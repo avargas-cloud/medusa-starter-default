@@ -21,6 +21,7 @@ import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reco
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
 import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
 import { vendorReconciler } from "../lib/meilisearch/reconcilers/vendor-reconciler";
+import { orderReconciler } from "../lib/meilisearch/reconcilers/order-reconciler";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
@@ -36,6 +37,9 @@ const RECONCILERS: Record<string, EntityReconciler> = {
   product: productReconciler,
   inventory_item: inventoryReconciler,
   vendor: vendorReconciler,
+  // Ships atomically with migration 1781300000000: a trigger without its
+  // reconciler registered here marks its rows "no reconciler" and loses them.
+  order: orderReconciler,
 };
 
 /** Max rows pulled per pass — safety cap, won't process more than this even

@@ -67,16 +67,26 @@ interface MinimalLogger {
  */
 export async function buildAllOrderDocs(
   container: MedusaContainer,
-  logger?: MinimalLogger
+  logger?: MinimalLogger,
+  /** Restrict to these order ids. Omit for the whole table. */
+  onlyIds?: string[]
 ): Promise<OrderMeiliDoc[]> {
   const log: MinimalLogger = logger ?? (container.resolve("logger") as any);
   const query = container.resolve("query") as any;
 
-  log.info("[sync-meili-orders] Fetching all orders…");
+  if (onlyIds && onlyIds.length === 0) return [];
+
+  log.info(
+    onlyIds
+      ? `[sync-meili-orders] Fetching ${onlyIds.length} order(s)…`
+      : "[sync-meili-orders] Fetching all orders…"
+  );
   const { data: orders } = await query.graph({
     entity: "order",
     fields: ORDER_FIELDS,
-    pagination: { take: null },
+    ...(onlyIds
+      ? { filters: { id: onlyIds } }
+      : { pagination: { take: null } }),
   });
 
   log.info(`[sync-meili-orders] Loaded ${orders.length} orders`);
@@ -91,17 +101,25 @@ export async function buildAllOrderDocs(
     const { Client } = await import("pg");
     const db = new Client({ connectionString: process.env.DATABASE_URL });
     await db.connect();
+    // Scoped when the caller named its orders: the reconciler runs on a cron
+    // over a handful of ids, and an unscoped pass would re-scan all 15,883
+    // order_item rows every minute to serve them.
+    const idScope = onlyIds ? [onlyIds] : [];
     const [fulRes, itemRes] = await Promise.all([
       db.query(
         `SELECT ofu.order_id, f.packed_at, f.shipped_at, f.delivered_at, f.canceled_at
            FROM order_fulfillment ofu
            JOIN fulfillment f ON f.id = ofu.fulfillment_id
-          WHERE ofu.deleted_at IS NULL AND f.deleted_at IS NULL`
+          WHERE ofu.deleted_at IS NULL AND f.deleted_at IS NULL
+            ${onlyIds ? "AND ofu.order_id = ANY($1::text[])" : ""}`,
+        idScope
       ),
       db.query(
         `SELECT oi.order_id, oi.quantity, oi.fulfilled_quantity
            FROM order_item oi
-           JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version`
+           JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version
+          ${onlyIds ? "WHERE oi.order_id = ANY($1::text[])" : ""}`,
+        idScope
       ),
     ]);
 
