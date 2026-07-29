@@ -27,22 +27,27 @@ const TAB_FILTER: Record<string, string> = {
   closed: "is_closed = true",
   web: "is_web = true",
   separated: "is_separated = true",
+  // Orders the POS presents as finished that Medusa never closed: the operator
+  // sees them delivered/shipped, but order.status is still pending, so
+  // completeOrderWorkflow either never ran or one of its four guards blocked it
+  // (pending + everything fulfilled + paid in full + no draft credit memo).
+  // An exception queue, not a view of "closed" orders — listing every natively
+  // closed order would repeat the Closed tab almost row for row (1,178 of
+  // 1,196). Admin-only in the POS.
+  medusa_open: 'is_closed = true AND status != "completed" AND status != "archived"',
 };
 
+// `captured` was dropped on 2026-07-29 — see the note on EffectivePaymentStatus
+// in build-order-doc. Accepting it here would be accepting a filter that can
+// only ever return nothing.
 const VALID_PAYMENTS = new Set([
   "not_paid",
   "deposited",
   "fully_paid",
-  "captured",
   "voided",
 ]);
 
-type EffectivePayment =
-  | "not_paid"
-  | "deposited"
-  | "fully_paid"
-  | "captured"
-  | "voided";
+type EffectivePayment = "not_paid" | "deposited" | "fully_paid" | "voided";
 
 interface MeiliOrderListDoc {
   id: string;
@@ -100,9 +105,19 @@ function parseTs(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function fallbackPaymentStatus(doc: MeiliOrderListDoc): string {
-  if (doc.payment_status) return doc.payment_status;
-  return doc.effective_payment === "captured" ? "captured" : "not_paid";
+/**
+ * The indexed native payment_status, or "" when the index does not know it.
+ *
+ * It never does today: Medusa computes payment_status instead of storing it, so
+ * query.graph hands the doc builder an empty value. This used to reconstruct
+ * "captured" from effective_payment and otherwise assert "not_paid" — asserting
+ * a payment state the index had no evidence for. "" is the honest answer, and
+ * it is safe: the POS reads this field only as a fallback for deriving a paid
+ * amount when payment_collections are missing, and this route always sends
+ * them.
+ */
+function nativePaymentStatus(doc: MeiliOrderListDoc): string {
+  return doc.payment_status || "";
 }
 
 async function hydrateOrderRows(
@@ -319,7 +334,7 @@ async function hydrateOrderRows(
 
     return [{
       ...listRow,
-      payment_status: fallbackPaymentStatus(doc),
+      payment_status: nativePaymentStatus(doc),
       fulfillment_status: computeFulfillmentStatus(fulfillments, items),
       total:
         numericSummaryTotal !== null && Number.isFinite(numericSummaryTotal)

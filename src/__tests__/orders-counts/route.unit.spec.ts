@@ -56,13 +56,13 @@ describe("GET /admin/orders/counts", () => {
     // (default 1000). That is why the All and Closed badges sat frozen at
     // exactly 1000 while the real populations were 1210 and 1193. The
     // documents endpoint's `total` has no such ceiling.
-    captureFilters([1210, 16, 1193, 23, 0, 3, 62]);
+    captureFilters([1210, 16, 1193, 23, 0, 3, 17, 62]);
 
     const res = buildRes();
     await GET(buildReq(), res);
 
     expect(search).not.toHaveBeenCalled();
-    expect(getDocuments).toHaveBeenCalledTimes(7);
+    expect(getDocuments).toHaveBeenCalledTimes(8);
     expect(res.body).toEqual({
       counts: {
         all: 1210,
@@ -71,6 +71,7 @@ describe("GET /admin/orders/counts", () => {
         unpaid: 23,
         web: 0,
         separated: 3,
+        medusa_open: 17,
       },
       cancelledCount: 62,
     });
@@ -92,32 +93,32 @@ describe("GET /admin/orders/counts", () => {
   });
 
   it("excludes cancelled and voided orders from the tab counts by default", async () => {
-    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
     await GET(buildReq(), buildRes());
 
-    // First six calls are the tabs; the seventh is the cancelled chip, which
+    // First seven calls are the tabs; the last is the cancelled chip, which
     // deliberately counts cancelled/voided regardless of the flag.
-    for (const filter of seen.slice(0, 6)) {
+    for (const filter of seen.slice(0, 7)) {
       expect(filter).toContain("is_canceled = false");
       expect(filter).toContain("is_voided = false");
     }
-    expect(seen[6]).toContain("(is_canceled = true OR is_voided = true)");
-    expect(seen[6]).not.toContain("is_canceled = false");
+    expect(seen[7]).toContain("(is_canceled = true OR is_voided = true)");
+    expect(seen[7]).not.toContain("is_canceled = false");
   });
 
   it("counts cancelled orders toward each tab when showCancelled is on", async () => {
-    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
     await GET(buildReq({ showCancelled: "true" }), buildRes());
 
-    for (const filter of seen.slice(0, 6)) {
+    for (const filter of seen.slice(0, 7)) {
       expect(filter).not.toContain("is_canceled = false");
     }
   });
 
   it("always excludes estimates", async () => {
-    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
     await GET(buildReq(), buildRes());
 
@@ -132,18 +133,18 @@ describe("GET /admin/orders/counts", () => {
     // rep MFP read 108 against its true 593, and rep JTV, whose orders predate
     // the loaded window, read as having none at all.
     it("constrains every count, including the cancelled chip", async () => {
-      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
       await GET(buildReq({ rep: "MFP" }), buildRes());
 
-      expect(seen).toHaveLength(7);
+      expect(seen).toHaveLength(8);
       for (const filter of seen) {
         expect(filter).toContain('(sales_rep_initials = "MFP")');
       }
     });
 
     it("matches initials OR name, because the source metadata is inconsistent", async () => {
-      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
       await GET(buildReq({ rep: "AG", rep_name: "Ana Gue" }), buildRes());
 
@@ -153,7 +154,7 @@ describe("GET /admin/orders/counts", () => {
     });
 
     it("adds no rep clause when no rep is selected", async () => {
-      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
       await GET(buildReq(), buildRes());
 
@@ -163,7 +164,7 @@ describe("GET /admin/orders/counts", () => {
     });
 
     it("ignores a blank rep rather than filtering on an empty string", async () => {
-      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
       await GET(buildReq({ rep: "   " }), buildRes());
 
@@ -173,7 +174,7 @@ describe("GET /admin/orders/counts", () => {
     });
 
     it("cannot be used to terminate the filter literal", async () => {
-      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+      const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
       await GET(buildReq({ rep: 'A" OR is_draft = true OR "' }), buildRes());
 
@@ -185,8 +186,22 @@ describe("GET /admin/orders/counts", () => {
     });
   });
 
+  it("counts the medusa_open tab with the same predicate the filter route uses", async () => {
+    // These two must stay byte-identical: this badge labels the table that
+    // TAB_FILTER.medusa_open populates, and the whole point of the tab is to be
+    // an exact reconciliation count. Any drift makes it lie about how many
+    // orders slipped past Medusa's close.
+    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
+
+    await GET(buildReq(), buildRes());
+
+    expect(seen[6]).toContain(
+      'is_closed = true AND status != "completed" AND status != "archived"'
+    );
+  });
+
   it("honours the effective-date range", async () => {
-    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1]);
+    const seen = captureFilters([1, 1, 1, 1, 1, 1, 1, 1]);
 
     await GET(buildReq({ from: "1700000000000", to: "1800000000000" }), buildRes());
 

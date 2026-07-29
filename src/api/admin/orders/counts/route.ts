@@ -46,6 +46,8 @@ export type OrdersCountsResponse = {
     unpaid: number;
     web: number;
     separated: number;
+    /** POS-closed but never closed natively in Medusa. Admin-only tab. */
+    medusa_open: number;
   };
   cancelledCount: number;
 };
@@ -109,7 +111,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       return r.total ?? 0;
     };
 
-    const [all, open, closed, unpaid, web, separated, cancelledCount] =
+    const [all, open, closed, unpaid, web, separated, medusaOpen, cancelledCount] =
       await Promise.all([
         countExact(tabBase),
         countExact([...tabBase, "is_open = true"]),
@@ -117,6 +119,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         countExact([...tabBase, "is_unpaid = true"]),
         countExact([...tabBase, "is_web = true"]),
         countExact([...tabBase, "is_separated = true"]),
+        // Must mirror TAB_FILTER.medusa_open in the filter route exactly, or the
+        // badge and the table it labels disagree.
+        countExact([
+          ...tabBase,
+          'is_closed = true AND status != "completed" AND status != "archived"',
+        ]),
         // Cancelled chip count: independent of showCancelled, always reflects
         // the date-range slice of cancelled + voided orders.
         countExact([
@@ -126,7 +134,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       ]);
 
     const body: OrdersCountsResponse = {
-      counts: { all, open, closed, unpaid, web, separated },
+      counts: { all, open, closed, unpaid, web, separated, medusa_open: medusaOpen },
       cancelledCount,
     };
     return res.json(body);

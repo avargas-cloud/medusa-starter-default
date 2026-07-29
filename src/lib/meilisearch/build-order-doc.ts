@@ -76,12 +76,20 @@ export interface OrderForMeili {
  * payment-collection amounts + the referential_deposit metadata, not from the
  * native field. Tabs filter on these derived values, so they MUST be computed
  * at index time for Meili to return the same truth the UI shows.
+ *
+ * `captured` was removed from this scale on 2026-07-29. It was unreachable
+ * here anyway — Medusa computes `payment_status` rather than storing it, so
+ * query.graph delivers it empty at index time and the branch never fired, which
+ * is why the POS's Captured payment filter returned nothing from the server.
+ * Rather than teach the index to reproduce a value that answers a different
+ * question ("the payments we took, we took successfully"), the POS dropped it:
+ * it was redundant for 1069 of 1128 orders and hid a $24.5k balance on the
+ * other 58. Both sides now classify purely by money in, so they agree.
  */
 export type EffectivePaymentStatus =
   | "not_paid"
   | "deposited"
   | "fully_paid"
-  | "captured"
   | "voided";
 
 export interface OrderMeiliDoc {
@@ -264,7 +272,6 @@ function getEffectivePaymentStatus(
 ): EffectivePaymentStatus {
   const meta = (order.metadata || {}) as Record<string, unknown>;
   if (meta.qb_sync_status === "voided") return "voided";
-  if (asString(order.payment_status) === "captured") return "captured";
 
   const paidAmount = getPaidAmount(order) ?? 0;
   const total = getOrderTotal(order) ?? 0;
