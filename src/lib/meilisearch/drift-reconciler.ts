@@ -46,6 +46,53 @@ export interface EntityReconciler {
   ): Promise<string[]>;
 }
 
+/** One row of the append-only audit log: one field of one entity that drifted. */
+export interface DriftLogRow {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  field_name: string;
+  db_value: string | null;
+  meili_value: string | null;
+}
+
+/**
+ * Appends drift rows to `meilisearch_drift_log`.
+ *
+ * Exported so verify-drift-log-insert.ts exercises THIS statement rather than a
+ * copy of it — a copy is how the original broke without anyone finding out.
+ *
+ * The multi-row form has to be `INSERT INTO t ${sql(rows, ...cols)}`, which is
+ * how postgres.js expands a value list. The original wrote
+ * `INSERT INTO t (cols) SELECT cols FROM ${sql(rows)}`, which throws
+ * `str.replace is not a function` in the driver before any SQL is sent. That
+ * threw into a catch that logged a warning, so the reconciliation cron ran every
+ * 5 minutes from May to 2026-07-29 with the audit log it advertises staying
+ * completely empty in both sandbox and production. Found only because the daily
+ * digest started reading the table.
+ *
+ * Callers keep catching: failing to WRITE THE LOG must never stop the reconciler
+ * from FIXING the drift. But the failure is now attributed to an entity and id,
+ * so the warning names something you can go look at.
+ */
+export async function insertDriftLogRows(
+  sql: postgres.Sql,
+  rows: readonly DriftLogRow[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  await sql`
+    INSERT INTO meilisearch_drift_log ${sql(
+      rows as DriftLogRow[],
+      "id",
+      "entity_type",
+      "entity_id",
+      "field_name",
+      "db_value",
+      "meili_value"
+    )}
+  `;
+}
+
 export interface ReconcilerStats {
   entityType: string;
   checked: number;
@@ -126,7 +173,7 @@ export async function reconcileEntity(
     stats.drifted++;
 
     if (!opts.dryRun) {
-      const driftRows = drifts.map((d) => ({
+      const driftRows: DriftLogRow[] = drifts.map((d) => ({
         id: generateEntityId("", "msdl"),
         entity_type: reconciler.entityType,
         entity_id: id,
@@ -135,15 +182,10 @@ export async function reconcileEntity(
         meili_value: stringifyVal(d.meiliValue),
       }));
       try {
-        await sql`
-          INSERT INTO meilisearch_drift_log
-            (id, entity_type, entity_id, field_name, db_value, meili_value)
-          SELECT id, entity_type, entity_id, field_name, db_value, meili_value
-          FROM ${sql(driftRows)}
-        `;
+        await insertDriftLogRows(sql, driftRows);
       } catch (err: unknown) {
         opts.logger.warn(
-          `[meili-reconcile] drift_log insert failed: ${(err as Error).message}`
+          `[meili-reconcile] drift_log insert failed for ${reconciler.entityType}:${id}: ${(err as Error).message}`
         );
       }
     }
