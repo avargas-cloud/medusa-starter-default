@@ -20,6 +20,7 @@ import { computeOrderReservationState } from "../../../../../../lib/finance/reco
 import { upsertOrderOnlyApplication } from "../../../../../../lib/finance/upsert-order-only-application";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 import { getNum } from "../../../../invoices/payment-balance";
+import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
 
 export interface OrderApplyOpts {
   scope: { resolve: (key: string) => any };
@@ -160,6 +161,10 @@ export async function handleOrderApply(
       payment.id,
       { relations: ["applications"] }
     );
+    // Refreshed on the replay too: the refresh is non-fatal, so if the original
+    // call's attempt failed this is the natural retry.
+    await refreshOrderDocsForPayment(scope, payment.id);
+
     return res.json({
       payment: replayedPayment,
       application,
@@ -208,6 +213,12 @@ export async function handleOrderApply(
     payment.id,
     { relations: ["applications"] }
   );
+
+  // The order's deposit just changed, so its search doc is stale:
+  // effective_payment and is_unpaid are computed at index time. This is THE path
+  // that matters — a deposit on an order comes through here, and the route's own
+  // refresh never runs for it because this helper returns first. Never fatal.
+  await refreshOrderDocsForPayment(scope, payment.id);
 
   return res.json({
     payment: updatedPayment,

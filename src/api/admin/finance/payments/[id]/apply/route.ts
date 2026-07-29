@@ -13,6 +13,7 @@ import { matchesLinkIntent } from "../../../../../../lib/finance/upsert-order-on
 import { reconcileOrderReservations } from "../../../../../../lib/finance/reconcile-order-reservations";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 import { handleOrderApply } from "./handle-order-apply";
+import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
 
 /**
  * POST /admin/finance/payments/:id/apply
@@ -463,6 +464,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }
     }
+
+    // The order's paid amount just changed, so its search doc is now stale:
+    // effective_payment and is_unpaid are computed at index time. Never fatal.
+    await refreshOrderDocsForPayment(req.scope, paymentId);
 
     return res.json({
       payment: updatedPayment,

@@ -349,6 +349,23 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   const isWebOrder = salesChannelId !== POS_SC_ID;
 
   const effectivePayment = getEffectivePaymentStatus(order);
+  // "Unpaid" means money is still owed, not that nothing has arrived (changed
+  // 2026-07-29 by the operator's call). An order with a deposit that does not
+  // cover the total belongs in the same work queue as one with nothing paid:
+  // in both cases someone still has to collect. An order whose deposit covers
+  // it in full does not, which is what keeps this from swallowing the whole
+  // list. A voided order is excluded — it is cancelled, not owing.
+  //
+  // Mirror of isUnpaid() in store-pos/app/(pos)/orders/utils.ts. These two MUST
+  // agree: this flag decides the Unpaid tab's membership server-side while that
+  // one labels the rows, and a tab whose rows disagree with it is the bug this
+  // codebase keeps re-learning.
+  const paidForBalance = getPaidAmount(order) ?? 0;
+  const totalForBalance = getOrderTotal(order) ?? 0;
+  const owesMoney =
+    effectivePayment !== "voided" &&
+    totalForBalance > 0 &&
+    paidForBalance + 0.01 < totalForBalance;
   const isDraft =
     order.is_draft_order === true || asString(order.status) === "draft";
   // A natively-completed order is DONE regardless of its (sometimes stale /
@@ -396,7 +413,7 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     payment_status: asString(order.payment_status),
     fulfillment_status: fulfillmentStatus,
     effective_payment: effectivePayment,
-    is_unpaid: effectivePayment === "not_paid",
+    is_unpaid: owesMoney,
     is_draft: isDraft,
     is_open: isOpen,
     is_closed: isClosed,

@@ -7,6 +7,7 @@ import {
   getAppliedInvoiceTotal,
   getNum,
 } from "../../../../invoices/payment-balance";
+import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
 
 /**
  * POST /admin/finance/applications/:id/void
@@ -142,6 +143,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         .resolve("logger")
         .error(`Failed to emit pos.payment.unapplied: ${emitErr.message}`);
     }
+
+    // Voiding took money off an order, so its search doc is stale:
+    // effective_payment and is_unpaid are computed at index time. Never fatal.
+    await refreshOrderDocsForPayment(req.scope, application.payment.id);
 
     return res.json({ success: true, application: voidedApplication });
   } catch (err: any) {

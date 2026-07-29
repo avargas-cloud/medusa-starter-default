@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
 
 /**
  * POST /admin/finance/applications/:id/unlink
@@ -95,6 +96,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         status: newStatus,
       });
     }
+
+    // Unlinking removed money from an order, so its search doc is stale:
+    // effective_payment and is_unpaid are computed at index time. Never fatal.
+    await refreshOrderDocsForPayment(req.scope, application.payment_id);
 
     return res.json({
       success: true,

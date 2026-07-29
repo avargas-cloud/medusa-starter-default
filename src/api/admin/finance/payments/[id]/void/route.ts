@@ -8,6 +8,7 @@ import {
   getAppliedInvoiceTotal,
   getNum,
 } from "../../../../invoices/payment-balance";
+import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
 
 /**
  * POST /admin/finance/payments/:id/void
@@ -175,6 +176,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }, 100);
     }
+
+    // Voiding the payment removed its money from every order it was applied to,
+    // so those search docs are stale: effective_payment and is_unpaid are
+    // computed at index time. Never fatal.
+    await refreshOrderDocsForPayment(req.scope, paymentId);
 
     return res.json({ success: true, payment: updatedPayment });
   } catch (err: any) {

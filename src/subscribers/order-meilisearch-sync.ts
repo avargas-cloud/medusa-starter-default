@@ -83,7 +83,28 @@ async function getMeili() {
   });
 }
 
-async function syncOrders(
+/**
+ * Rebuilds the Meili doc for specific orders.
+ *
+ * Exported because the finance routes that move money on an order have to call
+ * it directly. Until 2026-07-29 nothing did, and `POST
+ * /admin/finance/payments/:id/apply` emitted no event at all, so collecting the
+ * balance of an order never rebuilt its doc: `effective_payment` stayed frozen
+ * at whatever it was when the order was last indexed. ~900 documents were stale,
+ * which is why the Deposited filter returned 960 orders when only 58 actually
+ * owed money — #1348, #1350, #1351 and #1353 were paid to the cent and still
+ * indexed as deposited.
+ *
+ * Callers must NOT emit `order.updated` to get this effect instead. That event
+ * has other consumers, including the QuickBooks pipeline, and waking it from a
+ * payment flow risks enqueueing a non-reversible external operation as a side
+ * effect of a freshness fix.
+ *
+ * It is exported rather than moved to src/lib because of the SQL fallback below:
+ * query.graph intermittently returns fulfillments=[], and a second copy of that
+ * workaround would rot out of sync with this one.
+ */
+export async function syncOrders(
   orderIds: string[],
   container: any,
   logger: any
