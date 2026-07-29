@@ -692,32 +692,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // Oracle calculation based purely on order items stock and active POS Invoices
     await recalculateOrderStatus(invoice.order_id, req.scope);
 
-    // Restore referential_deposit: voiding the invoice reverses whatever amount_paid was credited to the order
-    if (invoice.amount_paid > 0) {
-      try {
-        const orderModule = req.scope.resolve(Modules.ORDER);
-        const [order] = await orderModule.listOrders(
-          { id: invoice.order_id },
-          { select: ["id", "metadata"] }
-        );
-        if (order) {
-          const existingMeta = ((order as any).metadata as Record<string, unknown>) ?? {};
-          const currentDeposit = Number(existingMeta.referential_deposit ?? 0);
-          const voidedDollars = invoice.amount_paid / 100;
-          const newDeposit = Math.max(0, Number((currentDeposit - voidedDollars).toFixed(2)));
-          await orderModule.updateOrders(invoice.order_id, {
-            metadata: { ...existingMeta, referential_deposit: newDeposit },
-          });
-          console.log(
-            `[VOID INVOICE] Restored referential_deposit for order ${invoice.order_id}: ${currentDeposit} → ${newDeposit}`
-          );
-        }
-      } catch (depositErr: any) {
-        console.warn(
-          `[VOID INVOICE] Could not restore referential_deposit for order ${invoice.order_id}: ${depositErr.message}`
-        );
-      }
-    }
+    // referential_deposit is NOT decremented here any more. The
+    // `recompute_order_money()` (migration 1781600000000) derives it from
+    // the order_money_projection authority as the applications are
+    // voided above, in the same transaction.
+    //
+    // The subtraction that used to be here worked, which was the trap: the
+    // paths that maintained the running total correctly made the ones that did
+    // not — unlink never subtracted — look like isolated bugs instead of the
+    // predictable output of a mirror maintained by hand.
 
     // NOTE: Voiding an invoice (even a sales receipt) never cancels the Medusa order.
     // The order stays open with its allocations restored by the steps above.

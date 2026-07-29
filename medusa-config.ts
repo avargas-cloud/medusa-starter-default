@@ -1,5 +1,10 @@
 // @ts-ignore — loadEnv and defineConfig exist at runtime but TypeScript types are missing in this Medusa version
 import { loadEnv, defineConfig } from "@medusajs/framework/utils";
+import {
+  ORDERS_FILTERABLE_ATTRIBUTES,
+  ORDERS_SEARCHABLE_ATTRIBUTES,
+  ORDERS_SORTABLE_ATTRIBUTES,
+} from "./src/lib/meilisearch/orders-index-settings";
 
 console.log("🔵 Loading medusa-config.ts");
 console.log("🔵 CWD:", process.cwd());
@@ -659,43 +664,14 @@ module.exports = defineConfig({
           // the index is created with the right searchable/filterable schema
           // and survives the plugin's startup overrides).
           orders: {
+            // Schema lives ONCE in src/lib/meilisearch/orders-index-settings.ts.
+            // These settings are re-applied on every boot, so a list kept only
+            // in the reindex runner gets silently dropped here — that is how a
+            // filter on has_deposit started returning 500 after a restart.
             indexSettings: {
-              searchableAttributes: [
-                "document_number",
-                "display_id_str",
-                "customer_name",
-                "customer_email",
-                "customer_phone",
-                "customer_phone_digits",
-                "company_name",
-                "qb_sales_order_ref",
-                "qb_invoice_refs",
-              ],
-              filterableAttributes: [
-                "status",
-                "payment_status",
-                "fulfillment_status",
-                "effective_payment",
-                "is_unpaid",
-                "is_draft",
-                "is_open",
-                "is_closed",
-                "is_separated",
-                "is_canceled",
-                "is_voided",
-                "is_web",
-                "is_web_order",
-                "sales_rep_initials",
-                "sales_channel_id",
-                "created_at_ts",
-                "effective_date_ts",
-              ],
-              sortableAttributes: [
-                "display_id",
-                "created_at_ts",
-                "effective_date_ts",
-                "total_cents",
-              ],
+              searchableAttributes: [...ORDERS_SEARCHABLE_ATTRIBUTES],
+              filterableAttributes: [...ORDERS_FILTERABLE_ATTRIBUTES],
+              sortableAttributes: [...ORDERS_SORTABLE_ATTRIBUTES],
               displayedAttributes: ["id"],
             },
             primaryKey: "id",

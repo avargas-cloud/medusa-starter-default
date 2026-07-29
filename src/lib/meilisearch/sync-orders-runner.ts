@@ -2,6 +2,11 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { buildOrderDoc, type OrderForMeili, type OrderMeiliDoc } from "./build-order-doc";
 import { enrichOrderTotals } from "./enrich-order-totals";
+import {
+  ORDERS_FILTERABLE_ATTRIBUTES,
+  ORDERS_SEARCHABLE_ATTRIBUTES,
+  ORDERS_SORTABLE_ATTRIBUTES,
+} from "./orders-index-settings";
 
 export const ORDERS_INDEX = "orders";
 
@@ -205,42 +210,9 @@ export async function syncAllOrdersToMeili(
   const index = client.index(ORDERS_INDEX);
 
   await index.updateSettings({
-    searchableAttributes: [
-      "document_number",
-      "display_id_str",
-      "customer_name",
-      "customer_email",
-      "customer_phone",
-      "customer_phone_digits",
-      "company_name",
-      "qb_sales_order_ref",
-      "qb_invoice_refs",
-    ],
-    filterableAttributes: [
-      "status",
-      "payment_status",
-      "fulfillment_status",
-      "effective_payment",
-      "is_unpaid",
-      "is_draft",
-      "is_open",
-      "is_closed",
-      "is_separated",
-      "is_canceled",
-      "is_voided",
-      "is_web",
-      "is_web_order",
-      "sales_rep_initials",
-      "sales_channel_id",
-      "created_at_ts",
-      "effective_date_ts",
-    ],
-    sortableAttributes: [
-      "display_id",
-      "created_at_ts",
-      "effective_date_ts",
-      "total_cents",
-    ],
+    searchableAttributes: [...ORDERS_SEARCHABLE_ATTRIBUTES],
+    filterableAttributes: [...ORDERS_FILTERABLE_ATTRIBUTES],
+    sortableAttributes: [...ORDERS_SORTABLE_ATTRIBUTES],
   });
 
   const CHUNK = 500;

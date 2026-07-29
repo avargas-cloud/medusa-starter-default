@@ -1361,8 +1361,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // order.metadata.referential_deposit is NOT written here any more. The
-    // `trg_order_referential_deposit` trigger on payment_application (migration
-    // 1781600000000) recomputes it from the ledger in the same transaction as
+    // `recompute_order_money()` (migration 1781600000000) derives it from
+    // the order_money_projection authority in the same transaction as
     // the application row, so it cannot be stale and cannot double-count.
     //
     // What used to be here was an increment, guarded by `!body.terminal_payment_id`

@@ -111,6 +111,16 @@ export interface OrderMeiliDoc {
   // maps to a single filterable boolean and Meili returns the true full set.
   effective_payment: EffectivePaymentStatus;
   is_unpaid: boolean;
+  /**
+   * The order is holding money that has not been used yet — a live deposit.
+   *
+   * A different question from `effective_payment`, which grades how COVERED the
+   * order is. An order can be fully_paid and still hold a live deposit (paid in
+   * full, invoiced only in part), and the operator's Deposited filter asks this
+   * question, not that one. Before 2026-07-29 the two were indistinguishable
+   * because the deposit field held every dollar, used or not.
+   */
+  has_deposit: boolean;
   // True for draft orders (POS estimates) — every /orders tab filters these out.
   is_draft: boolean;
   is_open: boolean;
@@ -242,11 +252,38 @@ function getOrderTotal(order: OrderForMeili): number | null {
   return null;
 }
 
+/**
+ * The order's money, in three numbers that never overlap.
+ *
+ *   getDepositAmount — money sitting on the order, NOT yet used  (Deposit)
+ *   getPaidAmount    — money already consumed by invoices        (Paid Amt)
+ *   getSettledAmount — the two together; decides whether the customer owes
+ *
+ * All three come from `order_money_projection`, mirrored into metadata by
+ * recompute_order_money(). Until 2026-07-29 `getPaidAmount` was
+ * `max(nativeCaptured, referential_deposit)` — one number answering two
+ * questions, which is why a settled order showed the same value in Deposit and
+ * Paid Amt, and why a consumed deposit still displayed as a deposit.
+ *
+ * Mirror of store-pos/app/(pos)/orders/utils.ts. These flags decide tab
+ * membership server-side, so if the two drift the tab and its rows contradict.
+ */
+function getDepositAmount(order: OrderForMeili): number {
+  const meta = (order.metadata || {}) as Record<string, unknown>;
+  const n = asNum(meta.referential_deposit);
+  return n > 0 ? n : 0;
+}
+
 function getPaidAmount(order: OrderForMeili): number | null {
   const meta = (order.metadata || {}) as Record<string, unknown>;
-  const referentialDeposit = asNum(meta.referential_deposit);
-  let nativePaid: number | null = null;
+  if (meta.applied_total != null) {
+    return asNum(meta.applied_total);
+  }
 
+  // No projection row yet — nothing in the finance ledger claims this order.
+  // Fall back to what Medusa captured. Measured 2026-07-29 against production:
+  // no order had captured MORE than the ledger applied.
+  let nativePaid: number | null = null;
   const collections = order.payment_collections || [];
   if (collections.length > 0) {
     nativePaid = collections.reduce(
@@ -261,10 +298,11 @@ function getPaidAmount(order: OrderForMeili): number | null {
   if (nativePaid == null && (ps === "not_paid" || ps === "refunded")) {
     nativePaid = 0;
   }
-
-  if (referentialDeposit > 0)
-    return Math.max(nativePaid ?? 0, referentialDeposit);
   return nativePaid;
+}
+
+function getSettledAmount(order: OrderForMeili): number {
+  return (getPaidAmount(order) ?? 0) + getDepositAmount(order);
 }
 
 function getEffectivePaymentStatus(
@@ -273,13 +311,23 @@ function getEffectivePaymentStatus(
   const meta = (order.metadata || {}) as Record<string, unknown>;
   if (meta.qb_sync_status === "voided") return "voided";
 
-  const paidAmount = getPaidAmount(order) ?? 0;
+  // Settled, not paid: a deposit that covers the order settles it even before
+  // an invoice consumes it. Paid Amt alone would report a fully-funded order as
+  // owing money for as long as it stayed uninvoiced.
+  const settled = getSettledAmount(order);
   const total = getOrderTotal(order) ?? 0;
 
-  if (paidAmount > 0 && total > 0 && paidAmount + 0.01 >= total) {
+  // A CENT, not "greater than zero". #1487 carried current_order_total =
+  // 0.0024 — positive in dollars, zero once rounded to cents — so a $6.39
+  // remainder read as covering it and the order came out fully_paid with
+  // total_cents = 0, a combination that looks impossible until you find the
+  // sub-cent. order_money_projection stores cents, so classifying on
+  // unrounded dollars made the projection and this doc disagree. Money below
+  // a cent is not money; both sides now agree on that.
+  if (settled > 0 && total >= 0.01 && settled + 0.01 >= total) {
     return "fully_paid";
   }
-  if (paidAmount > 0) return "deposited";
+  if (settled > 0) return "deposited";
   return "not_paid";
 }
 
@@ -360,11 +408,15 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   // agree: this flag decides the Unpaid tab's membership server-side while that
   // one labels the rows, and a tab whose rows disagree with it is the bug this
   // codebase keeps re-learning.
-  const paidForBalance = getPaidAmount(order) ?? 0;
+  // Settled, not paid: the deposit still sitting on the order counts toward
+  // covering it. Otherwise a funded-but-uninvoiced order reads as owing.
+  const paidForBalance = getSettledAmount(order);
   const totalForBalance = getOrderTotal(order) ?? 0;
   const owesMoney =
     effectivePayment !== "voided" &&
-    totalForBalance > 0 &&
+    // A cent, matching getEffectivePaymentStatus and the cents the projection
+    // stores. See the sub-cent note there.
+    totalForBalance >= 0.01 &&
     paidForBalance + 0.01 < totalForBalance;
   const isDraft =
     order.is_draft_order === true || asString(order.status) === "draft";
@@ -413,6 +465,7 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     payment_status: asString(order.payment_status),
     fulfillment_status: fulfillmentStatus,
     effective_payment: effectivePayment,
+    has_deposit: getDepositAmount(order) >= 0.01,
     is_unpaid: owesMoney,
     is_draft: isDraft,
     is_open: isOpen,

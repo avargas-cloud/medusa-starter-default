@@ -263,6 +263,14 @@ async function hydrateOrderRows(
           'qb_invoice_ref_num', o.metadata->'qb_invoice_ref_num',
           'order_placed_at', o.metadata->'order_placed_at',
           'referential_deposit', o.metadata->'referential_deposit',
+          -- Ships WITH referential_deposit, always. The two are halves of one
+          -- split (deposit = money not yet used, applied_total = money invoices
+          -- consumed) and getPaidAmount falls back to Medusa's captured amount
+          -- when applied_total is absent. Sending one without the other is how
+          -- S11178 displayed Deposit $173.28 AND Paid $173.28 on a $173.28
+          -- order: the same dollars twice, because the fallback re-derived what
+          -- this projection had dropped.
+          'applied_total', o.metadata->'applied_total',
           'document_number', o.metadata->'document_number',
           'pos_total', o.metadata->'pos_total',
           'is_separated', o.metadata->'is_separated',
@@ -369,7 +377,20 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   }
   if (tab && TAB_FILTER[tab]) filters.push(TAB_FILTER[tab]);
   if (payment && VALID_PAYMENTS.has(payment)) {
-    filters.push(`effective_payment = "${payment}"`);
+    // "Deposited" asks "which orders are holding money I have not used yet",
+    // not "which orders are partly covered" (operator's call, 2026-07-29).
+    // Those were the same question only while the deposit field held every
+    // dollar, used or not; once it means the LIVE remainder they diverge, and an
+    // order paid in full but invoiced in part — the case this came from — is
+    // effective_payment = fully_paid while still holding a deposit.
+    //
+    // The partly-covered orders keep their own home: every one of them owes
+    // money, so the Unpaid tab lists them (verified, 18 of 18).
+    filters.push(
+      payment === "deposited"
+        ? "has_deposit = true"
+        : `effective_payment = "${payment}"`
+    );
   }
   if (from !== null) filters.push(`effective_date_ts >= ${from}`);
   if (to !== null) filters.push(`effective_date_ts <= ${to}`);
