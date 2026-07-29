@@ -1,7 +1,13 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import {
+  parseRepSelection,
+  repSqlPredicate,
+} from "../../../../lib/sales-rep/sql-filter";
+
 /**
  * GET /admin/invoices/counts?from=<isoOrMs>&to=<isoOrMs>&showVoided=true|false
+ *                           &repInitials=<initials>&repName=<name>
  *
  * Returns the REAL tab counts for the POS /invoices page, computed via SQL
  * directly against pos_invoice + fulfillment + fulfillment_label so even
@@ -12,6 +18,11 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  *   - fulfillment.canceled_at set  → unfulfilled
  *   - no shipped_at, no delivered_at, and no fulfillment_label rows → unfulfilled
  *   - otherwise                    → fulfilled
+ *
+ * The rep params share their predicate with the list route via
+ * `lib/sales-rep/sql-filter`. Both MUST honour it: these counts are the tab
+ * badges, and the table under them is rep-filtered, so a badge that ignored the
+ * rep would be the list contradicting itself.
  */
 
 const VOIDED_STATUS = "voided";
@@ -41,6 +52,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const from = parseRange(req.query.from);
   const to = parseRange(req.query.to);
   const showVoided = req.query.showVoided === "true";
+  const rep = parseRepSelection(req.query as Record<string, unknown>);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pg = req.scope.resolve("__pg_connection__") as any;
@@ -57,6 +69,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       params.push(to);
       filters.push(`i.created_at <= ?::timestamptz`);
     }
+    // The rep lives on the ORDER, so the join below is what the predicate reads.
+    // An invoice whose order is missing cannot match any rep, which is why the
+    // join is only needed — and only added — when a rep is actually picked.
+    const repPredicate = repSqlPredicate(rep, "o");
+    if (repPredicate) {
+      params.push(...repPredicate.bindings);
+      filters.push(repPredicate.sql);
+    }
+    const repJoin = repPredicate
+      ? `JOIN "order" o ON o.id = i.order_id AND o.deleted_at IS NULL`
+      : "";
     const where = filters.join(" AND ");
 
     const sql = `
@@ -84,6 +107,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         FROM pos_invoice i
         LEFT JOIN fulfillment f
           ON f.id = i.fulfillment_id AND f.deleted_at IS NULL
+        ${repJoin}
         WHERE ${where}
       )
       SELECT

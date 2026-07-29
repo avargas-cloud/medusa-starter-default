@@ -82,6 +82,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const parsedLimit = limitParam
     ? Math.max(1, Math.min(500, parseInt(limitParam, 10) || 0))
     : undefined;
+  // Offset makes the 500-row ceiling a page size instead of a hard stop. The
+  // /transactions ledger used to render whatever the first page returned — 200
+  // of 1,297 payments — with nothing on screen saying so, and its search box
+  // then scanned only those rows, so a customer whose last payment predated the
+  // window came back as "no results".
+  const offsetParam = Array.isArray(query.offset)
+    ? query.offset[0]
+    : query.offset;
+  const parsedOffset = offsetParam
+    ? Math.max(0, parseInt(offsetParam, 10) || 0)
+    : undefined;
   const searchParam = Array.isArray(query.q) ? query.q[0] : query.q;
   const trimmedSearch = (searchParam ?? "").trim();
   const unlinkedParam = Array.isArray(query.unlinked)
@@ -171,9 +182,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const payments = await financeService.listCustomerPayments(filters, {
-      order: { received_at: "DESC" },
+      // `id` breaks ties so the order is total, which is what makes reading
+      // this list page by page safe: under a partial order, two rows sharing a
+      // `received_at` may land either side of a page boundary on different
+      // requests, silently duplicating one and dropping the other.
+      // Measured 2026-07-29: zero duplicate `received_at` values across all
+      // 1,297 payments, so nothing is being fixed here today — this keeps the
+      // guarantee from depending on that staying true.
+      order: { received_at: "DESC", id: "DESC" },
       relations: ["applications"],
       ...(parsedLimit ? { take: parsedLimit } : {}),
+      ...(parsedOffset ? { skip: parsedOffset } : {}),
     });
 
     const enriched = await enrichWithCustomer(payments, customerModule);

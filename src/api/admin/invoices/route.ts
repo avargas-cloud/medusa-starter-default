@@ -18,6 +18,10 @@ import {
   skipPendingPaymentRows,
 } from "../../../lib/quickbooks/qb-pipeline";
 import { getVariantAvgCostBatch } from "../../../lib/cost/get-variant-avg-cost";
+import {
+  parseRepSelection,
+  repSqlPredicate,
+} from "../../../lib/sales-rep/sql-filter";
 import { getDbPool } from "../../utils/db-pool";
 import { sortDocItemsByInsertion } from "./_lib/item-order";
 import { maybeCompleteOrder } from "../../../lib/maybe-complete-order";
@@ -37,6 +41,47 @@ import { getFiniteMoney, getNum } from "./payment-balance";
 import { registerMedusaPayment } from "./register-medusa-payment";
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
+/**
+ * Narrows an id filter that an earlier tab predicate may already have set.
+ *
+ * The tab filters each assign `filters.id` outright because they are never
+ * combined with one another. The rep IS combined with all of them — it is a
+ * separate dropdown, live on every tab — so it has to intersect rather than
+ * overwrite, or picking a rep on the Unfulfilled tab would silently widen the
+ * result back to every unfulfilled invoice.
+ */
+/** Accepts an epoch-ms or ISO timestamp, or null when absent/unparseable. */
+function parseTimestamp(value: unknown): Date | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const ms = Number(value);
+  if (Number.isFinite(ms)) return ms > 0 ? new Date(ms) : null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Builds the `created_at` range filter, or null when neither bound is usable. */
+function parseRangeFilter(
+  from: unknown,
+  to: unknown
+): Record<string, Date> | null {
+  const gte = parseTimestamp(from);
+  const lte = parseTimestamp(to);
+  if (!gte && !lte) return null;
+  return {
+    ...(gte ? { $gte: gte } : {}),
+    ...(lte ? { $lte: lte } : {}),
+  };
+}
+
+function intersectIdFilter(current: unknown, next: string[]): string[] {
+  if (current === undefined || current === null) return next;
+  const existing = Array.isArray(current)
+    ? (current as string[])
+    : [String(current)];
+  const allowed = new Set(next);
+  return existing.filter((id) => allowed.has(id));
+}
+
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
@@ -51,6 +96,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     delivery_active,
     unfulfilled,
     list_view,
+    from,
+    to,
   } =
     req.query as Record<string, any>;
 
@@ -58,6 +105,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   if (order_id) filters.order_id = order_id;
   if (customer_id) filters.customer_id = customer_id;
   if (created_at) filters.created_at = created_at;
+  // Date range as two plain timestamps, so the POS can scope the list to the
+  // same window its counts endpoint already uses. Without it the All tab could
+  // only narrow the most-recent-200 feed in the browser, so a 90-day range
+  // showed at most 200 rows under a badge counting all 1,032.
+  const rangeFilter = parseRangeFilter(from, to);
+  if (rangeFilter) filters.created_at = rangeFilter;
   if (status) filters.status = status;
   if (balance_due_gt !== undefined) filters.balance_due = { $gt: parseInt(balance_due_gt, 10) };
 
@@ -128,6 +181,42 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return res.json({ invoices: [], delivery_by_invoice: deliveryByInvoice });
     }
     filters.id = deliveryIds;
+  }
+
+  // Sales rep: lives on the ORDER, so it resolves to a set of invoice ids here
+  // rather than being a column filter. This replaces filtering it in the
+  // browser, which only ever saw the rows already fetched — on the All tab that
+  // is the most-recent-200 feed, so rep MFP showed 105 of its 605 invoices and
+  // JTV, both of whose invoices predate that window, showed as having none at
+  // all. The predicate is shared with `./counts` so the badge cannot disagree.
+  const rep = parseRepSelection(req.query as Record<string, unknown>);
+  const repPredicate = repSqlPredicate(rep, "o");
+  if (repPredicate) {
+    const pg = req.scope.resolve("__pg_connection__") as {
+      raw: (
+        sql: string,
+        bindings?: unknown[]
+      ) => Promise<{ rows?: Array<{ id: string }> }>;
+    };
+    const result = await pg.raw(
+      `SELECT i.id
+         FROM pos_invoice i
+         JOIN "order" o ON o.id = i.order_id AND o.deleted_at IS NULL
+        WHERE i.deleted_at IS NULL
+          AND ${repPredicate.sql}`,
+      repPredicate.bindings
+    );
+    const repIds = (result.rows ?? []).map((row) => row.id);
+    const scoped = intersectIdFilter(filters.id, repIds);
+    if (scoped.length === 0) {
+      return res.json({
+        invoices: [],
+        ...(deliveryByInvoice
+          ? { delivery_by_invoice: deliveryByInvoice }
+          : {}),
+      });
+    }
+    filters.id = scoped;
   }
 
   const isListView = list_view === "1" || list_view === "true";
@@ -1271,37 +1360,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
-    // Update order.metadata.referential_deposit so the POS order list "DEPOSIT" column
-    // reflects money received for this order regardless of capture path (cash/check at
-    // Create Invoice, credit consume, etc). Terminal flow already writes this field
-    // at capture time in store-pos/.../bams/terminal/route.ts, so we skip when a
-    // terminal_payment_id was used — prevents double-counting.
-    if (!body.terminal_payment_id) {
-      try {
-        const orderModule = req.scope.resolve(Modules.ORDER);
-        const currentOrder = (await orderModule.retrieveOrder(body.order_id, {
-          select: ["id", "metadata"],
-        })) as any;
-        const existingMeta = currentOrder?.metadata ?? {};
-        const currentDepositDollars = Number(
-          existingMeta.referential_deposit ?? 0
-        );
-        const incrementDollars = body.amount_paid / 100;
-        const newDepositDollars = Number(
-          (currentDepositDollars + incrementDollars).toFixed(2)
-        );
-        await orderModule.updateOrders(body.order_id, {
-          metadata: {
-            ...existingMeta,
-            referential_deposit: newDepositDollars,
-          },
-        });
-      } catch (depErr: any) {
-        console.warn(
-          `[invoice] Failed to update order referential_deposit for ${body.order_id}: ${depErr.message}`
-        );
-      }
-    }
+    // order.metadata.referential_deposit is NOT written here any more. The
+    // `trg_order_referential_deposit` trigger on payment_application (migration
+    // 1781600000000) recomputes it from the ledger in the same transaction as
+    // the application row, so it cannot be stale and cannot double-count.
+    //
+    // What used to be here was an increment, guarded by `!body.terminal_payment_id`
+    // because the terminal route had already added the same dollars. That guard
+    // is exactly the shape of the bug: six writers each adding, each having to
+    // know what the others already did. Two of them still got it wrong (#1710,
+    // #2400 landed at exactly 2.00x) and unlinking subtracted nothing at all.
   }
 
   // ── Fase 3: QB items readiness gate ────────────────────────────────────────

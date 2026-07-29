@@ -1,5 +1,10 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import {
+  parseRepSelection,
+  repSqlPredicate,
+} from "../../../../lib/sales-rep/sql-filter";
+
 export type DraftOrderCountsResponse = {
   visibleCount: number;
   notApprovedCount: number;
@@ -21,6 +26,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const to = parseRange(req.query.to);
   const showNotApproved = req.query.showNotApproved === "true";
   const showCancelled = req.query.showCancelled === "true";
+  // The badges label the table, so they must be scoped by the SAME rep the
+  // table is filtered by. Without this the count came from every rep while the
+  // rows came from one: picking AVP showed 5 estimates under a badge of 185.
+  const rep = parseRepSelection(req.query as Record<string, unknown>);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pg = req.scope.resolve("__pg_connection__") as any;
@@ -38,6 +47,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     if (to) {
       params.push(to);
       filters.push("o.created_at <= ?::timestamptz");
+    }
+    const repPredicate = repSqlPredicate(rep, "o");
+    if (repPredicate) {
+      params.push(...repPredicate.bindings);
+      filters.push(repPredicate.sql);
     }
     const where = filters.join(" AND ");
 

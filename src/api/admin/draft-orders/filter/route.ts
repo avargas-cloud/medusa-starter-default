@@ -1,5 +1,10 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import {
+  parseRepSelection,
+  repSqlPredicate,
+} from "../../../../lib/sales-rep/sql-filter";
+
 type SqlClient = {
   raw: (
     sql: string,
@@ -49,8 +54,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const showCancelled = req.query.showCancelled === "true";
   const query = readQueryString(req.query.q).toLowerCase();
   const queryDigits = query.replace(/\D/g, "");
-  const repInitials = readQueryString(req.query.repInitials);
-  const repName = readQueryString(req.query.repName);
+  const rep = parseRepSelection(req.query as Record<string, unknown>);
 
   const filters = [
     "o.deleted_at IS NULL",
@@ -76,13 +80,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       "COALESCE(o.metadata->>'order_status', o.metadata->>'estimate_status', '') NOT IN ('Cancelled', 'cancelled', 'Voided', 'voided')"
     );
   }
-  if (repInitials || repName) {
-    filters.push(`(
-      COALESCE(o.metadata->'sales_rep'->>'initials', '') = ?
-      OR COALESCE(o.metadata->'sales_rep'->>'initials', '') = ?
-      OR COALESCE(o.metadata->'sales_rep'->>'name', '') = ?
-    )`);
-    bindings.push(repInitials, repName, repName);
+  // Shared with `../counts` so the rows and the badge labelling them can never
+  // drift apart. The helper also drops empty tokens: the predicate this
+  // replaced bound `repInitials` unconditionally, so a rep with no initials
+  // compared the field against '' and matched every estimate that has no rep.
+  const repPredicate = repSqlPredicate(rep, "o");
+  if (repPredicate) {
+    filters.push(repPredicate.sql);
+    bindings.push(...repPredicate.bindings);
   }
   if (query) {
     const searchPredicates = [
