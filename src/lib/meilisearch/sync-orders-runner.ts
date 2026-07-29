@@ -1,6 +1,6 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
-import { buildOrderDoc, type OrderForMeili } from "./build-order-doc";
+import { buildOrderDoc, type OrderForMeili, type OrderMeiliDoc } from "./build-order-doc";
 import { enrichOrderTotals } from "./enrich-order-totals";
 
 export const ORDERS_INDEX = "orders";
@@ -57,17 +57,18 @@ interface MinimalLogger {
 }
 
 /**
- * Reads every order from the DB, builds the flat Meili doc, and upserts
- * into the `orders` index. Idempotent. Self-applies index settings so it
- * works on a fresh Meili install too.
+ * Builds the doc every order SHOULD have, without writing anything.
  *
- * Used both by the CLI script (scripts/sync/sync-meili-orders.ts) and
- * the admin recovery endpoint (api/admin/search/orders/sync).
+ * Extracted so the integrity audit can compare Meili against the same
+ * construction the sync performs. An audit that fetched or enriched even slightly
+ * differently would invent drift, and a second copy of this path would rot away
+ * from this one — which is exactly how the index came to disagree with reality in
+ * the first place.
  */
-export async function syncAllOrdersToMeili(
+export async function buildAllOrderDocs(
   container: MedusaContainer,
   logger?: MinimalLogger
-): Promise<SyncResult> {
+): Promise<OrderMeiliDoc[]> {
   const log: MinimalLogger = logger ?? (container.resolve("logger") as any);
   const query = container.resolve("query") as any;
 
@@ -152,7 +153,23 @@ export async function syncAllOrdersToMeili(
     );
   }
 
-  const docs = (orders as OrderForMeili[]).map((o) => buildOrderDoc(o));
+  return (orders as OrderForMeili[]).map((o) => buildOrderDoc(o));
+}
+
+/**
+ * Reads every order from the DB, builds the flat Meili doc, and upserts
+ * into the `orders` index. Idempotent. Self-applies index settings so it
+ * works on a fresh Meili install too.
+ *
+ * Used both by the CLI script (scripts/sync/sync-meili-orders.ts) and
+ * the admin recovery endpoint (api/admin/search/orders/sync).
+ */
+export async function syncAllOrdersToMeili(
+  container: MedusaContainer,
+  logger?: MinimalLogger
+): Promise<SyncResult> {
+  const log: MinimalLogger = logger ?? (container.resolve("logger") as any);
+  const docs = await buildAllOrderDocs(container, log);
 
   const { MeiliSearch } = await import("meilisearch");
   const client = new MeiliSearch({
@@ -221,5 +238,5 @@ export async function syncAllOrdersToMeili(
     `[sync-meili-orders] ✅ Done — ${synced} orders sent to MeiliSearch (async task running).`
   );
 
-  return { synced, total: orders.length };
+  return { synced, total: docs.length };
 }
