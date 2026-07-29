@@ -1,7 +1,17 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 
+import {
+  auditOrdersIndex,
+  type OrderIndexAuditResult,
+} from "../lib/meilisearch/audit-orders-index";
 import { sendMail } from "../utils/mailer";
 
+import {
+  buildOrderDriftRows,
+  renderOrderDriftSection,
+  type OrderDriftHistory,
+  type OrderDriftRow,
+} from "./_lib/_order-drift-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -140,14 +150,114 @@ const renderSection = (section: PipelineSection): string => {
   );
 };
 
-export default async function qbPipelineErrorDigest(
-  container: MedusaContainer
-) {
-  if (isScheduledJobsDisabled(container)) return;
+/**
+ * Audits the `orders` MeiliSearch index and turns what it finds into email rows.
+ *
+ * Costs ~13s over ~1,500 orders because every expected document is rebuilt, which
+ * is why it lives in this daily job and NOT in the 5-minute reconciliation sweep.
+ *
+ * Read-only in both directions: it never writes to MeiliSearch and never writes to
+ * `meilisearch_drift_log` — it only reads what the reconciler already recorded, to
+ * separate "the sweep never saw this" from "the sweep tried and failed", which is
+ * the difference between stale and genuinely stuck.
+ *
+ * Isolated failure by design: if the audit or MeiliSearch is unavailable, the QB
+ * pipeline sections still go out. Losing the whole digest over a search-index
+ * problem would hide the thing the digest was built for in the first place.
+ */
+async function collectOrderIndexDrift(
+  container: MedusaContainer,
+  knex: any,
+  logger: { info: (m: string) => void; warn: (m: string) => void }
+): Promise<{ rows: OrderDriftRow[]; audit: OrderIndexAuditResult } | null> {
+  if (!process.env.MEILISEARCH_HOST || !process.env.MEILISEARCH_API_KEY) {
+    logger.info(
+      "[qb-pipeline-error-digest] orders index audit skipped — MeiliSearch env vars missing"
+    );
+    return null;
+  }
 
-  const logger = container.resolve("logger");
-  const knex = (container as any).resolve("__pg_connection__");
+  try {
+    const t0 = Date.now();
+    const audit = await auditOrdersIndex(container);
 
+    const ids = [
+      ...new Set([
+        ...audit.drifts.map((d) => d.order_id),
+        ...audit.missing.map((m) => m.order_id),
+        ...audit.orphans,
+      ]),
+    ];
+
+    const history = new Map<string, OrderDriftHistory>();
+    if (ids.length > 0) {
+      // What the 5-minute sweep already knows about these orders. `fix_error`
+      // set means it tried and could not — that row gets reported first.
+      const res = await knex.raw(
+        `SELECT
+           entity_id,
+           MIN(detected_at) AS first_detected,
+           (ARRAY_AGG(fix_error ORDER BY detected_at DESC)
+              FILTER (WHERE fix_error IS NOT NULL))[1] AS last_fix_error
+         FROM meilisearch_drift_log
+         WHERE entity_type = 'order'
+           AND entity_id = ANY(?)
+         GROUP BY entity_id`,
+        [ids]
+      );
+      for (const r of (res?.rows ?? res ?? []) as Array<{
+        entity_id: string;
+        first_detected: string | Date | null;
+        last_fix_error: string | null;
+      }>) {
+        history.set(r.entity_id, {
+          first_detected: r.first_detected,
+          last_fix_error: r.last_fix_error,
+        });
+      }
+    }
+
+    const rows = buildOrderDriftRows(audit, history);
+    logger.info(
+      `[qb-pipeline-error-digest] orders index audit: ${audit.ordersInDb} orders vs ${audit.docsInIndex} docs — ` +
+        `drifted=${audit.driftedDocs} missing=${audit.missing.length} orphaned=${audit.orphans.length} ` +
+        `(${Date.now() - t0}ms)`
+    );
+    return { rows, audit };
+  } catch (e: any) {
+    logger.warn(
+      `[qb-pipeline-error-digest] orders index audit failed, digest continues without it: ${e.message}`
+    );
+    return null;
+  }
+}
+
+export interface DigestEmail {
+  subject: string;
+  html: string;
+  /** Pipeline error rows across the 4 QB pipelines. */
+  qbErrors: number;
+  /** Rows where the orders index disagrees with the database. */
+  driftRows: number;
+  /** qb_item_pipeline ids to stamp with digest_notified_at once the mail is out. */
+  stampItemIds: string[];
+  /** qb_order_pipeline ids to stamp with digest_notified_at once the mail is out. */
+  stampSalesIds: string[];
+}
+
+/**
+ * Composes the digest and returns null when there is nothing to report.
+ *
+ * Separated from the send so the composition — which is the part with logic in
+ * it — can be run and read without a mail provider anywhere in the loop
+ * (src/scripts/debug/run-qb-digest-once.ts). Returning null IS the "don't send an
+ * empty email" rule: there is no other place where that decision is made.
+ */
+export async function buildDigestEmail(
+  container: MedusaContainer,
+  knex: any,
+  logger: { info: (m: string) => void; warn: (m: string) => void }
+): Promise<DigestEmail | null> {
   const windowSinceIso = new Date(
     Date.now() - DIGEST_WINDOW_HOURS * 60 * 60 * 1000
   ).toISOString();
@@ -418,13 +528,17 @@ export default async function qbPipelineErrorDigest(
     },
   ];
 
-  const totalErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
+  const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
+
+  const orderDrift = await collectOrderIndexDrift(container, knex, logger);
+  const driftRows = orderDrift?.rows ?? [];
+  const totalErrors = qbErrors + driftRows.length;
 
   if (totalErrors === 0) {
     logger.info(
-      `[qb-pipeline-error-digest] no errors across 4 pipelines — skipping email`
+      `[qb-pipeline-error-digest] no errors across 4 pipelines and no orders index drift — skipping email`
     );
-    return;
+    return null;
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -432,7 +546,17 @@ export default async function qbPipelineErrorDigest(
     DIGEST_WINDOW_HOURS === 24
       ? "last 24 hours"
       : `last ${DIGEST_WINDOW_HOURS} hours`;
-  const subject = `[QB Pipeline] ${totalErrors} new error${totalErrors === 1 ? "" : "s"} (${windowLabel}) — ${today}`;
+  // Name both problems in the subject. A digest that says "3 QB errors" while
+  // carrying an orders-index section is the email lying about its own contents.
+  const subjectParts = [
+    qbErrors > 0
+      ? `${qbErrors} pipeline error${qbErrors === 1 ? "" : "s"} (${windowLabel})`
+      : "",
+    driftRows.length > 0
+      ? `${driftRows.length} orders index drift row${driftRows.length === 1 ? "" : "s"}`
+      : "",
+  ].filter(Boolean);
+  const subject = `[QB Pipeline] ${subjectParts.join(" · ")} — ${today}`;
 
   const html = `
 <!DOCTYPE html>
@@ -442,7 +566,11 @@ export default async function qbPipelineErrorDigest(
       <td>
         <h1 style="margin: 0; font-size: 22px; color: #111;">QuickBooks Pipeline Errors</h1>
         <p style="margin: 6px 0 0; font-size: 14px; color: #555;">
-          Daily digest for ${today} — ${totalErrors} error${totalErrors === 1 ? "" : "s"} from the ${windowLabel} across 4 pipelines.
+          Daily digest for ${today} — ${qbErrors} error${qbErrors === 1 ? "" : "s"} from the ${windowLabel} across 4 pipelines${
+            driftRows.length > 0
+              ? `, plus ${driftRows.length} row${driftRows.length === 1 ? "" : "s"} where the orders search index disagrees with the database`
+              : ""
+          }.
           <br/>
           <span style="color: #888; font-size: 12px;">
             Rows still on an automatic retry schedule are excluded — only genuinely stuck errors are shown.
@@ -454,6 +582,11 @@ export default async function qbPipelineErrorDigest(
       </td>
     </tr>
     ${sections.map(renderSection).join("")}
+    ${
+      orderDrift
+        ? renderOrderDriftSection(driftRows, orderDrift.audit, ADMIN_BASE_URL)
+        : ""
+    }
     <tr>
       <td style="padding: 24px 0; border-top: 1px solid #e5e7eb; color: #888; font-size: 11px;">
         Auto-generated by qb-pipeline-error-digest cron. Recipients: ${escapeHtml(DIGEST_RECIPIENT)}.
@@ -462,35 +595,58 @@ export default async function qbPipelineErrorDigest(
   </table>
 </body></html>`;
 
+  return {
+    subject,
+    html,
+    qbErrors,
+    driftRows: driftRows.length,
+    stampItemIds: itemErrors.map((r) => r.id),
+    stampSalesIds: salesErrors.map((r) => r.id),
+  };
+}
+
+export default async function qbPipelineErrorDigest(
+  container: MedusaContainer
+) {
+  if (isScheduledJobsDisabled(container)) return;
+
+  const logger = container.resolve("logger");
+  const knex = (container as any).resolve("__pg_connection__");
+
+  const email = await buildDigestEmail(container, knex, logger);
+  if (!email) return;
+
   try {
     const sent = await sendMail({
       to: DIGEST_RECIPIENT,
-      subject,
-      html,
+      subject: email.subject,
+      html: email.html,
     });
     if (sent) {
       logger.info(
-        `[qb-pipeline-error-digest] sent: ${totalErrors} errors → ${DIGEST_RECIPIENT}`
+        `[qb-pipeline-error-digest] sent: ${email.qbErrors} pipeline errors + ${email.driftRows} orders index drift rows → ${DIGEST_RECIPIENT}`
       );
       // Stamp every reported item-pipeline row so the STUCK bucket's dedup
       // window (above) can tell "already told them" from "new development".
       // Only do this on a confirmed send — if sendMail fails, leave rows
       // un-stamped so they're retried in tomorrow's digest.
-      const stuckIds = itemErrors.map((r) => r.id);
-      if (stuckIds.length > 0) {
+      //
+      // Nothing equivalent exists for the orders index section, on purpose: its
+      // drift has no row to stamp, and by the time this job runs the 5-minute
+      // sweep has already had its chance, so a repeat means still-unfixed.
+      if (email.stampItemIds.length > 0) {
         await knex.raw(
           `UPDATE qb_item_pipeline SET digest_notified_at = now() WHERE id = ANY(?)`,
-          [stuckIds]
+          [email.stampItemIds]
         );
       }
       // Same for the sales pipeline's dormant-failure bucket — without the
       // stamp its dedup can't distinguish "already told them" from "new", and
       // every dead row would be re-reported every single day.
-      const salesIds = salesErrors.map((r) => r.id);
-      if (salesIds.length > 0) {
+      if (email.stampSalesIds.length > 0) {
         await knex.raw(
           `UPDATE qb_order_pipeline SET digest_notified_at = now() WHERE id = ANY(?)`,
-          [salesIds]
+          [email.stampSalesIds]
         );
       }
     } else {

@@ -1,5 +1,6 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
+import { ORDER_AUDITED_FIELDS } from "../audit-orders-index";
 import type { EntityReconciler } from "../drift-reconciler";
 import { ORDERS_INDEX, buildAllOrderDocs } from "../sync-orders-runner";
 
@@ -35,30 +36,10 @@ async function buildOneOrderDoc(
 export const orderReconciler: EntityReconciler = {
   entityType: "order",
   meiliIndex: ORDERS_INDEX,
-  // The fields that decide what the operator sees and which tab an order lands
-  // in. updated_at_ts is deliberately excluded: it moves on every touch and would
-  // report drift on rows that are otherwise identical.
-  comparableFields: [
-    "display_id",
-    "document_number",
-    "status",
-    "effective_payment",
-    "fulfillment_status",
-    "is_unpaid",
-    "is_open",
-    "is_closed",
-    "is_separated",
-    "is_canceled",
-    "is_voided",
-    "is_web",
-    "is_draft",
-    "total_cents",
-    "sales_rep_initials",
-    "effective_date_ts",
-    "customer_name",
-    "company_name",
-    "customer_email",
-  ],
+  // Shared with the daily audit on purpose. When this list and the audit's were
+  // two separate literals they had already diverged by three fields, which means
+  // the 5-minute sweep and the report disagreed about what "drifted" meant.
+  comparableFields: [...ORDER_AUDITED_FIELDS],
   buildExpectedDoc: buildOneOrderDoc,
   syncOne: async (id, container) => {
     const doc = await buildOneOrderDoc(id, container);
