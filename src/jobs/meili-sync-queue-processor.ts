@@ -20,6 +20,7 @@ import type { EntityReconciler } from "../lib/meilisearch/drift-reconciler";
 import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reconciler";
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
 import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
+import { vendorReconciler } from "../lib/meilisearch/reconcilers/vendor-reconciler";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
@@ -34,6 +35,7 @@ const RECONCILERS: Record<string, EntityReconciler> = {
   customer: customerReconciler,
   product: productReconciler,
   inventory_item: inventoryReconciler,
+  vendor: vendorReconciler,
 };
 
 /** Max rows pulled per pass — safety cap, won't process more than this even
