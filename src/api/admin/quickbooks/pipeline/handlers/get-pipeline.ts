@@ -1,15 +1,11 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
-const PURCHASE_PIPELINE_STEPS = [
-  "purchase_order_mod",
-  "item_receipt_add",
-  "item_receipt_mod",
-  "vendor_bill_add",
-  "vendor_bill_mod",
-  "vendor_bill_rebuild_preflight",
-  "vendor_bill_rebuild_delete",
-] as const;
+import {
+  PURCHASE_PIPELINE_STEPS,
+  SALES_PIPELINE_EXCLUDED_STEPS,
+  salesPipelineStepScopeSql,
+} from "../../../../../lib/quickbooks/pipeline/sales-pipeline-scope";
 
 export async function GET(
   req: MedusaRequest,
@@ -100,16 +96,9 @@ export async function GET(
       values.push(step);
     } else {
       // Exclude steps that have dedicated tabs in the QB pipeline UI.
-      conditions.push(
-        `p.step NOT IN (
-          'customer_data_ext', 'inventory_adjustment',
-          'void_inventory_adjustment', 'purchase_order_mod',
-          'item_receipt_add', 'item_receipt_mod',
-          'vendor_bill_add', 'vendor_bill_mod',
-          'vendor_bill_rebuild_preflight',
-          'vendor_bill_rebuild_delete'
-        )`
-      );
+      // Scope shared with the badge summary below — see sales-pipeline-scope.ts.
+      conditions.push(salesPipelineStepScopeSql(p++, "p"));
+      values.push(SALES_PIPELINE_EXCLUDED_STEPS);
     }
     if (refId) {
       conditions.push(`(p.order_id = $${p} OR p.reference_id = $${p})`);
@@ -237,8 +226,10 @@ export async function GET(
     // a count for every status bucket, not just the active one.
     const summaryStepCondition = step
       ? `step = $1`
-      : `step <> 'customer_data_ext'`;
-    const summaryValues = step ? [step] : [];
+      : salesPipelineStepScopeSql(1);
+    const summaryValues: unknown[] = step
+      ? [step]
+      : [SALES_PIPELINE_EXCLUDED_STEPS];
     const { rows: summary } = await client.query(
       `SELECT status, COUNT(*) AS count
        FROM qb_order_pipeline

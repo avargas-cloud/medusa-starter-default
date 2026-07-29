@@ -10,9 +10,21 @@ import { withQbLockResult } from "../qb-locks";
 import {
   writePipelineRow,
   cacheEditSequence,
+  clearQuiescenceStamp,
+  deferPipelineRow,
+  failOrRetryPipelineRow,
+  failPipelineRow,
   requeueApplyPaymentWaiting,
   resolveCanonicalApplyPaymentRef,
 } from "../qb-pipeline";
+import { decideAddRetrySafety } from "../pipeline/add-retry-safety";
+import {
+  QUIESCENCE_MAX_WAIT_MS,
+  QUIESCENCE_RECHECK_SECONDS,
+  describeBlockers,
+  findApplyPaymentBlockers,
+  hasWaitedTooLong,
+} from "../pipeline/document-quiescence";
 import { getDbPool } from "../../../api/utils/db-pool";
 
 /**
@@ -397,6 +409,78 @@ export async function handlePosPaymentApplied({
     }
   }
 
+  // ── Quiescence gate ───────────────────────────────────────────────────────
+  // The two dependency checks above only ask "does the document EXIST in QB
+  // yet?". They never asked whether it is about to CHANGE. An apply dispatched
+  // while a mutation of the same document sits in the queue races it — that is
+  // exactly how CM-1105 → Invoice 21215 died with QB Error 3210 on 2026-07-27:
+  // the operator shrank the credit memo, and the apply fired 2.5 minutes before
+  // the corrective `credit_memo_mod` reached QuickBooks.
+  //
+  // Runs on EVERY attempt, immediately before the bridge call — a check made at
+  // enqueue time would be stale by now. See pipeline/document-quiescence.ts.
+  const quiescencePool = getDbPool();
+  const { rows: selfRows } = await quiescencePool.query(
+    `SELECT id, retry_count FROM qb_order_pipeline
+      WHERE step = 'apply_payment' AND order_id = $1 AND reference_id = $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [order_id, applyReferenceId]
+  );
+  const applyRowId: string | null = selfRows[0]?.id ?? null;
+  const retryCountSoFar: number = Number(selfRows[0]?.retry_count ?? 0);
+
+  const blockers = await findApplyPaymentBlockers(quiescencePool, {
+    invoiceId: invoice_id,
+    creditMemoNumber: isCreditMemoPayment
+      ? ((payment as any).reference ?? null)
+      : null,
+    paymentId: isCreditMemoPayment ? null : payment_id,
+    excludeRowId: applyRowId,
+  }).catch((qErr: any) => {
+    // Never let the gate itself block money movement — log and proceed.
+    logger.warn(
+      `${LOG_PREFIX} Quiescence check failed (${qErr?.message}) — dispatching without it`
+    );
+    return [];
+  });
+
+  if (blockers.length > 0) {
+    const detail = describeBlockers(blockers);
+    if (!applyRowId) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Documents not quiescent (${detail}) but no apply_payment row to defer — dispatching anyway`
+      );
+    } else {
+      const { deferredSince } = await deferPipelineRow(
+        applyRowId,
+        `⏸️ Waiting for in-flight QuickBooks edits to settle: ${detail}`,
+        QUIESCENCE_RECHECK_SECONDS
+      );
+
+      if (hasWaitedTooLong(deferredSince)) {
+        const minutes = Math.round(QUIESCENCE_MAX_WAIT_MS / 60000);
+        await failPipelineRow(
+          applyRowId,
+          `apply_payment held ${minutes}min waiting for in-flight QB edits: ${detail}. ` +
+            `NOT dispatched — applying while the document is changing is what produced QB Error 3210 ` +
+            `on CM-1105 / Invoice 21215. Resolve those operations, then Retry.`
+        );
+        logger.error(
+          `${LOG_PREFIX} ⛔ apply_payment ${applyRowId} gave up after ${minutes}min waiting on: ${detail}`
+        );
+        return;
+      }
+
+      logger.info(
+        `${LOG_PREFIX} ⏸️ apply_payment deferred ${QUIESCENCE_RECHECK_SECONDS}s — documents not quiescent: ${detail}`
+      );
+      return;
+    }
+  } else if (applyRowId) {
+    // Past the gate — reset the clock so a future wait starts from zero.
+    await clearQuiescenceStamp(applyRowId).catch(() => {});
+  }
+
   // 5. Fire the Bridge Request to Apply Payment to Invoice!
   logger.info(
     `${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${(amountForQbCents / 100).toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`
@@ -464,6 +548,11 @@ export async function handlePosPaymentApplied({
           invoiceTxnId: invoiceTxnId!,
           amount: amount_applied / 100,
           memo: updatedMemo,
+          // 1:1 with the document this ADD creates — see applyCreditMemoToInvoiceInQb.
+          applicationId:
+            applyReferenceType === "payment_application"
+              ? applyReferenceId
+              : undefined,
           log: (m: string) => logger.info(m),
           onQueued,
         })
@@ -480,19 +569,49 @@ export async function handlePosPaymentApplied({
         });
 
     if (!applyResult.success) {
+      const failure = applyResult.error || "Merge-apply failed";
       logger.error(
-        `${LOG_PREFIX} ❌ Failed to merge-apply payment in QB: ${applyResult.error}`
+        `${LOG_PREFIX} ❌ Failed to merge-apply payment in QB: ${failure}`
       );
+
+      // ── Retry policy ──────────────────────────────────────────────────────
+      // This used to write a raw `failed` row: no `next_retry_at`, so the row
+      // died on the spot. That is how the CM-1105 apply stayed broken — its
+      // sibling `credit_memo_mod` failed in the SAME second, went through the
+      // retry-aware path, and confirmed 2 minutes later.
+      //
+      // But the credit-memo path is a ReceivePaymentAdd, and ADDs are not
+      // idempotent. Only retry automatically when QuickBooks ANSWERED (nothing
+      // was created). When the outcome is unknown, stop and stay visible rather
+      // than risk minting a duplicate payment.
       try {
-        await writePipelineRow({
-          orderId: order_id,
-          referenceId: applyReferenceId,
-          referenceType: applyReferenceType,
-          step: "apply_payment",
-          status: "failed",
-          medusaRefNumber: medusaPayRef,
-          error: applyResult.error || "Merge-apply failed",
-        });
+        if (!applyRowId) {
+          await writePipelineRow({
+            orderId: order_id,
+            referenceId: applyReferenceId,
+            referenceType: applyReferenceType,
+            step: "apply_payment",
+            status: "failed",
+            medusaRefNumber: medusaPayRef,
+            error: failure,
+          });
+        } else if (!isCreditMemoPayment) {
+          // mergeApplyPaymentInQb is read-merge-replace and idempotent.
+          await failOrRetryPipelineRow(applyRowId, failure, retryCountSoFar);
+        } else {
+          const safety = decideAddRetrySafety(failure);
+          if (safety.safeToAutoRetry) {
+            await failOrRetryPipelineRow(applyRowId, failure, retryCountSoFar);
+          } else {
+            await failPipelineRow(
+              applyRowId,
+              `${failure} — ⚠️ NOT auto-retried: ${safety.reason}`
+            );
+            logger.error(
+              `${LOG_PREFIX} ⛔ apply_payment ${applyRowId} left for manual review — ${safety.reason}`
+            );
+          }
+        }
       } catch {}
       return;
     }

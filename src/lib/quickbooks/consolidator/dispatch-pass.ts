@@ -242,7 +242,12 @@ export async function runPendingDispatchPass(
           FROM qb_order_pipeline
          WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'payment_method_change', 'refund_check_mod', 'refund_payment_txndate_change', 'refund_apply_del', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment', 'purchase_order_mod', 'item_receipt_add', 'item_receipt_mod', 'vendor_bill_add', 'vendor_bill_mod', 'vendor_bill_rebuild_preflight', 'vendor_bill_rebuild_delete', 'vendor_bill_payment_check')
            AND (
-             status = 'pending'
+             -- A 'pending' row is normally due immediately. It carries a
+             -- next_retry_at only when a handler DEFERRED it on purpose
+             -- (see deferPipelineRow: apply_payment waiting for a document to
+             -- go quiescent). Honouring it here lets a deferral be expressed
+             -- without the row masquerading as 'failed' in the UI badges.
+             (status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
              OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
            )
          ORDER BY COALESCE(updated_at, created_at) ASC

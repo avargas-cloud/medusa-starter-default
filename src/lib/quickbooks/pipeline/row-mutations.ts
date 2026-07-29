@@ -266,6 +266,11 @@ export async function writePipelineRow(
                  submitted_at      = NULL,
                  bridge_op_id      = NULL,
                  qb_result         = NULL,
+                 -- Re-activation means "run this now". A stale backoff left over
+                 -- from an earlier failure must not survive it: since
+                 -- runPendingDispatchPass honours next_retry_at on pending rows,
+                 -- keeping it here would silently park the re-enqueued row.
+                 next_retry_at     = NULL,
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  qb_txn_id         = COALESCE($6, qb_txn_id),
                  qb_ref_number     = COALESCE($7, qb_ref_number),
@@ -735,6 +740,78 @@ export async function confirmPipelineRow(
     [rowId, qbTxnId, qbRefNumber, qbResult ? JSON.stringify(qbResult) : null]
   );
   return rows.length > 0;
+}
+
+/**
+ * Parks a row that is NOT in error — it simply must not run yet.
+ *
+ * Used by the apply_payment quiescence gate: the documents an apply depends on
+ * still have live operations queued against them, so dispatching now would
+ * race them (this is what produced QB Error 3210 on CM-1105 / Invoice 21215).
+ *
+ * Deliberate choices:
+ *  - status stays `pending`, NOT `failed`. A deferral is not a failure, and
+ *    parking it as failed would inflate the Failed badge the operator watches.
+ *    `runPendingDispatchPass` honours `next_retry_at` on pending rows.
+ *  - `retry_count` is untouched: waiting must not consume the retry budget.
+ *  - `depends_on` is untouched: an apply depends on TWO documents and that
+ *    column holds one parent. See document-quiescence.ts for the full rationale.
+ *  - The first deferral stamps `payload.quiescence_since` so the caller can
+ *    enforce an upper bound instead of sleeping forever.
+ *
+ * @returns the timestamp of the FIRST deferral in this streak (null if this
+ *          call started it), so the caller can apply the timeout.
+ */
+export async function deferPipelineRow(
+  rowId: string,
+  reason: string,
+  delaySeconds: number
+): Promise<{ deferredSince: string | null }> {
+  const pool = getDbPool();
+  const { rows } = await pool.query(
+    `WITH prev AS (
+        SELECT payload->>'quiescence_since' AS since
+          FROM qb_order_pipeline
+         WHERE id = $1
+     )
+     UPDATE qb_order_pipeline
+        SET status        = 'pending',
+            next_retry_at = NOW() + make_interval(secs => $3::float),
+            error         = $2,
+            failed_at     = NULL,
+            confirmed_at  = NULL,
+            submitted_at  = NULL,
+            bridge_op_id  = NULL,
+            payload       = COALESCE(payload, '{}'::jsonb)
+                            || jsonb_build_object(
+                                 'quiescence_since',
+                                 COALESCE(
+                                   (SELECT since FROM prev),
+                                   to_char(NOW() AT TIME ZONE 'UTC',
+                                           'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                                 )
+                               ),
+            updated_at    = NOW()
+      WHERE id = $1
+      RETURNING (SELECT since FROM prev) AS deferred_since`,
+    [rowId, reason, delaySeconds]
+  );
+  return { deferredSince: rows[0]?.deferred_since ?? null };
+}
+
+/**
+ * Clears the quiescence stamp once a row finally gets past the gate, so a later
+ * deferral streak starts its timeout from zero instead of inheriting an old one.
+ */
+export async function clearQuiescenceStamp(rowId: string): Promise<void> {
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE qb_order_pipeline
+        SET payload = payload - 'quiescence_since'
+      WHERE id = $1
+        AND payload -> 'quiescence_since' IS NOT NULL`,
+    [rowId]
+  );
 }
 
 /**

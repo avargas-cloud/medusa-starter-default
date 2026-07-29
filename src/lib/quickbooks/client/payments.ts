@@ -418,6 +418,15 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
   amount: number;
   refNumber?: string;
   memo?: string;
+  /**
+   * `payment_application.id` (papp_…). Rides as the bridge Idempotency-Key so a
+   * re-sent ADD collapses into the original op instead of minting a second
+   * ReceivePayment. MUST be 1:1 with the document — a key keyed by anything
+   * coarser (order id, payment id) would make the bridge swallow a second
+   * LEGITIMATE application, which is worse than a duplicate: money silently
+   * missing instead of visibly doubled.
+   */
+  applicationId?: string;
   log?: (msg: string) => void;
   onQueued?: (operationId: string) => Promise<void>;
 }): Promise<QbBridgeResult<MergeApplyResult>> {
@@ -439,16 +448,23 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
   }
 
   try {
-    const enqueueRes = await bridgeFetch("POST", "/api/payments", {
-      customerId: payload.customerId,
-      totalAmount: 0,
-      invoiceId: payload.invoiceTxnId,
-      paymentAmount: 0,
-      creditTxnId: payload.creditMemoTxnId,
-      amount: payload.amount,
-      ...(payload.refNumber ? { refNumber: payload.refNumber } : {}),
-      ...(payload.memo ? { memo: payload.memo } : {}),
-    });
+    const enqueueRes = await bridgeFetch(
+      "POST",
+      "/api/payments",
+      {
+        customerId: payload.customerId,
+        totalAmount: 0,
+        invoiceId: payload.invoiceTxnId,
+        paymentAmount: 0,
+        creditTxnId: payload.creditMemoTxnId,
+        amount: payload.amount,
+        ...(payload.refNumber ? { refNumber: payload.refNumber } : {}),
+        ...(payload.memo ? { memo: payload.memo } : {}),
+      },
+      payload.applicationId
+        ? { idempotencyKey: `apply-payment:${payload.applicationId}` }
+        : undefined
+    );
 
     const operationId: string = enqueueRes?.operationId;
     if (!operationId)
