@@ -7,6 +7,7 @@ import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
 } from "../../lib/quickbooks/order-flow-core";
+import { enqueueVoidIfAlreadyVoided } from "../../lib/quickbooks/pipeline/void-intent";
 import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../modules/finance";
 // Workaround for Medusa's exported types missing the internal hooks:
@@ -358,8 +359,14 @@ hooks.orderCreated(
                         writePipelineRow({
                           orderId: _qbOrderId,
                           referenceId: _qbCpayId,
+                          referenceType: "customer_payment",
                           step: "payment",
                           status: "confirmed",
+                          // El TxnID faltaba en la fila: sólo se estampaba en el
+                          // metadata del pago. Una fila `confirmed` sin el
+                          // documento que confirmó no le sirve a nadie que la
+                          // lea después — el void, entre otros.
+                          qbTxnId: qbResult.txnId ?? null,
                         }),
                         financeService
                           .updateCustomerPayments([
@@ -373,6 +380,34 @@ hooks.orderCreated(
                           ])
                           .catch(() => {}),
                       ]);
+
+                      // Camino INLINE de confirmación del pago WEB — el gemelo
+                      // de `handle-pos-payment-created` para el checkout.
+                      //
+                      // Si el cliente pagó y el pago se voideó mientras su
+                      // ReceivePaymentAdd viajaba, éste es el primer instante
+                      // con TxnID y por lo tanto el único momento en que el
+                      // TxnDel se puede emitir. Sin esta llamada el pago queda
+                      // voideado acá y VIVO en QuickBooks.
+                      //
+                      // El void de un pago web pasa por la MISMA ruta y el
+                      // MISMO handler que el del POS (`finance/payments/:id/void`
+                      // → `handlePosPaymentVoided`, que no distingue origen),
+                      // así que la carrera es idéntica: sólo faltaba avisar
+                      // desde este lado.
+                      if (qbResult.txnId) {
+                        await enqueueVoidIfAlreadyVoided({
+                          createStep: "payment",
+                          referenceId: _qbCpayId,
+                          orderId: _qbOrderId,
+                          qbTxnId: qbResult.txnId,
+                          medusaRefNumber: _qbRefNum ?? null,
+                          logger: {
+                            info: (m: string) => console.log(m),
+                            warn: (m: string) => console.warn(m),
+                          },
+                        });
+                      }
                     }
                   })
                   .catch((err: any) => {

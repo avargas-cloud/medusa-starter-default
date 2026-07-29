@@ -1,3 +1,31 @@
+/**
+ * ⚠️ CÓDIGO MUERTO — no puede ejecutar trabajo. No lo tomes como referencia.
+ *
+ * Dos guards complementarios lo dejan sin ningún caso posible:
+ *
+ *   - `qb-order-subscriber.ts` sólo lo invoca si la orden ES del POS
+ *     (`if (!isPosOrder(paymentOrder)) break;`).
+ *   - este handler retorna inmediatamente si la orden ES del POS
+ *     (`if (isPosOrder(order)) return;`).
+ *
+ * Las órdenes web nunca entran; las del POS entran y se van sin hacer nada.
+ * La prueba está en los datos: de las 786 filas `step='payment'` en producción,
+ * CERO carecen de `reference_id` — y este archivo escribe sin él. Nunca escribió
+ * una sola fila.
+ *
+ * Los pagos REALES viven en otro lado:
+ *   - POS → `handle-pos-payment-created.ts`
+ *   - WEB → el hook de checkout `workflows/hooks/maintain-cart-prices.ts`
+ *
+ * Se documenta en vez de borrarlo porque su sola existencia ya costó un
+ * diagnóstico equivocado: al leerlo se concluyó que el pago web no tenía un
+ * `customer_payment` que referenciar y que por eso su void era imposible de
+ * cubrir. Falso — el hook del checkout sí lo tiene, y hoy llama al
+ * `enqueueVoidIfAlreadyVoided` como todos los demás caminos.
+ *
+ * Si algún día se borra, revisar antes `src/scripts/test/sandbox-smoke-*.ts`,
+ * que lo nombran.
+ */
 import { processPaymentCaptureInQb } from "../order-flow-core";
 import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client";

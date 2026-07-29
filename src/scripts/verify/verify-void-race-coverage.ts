@@ -29,6 +29,9 @@ const INLINE_CONFIRM_PATHS = [
   "lib/quickbooks/handlers/handle-order-placed.ts",
   "lib/quickbooks/handlers/handle-pos-payment-created.ts",
   "subscribers/qb-draft-order-subscriber.ts",
+  // El pago WEB confirma acá, dentro del hook de checkout — no en un handler
+  // de `handlers/`, que es exactamente por qué se pasó por alto la primera vez.
+  "workflows/hooks/maintain-cart-prices.ts",
 ];
 
 /** El camino asíncrono del consolidator. */
@@ -64,13 +67,14 @@ for (const rel of [...INLINE_CONFIRM_PATHS, CONSOLIDATOR_CONFIRM]) {
 const TERNARY = /\?\s*"submitted"\s*:\s*"confirmed"/;
 const KNOWN = new Set([...INLINE_CONFIRM_PATHS]);
 /**
- * `handle-payment-captured` es la captura web a nivel ORDEN: su fila de
- * pipeline no lleva `reference_id` porque no hay un `customer_payment` que
- * referenciar, así que no hay clave sobre la que materializar un void. Es un
- * límite estructural, no cobertura faltante.
+ * `handle-payment-captured` es CÓDIGO MUERTO: dos guards complementarios (uno
+ * en el subscriber, otro en el propio handler) no le dejan ningún caso posible.
+ * Nunca escribió una fila — de las 786 `step='payment'` en producción, cero
+ * carecen de `reference_id`, y este archivo escribe sin él.
  *
- * (`handle-pos-payment-created` SÍ llama al hook desde el delta v2 y por eso
- * salió de esta lista.)
+ * Está exento porque no hay nada que cubrir, NO porque le falte cobertura. Ver
+ * el encabezado del archivo, que explica la trampa: leerlo llevó una vez a
+ * concluir en falso que el pago web no se podía cubrir.
  */
 const PAYMENT_PATHS = new Set([
   "lib/quickbooks/handlers/handle-payment-captured.ts",
