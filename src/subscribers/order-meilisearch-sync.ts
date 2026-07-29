@@ -7,6 +7,7 @@ import {
   type OrderForMeili,
 } from "../lib/meilisearch/build-order-doc";
 import { loadFullyInvoicedForOrder } from "../lib/invoices/load-fully-invoiced";
+import { enrichOrderTotals } from "../lib/meilisearch/enrich-order-totals";
 
 /**
  * AUTO-SYNC ORDER → MEILISEARCH
@@ -124,6 +125,34 @@ export async function syncOrders(
         `[MEILI-ORDER-SYNC] no orders returned for ids: ${orderIds.join(",")}`
       );
       return;
+    }
+
+    // The order total is missing from query.graph as well, and every payment
+    // branch in buildOrderDoc is gated on a positive total — without this the doc
+    // indexes with total 0, `fully_paid` becomes unreachable and everything with
+    // money lands in `deposited`. Own connection because the fulfillment fallback
+    // below only opens one when fulfillments are missing, which is a different
+    // and rarer condition.
+    try {
+      const db = new Client({ connectionString: process.env.DATABASE_URL });
+      await db.connect();
+      try {
+        const totals = await enrichOrderTotals(db, data as OrderForMeili[]);
+        if (totals.unresolved.length > 0) {
+          logger.warn(
+            `[MEILI-ORDER-SYNC] no resolvable total for ${totals.unresolved.length} ` +
+              `order(s); they index with 0 and land in no payment bucket: ` +
+              `${totals.unresolved.slice(0, 10).join(", ")}`
+          );
+        }
+      } finally {
+        await db.end();
+      }
+    } catch (totalErr: any) {
+      logger.warn(
+        `[MEILI-ORDER-SYNC] total enrichment failed: ${totalErr?.message}`
+      );
+      // Non-fatal — indexing a doc with a stale total beats not indexing at all.
     }
 
     // SQL fallback: query.graph intermittently returns fulfillments=[] due to a

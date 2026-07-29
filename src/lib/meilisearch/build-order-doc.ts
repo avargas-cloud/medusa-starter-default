@@ -424,7 +424,11 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     is_web_order: isWebOrder,
     sales_rep_initials: salesRepInitials,
     sales_channel_id: salesChannelId,
-    total_cents: Math.round(asNum(order.total) * 100),
+    // Same resolved total the payment logic uses, not the raw `order.total`.
+    // query.graph never delivers that field, so this was 0 on every document in
+    // the index — and total_cents is a sortableAttribute, meaning a Meili-side
+    // sort by order value was sorting a column of zeroes.
+    total_cents: Math.round((getOrderTotal(order) ?? 0) * 100),
     created_at_ts: ts(order.created_at),
     effective_date_ts:
       ts((meta.order_placed_at as string | Date | null | undefined) ?? null) ||

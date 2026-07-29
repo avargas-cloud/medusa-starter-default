@@ -1,6 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { buildOrderDoc, type OrderForMeili } from "./build-order-doc";
+import { enrichOrderTotals } from "./enrich-order-totals";
 
 export const ORDERS_INDEX = "orders";
 
@@ -102,7 +103,25 @@ export async function syncAllOrdersToMeili(
            JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version`
       ),
     ]);
+
+    // The order total is missing from query.graph too — same gap, same fix.
+    // Must happen before db.end(), and before buildOrderDoc: every payment
+    // branch downstream is gated on a positive total.
+    const totals = await enrichOrderTotals(db, orders as any[]);
     await db.end();
+
+    if (totals.patched > 0) {
+      log.info(
+        `[sync-meili-orders] SQL-enriched totals for ${totals.patched} orders`
+      );
+    }
+    if (totals.unresolved.length > 0) {
+      log.warn?.(
+        `[sync-meili-orders] ${totals.unresolved.length} order(s) still have no ` +
+          `resolvable total and will index with 0 — they land in no payment ` +
+          `bucket: ${totals.unresolved.slice(0, 10).join(", ")}`
+      );
+    }
 
     const fulByOrder = new Map<string, unknown[]>();
     for (const r of fulRes.rows) {
