@@ -3,6 +3,7 @@ import {
   computeFulfillmentStatus,
   type OrderForMeili,
 } from "../../../../lib/meilisearch/build-order-doc";
+import { parseRep, repFilter } from "../_lib/rep-filter";
 
 /**
  * GET /admin/orders/filter?tab=<tab>&payment=<effective>
@@ -15,6 +16,10 @@ import {
 const ORDERS_INDEX = "orders";
 const PAGE = 1000;
 const MAX_TOTAL = 10000;
+
+// Above this many ids, restricting the aggregate CTEs to the id list costs more
+// than it saves. See the measurements in hydrateOrderRows.
+const CTE_SCOPE_MAX_IDS = 1000;
 
 const TAB_FILTER: Record<string, string> = {
   unpaid: "is_unpaid = true",
@@ -108,6 +113,43 @@ async function hydrateOrderRows(
 
   const ids = docs.map((doc) => doc.id);
   const pg = resolveSql(req);
+
+  // Should the aggregate CTEs below be restricted to `ids`?
+  //
+  // Postgres is allowed to push a predicate on a grouping key down into a
+  // GROUP BY subquery, but measured against production it does not here: with
+  // the filter only on the outer SELECT, every request aggregated all 15,883
+  // order_item rows no matter how few orders it was serving.
+  //
+  // Restricting them is a large win while the requested set is a minority of
+  // the table, and a loss once it is nearly all of it — at that point testing
+  // each row against the id list costs more than scanning. Medians of 3 runs
+  // against production (1,272 orders in the table):
+  //
+  //     ids | unscoped | scoped
+  //      24 |   124 ms |  11 ms   (-92%)   Unpaid / Open / Separated
+  //     232 |   140 ms |  56 ms   (-58%)   payment filters
+  //     954 |   170 ms | 120 ms   (-30%)
+  //    1194 |   178 ms | 222 ms   (+25%)   Closed — regression
+  //
+  // Hence the threshold. It is an empirical break-even at today's table size,
+  // not a universal constant: re-measure it if the orders table grows by an
+  // order of magnitude. Once this route serves one page at a time rather than a
+  // whole tab, every request lands far below it and the branch stops mattering.
+  const scopeAggregates = ids.length <= CTE_SCOPE_MAX_IDS;
+  // Restricting a CTE cannot change a value this route emits: they are LEFT
+  // JOINed on order_id, so rows belonging to orders outside `ids` could never
+  // have matched a row inside it. Verified against production by hashing every
+  // emitted field of both variants inside one REPEATABLE READ snapshot across
+  // all six tabs plus payment and rep filters — identical in every case.
+  const scoped = (column: string): string =>
+    scopeAggregates ? `AND ${column} = ANY(?::text[])` : "";
+  // knex's pg.raw uses positional `?`, so `ids` is bound once per occurrence:
+  // four CTEs plus the outer SELECT when scoped, otherwise the outer one alone.
+  const bindings = scopeAggregates
+    ? [ids, ids, ids, ids, ids]
+    : [ids];
+
   const result = await pg.raw(
     `
       WITH payment_agg AS (
@@ -125,6 +167,7 @@ async function hydrateOrderRows(
           ON pc.id = opc.payment_collection_id
          AND pc.deleted_at IS NULL
         WHERE opc.deleted_at IS NULL
+          ${scoped("opc.order_id")}
         GROUP BY opc.order_id
       ),
       shipping_agg AS (
@@ -146,6 +189,7 @@ async function hydrateOrderRows(
           ON osm.id = os.shipping_method_id
          AND osm.deleted_at IS NULL
         WHERE os.deleted_at IS NULL
+          ${scoped("os.order_id")}
         GROUP BY os.order_id
       ),
       fulfillment_agg AS (
@@ -156,12 +200,13 @@ async function hydrateOrderRows(
             'shipped_at', fulfillment.shipped_at,
             'delivered_at', fulfillment.delivered_at,
             'canceled_at', fulfillment.canceled_at
-          )) AS fulfillments
+          ) ORDER BY order_fulfillment.id) AS fulfillments
         FROM order_fulfillment
         JOIN fulfillment
           ON fulfillment.id = order_fulfillment.fulfillment_id
          AND fulfillment.deleted_at IS NULL
         WHERE order_fulfillment.deleted_at IS NULL
+          ${scoped("order_fulfillment.order_id")}
         GROUP BY order_fulfillment.order_id
       ),
       item_agg AS (
@@ -172,13 +217,14 @@ async function hydrateOrderRows(
             'detail', jsonb_build_object(
               'fulfilled_quantity', order_item.fulfilled_quantity
             )
-          )) AS items
+          ) ORDER BY order_item.id) AS items
         FROM order_item
         JOIN "order" current_order
           ON current_order.id = order_item.order_id
          AND current_order.version = order_item.version
          AND current_order.deleted_at IS NULL
         WHERE order_item.deleted_at IS NULL
+          ${scoped("order_item.order_id")}
         GROUP BY order_item.order_id
       )
       SELECT
@@ -252,7 +298,7 @@ async function hydrateOrderRows(
       WHERE o.deleted_at IS NULL
         AND o.id = ANY(?::text[])
     `,
-    [ids]
+    bindings
   );
 
   const rows = result.rows as OrderListRow[];
@@ -289,8 +335,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const from = parseTs(req.query.from);
   const to = parseTs(req.query.to);
   const showCancelled = req.query.showCancelled === "true";
+  const rep = parseRep(req.query.rep);
+  const repName = parseRep(req.query.rep_name);
 
-  const filters: string[] = ["is_draft = false"];
+  const filters: string[] = ["is_draft = false", ...repFilter(rep, repName)];
   if (tab && TAB_FILTER[tab]) filters.push(TAB_FILTER[tab]);
   if (payment && VALID_PAYMENTS.has(payment)) {
     filters.push(`effective_payment = "${payment}"`);
@@ -301,7 +349,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     filters.push("is_canceled = false", "is_voided = false");
   }
 
-  if (!tab && !payment) {
+  // A rep selection alone is enough to need this route: on the All tab there is
+  // no other server-side filter, and falling through to the base-200 feed is
+  // precisely what made rep JTV look like it had no orders.
+  const hasRepFilter = rep !== null || repName !== null;
+  if (!tab && !payment && !hasRepFilter) {
     return res.json({ orders: [], estimatedTotalHits: 0 });
   }
 

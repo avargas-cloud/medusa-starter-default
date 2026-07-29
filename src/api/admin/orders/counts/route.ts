@@ -1,7 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { parseRep, repFilter } from "../_lib/rep-filter";
 
 /**
  * GET /admin/orders/counts?from=<ms>&to=<ms>&showCancelled=true|false
+ *                         &rep=<initials>&rep_name=<name>
  *
  * Returns the REAL tab counts for the POS /orders page, computed off the
  * MeiliSearch `orders` index across the entire DB. Previously the page
@@ -13,6 +15,13 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  *                     to created_at — see effective_date_ts on the doc).
  *   showCancelled   — when "true", cancelled/voided orders count toward each
  *                     tab. Default false (matches the UI default).
+ *   rep / rep_name  — sales-rep filter. Both are matched against the single
+ *                     `sales_rep_initials` field because the source metadata
+ *                     is inconsistent (object with initials, or a bare
+ *                     string) — mirrors the POS predicate exactly. Omit for
+ *                     "All". The badges MUST honour this: the footer counts
+ *                     the rep-filtered rows, so a badge that ignored the rep
+ *                     would disagree with the table it labels.
  *
  * Response:
  *   {
@@ -20,8 +29,11 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  *     cancelledCount: number
  *   }
  *
- * Six Meili searches run in parallel with limit=0; only estimatedTotalHits
- * is read, so each request is ~tens of ms.
+ * Seven document-fetch calls run in parallel with limit=0, reading the exact
+ * `total`. They deliberately do NOT use index.search()/estimatedTotalHits:
+ * Meili clamps that value to pagination.maxTotalHits (default 1000), which is
+ * why the All and Closed badges sat frozen at exactly 1000 while the real
+ * populations were 1210 and 1193. The documents endpoint has no such cap.
  */
 
 const ORDERS_INDEX = "orders";
@@ -54,10 +66,13 @@ function dateFilters(from: number | null, to: number | null): string[] {
   return out;
 }
 
+
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const from = parseTs(req.query.from);
   const to = parseTs(req.query.to);
   const showCancelled = req.query.showCancelled === "true";
+  const rep = parseRep(req.query.rep);
+  const repName = parseRep(req.query.rep_name);
 
   try {
     const { MeiliSearch } = await import("meilisearch");
@@ -71,32 +86,40 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     // Exclude POS estimates: key off the canonical is_draft_order boolean
     // (is_draft), not status != "draft" — a draft order's status can drift
     // (e.g. canceled estimates keep is_draft_order=true but status="canceled").
-    const baseFilters: string[] = ["is_draft = false", ...dateF];
+    const baseFilters: string[] = [
+      "is_draft = false",
+      ...dateF,
+      ...repFilter(rep, repName),
+    ];
 
     // Tab counts honor showCancelled: when off, exclude is_canceled/is_voided.
     const tabBase = showCancelled
       ? baseFilters
       : [...baseFilters, "is_canceled = false", "is_voided = false"];
 
-    const search = async (filters: string[]): Promise<number> => {
-      const r = await index.search("", {
+    // EXACT count. index.search()'s estimatedTotalHits is clamped to
+    // pagination.maxTotalHits; the documents endpoint's `total` is not, so this
+    // is the only shape that can report a population above that ceiling.
+    const countExact = async (filters: string[]): Promise<number> => {
+      const r = await index.getDocuments<{ id: string }>({
         filter: filters,
+        fields: ["id"],
         limit: 0,
       });
-      return r.estimatedTotalHits ?? 0;
+      return r.total ?? 0;
     };
 
     const [all, open, closed, unpaid, web, separated, cancelledCount] =
       await Promise.all([
-        search(tabBase),
-        search([...tabBase, "is_open = true"]),
-        search([...tabBase, "is_closed = true"]),
-        search([...tabBase, "is_unpaid = true"]),
-        search([...tabBase, "is_web = true"]),
-        search([...tabBase, "is_separated = true"]),
+        countExact(tabBase),
+        countExact([...tabBase, "is_open = true"]),
+        countExact([...tabBase, "is_closed = true"]),
+        countExact([...tabBase, "is_unpaid = true"]),
+        countExact([...tabBase, "is_web = true"]),
+        countExact([...tabBase, "is_separated = true"]),
         // Cancelled chip count: independent of showCancelled, always reflects
         // the date-range slice of cancelled + voided orders.
-        search([
+        countExact([
           ...baseFilters,
           "(is_canceled = true OR is_voided = true)",
         ]),
