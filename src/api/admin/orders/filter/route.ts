@@ -37,6 +37,12 @@ const TAB_FILTER: Record<string, string> = {
   medusa_open: 'is_closed = true AND status != "completed" AND status != "archived"',
 };
 
+// `all` is a real tab that adds no predicate of its own — the base filters
+// (is_draft, the date range, cancelled) already describe it. Listed explicitly so
+// serving the whole population is a decision rather than the accident of an
+// unknown tab name falling through TAB_FILTER and matching everything.
+const KNOWN_TABS = new Set<string>([...Object.keys(TAB_FILTER), "all"]);
+
 // `captured` was dropped on 2026-07-29 — see the note on EffectivePaymentStatus
 // in build-order-doc. Accepting it here would be accepting a filter that can
 // only ever return nothing.
@@ -354,6 +360,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const repName = parseRep(req.query.rep_name);
 
   const filters: string[] = ["is_draft = false", ...repFilter(rep, repName)];
+  // An unrecognised tab name is rejected rather than silently returning every
+  // order, which is what would happen if it just missed TAB_FILTER.
+  if (tab && !KNOWN_TABS.has(tab)) {
+    return res
+      .status(400)
+      .json({ error: "unknown_tab", message: `Unknown tab: ${tab}` });
+  }
   if (tab && TAB_FILTER[tab]) filters.push(TAB_FILTER[tab]);
   if (payment && VALID_PAYMENTS.has(payment)) {
     filters.push(`effective_payment = "${payment}"`);
