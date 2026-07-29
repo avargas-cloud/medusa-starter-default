@@ -49,6 +49,7 @@ import {
   bridgeFetch,
   pollRawOperationResult,
 } from "../../lib/quickbooks/client/core";
+import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 type Row = {
   display_id: number;
@@ -116,7 +117,7 @@ async function main(): Promise<void> {
   await db.connect();
 
   log("=== Audit: orphan-open Sales Orders for fully-invoiced orders ===");
-  log(`Bridge: ${process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"}\n`);
+  log(`Bridge: ${requireBridgeUrl()}\n`);
 
   const { rows } = await db.query<Row>(
     `SELECT display_id,

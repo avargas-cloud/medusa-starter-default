@@ -2,8 +2,8 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { pollBridgeStatus } from "../../../../../lib/quickbooks/bridge-fetch";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../modules/quickbooks-catalog";
+import { requireBridgeUrl } from "../../../../../lib/quickbooks/bridge-url";
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 
 const HEADERS = {
@@ -44,7 +44,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   try {
     // 1. Queue the account query on the bridge
-    const initRes = await fetch(`${BRIDGE_URL}/api/accounts`, {
+    const initRes = await fetch(`${requireBridgeUrl()}/api/accounts`, {
       headers: HEADERS,
     });
     const initData = await initRes.json();

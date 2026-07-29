@@ -3,6 +3,7 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
 import { buildPrefVendorRef } from "../../../lib/quickbooks/pref-vendor-ref";
 import { upsertItemPipelineRow } from "../../../lib/quickbooks/upsert-item-pipeline-row";
+import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -32,7 +33,6 @@ type BridgeResponse = {
   error?: string;
 };
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 
 const buildQbPayload = (item: EnqueueQbItemInput) => {
@@ -77,7 +77,7 @@ const buildQbPayload = (item: EnqueueQbItemInput) => {
 const postToBridge = async (
   payload: Record<string, unknown>
 ): Promise<BridgeResponse> => {
-  const res = await fetch(`${BRIDGE_URL}/api/products`, {
+  const res = await fetch(`${requireBridgeUrl()}/api/products`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

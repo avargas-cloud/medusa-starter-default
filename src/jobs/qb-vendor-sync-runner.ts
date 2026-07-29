@@ -11,7 +11,8 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
+
 const API_KEY = process.env.QB_API_KEY || "";
 const HEADERS = {
   "x-api-key": API_KEY,
@@ -217,7 +218,7 @@ async function handleQueued(
   catalog: any,
   logger: any
 ): Promise<void> {
-  const res = await fetch(`${BRIDGE_URL}/api/vendors`, { headers: HEADERS });
+  const res = await fetch(`${requireBridgeUrl()}/api/vendors`, { headers: HEADERS });
   const data = await res.json();
   if (!data.operationId) {
     throw new Error("Bridge did not return operationId");

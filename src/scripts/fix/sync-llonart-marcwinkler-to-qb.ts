@@ -17,10 +17,11 @@
 
 import "dotenv/config";
 import postgres from "postgres";
+import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 const DRY_RUN = !process.argv.includes("--execute");
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+const BRIDGE_URL = requireBridgeUrl();
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const HEADERS = { "x-api-key": API_KEY, "Content-Type": "application/json", "bypass-tunnel-reminder": "true" };
 

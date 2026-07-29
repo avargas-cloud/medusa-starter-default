@@ -17,6 +17,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { INVENTORY_COUNT_MODULE } from "../modules/inventory-count";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 /**
  * QB Inventory Adjustment poller.
  *
@@ -37,7 +38,6 @@ import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
  * so re-sending the same row is safe (the bridge returns the original op).
  */
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 const MAX_ROWS_PER_TICK = 25;
 const MAX_RETRIES = 5;
@@ -165,7 +165,7 @@ async function postAdjustmentToBridge(args: {
     })),
   };
 
-  const res = await fetch(`${BRIDGE_URL}/api/inventory-adjustments`, {
+  const res = await fetch(`${requireBridgeUrl()}/api/inventory-adjustments`, {
     method: "POST",
     headers: { ...COMMON_HEADERS, "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -182,7 +182,7 @@ async function postVoidToBridge(args: {
   external_id: string;
   txn_id: string;
 }): Promise<BridgeEnqueueResponse> {
-  const res = await fetch(`${BRIDGE_URL}/api/inventory-adjustments/void`, {
+  const res = await fetch(`${requireBridgeUrl()}/api/inventory-adjustments/void`, {
     method: "POST",
     headers: { ...COMMON_HEADERS, "content-type": "application/json" },
     body: JSON.stringify({

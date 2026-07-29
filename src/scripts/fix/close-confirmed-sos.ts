@@ -19,6 +19,7 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 import { closeSalesOrderInQb } from "../../lib/quickbooks/client/sales-orders";
+import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 const CONFIRM = process.env.CONFIRM === "yes";
 
@@ -44,7 +45,7 @@ const TARGETS: Array<{ ref: string; txnId: string; doc: string }> = [
 async function main(): Promise<void> {
   console.log(`=== Close ${TARGETS.length} confirmed orphan-open Sales Orders ===`);
   console.log(`MODE: ${CONFIRM ? "LIVE (writing to QB)" : "PREVIEW (set CONFIRM=yes to close)"}`);
-  console.log(`Bridge: ${process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"}\n`);
+  console.log(`Bridge: ${requireBridgeUrl()}\n`);
 
   let closed = 0;
   let errors = 0;

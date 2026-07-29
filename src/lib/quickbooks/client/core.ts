@@ -1,8 +1,7 @@
 import { QbAsyncResult, QbUpdateCustomerPayload } from "./types";
 import { pollBridgeStatus } from "../bridge-fetch";
+import { requireBridgeUrl } from "../bridge-url";
 
-export const BRIDGE_URL =
-  process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 export const API_KEY =
   process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 export const DRY_RUN = process.env.QB_DRY_RUN === "true";
@@ -25,7 +24,7 @@ export async function bridgeFetch(
   body?: object,
   opts?: { idempotencyKey?: string }
 ): Promise<any> {
-  const url = `${BRIDGE_URL}${path}`;
+  const url = `${requireBridgeUrl()}${path}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), BRIDGE_FETCH_TIMEOUT_MS);
 

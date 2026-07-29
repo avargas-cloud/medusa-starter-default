@@ -9,12 +9,13 @@
 
 import * as dotenv from "dotenv";
 import * as path from "path";
+import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 
 // Load backend/.env
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 export const BRIDGE_URL =
-  process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt";
+  requireBridgeUrl();
 export const API_KEY =
   process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 

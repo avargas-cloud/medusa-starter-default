@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { IProductModuleService } from "@medusajs/types";
 import { updateProductsWorkflow } from "@medusajs/medusa/core-flows";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
+import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 
 /**
  * Restores the 2 deleted variants (ESP-NFA30W0430, ESP-NFA30W0460) on product
@@ -14,7 +15,7 @@ import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
  *   DRY_RUN=true npx medusa exec ...
  */
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+const BRIDGE_URL = requireBridgeUrl();
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const POLL_INTERVAL_MS = 30_000;
 const MAX_POLL_ATTEMPTS = 20;

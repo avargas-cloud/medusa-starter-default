@@ -28,8 +28,9 @@
  */
 
 import { Client } from "pg"
+import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
-const QB_BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"
+const QB_BRIDGE_URL = requireBridgeUrl()
 const QB_API_KEY = process.env.QB_API_KEY || ""
 const DATABASE_URL = process.env.DATABASE_URL!
 const DRY_RUN = process.argv.includes("--dry-run")

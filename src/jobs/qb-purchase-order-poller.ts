@@ -33,9 +33,10 @@ import {
   orderPurchaseOrderModLines,
   type PurchaseOrderModLineLike,
 } from "../lib/quickbooks/purchase-order-line-order";
+import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 
 const bridgeUrl = (): string =>
-  process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+  requireBridgeUrl();
 const apiKey = (): string => process.env.QB_API_KEY || "";
 const MAX_ROWS_PER_TICK = 30;
 const MAX_RETRIES = 5;

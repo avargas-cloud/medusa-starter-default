@@ -12,10 +12,11 @@
  */
 
 import { loadEnv } from "@medusajs/utils";
+import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 
 loadEnv("development", process.cwd());
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+const BRIDGE_URL = requireBridgeUrl();
 const API_KEY = process.env.QB_API_KEY || "";
 
 async function testEstimateEndpoint() {

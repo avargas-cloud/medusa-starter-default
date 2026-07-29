@@ -9,8 +9,8 @@
  * reintentamos con DataExtMod. Idempotente.
  */
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 import { pollBridgeStatus } from "./bridge-fetch";
+import { requireBridgeUrl } from "./bridge-url";
 
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 
@@ -29,7 +29,7 @@ async function enqueueDataExt(
   dataExtName: string,
   dataExtValue: string
 ): Promise<string> {
-  const res = await fetch(`${BRIDGE_URL}/api/sync/enqueue`, {
+  const res = await fetch(`${requireBridgeUrl()}/api/sync/enqueue`, {
     method: "POST",
     signal: AbortSignal.timeout(8000),
     headers: {

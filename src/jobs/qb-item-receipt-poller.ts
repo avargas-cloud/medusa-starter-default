@@ -39,9 +39,10 @@ import {
   type KnexRaw,
 } from "../lib/purchase-orders/item-receipt-mod-payload";
 import { checkPoQbSyncGate } from "../lib/purchase-orders/po-qb-sync-gate";
+import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 
 const bridgeUrl = (): string =>
-  process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+  requireBridgeUrl();
 const apiKey = (): string => process.env.QB_API_KEY || "";
 const MAX_ROWS_PER_TICK = 30;
 const MAX_RETRIES = 5;

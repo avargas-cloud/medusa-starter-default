@@ -9,8 +9,9 @@
  * requested in the QBXML builder (see item.ts buildItemQueryActiveWithDesc).
  */
 import type { QbItemRaw, QbItemType, QbRef } from "../../../lib/quickbooks/bulk-item-types";
+import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+const BRIDGE_URL = requireBridgeUrl();
 const API_KEY = process.env.QB_API_KEY || "";
 const POLL_INTERVAL_MS = 30_000;
 const MAX_POLL_ATTEMPTS = 20;

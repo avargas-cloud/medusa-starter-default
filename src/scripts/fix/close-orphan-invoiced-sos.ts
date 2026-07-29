@@ -39,6 +39,7 @@ import {
   pollRawOperationResult,
 } from "../../lib/quickbooks/client/core";
 import { closeSalesOrderInQb } from "../../lib/quickbooks/client/sales-orders";
+import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 type Row = {
   display_id: number;
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
   console.log("=== Close orphan-open Sales Orders (controlled close) ===");
   console.log(`MODE: ${APPLY ? "APPLY (will close SOs in QB)" : "DRY-RUN (no writes)"}`);
   if (ONLY.length) console.log(`ONLY: ${ONLY.join(", ")}`);
-  console.log(`Bridge: ${process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"}\n`);
+  console.log(`Bridge: ${requireBridgeUrl()}\n`);
 
   const { rows } = await db.query<Row>(
     `WITH inv AS (

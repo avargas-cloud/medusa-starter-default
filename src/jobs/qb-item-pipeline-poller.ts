@@ -11,9 +11,10 @@ import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meil
 import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-inventory-item-meilisearch";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 // Read at call time so tests can override QB_BRIDGE_URL after module load.
 const bridgeUrl = (): string =>
-  process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+  requireBridgeUrl();
 const apiKey = (): string => process.env.QB_API_KEY || "";
 const MAX_ROWS_PER_TICK = 50;
 const MAX_RETRIES = 5;

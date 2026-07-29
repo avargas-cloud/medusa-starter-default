@@ -1,8 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../modules/quickbooks-catalog";
+import { requireBridgeUrl } from "../../../../lib/quickbooks/bridge-url";
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 
 type CreateVendorBody = {
@@ -144,7 +144,7 @@ export const POST = async (
     };
 
     try {
-      const bridgeRes = await fetch(`${BRIDGE_URL}/api/vendors`, {
+      const bridgeRes = await fetch(`${requireBridgeUrl()}/api/vendors`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

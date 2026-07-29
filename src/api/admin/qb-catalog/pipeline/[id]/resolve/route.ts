@@ -2,9 +2,10 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../../modules/quickbooks-catalog";
+import { requireBridgeUrl } from "../../../../../../lib/quickbooks/bridge-url";
 
 const bridgeUrl = (): string =>
-  process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+  requireBridgeUrl();
 const apiKey = (): string =>
   process.env.QB_BRIDGE_API_KEY || process.env.QB_API_KEY || "";
 

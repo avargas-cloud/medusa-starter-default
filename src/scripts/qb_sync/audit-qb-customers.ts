@@ -25,11 +25,12 @@ import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import postgres from "postgres";
+import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const BRIDGE_URL =
-  process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+  requireBridgeUrl();
 const API_KEY =
   process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const EXPORT_PATH = path.resolve(__dirname, "../../../customers_export.json");

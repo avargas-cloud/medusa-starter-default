@@ -26,6 +26,7 @@ import {
   applyPaymentToInvoiceInQb,
   pollOperationResult,
 } from "../../lib/quickbooks/qb-bridge-client";
+import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ async function runFullCycle() {
   console.log("🧪 Layer 2: Live Bridge - Full Order Lifecycle Test");
   console.log("=".repeat(60));
   console.log(
-    `📡 Bridge: ${process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"}`
+    `📡 Bridge: ${requireBridgeUrl()}`
   );
   console.log(`👤 Customer: ${CUSTOMER_ID}`);
   console.log(`📦 Product: ${PRODUCT_ID} × ${TEST_QTY} @ $${TEST_PRICE}`);

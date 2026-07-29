@@ -8,8 +8,8 @@ import {
   type QbItemRaw,
 } from "./bulk-item-types";
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
+import { requireBridgeUrl } from "./bridge-url";
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY =
   process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const POLL_INTERVAL_MS = 30_000;
@@ -149,9 +149,9 @@ async function fetchBridgeJson(url: string): Promise<unknown> {
  * LOOK must not go on to call `applyAverageCostUpdates`.
  */
 export async function fetchQbAverageCostItems(log: (line: string) => void) {
-  log(`[QB] Requesting active inventory items with AverageCost from ${BRIDGE_URL}`);
+  log(`[QB] Requesting active inventory items with AverageCost from ${requireBridgeUrl()}`);
   const initJson = (await fetchBridgeJson(
-    `${BRIDGE_URL}/api/products/active-with-description`
+    `${requireBridgeUrl()}/api/products/active-with-description`
   )) as { operationId?: string };
   const operationId = initJson.operationId;
   if (!operationId) throw new Error("Bridge did not return operationId");
@@ -163,7 +163,7 @@ export async function fetchQbAverageCostItems(log: (line: string) => void) {
     log(`⏳ Polling Status (${attempt}/${MAX_POLL_ATTEMPTS})...`);
 
     const body = (await fetchBridgeJson(
-      `${BRIDGE_URL}/api/sync/status/${operationId}`
+      `${requireBridgeUrl()}/api/sync/status/${operationId}`
     )) as { operation?: BridgeOperation };
     const operation = body.operation;
     if (!operation) continue;

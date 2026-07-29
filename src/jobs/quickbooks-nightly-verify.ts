@@ -21,8 +21,9 @@ import { Client } from "pg";
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 const TAG = "[QB-NIGHTLY-VERIFY]";
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const REPORT_EMAIL = process.env.QB_REPORT_EMAIL || "a.vargas@ecopowertech.com";
 const VERIFY_HOUR = 0; // Run at midnight store-time (America/New_York)
@@ -60,7 +61,7 @@ async function checkBridgeStatus(operationId: string): Promise<{
   error?: string;
 }> {
   try {
-    const res = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
+    const res = await fetch(`${requireBridgeUrl()}/api/sync/status/${operationId}`, {
       method: "GET",
       headers: {
         "x-api-key": API_KEY,
