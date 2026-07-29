@@ -17,6 +17,7 @@ import { reconcileEntity, type ReconcilerStats } from "../lib/meilisearch/drift-
 import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reconciler";
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
 import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
+import { orderReconciler } from "../lib/meilisearch/reconcilers/order-reconciler";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
@@ -26,7 +27,18 @@ export const config = {
   schedule: "*/5 * * * *",
 };
 
-const RECONCILERS = [customerReconciler, productReconciler, inventoryReconciler];
+// `order` is here as well as in the queue processor: the processor drains what the
+// triggers enqueue, while THIS sweep is what calls fetchUpdatedIdsSince and heals
+// drift the triggers never saw — a doc written before the triggers existed, or one
+// the trigger enqueued while the reconciler was failing. Registering a reconciler
+// in only one of the two leaves its fetchUpdatedIdsSince as dead code, which is
+// exactly what happened on the first pass of this work.
+const RECONCILERS = [
+  customerReconciler,
+  productReconciler,
+  inventoryReconciler,
+  orderReconciler,
+];
 
 /** Cap on rows scanned per entity per pass — protects against runaway. */
 const MAX_ROWS_PER_PASS = 500;
