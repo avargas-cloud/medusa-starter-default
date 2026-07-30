@@ -177,6 +177,18 @@ export async function updateEstimateInQb(
           price: item.price,
           amount: item.amount,
           desc: item.desc,
+          // Same defect the Sales Order *Mod* mapper had: rebuilding each line
+          // by hand silently drops the three fields the bridge needs.
+          //   • `taxable` → without it the bridge falls to its `Tax` branch for
+          //     any line carrying a productId when the payload has a
+          //     salesTaxCode, rewriting an exempt line as taxable in QuickBooks.
+          //   • `noSite` / `qbItemType` → a non-inventory line then receives an
+          //     <InventorySiteRef> and QuickBooks rejects the whole request with
+          //     error 3140 (the 2026-06-01 rule: every QbOrderItem mapper must
+          //     forward all three).
+          ...(item.noSite ? { noSite: true } : {}),
+          ...(item.qbItemType ? { qbItemType: item.qbItemType } : {}),
+          ...(item.taxable !== undefined ? { taxable: item.taxable } : {}),
         };
       })
       // QB Error 3290: TxnLineIDs must be sent in ascending numeric order.

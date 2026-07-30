@@ -2,7 +2,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { getDbPool } from "../../../api/utils/db-pool";
 import { updateSalesOrderInQb } from "../client/sales-orders";
-import { buildQbItems, resolveProductTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
+import { buildQbItems, resolveProductTaxableMap, resolveLineTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { getSoTxnId, getSoRef } from "../qb-metadata-types";
 import {
@@ -169,11 +169,21 @@ export async function handleOrderUpdated(
     }
 
     const typedOrder = fullOrder as unknown as MedusaOrderForQb;
+    const pgConn = container.resolve("__pg_connection__");
     const productTaxableMap = await resolveProductTaxableMap(
-      container.resolve("__pg_connection__"),
+      pgConn,
       typedOrder.items || []
     );
-    const qbItems = buildQbItems(typedOrder.items || [], typedOrder.metadata, productTaxableMap);
+    const lineTaxableMap = await resolveLineTaxableMap(
+      pgConn,
+      typedOrder.items || []
+    );
+    const qbItems = buildQbItems(
+      typedOrder.items || [],
+      typedOrder.metadata,
+      productTaxableMap,
+      lineTaxableMap
+    );
     const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep);
 
     try {

@@ -389,6 +389,51 @@ function sanitizeForQb(text: string): string {
  * Pass the returned map as the third arg to buildQbItems so the bridge can
  * emit per-line `<SalesTaxCodeRef>Non</...>` for non-taxable lines.
  */
+/**
+ * Resolves the order-line-id → taxable map for a set of order items.
+ *
+ * Reads `order_line_item.taxable`, the SNAPSHOT the DB trigger seeds from
+ * `product.taxable` when the line is created. Taxability itself is a product
+ * attribute — nothing in the POS can set it per line — so this map is not a
+ * second opinion, it is the value as it stood when the document was written.
+ *
+ * It is still needed alongside the product map, for two reasons. A snapshot can
+ * differ from today's catalog (8 lines predate the trigger and carry the column
+ * default under a non-taxable product), and when we send no per-line tax code
+ * at all QuickBooks falls back to the tax status stored on its own item, which
+ * we do not control from here. Combined by AND with the product flag, so the
+ * result is exempt whenever either source says exempt.
+ *
+ * Pass the returned map as the fourth arg to buildQbItems.
+ */
+export async function resolveLineTaxableMap(
+  pg: any,
+  items: MedusaOrderForQb["items"]
+): Promise<Record<string, boolean>> {
+  const lineIds = Array.from(
+    new Set((items || []).map((i) => (i as any).id).filter(Boolean) as string[])
+  );
+  if (lineIds.length === 0) return {};
+  try {
+    const r = await pg.raw(
+      `SELECT id, taxable FROM order_line_item WHERE id = ANY(?::text[])`,
+      [lineIds]
+    );
+    return Object.fromEntries(
+      (r.rows ?? []).map((row: any) => [row.id, row.taxable !== false])
+    );
+  } catch (e: any) {
+    // Rethrow. An empty map here reads downstream as "no line is exempt", and
+    // for a document that carries `salesTaxCode` the bridge answers a blank flag
+    // with its `Tax` branch — so a transient DB error would write a taxable line
+    // into QuickBooks where an exempt one belongs. That is money, so the caller
+    // must fail rather than send a payload built from a failed read.
+    throw new Error(
+      `could not read per-line taxable flags for the QB payload: ${e?.message ?? e}`
+    );
+  }
+}
+
 export async function resolveProductTaxableMap(
   pg: any,
   items: MedusaOrderForQb["items"]
@@ -430,7 +475,15 @@ export function buildQbItems(
    * line, so QB does not tax services / labor lines like INSTALL.
    * Default (undefined) preserves prior behavior — every line is taxable.
    */
-  productTaxableMap?: Record<string, ProductQbInfo>
+  productTaxableMap?: Record<string, ProductQbInfo>,
+  /**
+   * Optional map of order_line_item.id → taxable (the PER-LINE exemption).
+   * Combined with the product map by OR: a line is non-taxable when EITHER
+   * says so. Never the other way round — a line-level `true` must not be able
+   * to re-tax a product QuickBooks holds as non-taxable, or this map could
+   * turn an existing `Non` into `Tax` on a *Mod. Monotonic toward exempt.
+   */
+  lineTaxableMap?: Record<string, boolean>
 ): QbOrderItem[] {
   const productLines = (items || [])
     .filter((item) => item.variant?.metadata?.quickbooks_id)
@@ -494,14 +547,18 @@ export function buildQbItems(
       // Resolve per-line tax flag from the optional product map. When the
       // map is missing or has no entry for this product, default to taxable
       // (true) — preserves legacy behavior.
-      const lineTaxable =
-        isNoSiteItem
-          ? false
-          : productTaxableMap && productIdMedusa
+      const productSaysTaxable =
+        productTaxableMap && productIdMedusa
           ? typeof productInfo === "object"
             ? productInfo.taxable !== false
             : productInfo !== false
           : true;
+      // The per-line flag can only REMOVE tax, never add it (see lineTaxableMap
+      // doc above). An absent entry means "no opinion", not "taxable".
+      const lineSaysTaxable = lineTaxableMap?.[(item as any)?.id] !== false;
+      const lineTaxable = isNoSiteItem
+        ? false
+        : productSaysTaxable && lineSaysTaxable;
       return {
         _sortOrder:
           typeof item.metadata?.sort_order === "number"

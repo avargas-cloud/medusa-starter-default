@@ -1,24 +1,25 @@
 import { updateOrderTaxLinesWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
-import { Pool } from "pg";
 
 import { getQbConfig } from "../../../../../lib/quickbooks/qb-config";
 import { resolveTaxListid } from "../../../../../lib/quickbooks/resolve-tax-listid";
+import {
+  loadLineTaxability,
+  loadOrderMoneyBase,
+  resolveQbParityTax,
+} from "../../../../../lib/order-money/order-tax-lines";
+import { getDbPool } from "../../../../utils/db-pool";
 
-// Lazy DB pool singleton for idempotent tax line cleanup.
-// Uses the same DATABASE_URL as the rest of the backend.
-let _taxCleanupPool: Pool | null = null;
-function getTaxCleanupPool(): Pool {
-  if (!_taxCleanupPool) {
-    _taxCleanupPool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 2,
-    });
-  }
-  return _taxCleanupPool;
-}
+// The local pool that used to live here forced `ssl: { rejectUnauthorized:
+// false }`, which Railway accepts and a plain Postgres refuses outright with
+// "the server does not support SSL connections". Both of its callers wrap their
+// work in a try/catch that degrades to a warning, so wherever that connection
+// failed the tax-line CLEANUP silently did not run — and the workflow below
+// then created a second set of lines on top of the surviving ones. Measured in
+// the sandbox: every line ended up with TWO tax lines, so Medusa's native tax
+// came out doubled. Use the shared pool, which is configured for whatever
+// database this backend is actually pointed at.
 
 const PICKUP_KEYWORDS = [
   "pickup",
@@ -147,9 +148,13 @@ export async function GET(
 
     // NOTE: /admin/orders returns monetary values in DOLLARS/DECIMALS for draft orders in v2.
     // To match POS and QuickBooks exactly, we MUST calculate in CENTS and match the POS rounding phases.
+    // Round the LINE, not the unit — same convention as loadOrderMoneyBase,
+    // and for the same reason: QuickBooks' own Subtotal is the per-line figure
+    // (verified over the bridge on E1497 and E1976). They only diverge when a
+    // percentage line discount leaves a sub-cent unit price.
     const itemsSubtotalCents: number = (order?.items ?? []).reduce(
       (sum: number, item: any) =>
-        sum + Math.round((item.unit_price ?? 0) * 100) * (item.quantity ?? 1),
+        sum + Math.round((item.unit_price ?? 0) * (item.quantity ?? 1) * 100),
       0
     );
 
@@ -168,6 +173,61 @@ export async function GET(
     const discountedSubtotalCents: number = Math.max(
       0,
       itemsSubtotalCents - roundedDiscountCents
+    );
+
+    // ── Taxable-only base ──────────────────────────────────────────────────
+    // The tax must be charged on the taxable lines alone. This route used to
+    // apply the rate to `discountedSubtotalCents`, which is EVERY line, so an
+    // exempt line got taxed — 17 estimates carry 19 such lines today. It also
+    // diverges from QuickBooks, which reads the per-line Tax/Non code and only
+    // taxes what is marked Tax (verified on Invoice 18861: Services → Non).
+    // `taxable` is invisible on `order.items` (MikroORM drops the custom
+    // column), so it has to be read from the DB.
+    // getDbPool(), NOT the local getTaxCleanupPool(): that one is configured for
+    // Railway and cannot open a connection to the sandbox Postgres ("the server
+    // does not support SSL connections"). Its two existing callers below already
+    // log that as a soft failure on every sandbox run.
+    //
+    // And this read must NOT be allowed to fail quietly. When taxability is
+    // unknown the safe move is to leave the base untouched rather than assume
+    // everything is taxable: the first sandbox run of this code did exactly that
+    // and charged 7% on $2580 instead of the $2250 that is taxable.
+    // Refuses rather than falling back. "Unknown taxability" resolved to "all
+    // taxable" is not a degraded answer, it is an overcharge: the first sandbox
+    // run of this code hit an unreachable pool, treated the empty map as
+    // all-taxable, and charged 7% on $2580 instead of the $2250 that is taxable.
+    // A visible error beats a plausible wrong number on a money field.
+    const lineTaxability = await loadLineTaxability(getDbPool(), id);
+    const lineIdsOnOrder = (order?.items ?? [])
+      .map((i: any) => i?.id)
+      .filter(Boolean);
+    const missing = lineIdsOnOrder.filter(
+      (lid: string) => !(lid in lineTaxability)
+    );
+    if (missing.length > 0) {
+      // Partial data is the dangerous case: every absent id would silently read
+      // as taxable, so completeness has to be proven, not assumed.
+      throw new Error(
+        `per-line taxability is incomplete for order ${id}: ${missing.length} of ` +
+          `${lineIdsOnOrder.length} lines missing. Refusing to compute tax rather ` +
+          `than default them to taxable.`
+      );
+    }
+    // ONE derivation. This block used to build its own taxable base from the
+    // API's `order.items`, whose `unit_price` is the NET when a per-line
+    // discount is baked in — so it silently disagreed with the base every other
+    // route now uses, which reads the GROSS from `metadata.original_unit_price`.
+    // On order S10255 that gap is 45c of subtotal and 3c of tax against what
+    // QuickBooks billed. Same helper everywhere, or the routes drift again.
+    const taxMoneyBase = await loadOrderMoneyBase(getDbPool(), id);
+
+    // Only `taxableBase` is used here — the rate is applied further down, after
+    // it has been resolved from the order's own tax lines. Passing 0 keeps that
+    // explicit instead of computing a tax figure this line has no business
+    // deciding.
+    const taxableBaseCents: number = Math.round(
+      resolveQbParityTax(taxMoneyBase, roundedDiscountCents / 100, 0)
+        .taxableBase * 100
     );
 
     const shippingMethods: any[] = order?.shipping_methods ?? [];
@@ -242,7 +302,7 @@ export async function GET(
     // We use pg directly because the Order Module service doesn't expose
     // list/delete tax line methods in this version of Medusa.
     try {
-      const db = getTaxCleanupPool();
+      const db = getDbPool();
       const client = await db.connect();
       try {
         // Delete item tax lines via order_item join (confirmed schema)
@@ -303,13 +363,36 @@ export async function GET(
     const { order: taxLineOrder } = taxLineRes.ok
       ? await taxLineRes.json()
       : { order: null };
-    const sampleTaxLine = taxLineOrder?.items?.[0]?.tax_lines?.[0];
-    rate = sampleTaxLine?.rate ?? (exempt ? 0 : 7);
+    // Take the HIGHEST rate present, not the rate of whichever line happens to
+    // be first. Sampling items[0].tax_lines[0] worked only while every line of
+    // an order carried the same rate; now that exempt lines correctly carry a 0%
+    // EXEMPT line, an order whose first line is exempt would report rate=0 for
+    // the whole order and compute $0 of tax on its taxable lines.
+    const allRates: number[] = (taxLineOrder?.items ?? []).flatMap(
+      (it: any) =>
+        (it?.tax_lines ?? [])
+          .map((tl: any) => Number(tl?.rate))
+          .filter((n: number) => Number.isFinite(n)) as number[]
+    );
+    // Validate, do not silently pick the largest. A 0% line is expected — that
+    // is what an exempt line looks like — but two DIFFERENT positive rates on
+    // one order is a shape this calculator cannot represent, and quietly
+    // applying the highest to the whole taxable base would overstate the tax
+    // without anyone seeing it.
+    const positiveRates = Array.from(new Set(allRates.filter((r) => r > 0)));
+    if (positiveRates.length > 1) {
+      throw new Error(
+        `order ${id} carries ${positiveRates.length} different positive tax rates ` +
+          `(${positiveRates.join(", ")}). This calculator applies ONE rate to the ` +
+          `taxable base; refusing rather than guessing which one.`
+      );
+    }
+    rate = positiveRates[0] ?? (exempt ? 0 : allRates.length > 0 ? 0 : 7);
 
     // ── Compute correct discount-aware amount ──────────────────────────────
     // POS parity: Tax applies on the aggregate rounded taxable amount.
     if (!exempt) {
-      amount = Math.round(discountedSubtotalCents * (rate / 100)) / 100;
+      amount = Math.round(taxableBaseCents * (rate / 100)) / 100;
     }
 
     // ── Post-workflow DB fix ───────────────────────────────────────────────
@@ -318,7 +401,7 @@ export async function GET(
     //   • "manual" lines from Medusa's own engine (duplicate!)
     // Fix: (1) delete the "manual" duplicates, (2) update FL amounts to correct value.
     try {
-      const db = getTaxCleanupPool();
+      const db = getDbPool();
       const client = await db.connect();
       try {
         // 1. Remove "manual" / stray lines Medusa's engine added on top

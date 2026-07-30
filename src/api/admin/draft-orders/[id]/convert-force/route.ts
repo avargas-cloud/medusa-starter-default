@@ -12,6 +12,12 @@ import { buildOrderCostSnapshot } from "../../../../../lib/finance/build-order-c
 import { upsertOrderOnlyApplication } from "../../../../../lib/finance/upsert-order-only-application";
 import { USA_LOC } from "../../../../../lib/locations";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
+import {
+  replaceOrderTaxLines,
+  resolvePatchedOrderTotal,
+  loadOrderMoneyBase,
+  resolveQbParityTax,
+} from "../../../../../lib/order-money/order-tax-lines";
 
 /**
  * POST /admin/draft-orders/:id/convert-force
@@ -555,63 +561,64 @@ export async function POST(
 
       // 7b. Tax parameters (mirrors pos-tax service.ts identifier constants)
       const taxRate = isExempt ? 0 : 7;
+      // The per-line code and description now come from replaceOrderTaxLines,
+      // which decides them line by line; this one is only for the log below.
       const taxCode = isExempt ? "EXEMPT" : "FL";
-      const taxDesc = isExempt ? "Tax Exempt" : "Florida Sales Tax";
       console.log(`[convert-force] Tax decision: ${taxCode} @ ${taxRate}%`);
 
       // 7c. Insert tax lines via SQL
       const db = getDbPool();
       const client = await db.connect();
       try {
-        const itemsRes = await client.query<{ item_id: string }>(
-          `SELECT DISTINCT oi.item_id FROM order_item oi WHERE oi.order_id = $1 AND oi.deleted_at IS NULL`,
-          [id]
-        );
-        const itemIds = itemsRes.rows.map((r) => r.item_id);
+        // Rewrite the tax lines PER LINE. This loop used to insert one line at
+        // `taxRate` for every item with no `taxable` check, taxing exempt lines.
+        // Pass the POOL, not the checked-out client. This route calls
+        // db.connect() but never issues BEGIN, so handing over the client told
+        // the helper "the caller owns a transaction" when nobody did, and the
+        // DELETE and INSERT auto-committed separately — the exact partial state
+        // the helper exists to prevent. With the pool it opens and owns its own
+        // transaction.
+        const taxRewrite = await replaceOrderTaxLines(db, id, taxRate);
+        const itemIds = taxRewrite.itemIds;
 
         if (itemIds.length > 0) {
-          // Delete existing tax lines (belt-and-suspenders after Step 6)
-          await client.query(
-            `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1)`,
-            [itemIds]
-          );
-
-          const rawRate = JSON.stringify({
-            value: String(taxRate),
-            precision: 20,
-          });
-          const genId = (prefix: string) =>
-            `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-          for (const itemId of itemIds) {
-            await client.query(
-              `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
-                             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
-              [genId("taxline"), itemId, taxCode, taxRate, rawRate, taxDesc]
-            );
-          }
           console.log(
-            `[convert-force] ✅ Inserted ${taxCode} @ ${taxRate}% for ${itemIds.length} items`
+            `[convert-force] ✅ Tax lines rewritten: ${taxRewrite.taxedItemIds.length} taxed @ ${taxRate}%, ` +
+              `${taxRewrite.exemptItemIds.length} exempt (${taxCode})`
           );
 
-          // 7d. Re-fetch live tax_total — decorateCartTotals with adjustments
-          // computes the correct post-discount amount: rate × (subtotal − discount)
-          let liveTaxTotal = 0;
-          try {
-            const taxFetch = await fetch(
-              `${base}/admin/orders/${id}?fields=tax_total`,
-              { headers: authHeaders }
-            );
-            if (taxFetch.ok) {
-              const { order: taxOrder } = await taxFetch.json();
-              liveTaxTotal = Number(taxOrder?.tax_total ?? 0);
-              console.log(
-                `[convert-force] Live tax_total = $${liveTaxTotal.toFixed(2)}`
-              );
-            }
-          } catch {
-            /* non-fatal */
-          }
+          // 7d. Derive the tax from the order's own lines — do NOT re-read it
+          //     over HTTP.
+          //
+          //     That fetch ran while THIS transaction was still open, so it went
+          //     out on a different connection and could not see the tax lines
+          //     the rewrite above had just written. It read the pre-rewrite
+          //     state and handed back 0, and the summary was then patched with
+          //     a tax_total of zero on an order full of taxable lines — which
+          //     also sends the QuickBooks header as Exempt.
+          //
+          //     Reading through the same client keeps it inside the transaction
+          //     and removes the round-trip entirely.
+          const taxBaseForDoc = await loadOrderMoneyBase(client, id);
+          const parity = resolveQbParityTax(
+            taxBaseForDoc,
+            Number(
+              (
+                await client.query<{ d: string }>(
+                  `SELECT COALESCE((totals->>'discount_total')::numeric, 0) d
+                     FROM order_summary
+                    WHERE order_id = $1 AND deleted_at IS NULL
+                    ORDER BY version DESC LIMIT 1`,
+                  [id]
+                )
+              ).rows[0]?.d ?? 0
+            ),
+            taxRate
+          );
+          let liveTaxTotal = parity.tax;
+          console.log(
+            `[convert-force] Derived tax = $${liveTaxTotal.toFixed(2)} on taxable base $${parity.taxableBase.toFixed(2)} @ ${taxRate}%`
+          );
 
           // 7e. Update order_summary with tax and corrected totals
           const sumRes = await client.query<{ id: string; totals: any }>(
@@ -623,10 +630,37 @@ export async function POST(
           if (sumRes.rows[0]) {
             const { id: sumId, totals } = sumRes.rows[0];
             const discountTotal = Number(totals.discount_total || 0);
-            const newTotal =
-              Number(totals.original_order_total || 0) +
-              liveTaxTotal -
-              discountTotal;
+
+            // Round the aggregate ONCE. Medusa accumulates tax per line and
+            // leaves the decimals hanging (99.98 × 7% → 6.9986); QuickBooks
+            // rounds the whole taxable base to the cent and bills 7.00. Since
+            // Σ(lineᵢ × rate) === (Σlineᵢ) × rate, rounding the sum here lands
+            // on QB's exact figure — verified against SR 27807 and Invoice 18861.
+            const qbParityTax = liveTaxTotal; // already rounded once, QB-style
+
+            // Derived from the order's own lines and shipping, NOT from
+            // `original_order_total`: on a converted draft that field holds the
+            // net with the tax kept separately, while on an edited order it
+            // holds the net WITH the tax folded in. Adding the tax to it is
+            // wrong in the first case and doubles it in the second.
+            const moneyBase = await loadOrderMoneyBase(client, id);
+            const resolved = resolvePatchedOrderTotal({
+              base: moneyBase,
+              posTaxAmount: qbParityTax,
+              discount: discountTotal,
+            });
+            if (!resolved.ok) {
+              console.error(
+                `[convert-force] ❌ Refusing to patch order_summary ${sumId}: ${resolved.reason}. ` +
+                  `Leaving the previous total — it is the clamp ceiling for order_money_projection.`
+              );
+              throw new Error(`order total not derivable: ${resolved.reason}`);
+            }
+            for (const w of resolved.warnings) {
+              console.warn(`[convert-force] ⚠️  ${w}`);
+            }
+            const newTotal = resolved.total;
+            liveTaxTotal = qbParityTax;
             await client.query(
               `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
               [

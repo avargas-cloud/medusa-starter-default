@@ -7,6 +7,7 @@ import {
   buildShippingQbItem,
   buildQbOrderDiscountLines,
   resolveProductTaxableMap,
+  resolveLineTaxableMap,
   processOrderInQb,
 } from "../../../../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
@@ -123,11 +124,22 @@ export async function POST(
       subtotal: undefined, // force original price, ignore item-level adjustments
     }));
 
+    // This route is the ONLY sales-order caller that sends `salesTaxCode`, so
+    // it is the one where a missing per-line flag is not merely ignored: the
+    // bridge answers a blank flag with its `Tax` branch and rewrites an exempt
+    // line as taxable in QuickBooks. The per-line map has to be resolved here.
+    const pgConn = req.scope.resolve("__pg_connection__");
     const productTaxableMap = await resolveProductTaxableMap(
-      req.scope.resolve("__pg_connection__"),
+      pgConn,
       itemsForQb
     );
-    const qbItems = buildQbItems(itemsForQb, order.metadata, productTaxableMap);
+    const lineTaxableMap = await resolveLineTaxableMap(pgConn, itemsForQb);
+    const qbItems = buildQbItems(
+      itemsForQb,
+      order.metadata,
+      productTaxableMap,
+      lineTaxableMap
+    );
 
     // Append Subtotal + Discount lines BEFORE shipping so the Subtotal only sums products.
     // Shipping goes LAST — outside the Subtotal — so it's never included in the discount.

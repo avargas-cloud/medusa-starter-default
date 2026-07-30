@@ -8,6 +8,13 @@ import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales
 import { withQbSerialized } from "../../../../../lib/quickbooks/qb-serializer";
 import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile-order-reservations";
 import { getDbPool } from "../../../../utils/db-pool";
+import {
+  replaceOrderTaxLines,
+  resolvePatchedOrderTotal,
+  resolveQbParityTax,
+  loadOrderMoneyBase,
+  isZeroTaxSafe,
+} from "../../../../../lib/order-money/order-tax-lines";
 
 /**
  * POST /admin/orders/:id/post-edit-sync
@@ -207,69 +214,50 @@ export async function POST(
       const pool = getDbPool();
       try {
         // 1. Fetch current Medusa-stored tax_total (BEFORE our injection) natively.
-        let calculatedTax = 0;
+        //    NULL means "could not read", which is NOT the same as zero: this
+        //    value is the tax already baked into original_order_total, and the
+        //    total below is derived by subtracting it. Defaulting a failed read
+        //    to 0 is what let the tax get counted twice on 43 orders.
+        let calculatedTax: number | null = null;
         try {
           const { data } = await query.graph({
             entity: "order",
             fields: ["tax_total"],
             filters: { id },
           });
-          calculatedTax = Number(data?.[0]?.tax_total ?? 0);
+          const raw = data?.[0]?.tax_total;
+          calculatedTax = raw == null ? 0 : Number(raw);
+          if (!Number.isFinite(calculatedTax)) calculatedTax = null;
         } catch {
-          /* non-fatal */
+          /* leave null — the summary write below refuses rather than guesses */
         }
 
-        // 2. Fetch item IDs for tax line operations.
-        const itemsRes = await pool.query<{ item_id: string }>(
-          `SELECT DISTINCT oi.item_id FROM order_item oi WHERE oi.order_id = $1 AND oi.deleted_at IS NULL`,
-          [id]
-        );
-        const itemIds = itemsRes.rows.map((r) => r.item_id);
-
         // Use the statutory tax rate (7% FL). Do NOT back-calculate from gross subtotal.
-        // With pos-tax provider fixed (provider_id='tp_pos-tax') and adjustments loaded:
-        // 7% × (subtotal − discount) = correct amount ✅
-        // This fallback only runs if apply-discount-force tax insertion missed something.
         const effectiveRate = pos_tax_rate ?? 7;
 
         logger.info(
-          `[post-edit-sync] CALCULATED TAX = $${calculatedTax.toFixed(2)} | POS TAX = $${pos_tax_amount.toFixed(2)}`
+          `[post-edit-sync] CALCULATED TAX = ${calculatedTax === null ? "UNREADABLE" : `$${calculatedTax.toFixed(2)}`} | POS TAX = $${pos_tax_amount.toFixed(2)}`
         );
-        if (Math.abs(calculatedTax - pos_tax_amount) > 0.005) {
+        if (
+          calculatedTax !== null &&
+          Math.abs(calculatedTax - pos_tax_amount) > 0.005
+        ) {
           logger.warn(
             `[post-edit-sync] ⚠️  TAX OVERWRITE: Medusa=$${calculatedTax.toFixed(2)} → POS=$${pos_tax_amount.toFixed(2)} (rate=${effectiveRate}%)`
           );
         }
 
+        // 2. Rewrite the tax lines PER LINE. This block used to insert one line
+        //    at `effectiveRate` for every item of the order with no `taxable`
+        //    check, which taxed exempt lines: S10732 landed at $156.62 against
+        //    QuickBooks' $154.24, the $2.38 being 7% charged on an exempt $34
+        //    service. QB itself had it right — it received `Services → Non`.
+        const taxRewrite = await replaceOrderTaxLines(pool, id, effectiveRate);
+        const itemIds = taxRewrite.itemIds;
         if (itemIds.length > 0) {
-          // Delete ALL existing tax lines to ensure clean state.
-          await pool.query(
-            `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1)`,
-            [itemIds]
-          );
-
-          const rawRate = JSON.stringify({
-            value: String(effectiveRate),
-            precision: 20,
-          });
-          const genId = (prefix: string) =>
-            `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-          // Use EXEMPT code when rate is 0, FL when rate is 7
-          const taxCode = effectiveRate === 0 ? "EXEMPT" : "FL";
-          const taxDesc =
-            effectiveRate === 0 ? "Tax Exempt" : "Florida Sales Tax";
-
-          for (const itemId of itemIds) {
-            const lineId = genId("taxline");
-            await pool.query(
-              `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
-                             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
-              [lineId, itemId, taxCode, effectiveRate, rawRate, taxDesc]
-            );
-          }
           logger.info(
-            `[post-edit-sync] ✅ Inserted ${taxCode} tax lines at ${effectiveRate}% for ${itemIds.length} items ($${pos_tax_amount} total)`
+            `[post-edit-sync] ✅ Tax lines rewritten: ${taxRewrite.taxedItemIds.length} taxed @ ${effectiveRate}%, ` +
+              `${taxRewrite.exemptItemIds.length} exempt (POS tax $${pos_tax_amount})`
           );
         }
 
@@ -297,18 +285,81 @@ export async function POST(
                 ? discount_value
                 : totals.discount_total || 0;
 
+          // The old formula was `original_order_total + pos_tax − discount`, and
+          // `original_order_total` carries the native tax on SOME orders — 43 of
+          // them came out overstated by a flat 6.535–6.563%, i.e. 7/107, the
+          // signature of a tax added on a base that already had one. It is NOT a
+          // reliable input either way (a converted draft stores it with the tax
+          // held separately), so the total is derived from the order's own lines
+          // and shipping instead of by arithmetic on another derived figure.
+          const moneyBase = await loadOrderMoneyBase(pool, id);
+          const resolved = resolvePatchedOrderTotal({
+            base: moneyBase,
+            posTaxAmount: pos_tax_amount,
+            discount: forcedDiscount,
+          });
+
+          if (!resolved.ok) {
+            logger.error(
+              `[post-edit-sync] ❌ Refusing to patch order_summary ${summaryId}: ${resolved.reason}. ` +
+                `Leaving the previous total in place — this figure is the clamp ceiling for ` +
+                `order_money_projection, so a wrong one silently zeroes a real deposit.`
+            );
+            results.tax_error = resolved.reason;
+            throw new Error(`order total not derivable: ${resolved.reason}`);
+          }
+          for (const w of resolved.warnings) {
+            logger.warn(`[post-edit-sync] ⚠️  ${w}`);
+          }
+          // `tax_total` is not display-only: the QB handlers choose the header
+          // tax code with `hasTax = tax_total > 0`, and a zero sends the whole
+          // document as Exempt so QuickBooks charges nothing on any line.
+          //
+          // The first version of this guard kept the PREVIOUS tax_total when the
+          // POS sent 0 on an order that still had taxable lines. That protected
+          // the header and produced an incoherent row: a total derived with zero
+          // tax stored next to a positive tax_total left over from an earlier
+          // state. Recompute instead — from the same base the total came from,
+          // so the two agree by construction.
+          let taxTotalToWrite = pos_tax_amount;
+          if (pos_tax_amount === 0 && !isZeroTaxSafe(taxRewrite)) {
+            const recomputed = resolveQbParityTax(
+              moneyBase,
+              forcedDiscount,
+              effectiveRate
+            );
+            taxTotalToWrite = recomputed.tax;
+            logger.warn(
+              `[post-edit-sync] ⚠️  POS sent tax 0 with ${taxRewrite.taxedItemIds.length} taxable ` +
+                `line(s); recomputed $${taxTotalToWrite} on a base of $${recomputed.taxableBase} @ ${effectiveRate}%.`
+            );
+          }
+
+          // Whatever the tax ends up being, the total has to include THAT number.
+          // Deriving the total with one tax and storing another is the shape this
+          // whole change exists to remove.
           const newAccountingTotal =
-            Number(totals.original_order_total || 0) +
-            pos_tax_amount -
-            forcedDiscount;
+            taxTotalToWrite === pos_tax_amount
+              ? resolved.total
+              : (() => {
+                  const redo = resolvePatchedOrderTotal({
+                    base: moneyBase,
+                    posTaxAmount: taxTotalToWrite,
+                    discount: forcedDiscount,
+                  });
+                  return redo.ok ? redo.total : resolved.total;
+                })();
 
           await pool.query(
             `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
             [
               JSON.stringify({
                 ...totals,
-                tax_total: pos_tax_amount,
-                raw_tax_total: { value: String(pos_tax_amount), precision: 20 },
+                tax_total: taxTotalToWrite,
+                raw_tax_total: {
+                  value: String(taxTotalToWrite),
+                  precision: 20,
+                },
                 // Force the bottom-line variables so Admin UI doesn't look crazy
                 accounting_total: newAccountingTotal,
                 raw_accounting_total: {
@@ -1074,6 +1125,24 @@ export async function POST(
     logger.warn(
       `[post-edit-sync] reservation reconcile non-fatal err: ${e.message}`
     );
+  }
+
+  // A refused money write is NOT a success. `results.tax_error` is set when the
+  // total could not be derived and `order_summary` was deliberately left alone —
+  // but the tax lines above may already have been rewritten, so the order is in
+  // a mixed state and the POS must be told. Answering 200 {success:true} here
+  // meant the cashier saw the edit land while the stored total stayed stale, and
+  // that stale total is the clamp ceiling for order_money_projection.
+  if (results.tax_error) {
+    res.status(409).json({
+      success: false,
+      code: "ORDER_TOTAL_NOT_DERIVABLE",
+      message:
+        "The order total could not be derived, so order_summary was left unchanged. " +
+        "The order's tax lines may already reflect the edit — re-save the order to retry.",
+      ...results,
+    });
+    return;
   }
 
   res.status(200).json({ success: true, ...results });

@@ -9,7 +9,11 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { USA_LOC } from "../../../../../lib/locations";
 import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
 import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
-import { buildQbItems } from "../../../../../lib/quickbooks/order-flow-core";
+import {
+  buildQbItems,
+  resolveProductTaxableMap,
+  resolveLineTaxableMap,
+} from "../../../../../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
@@ -801,10 +805,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 filters: { id: invoice.order_id },
               });
               const fullOrder = orderData?.[0];
+              // This SO is recreated from scratch after the void, so it is a
+              // NEW document in QuickBooks and carries whatever tax codes we
+              // send. Resolving neither map left every line blank, which let
+              // QB fall back to its own item defaults — right only for as long
+              // as no line carries an order-specific exemption.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const voidSoItems = (fullOrder?.items ?? []).filter(
+                Boolean
+              ) as any[];
+              const voidPgConn = req.scope.resolve("__pg_connection__");
               const qbItems = buildQbItems(
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (fullOrder?.items ?? []).filter(Boolean) as any[],
-                fullOrder?.metadata ?? undefined
+                voidSoItems,
+                fullOrder?.metadata ?? undefined,
+                await resolveProductTaxableMap(voidPgConn, voidSoItems),
+                await resolveLineTaxableMap(voidPgConn, voidSoItems)
               );
               const qbListId = orderRow.qb_list_id as string;
 

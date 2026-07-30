@@ -201,6 +201,18 @@ export async function updateSalesOrderInQb(
           desc: item.desc,
           noSite: item.noSite,
           qbItemType: item.qbItemType,
+          // Forwarding `taxable` is NOT optional. Both MOD callers already
+          // resolve it correctly and this map used to drop it on the floor,
+          // so the flag never reached the bridge on a *Mod. Two different
+          // failure modes came out of that, depending on the caller:
+          //   • no salesTaxCode in the payload (handle-order-updated) → the
+          //     bridge emits no <SalesTaxCodeRef> and QB keeps the tax status
+          //     stored on its own item. Benign, but it can only express
+          //     "this product is never taxed" — never a per-line exemption.
+          //   • salesTaxCode present (admin/quickbooks/order force-sync) → the
+          //     bridge takes its `Tax` branch for every line with a productId,
+          //     which OVERWRITES an exempt line to taxable in QuickBooks.
+          ...(item.taxable !== undefined ? { taxable: item.taxable } : {}),
         };
       })
       // QB Error 3290: TxnLineIDs must be sent in ascending numeric order.

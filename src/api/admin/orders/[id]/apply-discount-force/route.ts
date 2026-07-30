@@ -8,6 +8,7 @@ import {
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
+import { replaceOrderTaxLines } from "../../../../../lib/order-money/order-tax-lines";
 import {
   Modules,
   PromotionType,
@@ -417,37 +418,19 @@ export async function POST(
       if (dbUrl) {
         const taxPool = getDbPool();
         try {
-          const taxItemsRes = await taxPool.query<{ item_id: string }>(
-            `SELECT DISTINCT item_id FROM order_item WHERE order_id = $1 AND deleted_at IS NULL`,
-            [id]
-          );
-          // Delete existing tax lines first to ensure clean state
-          const itemIds = taxItemsRes.rows.map((r) => r.item_id);
-          if (itemIds.length > 0) {
-            await taxPool.query(
-              `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1)`,
-              [itemIds]
-            );
-          }
           // Use pos_tax_rate to determine correct tax: 0 = EXEMPT, 7 = FL (or other rate)
           const effectiveRate = pos_tax_rate ?? 7;
-          const taxCode = effectiveRate === 0 ? "EXEMPT" : "FL";
-          const taxDesc =
-            effectiveRate === 0 ? "Tax Exempt" : "Florida Sales Tax";
-          const rawRate = JSON.stringify({
-            value: String(effectiveRate),
-            precision: 20,
-          });
-          for (const row of taxItemsRes.rows) {
-            const taxLineId = `taxline_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            await taxPool.query(
-              `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
-                             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
-              [taxLineId, row.item_id, taxCode, effectiveRate, rawRate, taxDesc]
-            );
-          }
+          // Rewrite PER LINE. This block used to stamp `effectiveRate` on every
+          // line of the order without consulting `order_line_item.taxable`, so
+          // applying a discount silently re-taxed any exempt line.
+          const taxRewrite = await replaceOrderTaxLines(
+            taxPool,
+            id,
+            effectiveRate
+          );
           logger.info(
-            `[apply-discount-force] ✅ Inserted ${taxCode} tax lines at ${effectiveRate}% for ${taxItemsRes.rows.length} items`
+            `[apply-discount-force] ✅ Tax lines rewritten: ${taxRewrite.taxedItemIds.length} taxed @ ${effectiveRate}%, ` +
+              `${taxRewrite.exemptItemIds.length} exempt`
           );
         } catch (e: any) {
           logger.warn(
