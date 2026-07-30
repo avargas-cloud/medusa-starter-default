@@ -18,6 +18,7 @@ import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reco
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
 import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
 import { orderReconciler } from "../lib/meilisearch/reconcilers/order-reconciler";
+import { vendorReconciler } from "../lib/meilisearch/reconcilers/vendor-reconciler";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
@@ -27,17 +28,25 @@ export const config = {
   schedule: "*/5 * * * *",
 };
 
-// `order` is here as well as in the queue processor: the processor drains what the
-// triggers enqueue, while THIS sweep is what calls fetchUpdatedIdsSince and heals
-// drift the triggers never saw — a doc written before the triggers existed, or one
-// the trigger enqueued while the reconciler was failing. Registering a reconciler
-// in only one of the two leaves its fetchUpdatedIdsSince as dead code, which is
-// exactly what happened on the first pass of this work.
+// EVERY reconciler belongs in BOTH registries, and this list is the one that gets
+// forgotten. The processor drains what the triggers enqueue; THIS sweep is the only
+// caller of fetchUpdatedIdsSince, so it is what heals drift the triggers never saw —
+// a doc written before the triggers existed, or one the trigger enqueued while the
+// reconciler was failing. Registered in only one of the two, a reconciler's
+// fetchUpdatedIdsSince is dead code. That happened twice: `order` on the first pass
+// of that work, and `vendor` for a month after it shipped.
+//
+// Measured before adding `vendor` (2026-07-29): 0 drift across the 1000
+// most-recently-updated of 1109 vendors, so this does not kick off a mass rewrite.
+// Cost is 2.67ms per vendor with Postgres and Meili co-located, i.e. ~1.3s for a
+// full 500-row pass — which matters because a qb-vendor-sync-runner bulk pass puts
+// nearly the whole table into ONE 6-minute window (1105 of 1109 on 2026-07-23).
 const RECONCILERS = [
   customerReconciler,
   productReconciler,
   inventoryReconciler,
   orderReconciler,
+  vendorReconciler,
 ];
 
 /** Cap on rows scanned per entity per pass — protects against runaway. */

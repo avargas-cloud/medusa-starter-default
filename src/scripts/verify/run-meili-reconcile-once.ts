@@ -19,12 +19,14 @@ import { customerReconciler } from "../../lib/meilisearch/reconcilers/customer-r
 import { inventoryReconciler } from "../../lib/meilisearch/reconcilers/inventory-reconciler";
 import { orderReconciler } from "../../lib/meilisearch/reconcilers/order-reconciler";
 import { productReconciler } from "../../lib/meilisearch/reconcilers/product-reconciler";
+import { vendorReconciler } from "../../lib/meilisearch/reconcilers/vendor-reconciler";
 
 const BY_ENTITY: Record<string, EntityReconciler> = {
   customer: customerReconciler,
   product: productReconciler,
   inventory: inventoryReconciler,
   order: orderReconciler,
+  vendor: vendorReconciler,
 };
 
 export default async function runMeiliReconcileOnce({ container }: ExecArgs): Promise<void> {
