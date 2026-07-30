@@ -4,6 +4,7 @@ import type {
 } from "@medusajs/framework/http";
 import { randomUUID } from "crypto";
 
+import { clearBillMissingInQb } from "../../../../../lib/quickbooks/pipeline/vendor-bill-missing";
 import {
   getActorUserId,
   UnauthenticatedError,
@@ -36,7 +37,7 @@ export async function POST(
     req.scope as unknown as { resolve: (key: string) => unknown }
   ).resolve("__pg_connection__") as KnexLike;
   const billResult = await knex.raw(
-    `SELECT id, purchase_order_id, qb_txn_id, qb_ref_number
+    `SELECT id, purchase_order_id, qb_txn_id, qb_ref_number, qb_missing_in_qb_at
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL`,
     [id]
@@ -47,6 +48,7 @@ export async function POST(
         purchase_order_id: string | null;
         qb_txn_id: string | null;
         qb_ref_number: string | null;
+        qb_missing_in_qb_at: Date | string | null;
       }
     | undefined;
   if (!bill) {
@@ -59,6 +61,16 @@ export async function POST(
       error: "Vendor bill is not linked to QuickBooks",
       code: "bill_not_synced",
     });
+  }
+
+  // A human asking for a re-check is the ONLY thing that clears the
+  // "gone from QuickBooks" marker. Nothing clears it automatically — an automatic
+  // clear would restore the one-dead-row-per-hour loop the marker exists to stop.
+  // Cleared before the already-queued early return below, so the request always
+  // un-sticks the bill even when a row is already in flight.
+  const wasMissingInQb = bill.qb_missing_in_qb_at != null;
+  if (wasMissingInQb) {
+    await clearBillMissingInQb(id);
   }
 
   const existingResult = await knex.raw(
@@ -78,6 +90,7 @@ export async function POST(
       status: "payment_check_queued",
       pipeline_row_id: existing.id,
       already_queued: true,
+      missing_in_qb_cleared: wasMissingInQb,
     });
   }
 
@@ -104,5 +117,6 @@ export async function POST(
     status: "payment_check_queued",
     pipeline_row_id: pipelineRowId,
     already_queued: false,
+    missing_in_qb_cleared: wasMissingInQb,
   });
 }

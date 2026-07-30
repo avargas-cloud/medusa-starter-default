@@ -30,6 +30,11 @@ import {
 import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-deactivate";
 import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
 import {
+  isQbObjectNotFound,
+  qbStatusMessage,
+  settleBillMissingInQb,
+} from "../pipeline/vendor-bill-missing";
+import {
   isEditSequenceStaleError,
   refreshEditSequenceForRow,
   stepToCacheEntityType,
@@ -183,6 +188,24 @@ export async function pollSubmittedRows(
             ? msgs?.BillModRs?.BillRet ?? null
             : null;
         if (row.step === "vendor_bill_payment_check" && !paymentBill) {
+          // Two different facts hide behind "no BillRet":
+          //   • QB answered statusCode 500 — the document is GONE. Permanent:
+          //     retrying it hourly is what produced the row-per-hour leak.
+          //   • anything else — we could not tell. Keep the ordinary retry path.
+          if (isQbObjectNotFound(msgs?.BillQueryRs)) {
+            const qbMessage =
+              qbStatusMessage(msgs?.BillQueryRs) ??
+              "QuickBooks reported the Bill as not found";
+            const { billMarked } = await settleBillMissingInQb(
+              row.id,
+              row.reference_id ?? null,
+              `Bill no longer exists in QuickBooks — payment checks stopped. QB said: ${qbMessage}`
+            );
+            logger.warn(
+              `${LOG_PREFIX} 🚫 vendor_bill_payment_check ${row.id}: QuickBooks no longer has Bill ${row.qb_txn_id} (vendor_bill ${row.reference_id ?? "?"}) — row skipped${billMarked ? ", bill flagged as missing" : ""}`
+            );
+            continue;
+          }
           await failOrRetryPipelineRow(
             row.id,
             "BillQuery completed without a matching QuickBooks Bill",

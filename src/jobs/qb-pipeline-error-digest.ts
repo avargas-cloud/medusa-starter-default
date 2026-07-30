@@ -443,6 +443,38 @@ export async function buildDigestEmail(
     po_reference_number: string | null;
   }>;
 
+  // ── 5. Vendor Bills whose QuickBooks document is GONE ───────────────────
+  // No window and no dedup stamp, deliberately — the same reasoning the orders
+  // index drift section uses. A bill pointing at a deleted QB document is a fact
+  // only a human can resolve (the payment monitor has already, correctly, stopped
+  // touching it), so steady state is zero rows and repeating it every day until
+  // someone acts is the right behaviour. Silence here means clean.
+  const missingBillsRes = await knex.raw(
+    `SELECT
+       vb.id,
+       vb.number,
+       vb.qb_ref_number,
+       vb.qb_txn_id,
+       vb.vendor_name_snapshot,
+       vb.qb_amount_due_cents,
+       vb.qb_source,
+       vb.qb_missing_in_qb_at
+     FROM vendor_bill vb
+     WHERE vb.qb_missing_in_qb_at IS NOT NULL
+       AND vb.deleted_at IS NULL
+     ORDER BY vb.qb_missing_in_qb_at ASC`
+  );
+  const missingBills = (missingBillsRes?.rows ?? missingBillsRes ?? []) as Array<{
+    id: string;
+    number: string | null;
+    qb_ref_number: string | null;
+    qb_txn_id: string | null;
+    vendor_name_snapshot: string | null;
+    qb_amount_due_cents: number | null;
+    qb_source: string | null;
+    qb_missing_in_qb_at: string | Date;
+  }>;
+
   const sections: PipelineSection[] = [
     {
       title: "Sales Pipeline",
@@ -524,6 +556,31 @@ export async function buildDigestEmail(
         retries: r.retries ?? 0,
         status: r.status,
         created_at: r.created_at,
+      })),
+    },
+    {
+      title: "Vendor Bills missing in QuickBooks",
+      description:
+        "The linked QuickBooks Bill no longer exists — QB answered a query for its TxnID with \"could not be found\". Automatic payment checks are STOPPED for these bills (otherwise each one queues a dead row every hour). Our balance for them is therefore frozen at the last known value and may not reflect the books. Resolve by re-linking or writing the bill off; then use Check Payment on the bill to resume automatic checks. Repeats daily until resolved.",
+      admin_path: "/qb-pipeline",
+      rows: missingBills.map((r) => ({
+        id: r.id,
+        medusa_ref: r.number ?? r.id,
+        qb_ref: r.qb_ref_number ?? r.qb_txn_id ?? "",
+        step: r.qb_source === "adopted" ? "adopted bill" : "bill",
+        error: `${r.vendor_name_snapshot ?? "unknown vendor"} — ${
+          r.qb_amount_due_cents == null
+            ? "amount unknown"
+            : (r.qb_amount_due_cents / 100).toLocaleString("en-US", {
+                style: "currency",
+                currency: "USD",
+              })
+        } still open on our side, with no QuickBooks document behind it.`,
+        retries: 0,
+        status: "missing_in_qb",
+        // The date column carries WHEN WE FOUND OUT, not when the row was made —
+        // that is the only timestamp an operator can act on here.
+        created_at: r.qb_missing_in_qb_at,
       })),
     },
   ];

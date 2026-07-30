@@ -138,7 +138,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const [dataResult, countResult, summaryResult, voidResult] = await Promise.all([
     pool.query(
-      `SELECT * FROM (${unionSql}) combined ${where} ORDER BY created_at DESC LIMIT $${p} OFFSET $${p + 1}`,
+      // ORDER BY created_at alone is not a total order, and with LIMIT/OFFSET that
+      // lets a tied row appear on two pages while another appears on none. Same
+      // defect the Sales Pipeline listing had. `seq` is not enough on its own here:
+      // the two UNION branches come from different tables with independent seq
+      // counters, so `seq_label` ('L…' for legacy, tab_seq for the new table) is the
+      // key that makes the order total across both.
+      `SELECT * FROM (${unionSql}) combined ${where} ORDER BY created_at DESC, seq DESC, seq_label DESC LIMIT $${p} OFFSET $${p + 1}`,
       [...values, limit, offset]
     ),
     pool.query(`SELECT COUNT(*) AS total FROM (${unionSql}) combined ${where}`, values),

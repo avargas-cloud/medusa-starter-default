@@ -101,6 +101,14 @@ export const VendorBill = model.define("vendor_bill", {
   qb_is_paid: model.boolean().default(false),
   qb_balance_remaining_cents: model.number().nullable(),
   qb_payment_checked_at: model.dateTime().nullable(),
+  // Set when a BillQuery proves the linked QB document is GONE (QB answers
+  // statusCode 500 "required element could not be found" for both its TxnID and
+  // its RefNumber) — i.e. someone deleted the Bill inside QuickBooks Desktop.
+  // A deleted document never comes back on its own, so this is a terminal fact,
+  // not a retryable failure: the hourly payment monitor skips marked bills, which
+  // is what stops one permanently-failed pipeline row per hour, forever. Cleared
+  // by an explicit human re-check (POST /admin/vendor-bills/:id/check-payment).
+  qb_missing_in_qb_at: model.dateTime().nullable(),
   qb_synced_at: model.dateTime().nullable(), // when the Bill landed in QB
   qb_source: model.text().nullable(), // 'owned' | 'adopted'
   // China-agent regular Bills have negative QB Expense lines that clear the

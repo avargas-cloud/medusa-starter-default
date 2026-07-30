@@ -160,12 +160,27 @@ export async function GET(
                 source_dep.medusa_ref_number AS source_dep_ref,
                 target_dep.step AS target_dep_step,
                 target_dep.status AS target_dep_status,
-                target_dep.medusa_ref_number AS target_dep_ref
+                target_dep.medusa_ref_number AS target_dep_ref,
+                -- ── Vendor Bill display (Bill Payments tab) ──────────────────
+                -- Rows keyed on a vendor_bill carry only its id; the tab needs the
+                -- human-facing identity (VB number, vendor, amount) and the two QB
+                -- facts the check exists to refresh.
+                vb.number AS bill_number,
+                vb.qb_ref_number AS bill_qb_ref_number,
+                vb.vendor_name_snapshot AS bill_vendor_name,
+                vb.qb_amount_due_cents AS bill_amount_due_cents,
+                vb.qb_balance_remaining_cents AS bill_balance_cents,
+                vb.qb_is_paid AS bill_is_paid,
+                vb.qb_payment_checked_at AS bill_payment_checked_at,
+                vb.qb_missing_in_qb_at AS bill_missing_in_qb_at
             FROM qb_order_pipeline p
             LEFT JOIN "order" ord ON ord.id = p.order_id
             LEFT JOIN pos_credit_memo cm ON p.reference_type = 'credit_memo' AND cm.id = p.reference_id
             LEFT JOIN "order" cm_ord ON cm_ord.id = cm.order_id
             LEFT JOIN qb_order_pipeline dep ON dep.id = p.depends_on
+            LEFT JOIN vendor_bill vb
+                ON p.reference_type = 'vendor_bill'
+                AND vb.id = p.reference_id
             -- apply_payment rows may key reference_id on the payment_application id
             -- (current convention, reference_type='payment_application') or directly
             -- on the customer_payment id (legacy). Resolve the application first so the
@@ -208,7 +223,14 @@ export async function GET(
                 AND target_dep.step = 'invoice'
                 AND target_dep.reference_id = COALESCE(pa_ref.invoice_id, papp.invoice_id)
             ${where}
-            ORDER BY ${sortBy === "updated_at" ? "COALESCE(p.updated_at, p.created_at)" : "p.created_at"} DESC
+            -- p.seq breaks ties. WITHOUT it this ORDER BY is not a total order and
+            -- OFFSET pagination silently lies: the hourly monitor inserts a whole
+            -- batch under one NOW(), so 762 rows share a created_at to the second.
+            -- Postgres is free to order tied rows differently per query, so the same
+            -- row could show on page 1 AND page 2 while another appeared on neither —
+            -- which is exactly how a correct "Failed 3" badge sat above four visibly
+            -- failed rows.
+            ORDER BY ${sortBy === "updated_at" ? "COALESCE(p.updated_at, p.created_at)" : "p.created_at"} DESC, p.seq DESC
             LIMIT $${p} OFFSET $${p + 1}
         `,
       [...values, limit, offset]

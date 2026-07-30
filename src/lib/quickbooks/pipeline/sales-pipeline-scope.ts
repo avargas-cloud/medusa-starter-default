@@ -32,6 +32,17 @@ export const INVENTORY_ADJUSTMENT_STEPS = [
 export const CUSTOMER_SYNC_STEPS = ["customer_data_ext"] as const;
 
 /**
+ * Steps surfaced by the Bill Payments tab.
+ *
+ * `vendor_bill_payment_check` is a read-only BillQuery the hourly monitor emits
+ * for every linked unpaid Vendor Bill, so it is by far the highest-volume step in
+ * the shared table — 165 of the 241 rows created in the 24 h before this tab
+ * existed, against 76 for every other step combined. Left in the Sales Pipeline
+ * it buried the sales documents it was supposed to sit beside.
+ */
+export const BILL_PAYMENT_STEPS = ["vendor_bill_payment_check"] as const;
+
+/**
  * Every step that has its own tab — and therefore must be excluded from both the
  * Sales Pipeline listing and its status badges.
  */
@@ -39,6 +50,7 @@ export const SALES_PIPELINE_EXCLUDED_STEPS: string[] = [
   ...CUSTOMER_SYNC_STEPS,
   ...INVENTORY_ADJUSTMENT_STEPS,
   ...PURCHASE_PIPELINE_STEPS,
+  ...BILL_PAYMENT_STEPS,
 ];
 
 /**

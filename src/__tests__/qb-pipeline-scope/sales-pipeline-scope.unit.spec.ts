@@ -1,4 +1,5 @@
 import {
+  BILL_PAYMENT_STEPS,
   PURCHASE_PIPELINE_STEPS,
   SALES_PIPELINE_EXCLUDED_STEPS,
   salesPipelineStepScopeSql,
@@ -28,6 +29,17 @@ describe("sales pipeline step scope", () => {
     expect(SALES_PIPELINE_EXCLUDED_STEPS).toContain("inventory_adjustment");
     expect(SALES_PIPELINE_EXCLUDED_STEPS).toContain(
       "void_inventory_adjustment"
+    );
+  });
+
+  it("excludes every bill-payment step from the sales scope", () => {
+    // The highest-volume step in the shared table: an hourly read-only BillQuery
+    // per linked unpaid bill. It owns the Bill Payments tab.
+    for (const step of BILL_PAYMENT_STEPS) {
+      expect(SALES_PIPELINE_EXCLUDED_STEPS).toContain(step);
+    }
+    expect(SALES_PIPELINE_EXCLUDED_STEPS).toContain(
+      "vendor_bill_payment_check"
     );
   });
 
