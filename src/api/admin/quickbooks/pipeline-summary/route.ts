@@ -1,6 +1,11 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
+import {
+  BILL_PAYMENT_STEPS,
+  PURCHASE_PIPELINE_STEPS,
+} from "../../../../lib/quickbooks/pipeline/sales-pipeline-scope";
+
 /**
  * GET /admin/quickbooks/pipeline-summary
  *
@@ -74,15 +79,27 @@ const accumulate = (
   return { counts, total };
 };
 
+/**
+ * The Customer Sync TAB fetches both of these steps, so the breakdown counts both.
+ * Kept local because it differs from the scope module's CUSTOMER_SYNC_STEPS, which
+ * lists only `customer_data_ext` — the Sales Pipeline tab does still show `customer`
+ * rows. Do not "unify" these two without deciding which tab owns `customer`.
+ */
 const CUSTOMER_STEPS = ["customer", "customer_data_ext"];
-const PURCHASE_STEPS = [
-  "purchase_order_mod",
-  "item_receipt_add",
-  "item_receipt_mod",
-  "vendor_bill_add",
-  "vendor_bill_mod",
-  "vendor_bill_rebuild_preflight",
-  "vendor_bill_rebuild_delete",
+
+/**
+ * Steps this card must NOT count under Sales, because they render in their own tab.
+ *
+ * Imported, never re-typed. This route was the THIRD hand-written copy of the same
+ * list — the two the scope module was created for were the listing query and its
+ * badge summary, and nobody remembered this card existed. The symptom the operator
+ * saw: 756 confirmed and 4 failed bill-payment checks counted under "Sales" while the
+ * Sales Pipeline tab, correctly, showed none of them.
+ */
+const NON_SALES_STEPS = [
+  ...CUSTOMER_STEPS,
+  ...PURCHASE_PIPELINE_STEPS,
+  ...BILL_PAYMENT_STEPS,
 ];
 
 export async function GET(
@@ -99,11 +116,20 @@ export async function GET(
     const sales = await client.query<StatusRow>(
       `SELECT status, COUNT(*) AS count
          FROM qb_order_pipeline
-        WHERE step NOT IN (${[...CUSTOMER_STEPS, ...PURCHASE_STEPS]
-          .map((_, i) => `$${i + 1}`)
-          .join(", ")})
+        WHERE step <> ALL($1::text[])
         GROUP BY status`,
-      [...CUSTOMER_STEPS, ...PURCHASE_STEPS]
+      [NON_SALES_STEPS]
+    );
+
+    // 1b) Bill Payments = the hourly read-only BillQuery per linked unpaid bill.
+    //     Its own tab since 2026-07-30: at 761 rows it is the largest step in this
+    //     shared table and it was drowning the sales documents next to it.
+    const billPayments = await client.query<StatusRow>(
+      `SELECT status, COUNT(*) AS count
+         FROM qb_order_pipeline
+        WHERE step = ANY($1::text[])
+        GROUP BY status`,
+      [[...BILL_PAYMENT_STEPS]]
     );
 
     // 2) Customer sync = qb_order_pipeline restricted to customer steps.
@@ -191,6 +217,9 @@ export async function GET(
         inventory.rows
       ),
       build("purchase_orders", "Purchases", "po-pipeline", purchases.rows),
+      // `tab` must match the Tabs.Trigger value in qb-pipeline/page.tsx — clicking
+      // the row jumps to that tab, and a wrong value jumps nowhere.
+      build("bill_payments", "Bill Payments", "bill-payments", billPayments.rows),
       build("vendors", "Vendors", "vendors", vendors.rows),
       build("customers", "Customer Sync", "customer-sync", customers.rows),
     ];
