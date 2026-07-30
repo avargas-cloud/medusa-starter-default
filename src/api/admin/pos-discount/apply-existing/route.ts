@@ -1,12 +1,14 @@
 import {
   beginDraftOrderEditWorkflow,
   addDraftOrderPromotionWorkflow,
+  removeDraftOrderPromotionsWorkflow,
   confirmDraftOrderEditWorkflow,
   cancelDraftOrderEditWorkflow,
 } from "@medusajs/core-flows";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { IPromotionModuleService } from "@medusajs/types";
 
+import { getDbPool } from "../../../utils/db-pool";
 import { posOverrideAdjustmentsWorkflow } from "../../../../workflows/pos-discount/workflows";
 
 /**
@@ -170,6 +172,70 @@ export async function POST(
       1500
     );
     logger.info(`[POS apply-existing] Began draft order edit`);
+
+    // ── Step 3b: Quitar TODA promo de orden ya aplicada ────────────────────
+    //
+    // Misma razón que en `../route.ts`: si el descuento anterior sigue vivo,
+    // Medusa calcula el nuevo porcentaje sobre un total que ya viene descontado.
+    // Reproducido en sandbox — aplicar una promo preset sobre un 10% existente
+    // guardaba 43.20 (10% de 432.00) en vez de los 48.00 que muestra el
+    // documento, y la limpieza posterior dejaba UNA sola fila con ese monto
+    // compuesto.
+    const stale: string[] = [];
+    try {
+      const { rows } = await getDbPool().query<{ code: string | null }>(
+        `SELECT DISTINCT a.code
+           FROM order_item oi
+           JOIN order_line_item_adjustment a ON a.item_id = oi.item_id
+          WHERE oi.order_id = $1
+            AND a.deleted_at IS NULL
+            AND a.code IS NOT NULL
+            AND a.code <> $2`,
+        [order_id, promotion_code]
+      );
+      for (const r of rows) if (r.code) stale.push(r.code);
+    } catch (e: any) {
+      logger.warn(
+        `[POS apply-existing] Could not read live adjustment codes: ${e.message}`
+      );
+    }
+    if (stale.length > 0) {
+      try {
+        await removeDraftOrderPromotionsWorkflow(req.scope).run({
+          input: { order_id, promo_codes: stale },
+        });
+        logger.info(
+          `[POS apply-existing] Removed ${stale.length} stale promo(s): ${stale.join(", ")}`
+        );
+        // El workflow saca la promoción y devuelve OK, pero las FILAS siguen
+        // vivas: las escribe `posOverrideAdjustmentsWorkflow` por fuera del
+        // workflow de promociones. Medido partiendo este paso en dos — después
+        // de aplicar la preset quedaban los DOS códigos a la vez
+        // (CPOS-PCT-1000 + ORDER-DISCOUNT-10%, ADJ 96.00 sobre un neto de
+        // 480.00) y el siguiente cálculo salía sobre 432.00.
+        const del = await getDbPool().query(
+          `DELETE FROM order_line_item_adjustment
+            WHERE deleted_at IS NULL
+              AND code = ANY($2::text[])
+              AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)`,
+          [order_id, stale]
+        );
+        if ((del.rowCount ?? 0) > 0) {
+          logger.info(
+            `[POS apply-existing] Also hard-deleted ${del.rowCount} leftover adjustment row(s)`
+          );
+        }
+      } catch (e: any) {
+        // Falla CERRADO: aplicar encima de un descuento vivo produce un total
+        // que el documento no muestra.
+        logger.error(
+          `[POS apply-existing] Could not remove stale promos: ${e.message}`
+        );
+        throw new Error(
+          `no se pudo quitar el descuento anterior (${stale.join(", ")}) — el nuevo se habría calculado sobre un subtotal ya descontado: ${e.message}`
+        );
+      }
+    }
 
     // ── Step 4: Apply the promotion via workflow ───────────────────────────
     await addDraftOrderPromotionWorkflow(req.scope).run({

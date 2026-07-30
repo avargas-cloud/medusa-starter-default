@@ -16,6 +16,8 @@ import {
   ApplicationMethodTargetType,
 } from "@medusajs/utils";
 
+import { getDbPool } from "../../utils/db-pool";
+
 /**
  * POST /admin/pos-discount
  *
@@ -130,17 +132,82 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // 3. Begin a new draft order edit
     await beginDraftOrderEditWorkflow(req.scope).run({ input: { order_id } });
 
-    // 4. If there was a previous custom promo to remove, remove it inside the edit
-    if (existing_promo_code) {
+    // 4. Remove EVERY order-level promo already on the order, inside the edit.
+    //
+    // Esto NO puede depender de que el caller mande `existing_promo_code`: el POS
+    // no lo manda (manda sólo order_id/discount_type/discount_value), así que el
+    // descuento anterior seguía vivo cuando se aplicaba el nuevo — y Medusa
+    // calcula el porcentaje nuevo sobre el total que YA trae descontado el viejo.
+    //
+    // Reproducido en sandbox (`e2e-order-discount-lifecycle-sandbox.ts`): con un
+    // subtotal de 480.00 y un 10% ya aplicado, cambiar a 5% guardaba 21.60 —que
+    // es 5% de 432.00— en vez de los 24.00 que muestra el documento. Después la
+    // limpieza de `sync-pos` borra el código viejo y queda UNA fila con el monto
+    // compuesto, indistinguible de un descuento legítimo. Es la firma exacta de
+    // E2146 en producción: 10% de 19.607,76 = 1.960,78, cuando el documento dice
+    // 10% de 21.786,40 = 2.178,64.
+    //
+    // Se descubren por los adjustments vivos y no por la metadata porque la
+    // metadata es justamente lo que en esos documentos está vacío.
+    const codesToDrop = new Set<string>();
+    if (existing_promo_code) codesToDrop.add(existing_promo_code);
+    try {
+      const { rows } = await getDbPool().query<{ code: string | null }>(
+        `SELECT DISTINCT a.code
+           FROM order_item oi
+           JOIN order_line_item_adjustment a ON a.item_id = oi.item_id
+          WHERE oi.order_id = $1
+            AND a.deleted_at IS NULL
+            AND a.code IS NOT NULL`,
+        [order_id]
+      );
+      for (const r of rows) if (r.code) codesToDrop.add(r.code);
+    } catch (e: any) {
+      logger.warn(
+        `[POS Discount] Could not read live adjustment codes: ${e.message}`
+      );
+    }
+    // Re-aplicar el MISMO código no necesita removerlo (medido: no compone), y
+    // sacarlo para volver a ponerlo agrega una escritura que puede fallar sola.
+    codesToDrop.delete(promoCode);
+
+    if (codesToDrop.size > 0) {
+      const promo_codes = [...codesToDrop];
       try {
         await removeDraftOrderPromotionsWorkflow(req.scope).run({
-          input: { order_id, promo_codes: [existing_promo_code] },
+          input: { order_id, promo_codes },
         });
         logger.info(
-          `[POS Discount] Removed existing promo ${existing_promo_code}`
+          `[POS Discount] Removed ${promo_codes.length} stale promo(s) before applying ${promoCode}: ${promo_codes.join(", ")}`
         );
+        // El workflow saca la PROMOCIÓN, no necesariamente sus filas: las que
+        // escribió `apply-existing` vienen de `posOverrideAdjustmentsWorkflow`,
+        // que las pone a mano fuera del workflow de promociones y por lo tanto
+        // sobreviven a la remoción. Si sobreviven, el porcentaje nuevo se calcula
+        // sobre el neto que todavía las tiene restadas — medido: 43.20 en vez de
+        // 48.00. Borrarlas acá es lo que deja la base limpia ANTES de aplicar.
+        const del = await getDbPool().query(
+          `DELETE FROM order_line_item_adjustment
+            WHERE deleted_at IS NULL
+              AND code = ANY($2::text[])
+              AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)`,
+          [order_id, promo_codes]
+        );
+        if ((del.rowCount ?? 0) > 0) {
+          logger.info(
+            `[POS Discount] Also hard-deleted ${del.rowCount} leftover adjustment row(s) for ${promo_codes.join(", ")}`
+          );
+        }
       } catch (e: any) {
-        logger.warn(`[POS Discount] Could not remove old promo: ${e.message}`);
+        // Falla CERRADO a propósito: si el descuento viejo sigue vivo, el nuevo
+        // se calcula sobre una base contaminada y el documento queda mintiendo.
+        // Mejor que el POS reciba un error a que guarde un total equivocado.
+        logger.error(
+          `[POS Discount] Could not remove stale promos (${promo_codes.join(", ")}): ${e.message}`
+        );
+        throw new Error(
+          `no se pudo quitar el descuento anterior (${promo_codes.join(", ")}) — el nuevo se habría calculado sobre un subtotal ya descontado: ${e.message}`
+        );
       }
     }
 
