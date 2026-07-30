@@ -16,7 +16,8 @@
  *   - Bills of type 'bank_fee' cannot be moved (they belong to their wire).
  *   - Confirmed wires are immutable — neither origin nor destination can be
  *     confirmed.
- *   - applied_cents must be in (0, bill.amount_cents].
+ *   - applied_cents must be in (0, max(amount_cents − Σ CONFIRMED applied, 0)]
+ *     — a bill paid short is scheduled for its REMAINDER, not its full value.
  *   - A bill may have at most one DRAFT application after the patch.
  *   - Confirmed-wire applications for the same bill are preserved untouched.
  *
@@ -31,6 +32,7 @@ import type {
 } from "@medusajs/framework/http";
 import { randomUUID } from "crypto";
 import { z } from "zod";
+import { schedulableCents } from "../../../../../lib/china-finance/schedulable-amount";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -159,14 +161,46 @@ export const PATCH = async (
       });
     }
 
-    // Validate applied_cents bounds.
+    // What each bill still OWES, which is not the same as what it costs.
+    //
+    // A bill may already carry a confirmed application: the wire went out and
+    // that money is gone. The ceiling for anything scheduled now is therefore
+    // the remainder, never the bill's full amount — the old check compared
+    // against `amount_cents` and would have let a bill paid short be scheduled
+    // for its whole value a second time.
+    //
+    // Clamped at 0 on purpose. A bill corrected DOWNWARD after being paid has
+    // confirmed applications LARGER than its amount (VB-1045 sits at $3,025.00
+    // with $3,136.50 applied); it owes nothing, and its excess settles through
+    // `china_finance_wire_credit`, not through another application here.
+    const { rows: confirmedRows } = (await db.raw(
+      `SELECT cwta.bill_id, COALESCE(SUM(cwta.applied_cents), 0)::int AS confirmed_cents
+         FROM china_wire_transfer_application cwta
+         JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+        WHERE cwta.bill_id = ANY(?)
+          AND cwt.status = 'confirmed'
+        GROUP BY cwta.bill_id`,
+      [billIds]
+    )) as { rows: Array<{ bill_id: string; confirmed_cents: number | string }> };
+    const confirmedByBill = new Map(
+      confirmedRows.map((r) => [r.bill_id, Number(r.confirmed_cents)])
+    );
+
     for (const a of assignments) {
       const bill = billsById.get(a.bill_id)!;
-      if (a.applied_cents > bill.amount_cents) {
+      const confirmed = confirmedByBill.get(a.bill_id) ?? 0;
+      const schedulable = schedulableCents(bill.amount_cents, confirmed);
+      if (a.applied_cents > schedulable) {
         if (trx) await trx.rollback();
         return res.status(400).json({
-          message: "applied_cents exceeds bill.amount_cents",
+          message:
+            confirmed > 0
+              ? "applied_cents exceeds what this bill still owes after its confirmed payments"
+              : "applied_cents exceeds bill.amount_cents",
           bill_id: a.bill_id,
+          amount_cents: bill.amount_cents,
+          confirmed_cents: confirmed,
+          schedulable_cents: schedulable,
         });
       }
     }
