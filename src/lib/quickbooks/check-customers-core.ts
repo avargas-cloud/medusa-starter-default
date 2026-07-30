@@ -3,10 +3,10 @@ import { pollBridgeStatus } from "./bridge-fetch";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { Client } from "pg";
 import { requireBridgeUrl } from "./bridge-url";
+import { requireQbApiKey } from "./qb-api-key";
 
 // Config — from env vars
 
-const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const POLL_INTERVAL_MS = 30000; // 30 seconds
 const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
 
@@ -70,7 +70,7 @@ export async function checkCustomersCore(
     // 1. Fetch QB Customers via Bridge
     logger.info("📡 Requesting Customer Data from Bridge...");
     const initRes = await fetch(`${requireBridgeUrl()}/api/customers`, {
-      headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
+      headers: { "x-api-key": requireQbApiKey(), "bypass-tunnel-reminder": "true" },
     });
 
     if (!initRes.ok) {

@@ -11,8 +11,8 @@
 
 import { pollBridgeStatus } from "./bridge-fetch";
 import { requireBridgeUrl } from "./bridge-url";
+import { requireQbApiKey } from "./qb-api-key";
 
-const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_ATTEMPTS = 60; // 2 min
@@ -34,7 +34,7 @@ async function enqueueDataExt(
     signal: AbortSignal.timeout(8000),
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": API_KEY,
+      "x-api-key": requireQbApiKey(),
       "bypass-tunnel-reminder": "true",
     },
     body: JSON.stringify({

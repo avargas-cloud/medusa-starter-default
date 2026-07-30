@@ -27,8 +27,7 @@ const REGION_ID = "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1";
 const PUBLISHABLE =
   "pk_519e7f66680afc4ab0136ce701a7f6d1e8df2b8fc48a29b7a55616a05cb5b5f3";
 const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  "postgresql://postgres:hUMSVtteMnqSBZSuSGUBivBooMdRoKtj@interchange.proxy.rlwy.net:34919/railway";
+  process.env.DATABASE_URL;
 const HEADERS = {
   "Content-Type": "application/json",
   "x-publishable-api-key": PUBLISHABLE,

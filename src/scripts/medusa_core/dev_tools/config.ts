@@ -17,7 +17,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 export const BRIDGE_URL =
   requireBridgeUrl();
 export const API_KEY =
-  process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
+  process.env.QB_API_KEY;
 
 // Default test IDs — update when testing with specific QB entities
 // Find these in QB Desktop or via GET /api/customers?ListID=... or /api/products?FullName=...

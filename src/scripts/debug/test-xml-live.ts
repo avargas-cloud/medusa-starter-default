@@ -2,7 +2,7 @@ import fetch from "node-fetch";
 import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 const BRIDGE_URL = requireBridgeUrl();
-const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
+const API_KEY = process.env.QB_API_KEY;
 
 async function run() {
   console.log("Fetching EditSequence for customer...");

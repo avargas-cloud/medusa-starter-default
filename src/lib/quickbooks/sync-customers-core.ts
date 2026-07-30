@@ -7,10 +7,10 @@ import postgres from "postgres";
 
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { requireBridgeUrl } from "./bridge-url";
+import { requireQbApiKey } from "./qb-api-key";
 
 // Config — from env vars
 
-const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const POLL_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes — 7200 customers take time to process
 const INITIAL_WAIT_MS = 2 * 60 * 1000; // wait 2 min before first poll
 const MAX_POLL_ATTEMPTS = 8; // up to 16 min total
@@ -133,7 +133,7 @@ export async function syncCustomersCore(
     const initRes = await fetch(
       `${requireBridgeUrl()}/api/customers?MaxReturned=99999&ActiveStatus=All`,
       {
-        headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
+        headers: { "x-api-key": requireQbApiKey(), "bypass-tunnel-reminder": "true" },
       }
     );
 

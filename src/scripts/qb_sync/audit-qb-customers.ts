@@ -32,7 +32,7 @@ import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 const BRIDGE_URL =
   requireBridgeUrl();
 const API_KEY =
-  process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
+  process.env.QB_API_KEY;
 const EXPORT_PATH = path.resolve(__dirname, "../../../customers_export.json");
 const REPORT_PATH = path.resolve(__dirname, "../../../qb_audit_report.json");
 

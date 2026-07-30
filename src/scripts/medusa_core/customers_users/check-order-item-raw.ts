@@ -5,8 +5,7 @@
 import pg from "pg";
 
 const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  "postgresql://postgres:hUMSVtteMnqSBZSuSGUBivBooMdRoKtj@interchange.proxy.rlwy.net:34919/railway";
+  process.env.DATABASE_URL;
 
 const orderId = process.argv[2] ?? "order_01KJ8D67JKZETPVCHQ5S46J6T5";
 

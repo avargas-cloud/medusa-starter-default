@@ -1,7 +1,19 @@
 const { Pool } = require('pg')
+// SANDBOX ONLY, fail-closed. Added 2026-07-30 when this file was moved out of the
+// backend repo ROOT, where it had sat for four months with the production Postgres
+// URL hardcoded — `node repair-invoices.js` from that directory would have run the
+// statements below against production. It has no dry run, no APPLY flag and no
+// WHERE clause, so the guard is the only thing between it and the payment ledger.
+// Per the repo rules a destructive write goes to the Docker sandbox first.
+const DB = process.env.DATABASE_URL || ''
+if (!DB.includes(':5499')) {
+  console.error('REFUSING — this script only runs against the Docker sandbox (port 5499).')
+  console.error('  DATABASE_URL points somewhere else. See docs/SANDBOX.md.')
+  process.exit(2)
+}
 
 const pool = new Pool({
-  connectionString: 'postgresql://postgres:hUMSVtteMnqSBZSuSGUBivBooMdRoKtj@interchange.proxy.rlwy.net:34919/railway',
+  connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 })
 

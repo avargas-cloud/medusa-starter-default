@@ -1,5 +1,5 @@
 const { Pool } = require('pg');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL || 'postgresql://postgres:hUMSVtteMnqSBZSuSGUBivBooMdRoKtj@interchange.proxy.rlwy.net:56649/railway' });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 async function debug() {
   const oRes = await pool.query('SELECT id, display_id FROM "order" WHERE display_id = 1096');

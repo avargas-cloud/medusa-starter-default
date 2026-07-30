@@ -247,7 +247,7 @@ Ya no necesitas buscar IDs. El sistema acepta los nombres de cuentas estándar (
 
 **Comando PowerShell para crear producto:**
 ```powershell
-$headers = @{ "x-api-key" = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD" }
+$headers = @{ "x-api-key" = "$QB_API_KEY" }
 $body = @{
     Name = "Producto Test API V2"
     SalesPrice = 99.99
@@ -265,7 +265,7 @@ Si obtienes un resultado vacío, usa este comando para ver el **XML CRUDO** que 
 ```powershell
 # Reemplaza ID_OPERACION con el ID que te dio el POST anterior
 $id = "ID_OPERACION"
-$headers = @{ "x-api-key" = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD" }
+$headers = @{ "x-api-key" = "$QB_API_KEY" }
 $res = Invoke-RestMethod -Method Get -Uri "https://ecopower-qb.loca.lt/api/sync/status/$id" -Headers $headers
 $res.operation.qbxmlResponse
 ```

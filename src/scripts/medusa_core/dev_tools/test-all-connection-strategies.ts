@@ -3,7 +3,7 @@ import { Client } from "pg";
 
 // Test multiple connection strategies
 const baseUrl =
-  "postgresql://postgres:hUMSVtteMnqSBZSuSGUBivBooMdRoKtj@interchange.proxy.rlwy.net:34919/railway";
+  process.env.DATABASE_URL;
 
 const strategies = [
   { name: "No SSL", config: { connectionString: baseUrl } },

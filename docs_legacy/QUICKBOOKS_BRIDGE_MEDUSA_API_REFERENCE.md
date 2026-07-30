@@ -2,7 +2,7 @@
 
 **Version:** 2.1 (Production)
 **Base URL:** `https://ecopower-qb.loca.lt/api`
-**Auth Header:** `x-api-key: mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD`
+**Auth Header:** `x-api-key: $QB_API_KEY`
 **QBXML Version:** `10.0` (required for Inventory Site support)
 **Last Updated:** Feb 27, 2026
 

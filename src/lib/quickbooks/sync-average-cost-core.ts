@@ -9,9 +9,8 @@ import {
 } from "./bulk-item-types";
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { requireBridgeUrl } from "./bridge-url";
+import { requireQbApiKey } from "./qb-api-key";
 
-const API_KEY =
-  process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const POLL_INTERVAL_MS = 30_000;
 const MAX_POLL_ATTEMPTS = 20;
 const METADATA_BATCH = 500;
@@ -129,7 +128,7 @@ function parseInventoryItems(queryRs: Record<string, unknown>): QbItemRaw[] {
 async function fetchBridgeJson(url: string): Promise<unknown> {
   const res = await fetch(url, {
     headers: {
-      "x-api-key": API_KEY,
+      "x-api-key": requireQbApiKey(),
       "bypass-tunnel-reminder": "true",
     },
   });

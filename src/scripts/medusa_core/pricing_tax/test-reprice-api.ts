@@ -29,8 +29,7 @@ async function run() {
 
   const pool = new Pool({
     connectionString:
-      process.env.DATABASE_URL ||
-      "postgresql://postgres:hUMSVtteMnqSBZSuSGUBivBooMdRoKtj@interchange.proxy.rlwy.net:34919/railway",
+      process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
   });
 

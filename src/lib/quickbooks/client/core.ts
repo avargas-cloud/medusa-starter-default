@@ -1,9 +1,8 @@
 import { QbAsyncResult, QbUpdateCustomerPayload } from "./types";
 import { pollBridgeStatus } from "../bridge-fetch";
 import { requireBridgeUrl } from "../bridge-url";
+import { requireQbApiKey } from "../qb-api-key";
 
-export const API_KEY =
-  process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 export const DRY_RUN = process.env.QB_DRY_RUN === "true";
 
 export const POLL_INTERVAL_MS = 20_000;
@@ -33,7 +32,7 @@ export async function bridgeFetch(
     res = await fetch(url, {
       method,
       headers: {
-        "x-api-key": API_KEY,
+        "x-api-key": requireQbApiKey(),
         "Content-Type": "application/json",
         "bypass-tunnel-reminder": "true",
         // Idempotency key rides as a header (not in the QBXML body). The bridge

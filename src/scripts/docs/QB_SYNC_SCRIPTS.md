@@ -89,7 +89,7 @@ Todos usan las mismas variables:
 
 ```typescript
 const BRIDGE_URL = "https://ecopower-qb.loca.lt"  // Tu túnel localtunnel
-const API_KEY = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
+const API_KEY = "$QB_API_KEY"
 const POLL_INTERVAL_MS = 30000  // 30 segundos
 const MAX_POLL_ATTEMPTS = 20    // 10 mins máximo
 ```

@@ -20,7 +20,7 @@ import {
 import { requireBridgeUrl } from "../../lib/quickbooks/bridge-url";
 
 const BRIDGE_URL = requireBridgeUrl();
-const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
+const API_KEY = process.env.QB_API_KEY;
 
 // CM-1087 — the document the bug was found on.
 const TXN_ID = process.argv[2] || "1C9684-1783534817";

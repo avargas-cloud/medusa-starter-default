@@ -7,10 +7,10 @@ import { syncInventoryWorkflow } from "../../workflows/sync-inventory";
 
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { requireBridgeUrl } from "./bridge-url";
+import { requireQbApiKey } from "./qb-api-key";
 
 // Config — URLs and keys from env vars
 
-const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 const POLL_INTERVAL_MS = 30000; // 30 seconds
 const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
 const QB_PRINCIPAL_WAREHOUSE_ID = "80000001-1331053531";
@@ -198,7 +198,7 @@ export async function syncInventoryCore(
     const initRes = await fetchWithRetry(
       `${requireBridgeUrl()}/api/products/site/${QB_PRINCIPAL_WAREHOUSE_ID}`,
       {
-        headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
+        headers: { "x-api-key": requireQbApiKey(), "bypass-tunnel-reminder": "true" },
       }
     );
 

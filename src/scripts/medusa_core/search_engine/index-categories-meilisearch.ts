@@ -8,7 +8,7 @@ import postgres from "postgres";
 
 const MEILISEARCH_HOST = "https://meilisearch-production-1237.up.railway.app";
 const MEILISEARCH_API_KEY =
-  "bf013bc7e93ee16593d58b3c0aeecec4b6a69e9ac0bb88f705148f1bf0265562";
+  process.env.MEILISEARCH_API_KEY;
 
 async function indexCategories() {
   console.log("🔍 Starting MeiliSearch category indexing...");
