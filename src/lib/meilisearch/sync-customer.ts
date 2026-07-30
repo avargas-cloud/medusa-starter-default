@@ -11,8 +11,14 @@ import { Modules } from "@medusajs/utils";
  *     does NOT emit `customer.created`/`customer.updated`, so the subscriber
  *     never fires and the doc must be pushed explicitly.
  *
- * Non-throwing by design — a Meili hiccup logs and returns instead of breaking
- * the caller's primary write.
+ * A customer that is GONE from the database loses its document here. That is the
+ * only path that removes one, and it fires only on a provable absence — see the
+ * catch block for why "provable" is doing real work in that sentence.
+ *
+ * Non-throwing by design, with one exception — a Meili hiccup logs and returns
+ * instead of breaking the caller's primary write. The exception is a FAILED
+ * DELETE, which rethrows so the queue retries it: nothing else can repair that
+ * one, because the reconciliation sweep never enumerates a deleted row.
  */
 export async function syncCustomerToMeili(
   customerId: string,
@@ -82,6 +88,51 @@ export async function syncCustomerToMeili(
       `[MEILI-CUSTOMER-SYNC] ✅ ${customer.email} — Type: ${existingCustomerType}, Price: ${priceLevel}, Groups: ${meiliDoc.groups.join(", ") || "none"}`
     );
   } catch (err: any) {
+    // A customer that is GONE has to lose its document. Nothing did that until
+    // 2026-07-29, so a soft-deleted customer stayed searchable forever: three of
+    // them had been sitting in the index since 2026-05-01. Measured end to end —
+    // the trigger fires (as an UPDATE, since a soft delete IS an update), the
+    // queue processor lands here, retrieveCustomer throws, this catch logged and
+    // returned, and the queue marked the row done with the document intact.
+    //
+    // The delete happens ONLY on a provable absence. Medusa throws
+    // `type: "not_found"` for a soft-deleted or missing customer, which is what
+    // makes that distinguishable from a transient read failure — and the
+    // distinction is the whole safety property here. Deleting on any error would
+    // mean a Postgres hiccup silently removes a LIVE customer from search, which
+    // is far worse than leaving a stale one behind. (The vendor reconciler does
+    // `retrieveQbVendor(id).catch(() => null)` and deletes on null, so it still
+    // has that hazard; noted, not fixed here.)
+    if (err?.type === "not_found") {
+      try {
+        const { MeiliSearch } = await import("meilisearch");
+        await new MeiliSearch({
+          host: process.env.MEILISEARCH_HOST!,
+          apiKey: process.env.MEILISEARCH_API_KEY!,
+        })
+          .index("customers")
+          .deleteDocument(customerId);
+        log.info(
+          `[MEILI-CUSTOMER-SYNC] 🗑️  ${customerId} is gone from the database — document deleted`
+        );
+      } catch (delErr: any) {
+        // Rethrow so the queue retries. A failed delete cannot be repaired by
+        // anything else: the reconciliation sweep enumerates rows by updated_at
+        // and a deleted row is never enumerated, so a swallowed failure here is
+        // exactly how a permanent orphan is created. Rethrowing is safe for the
+        // existing callers because this branch never ran before today.
+        log.error(
+          `[MEILI-CUSTOMER-SYNC] ❌ could not delete the document for ${customerId}: ${delErr.message}`
+        );
+        throw delErr;
+      }
+      return;
+    }
+
+    // Anything else stays non-throwing, as it has always been: a Meili hiccup
+    // must not break the caller's primary write, and the 5-minute sweep is the
+    // net for a stale document. Changing that would touch all 8 callsites,
+    // including customer-facing routes, and is a separate decision.
     log.error(
       `[MEILI-CUSTOMER-SYNC] ❌ sync failed for ${customerId}: ${err.message}`
     );
