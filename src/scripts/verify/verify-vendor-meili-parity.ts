@@ -35,11 +35,9 @@
 
 import type { MedusaContainer } from "@medusajs/framework/types";
 
-// Generic value comparison, not orders-specific despite where it lives: it exists
-// so a string/number round trip or ""-vs-null is not reported as drift. If a third
-// consumer appears, move it to its own module.
-import { sameIndexedValue } from "../../lib/meilisearch/audit-orders-index";
+import { isIndexNotFound } from "../../lib/meilisearch/meili-errors";
 import { vendorReconciler } from "../../lib/meilisearch/reconcilers/vendor-reconciler";
+import { sameIndexedValue } from "../../lib/meilisearch/same-indexed-value";
 import { transformVendor, VENDORS_INDEX } from "../../lib/meilisearch/vendor-doc";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
 import type QuickbooksCatalogModuleService from "../../modules/quickbooks-catalog/service";
@@ -79,10 +77,24 @@ export default async function run({
 
   // getDocuments().total is the accurate count — search's estimatedTotalHits
   // is capped by the index's maxTotalHits setting and lies above it.
-  const docs = await index.getDocuments<Doc>({
-    limit: 100000,
-    fields: ["id", ...AUDITED],
-  });
+  let docs: Awaited<ReturnType<typeof index.getDocuments<Doc>>>;
+  try {
+    docs = await index.getDocuments<Doc>({
+      limit: 100000,
+      fields: ["id", ...AUDITED],
+    });
+  } catch (err: unknown) {
+    // A restored sandbox has qb_vendor populated and NO vendors index — the
+    // sandbox restore does not build Meili indexes, and Meili's own
+    // index_not_found reads like a bug in this script. Say what to run.
+    if (isIndexNotFound(err)) {
+      throw new Error(
+        `the "${VENDORS_INDEX}" index does not exist on ${process.env.MEILISEARCH_HOST} — ` +
+          `build it first with: medusa exec ./src/scripts/sync/sync-vendors-meilisearch.ts`
+      );
+    }
+    throw err;
+  }
   const byId = new Map<string, Doc>(docs.results.map((d) => [String(d.id), d]));
 
   const missing: VendorRow[] = [];

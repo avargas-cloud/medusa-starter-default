@@ -33,6 +33,8 @@
  */
 import type { MedusaContainer } from "@medusajs/framework/types";
 
+import { isIndexNotFound } from "./meili-errors";
+import { sameIndexedValue } from "./same-indexed-value";
 import { ORDERS_INDEX, buildAllOrderDocs } from "./sync-orders-runner";
 
 /**
@@ -96,34 +98,6 @@ export interface OrderIndexAuditResult {
   clean: boolean;
 }
 
-/**
- * Same value, allowing for the sloppiness a value survives a round trip as.
- *
- * Money and timestamps come back from query.graph as string or BigNumber and from
- * Meili as number, and "missing" serializes as "" on one side and null on the
- * other. Neither is drift, and reporting it as such is how a drift report gets
- * ignored.
- */
-export function sameIndexedValue(expected: unknown, actual: unknown): boolean {
-  if (expected === actual) return true;
-
-  if (typeof expected === "number" || typeof actual === "number") {
-    const a = Number(expected);
-    const b = Number(actual);
-    if (Number.isFinite(a) && Number.isFinite(b)) return Math.abs(a - b) < 0.01;
-  }
-
-  if (Array.isArray(expected) && Array.isArray(actual)) {
-    if (expected.length !== actual.length) return false;
-    const sa = [...expected].sort();
-    const sb = [...actual].sort();
-    return sa.every((v, i) => v === sb[i]);
-  }
-
-  const empty = (v: unknown) => v === "" || v === null || v === undefined;
-  return empty(expected) && empty(actual);
-}
-
 /** Every document currently in the index, keyed by id, audited fields only. */
 async function fetchIndexedDocs(): Promise<Map<string, Doc>> {
   const { MeiliSearch } = await import("meilisearch");
@@ -137,11 +111,24 @@ async function fetchIndexedDocs(): Promise<Map<string, Doc>> {
   let offset = 0;
   const PAGE = 1000;
   for (;;) {
-    const page = await index.getDocuments<Doc>({
-      limit: PAGE,
-      offset,
-      fields: ["id", ...ORDER_AUDITED_FIELDS] as string[],
-    });
+    let page: Awaited<ReturnType<typeof index.getDocuments<Doc>>>;
+    try {
+      page = await index.getDocuments<Doc>({
+        limit: PAGE,
+        offset,
+        fields: ["id", ...ORDER_AUDITED_FIELDS] as string[],
+      });
+    } catch (err: unknown) {
+      // A fresh sandbox has the tables but not the indexes, and Meili's own error
+      // for that reads like a bug in this code. Say what to run instead.
+      if (isIndexNotFound(err)) {
+        throw new Error(
+          `the "${ORDERS_INDEX}" index does not exist on ${process.env.MEILISEARCH_HOST} — ` +
+            `build it first with: medusa exec ./src/scripts/sync/sync-meili-orders.ts`
+        );
+      }
+      throw err;
+    }
     for (const doc of page.results) byId.set(String(doc.id), doc);
     if (page.results.length < PAGE) break;
     offset += PAGE;

@@ -7,7 +7,7 @@
  * clean index producing NO section and therefore no empty email.
  */
 import type { OrderIndexAuditResult } from "../../lib/meilisearch/audit-orders-index";
-import { sameIndexedValue } from "../../lib/meilisearch/audit-orders-index";
+import { sameIndexedValue } from "../../lib/meilisearch/same-indexed-value";
 import {
   MAX_DRIFT_ROWS,
   buildOrderDriftRows,
