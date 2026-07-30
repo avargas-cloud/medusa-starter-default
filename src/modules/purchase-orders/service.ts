@@ -1,7 +1,7 @@
 /**
  * src/modules/purchase-orders/service.ts
  *
- * Wraps the 6 purchase-orders models. Numbering is delegated to two shared
+ * Wraps the purchase-orders models. Numbering is delegated to two shared
  * Postgres sequences:
  *   - custom_purchase_order_seq  → allocated at submit time, format PO-{seq}
  *   - custom_po_receipt_seq      → allocated at receipt creation, format RCP-{seq}
@@ -17,6 +17,9 @@ import { PurchaseOrder } from "./models/purchase-order";
 import { PurchaseOrderLine } from "./models/purchase-order-line";
 import { PurchaseOrderReceipt } from "./models/purchase-order-receipt";
 import { PurchaseOrderReceiptLine } from "./models/purchase-order-receipt-line";
+import { PurchaseOrderTracking } from "./models/purchase-order-tracking";
+import { PurchaseOrderTrackingNumber } from "./models/purchase-order-tracking-number";
+import { PurchaseOrderTrackingLine } from "./models/purchase-order-tracking-line";
 import { QbItemReceiptPipeline } from "./models/qb-item-receipt-pipeline";
 import { QbPurchaseOrderPipeline } from "./models/qb-purchase-order-pipeline";
 import { QbVendorBillPipeline } from "./models/qb-vendor-bill-pipeline";
@@ -28,6 +31,9 @@ class PurchaseOrdersModuleService extends MedusaService({
   PurchaseOrderLine,
   PurchaseOrderReceipt,
   PurchaseOrderReceiptLine,
+  PurchaseOrderTracking,
+  PurchaseOrderTrackingNumber,
+  PurchaseOrderTrackingLine,
   QbPurchaseOrderPipeline,
   QbItemReceiptPipeline,
   QbVendorBillPipeline,

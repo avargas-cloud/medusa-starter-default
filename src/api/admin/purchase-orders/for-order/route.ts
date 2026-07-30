@@ -125,9 +125,38 @@ export async function GET(
 
   const pool = getDbPool();
 
+  // `tracking` comes from purchase_order_tracking_number, not the PO's legacy
+  // JSON column. That column is frozen and no longer written, so reading it here
+  // would quote a customer an arrival date from a shipment list that stopped
+  // updating.
+  //
+  // FLAT on purpose: this answers "where is my order?" for a customer, who wants
+  // numbers and a date — not the delivery/number hierarchy the buyer works with.
+  // Every number of every delivery is listed, master first within each.
   const headers = await pool.query<PoHeaderRow>(
     `SELECT id, number, status, po_status, vendor_name_snapshot,
-            ordered_at, expected_at, tracking
+            ordered_at, expected_at,
+            COALESCE(
+              (SELECT json_agg(
+                        json_build_object(
+                          'id',             n.id,
+                          'provider',       n.provider,
+                          'tracking_number', n.tracking_number,
+                          'tracking_url',   n.tracking_url,
+                          'carrier_eta',    n.carrier_eta,
+                          'carrier_status', n.carrier_status,
+                          'carrier_detail', n.carrier_detail
+                        )
+                        ORDER BY trk.created_at, n.is_master DESC, n.created_at, n.id
+                      )
+                 FROM purchase_order_tracking trk
+                 JOIN purchase_order_tracking_number n
+                   ON n.purchase_order_tracking_id = trk.id
+                  AND n.deleted_at IS NULL
+                WHERE trk.purchase_order_id = purchase_order.id
+                  AND trk.deleted_at IS NULL),
+              '[]'::json
+            ) AS tracking
        FROM purchase_order
       WHERE deleted_at IS NULL
         AND linked_order_ids IS NOT NULL
