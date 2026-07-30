@@ -1,0 +1,56 @@
+# Type-check + unit tests on the delivery path.
+#
+# Why this exists: 17 unit tests sat red across 3 suites from June to July 2026
+# without blocking anything, because nothing automated ran on the way to
+# production. `yarn code-quality` cannot serve as the gate — it chains
+# `yarn lint`, which exits 1 on ~9k pre-existing problems, so it never gets as
+# far as the tests. And the only other workflow here (test-cli.yml) triggers on
+# pull_request, while this repo pushes straight to master.
+#
+# Deliberately narrow: type-check and the mocked unit suite only. No database,
+# no Redis, no MeiliSearch, no secrets — the suite runs in seconds and must stay
+# that way, so it can gate every push without anyone wanting to skip it.
+# Integration tests are NOT here: they need real services and would make this
+# flaky, which is how a gate loses its authority.
+
+name: Unit tests
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+# A newer push supersedes an in-flight run for the same ref.
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: type-check + test:unit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Type-check
+        run: yarn type-check
+
+      # NOTE: the env var is TEST_TYPE, not TESTS_TYPE. Misspelling it widens
+      # jest's testMatch to integration-tests/http/*.spec.ts, which die on a
+      # dynamic-import error that looks like a real failure but is not. The
+      # `test:unit` script gets it right — always go through the script.
+      - name: Unit tests
+        run: yarn test:unit
