@@ -47,6 +47,7 @@ const STATUS_FILTERS = [
   { label: "Submitted", value: "submitted" },
   { label: "Confirmed", value: "confirmed" },
   { label: "Failed", value: "failed" },
+  { label: "Fixed", value: "fixed" },
   { label: "Skipped", value: "skipped" },
 ];
 
@@ -79,6 +80,7 @@ export const BillPaymentsPipelineSection = () => {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [markingFixed, setMarkingFixed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const fetchRows = useCallback(async () => {
@@ -137,6 +139,38 @@ export const BillPaymentsPipelineSection = () => {
     }
   };
 
+  /**
+   * Retire a failed row a human has judged as needing no further action.
+   *
+   * Needed here more than in most tabs: when a bill is deleted inside QuickBooks
+   * the rows that failed BEFORE the fix shipped can never be retried into a good
+   * state — the document they point at does not exist. Retry was the only action
+   * offered, so those rows were unclearable, which is exactly the "red badge no
+   * action can clear" problem the rest of this change set out to avoid.
+   */
+  const markFixed = async (id: string) => {
+    setMarkingFixed((s) => new Set(s).add(id));
+    try {
+      const res = await fetch(
+        `/admin/quickbooks/pipeline?action=mark-fixed&id=${encodeURIComponent(id)}`,
+        { method: "POST", credentials: "include" }
+      );
+      if (!res.ok) throw new Error(`${res.status}`);
+      toast.success("Marked fixed");
+      await fetchRows();
+    } catch (e: unknown) {
+      toast.error(
+        `Mark fixed failed: ${e instanceof Error ? e.message : String(e)}`
+      );
+    } finally {
+      setMarkingFixed((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+    }
+  };
+
   const missingCount = rows.filter((r) => r.bill_missing_in_qb_at).length;
 
   return (
@@ -169,6 +203,7 @@ export const BillPaymentsPipelineSection = () => {
           {(counts.submitted ?? 0) > 0 && <Badge color="blue" size="xsmall">Submitted {counts.submitted}</Badge>}
           {(counts.confirmed ?? 0) > 0 && <Badge color="green" size="xsmall">Confirmed {counts.confirmed}</Badge>}
           {(counts.failed ?? 0) > 0 && <Badge color="red" size="xsmall">Failed {counts.failed}</Badge>}
+          {(counts.fixed ?? 0) > 0 && <Badge color="purple" size="xsmall">Fixed {counts.fixed}</Badge>}
           {(counts.skipped ?? 0) > 0 && <Badge color="grey" size="xsmall">Skipped {counts.skipped}</Badge>}
           {missingCount > 0 && (
             <Badge color="red" size="xsmall">
@@ -294,14 +329,24 @@ export const BillPaymentsPipelineSection = () => {
                               </button>
                             ) : null}
                             {r.status === "failed" ? (
-                              <Button
-                                size="small"
-                                variant="secondary"
-                                onClick={() => retry(r.id)}
-                                disabled={retrying.has(r.id)}
-                              >
-                                <ArrowPath /> Retry
-                              </Button>
+                              <>
+                                <Button
+                                  size="small"
+                                  variant="secondary"
+                                  onClick={() => retry(r.id)}
+                                  disabled={retrying.has(r.id)}
+                                >
+                                  <ArrowPath /> Retry
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="secondary"
+                                  onClick={() => markFixed(r.id)}
+                                  disabled={markingFixed.has(r.id)}
+                                >
+                                  Mark Fixed
+                                </Button>
+                              </>
                             ) : null}
                           </div>
                         </Table.Cell>
