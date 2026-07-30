@@ -20,6 +20,8 @@ import postgres from "postgres";
 import type { MedusaContainer } from "@medusajs/framework/types";
 import { generateEntityId } from "@medusajs/utils";
 
+import { isDocumentNotFound } from "./meili-errors";
+
 export interface EntityReconciler {
   /** Stable name written to drift_log (e.g. "customer", "product"). */
   entityType: string;
@@ -155,9 +157,19 @@ export async function reconcileEntity(
     try {
       actual = (await index.getDocument(id)) as Record<string, unknown>;
     } catch (err: unknown) {
-      // 404 = doc missing from Meili (drift: should exist, doesn't)
-      const status = (err as { httpStatus?: number }).httpStatus;
-      if (status === 404) {
+      // The document is absent: the database has a row and the index does not,
+      // which is drift this sweep exists to heal.
+      //
+      // This read `(err as {httpStatus?: number}).httpStatus === 404` until
+      // 2026-07-29, and `httpStatus` is not a property MeiliSearchApiError has —
+      // its own keys are name, cause and response. So the check never matched, a
+      // missing document always fell into the branch below, and the sweep would
+      // heal a document with wrong FIELDS but never one that was absent, for any
+      // of the five entities, while logging something that reads like a transient
+      // Meili hiccup. Measured when it was found: 4 customers had been missing
+      // from the index — and therefore unsearchable — since 2026-05-01.
+      // isDocumentNotFound was probed against the live client; see meili-errors.ts.
+      if (isDocumentNotFound(err)) {
         actual = null;
       } else {
         opts.logger.warn(
