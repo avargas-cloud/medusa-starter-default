@@ -7,6 +7,7 @@ import {
 } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { assertOrderEditable } from "../_lib/assert-order-editable";
+import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
 import {
   Modules,
   PromotionType,
@@ -37,6 +38,15 @@ export async function POST(
   const archivedBlock = await assertOrderEditable(req.scope, id);
   if (archivedBlock) {
     res.status(409).json({ error: archivedBlock, code: "ORDER_ARCHIVED" });
+    return;
+  }
+
+  // Una orden que vino de la WEB exige PIN de supervisor para editarse. El gate
+  // vivia solo en la pantalla (useWebOrderLock) y comparaba en el navegador, asi
+  // que un POST directo a esta ruta la editaba sin encontrar ninguna puerta.
+  const webAuth = await assertWebOrderAuthorized(req.scope, id, req);
+  if (webAuth.denial) {
+    res.status(webAuth.denial.status).json(webAuth.denial.body);
     return;
   }
   const { discount_type, discount_value, pos_total, pos_tax_rate } =

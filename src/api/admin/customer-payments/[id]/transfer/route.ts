@@ -6,6 +6,13 @@ import {
 } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../../../utils/db-pool";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 
 /**
  * POST /admin/customer-payments/:id/transfer
@@ -25,10 +32,11 @@ export async function POST(
   res: MedusaResponse
 ) {
   const paymentId = req.params.id as string;
-  const { target_customer_id, reason, supervisor_pin } = (req.body ?? {}) as {
+  // `supervisor_pin` ya no se destructura: lo extrae el guard, que mira tambien
+  // el header `x-supervisor-pin`.
+  const { target_customer_id, reason } = (req.body ?? {}) as {
     target_customer_id?: string;
     reason?: string;
-    supervisor_pin?: string;
   };
 
   const logger = req.scope.resolve("logger");
@@ -45,21 +53,28 @@ export async function POST(
     return res.status(400).json({ error: "target_customer_id is required" });
   }
 
-  // Server-side supervisor PIN (defense in depth — the frontend gate is not enough).
-  try {
-    const { rows } = await pool.query<{ metadata: Record<string, any> | null }>(
-      `SELECT metadata FROM store
-        WHERE metadata->>'pos_supervisor_pin' IS NOT NULL
-        ORDER BY id LIMIT 1`
-    );
-    const storedPin = rows[0]?.metadata?.pos_supervisor_pin as
-      | string
-      | undefined;
-    if (!storedPin || String(supervisor_pin ?? "") !== String(storedPin)) {
-      return res.status(403).json({ error: "Invalid supervisor PIN" });
+  // PIN de supervisor por el guard COMPARTIDO.
+  //
+  // Antes esta ruta copiaba la comparación a mano — verificaba de verdad, pero
+  // sin límite de intentos. Eso alcanzaba mientras el PIN viajara al navegador
+  // (para probarlo había que conocerlo). Ahora que el valor no viaja, la fuerza
+  // bruta es el ataque que queda: 4 dígitos son 10.000 combinaciones y un
+  // script las prueba en segundos. El guard cuenta los fallos por usuario.
+  //
+  // El adaptador existe porque acá hay un pg pool y el helper pide una conexión
+  // estilo knex — pero su query no lleva parámetros, así que la advertencia
+  // sobre no mezclar estilos de binding no aplica.
+  {
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pgAsPinConn(pool),
+      pin: extractSupervisorPin(req),
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
     }
-  } catch {
-    return res.status(403).json({ error: "Could not validate supervisor PIN" });
   }
 
   const client = await pool.connect();

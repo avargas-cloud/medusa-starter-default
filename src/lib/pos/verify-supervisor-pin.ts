@@ -35,3 +35,23 @@ export async function verifySupervisorPin(
     return false;
   }
 }
+
+/**
+ * Adaptador para los callsites que tienen un pg POOL en vez de knex.
+ *
+ * El docstring de arriba advierte —con razón— que los dos estilos de binding no
+ * son intercambiables. Pero la query de este helper NO LLEVA PARÁMETROS, así que
+ * la advertencia no aplica: lo único que hace falta es algo que ejecute un SQL
+ * crudo.
+ *
+ * Existe porque cuatro rutas (transfer de pago, adopt/undo de bill-match, import
+ * de créditos QB) habían copiado la comparación a mano justo por esa
+ * incompatibilidad aparente — y al copiarla se quedaron sin el límite de
+ * intentos, que es lo único que separa "hay que saber el PIN" de "hay que
+ * adivinarlo".
+ */
+export function pgAsPinConn(pool: {
+  query: (sql: string) => Promise<{ rows: unknown[] }>;
+}): PinConn {
+  return { raw: (sql: string) => pool.query(sql) };
+}

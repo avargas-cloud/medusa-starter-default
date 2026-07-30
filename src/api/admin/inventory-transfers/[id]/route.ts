@@ -14,6 +14,7 @@ import type {
 import { generateEntityId } from "@medusajs/utils";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
 import {
+  extractSupervisorPin,
   guardSupervisorPin,
   pinGuardResponse,
   resolveActorId,
@@ -142,8 +143,7 @@ export async function PATCH(
     const guard = await guardSupervisorPin({
       scope: req.scope as unknown as { resolve: (k: string) => unknown },
       db: knex as unknown as PinConn,
-      pin: (req.body as { supervisor_pin?: unknown } | undefined)
-        ?.supervisor_pin,
+      pin: extractSupervisorPin(req),
       actorId: resolveActorId(req),
     });
     if (!guard.ok) {

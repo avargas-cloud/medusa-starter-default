@@ -62,6 +62,28 @@ export function resolveActorId(req: unknown): string {
   return ctx?.actor_id ?? "unknown-actor";
 }
 
+/**
+ * Extrae el PIN de un request, mirando el HEADER y el body.
+ *
+ * El header (`x-supervisor-pin`) es la forma preferida: es una credencial, y
+ * ademas sirve donde el body no llega — un DELETE no lo lleva, algunos schemas
+ * zod lo filtrarian, y un guardado que pega a ocho rutas necesitaria el campo
+ * inyectado en ocho cuerpos distintos.
+ *
+ * El body sigue aceptado porque varias rutas ya lo mandan asi y no hay motivo
+ * para romperlas.
+ */
+export function extractSupervisorPin(req: unknown): unknown {
+  const r = req as {
+    headers?: Record<string, unknown>;
+    body?: { supervisor_pin?: unknown };
+  };
+  const header = r?.headers?.["x-supervisor-pin"];
+  if (typeof header === "string" && header.length > 0) return header;
+  if (Array.isArray(header) && typeof header[0] === "string") return header[0];
+  return r?.body?.supervisor_pin;
+}
+
 function getCache(scope: ScopeLike): CacheLike | null {
   try {
     return scope.resolve(Modules.CACHE) as CacheLike;

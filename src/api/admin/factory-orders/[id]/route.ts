@@ -12,6 +12,7 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 import {
+  extractSupervisorPin,
   guardSupervisorPin,
   pinGuardResponse,
   resolveActorId,
@@ -342,7 +343,7 @@ export async function PATCH(
     const guard = await guardSupervisorPin({
       scope: req.scope as unknown as { resolve: (k: string) => unknown },
       db: pinDb,
-      pin: (req.body as { supervisor_pin?: unknown } | undefined)?.supervisor_pin,
+      pin: extractSupervisorPin(req),
       actorId: resolveActorId(req),
     });
     if (!guard.ok) {
