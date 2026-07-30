@@ -71,22 +71,58 @@ export const submitSchema = z.object({});
 // the snapshot verbatim. tracking_url may be empty for untrackable carriers
 // (e.g. ocean freight).
 
+// `lines` carries WHICH goods travel in this shipment. Absent or empty means
+// scope 'all_order': the number covers the PO but the quantities were never
+// distributed — which is exactly what every pre-existing entry means, and the
+// right default for the ordinary one-box PO.
+//
+// This validates SHAPE only. The cap (a line's allocations across sibling
+// trackings may not exceed qty_ordered - qty_cancelled) needs sibling rows, so
+// it is enforced in the route inside a transaction. Zod can only catch the
+// duplicate-line-id case, which it does — the same line twice in one payload
+// would otherwise land as two rows and quietly double the shipment.
+const trackingAllocationSchema = z.object({
+  purchase_order_line_id: z.string().trim().min(1),
+  qty: z.number().int().positive().max(1_000_000),
+});
+
+const trackingLinesSchema = z
+  .array(trackingAllocationSchema)
+  .max(500)
+  .refine(
+    (lines) =>
+      new Set(lines.map((l) => l.purchase_order_line_id)).size === lines.length,
+    { message: "The same purchase order line appears more than once." }
+  )
+  .optional();
+
 export const addTrackingSchema = z.object({
   provider: z.string().trim().min(1).max(50),
   tracking_number: z.string().trim().min(1).max(200),
   tracking_url: z.string().trim().max(2000).nullish(),
+  /** Present → attach this number to an existing delivery instead of creating one. */
+  shipment_id: z.string().trim().min(1).optional(),
+  lines: trackingLinesSchema,
 });
 
 export const updateTrackingSchema = z.object({
-  tracking_id: z.string().trim().min(1),
-  provider: z.string().trim().min(1).max(50),
-  tracking_number: z.string().trim().min(1).max(200),
-  tracking_url: z.string().trim().max(2000).nullish(),
+  shipment_id: z.string().trim().min(1),
+  lines: trackingLinesSchema,
 });
 
-export const deleteTrackingSchema = z.object({
-  tracking_id: z.string().trim().min(1),
-});
+/**
+ * Removing a whole delivery (`shipment_id`) frees the quantity it carried;
+ * removing one number (`number_id`) leaves the delivery standing. They are
+ * different consequences, so the caller must say which one it means.
+ */
+export const deleteTrackingSchema = z
+  .object({
+    shipment_id: z.string().trim().min(1).optional(),
+    number_id: z.string().trim().min(1).optional(),
+  })
+  .refine((v) => Boolean(v.shipment_id) !== Boolean(v.number_id), {
+    message: "Send exactly one of shipment_id or number_id.",
+  });
 
 export const receiveLineSchema = z.object({
   po_line_id: z.string().min(1),

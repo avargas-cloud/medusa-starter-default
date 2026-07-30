@@ -10,15 +10,17 @@
 
 import { PURCHASE_ORDERS_MODULE } from "../../modules/purchase-orders";
 import { reconcileShippedPoStatus } from "../../api/admin/purchase-orders/_lib/po-shipping-status";
-import type { TrackingEntry } from "../../lib/carrier-tracking/types";
 
 interface PoRow {
   id: string;
   number?: string | null;
   status: string;
   po_status: string | null;
-  tracking: TrackingEntry[] | null;
 }
+
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
 
 interface PoServiceLike {
   listPurchaseOrders: (
@@ -35,12 +37,29 @@ export default async function run({
 }): Promise<void> {
   const dry = process.env.DRY_RUN !== "false"; // default = dry-run
   const service = container.resolve(PURCHASE_ORDERS_MODULE) as PoServiceLike;
+  const db = container.resolve("__pg_connection__") as Knex;
 
   const rows = await service.listPurchaseOrders({}, { take: 5000, skip: 0 });
 
+  // "Does this PO have a shipment?" is a table read since 2026-07-30 — the
+  // `tracking` JSON column is frozen and would answer for a world that stopped
+  // being written, relabeling live POs as "Missing Tracking".
+  const counts = await db.raw(
+    `SELECT purchase_order_id, count(*)::int AS n
+       FROM purchase_order_tracking
+      WHERE deleted_at IS NULL
+      GROUP BY purchase_order_id`
+  );
+  const trackingCount = new Map(
+    (counts.rows as Array<{ purchase_order_id: string; n: number }>).map((r) => [
+      r.purchase_order_id,
+      Number(r.n ?? 0),
+    ])
+  );
+
   let changed = 0;
   for (const po of rows) {
-    const entries = Array.isArray(po.tracking) ? po.tracking : [];
+    const entries = { length: trackingCount.get(po.id) ?? 0 };
     const reconciled = reconcileShippedPoStatus(
       po.po_status,
       po.status,

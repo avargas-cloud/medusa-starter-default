@@ -20,14 +20,20 @@ import type {
 import { getActorUserId, UnauthenticatedError } from "../../../_lib/auth";
 import { getPurchaseOrdersService } from "../../../_lib/service-resolver";
 import { refreshPoTrackingEta } from "../../../../../../lib/carrier-tracking/refresh-po";
-import type { TrackingEntry } from "../../../../../../lib/carrier-tracking/types";
+import {
+  resolvePoShipments,
+  trackingCoverage,
+} from "../../../../../../lib/purchase-orders/po-tracking-read";
 
 interface PoHeaderLike {
   id: string;
   status: string;
   expected_at: Date | string | null;
-  tracking: TrackingEntry[] | null;
 }
+
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
 
 const FROZEN_STATUSES = ["cancelled", "voided"];
 
@@ -67,10 +73,20 @@ export async function POST(
 
   const forceApply =
     (req.body as { apply?: boolean } | undefined)?.apply === true;
-  const result = await refreshPoTrackingEta(service, existing, forceApply);
+  const db = (
+    req.scope as unknown as { resolve: (k: string) => Knex }
+  ).resolve("__pg_connection__");
+
+  const result = await refreshPoTrackingEta(db, service, existing, forceApply);
+
+  // Re-read the full view so the caller gets the allocations too — the refresh
+  // only touches carrier fields, but the modal redraws the whole list from this
+  // response and would otherwise lose what each shipment carries.
+  const tracking = await resolvePoShipments(db, id);
 
   return res.json({
-    tracking: result.tracking,
+    tracking,
+    coverage: trackingCoverage(tracking),
     expected_at: result.expected_at,
     changed: result.changed,
   });

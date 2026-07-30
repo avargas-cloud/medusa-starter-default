@@ -42,6 +42,15 @@ import {
 } from "../../../../lib/purchase-orders/po-received-status";
 import { resolveVendorDisplayName } from "../../../../lib/vendors/vendor-display-name";
 import {
+  poLineChangeRejections,
+  resolveLineAllocationClaims,
+} from "../../../../lib/purchase-orders/po-tracking-line-guard";
+import {
+  poLineTrackingViews,
+  resolvePoShipments,
+  trackingCoverage,
+} from "../../../../lib/purchase-orders/po-tracking-read";
+import {
   enqueuePurchaseQbOperation,
   purchaseOperationKey,
 } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
@@ -604,13 +613,53 @@ export async function GET(
     }
   })();
 
+  // Inbound shipments come from purchase_order_tracking, NOT the PO's legacy
+  // `tracking` JSON column — that column is frozen as the rollback path and is
+  // no longer written, so serving it would show a stale list. Overriding it by
+  // name (rather than deleting it) keeps the response shape the POS already
+  // reads while making the value the true one.
+  const trackingDb = req.scope.resolve("__pg_connection__") as {
+    raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  };
+  const trackingRows = await resolvePoShipments(trackingDb, id);
+  // A whole-PO tracking stores no allocation rows — it means "everything here
+  // travels in this box" — so the lines it covers can only come from the PO.
+  // Without this the ETA column would sit empty on every PO that has not been
+  // split, which is most of them.
+  const lineTracking = poLineTrackingViews(
+    trackingRows,
+    decoratedLines.map((l) => {
+      const line = l as { id?: string; qty_ordered?: number; qty_cancelled?: number };
+      return {
+        purchase_order_line_id: line.id ?? "",
+        qty_ordered: Math.max(
+          Number(line.qty_ordered ?? 0) - Number(line.qty_cancelled ?? 0),
+          0
+        ),
+      };
+    })
+  );
+
   return res.json({
     purchase_order: {
       ...po,
+      tracking: trackingRows,
+      tracking_coverage: trackingCoverage(trackingRows),
       linked_order_ids,
       linked_inventory_transfer,
       china_transfer,
-      lines: decoratedLines,
+      // Each line carries the shipments covering it and their latest ETA — the
+      // per-product arrival date this feature exists to produce. Independent of
+      // the header's expected_at, which keeps its own (earliest-box) policy.
+      lines: decoratedLines.map((line) => {
+        const view = lineTracking.get((line as { id?: string }).id ?? "");
+        return {
+          ...line,
+          tracking: view?.shipments ?? [],
+          tracking_eta: view?.carrier_eta ?? null,
+          tracking_qty_allocated: view?.qty_allocated ?? 0,
+        };
+      }),
       receipts: decoratedReceipts,
       vendor,
       creator,
@@ -856,6 +905,44 @@ export async function PATCH(
         next_qty: 0,
       })),
     ];
+
+    // An inbound shipment already claiming these units outranks the edit: a box
+    // is on a truck carrying goods this save is about to delete or shrink away.
+    // Refused, not cascaded — a silent cascade rewrites logistics with nothing
+    // on screen saying which shipment just lost its cargo. Runs BEFORE any
+    // mutation, and before the vendor-bill checks, because a stranded shipment
+    // is cheaper to discover than a half-applied save.
+    if (reductions.length > 0) {
+      const trackingKnex = req.scope.resolve("__pg_connection__") as {
+        raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+      };
+      const claims = await resolveLineAllocationClaims(
+        trackingKnex,
+        reductions.map((line) => line.line_id)
+      );
+      const trackingRejections = poLineChangeRejections(
+        claims,
+        reductions.map((line) => ({
+          line_id: line.line_id,
+          sku: line.sku,
+          // qty_cancelled is not editable through this route, so the ceiling
+          // after the edit is the new ordered qty minus what was already
+          // cancelled on the stored line.
+          new_ceiling:
+            line.next_qty -
+            Number(oldById.get(line.line_id)?.qty_cancelled ?? 0),
+          deleted: line.next_qty === 0 && !keepIds.has(line.line_id),
+        }))
+      );
+      if (trackingRejections.length > 0) {
+        return res.status(409).json({
+          error:
+            "Some lines are already on an inbound shipment and cannot be reduced.",
+          code: "line_claimed_by_tracking",
+          rejections: trackingRejections,
+        });
+      }
+    }
 
     if (reductions.length > 0) {
       const knex = req.scope.resolve("__pg_connection__") as {
@@ -1201,12 +1288,20 @@ export async function PATCH(
     if (bodyPoStatus === undefined) {
       const effectiveLifecycle =
         (headerUpdate.status as string | undefined) ?? existing.status;
+      // "Does this PO have a shipment?" is now a table read. `existing.tracking`
+      // is the frozen JSON column and would answer for a world that stopped
+      // being written — a PO whose only tracking was added after the cutover
+      // would silently reconcile to "Missing Tracking".
+      const trackingCountDb = req.scope.resolve("__pg_connection__") as {
+        raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+      };
+      const liveTracking = await resolvePoShipments(trackingCountDb, id);
       const reconciledPoStatus = reconcileReceivedPoStatus(
         existing.po_status ?? null,
         effectiveLifecycle,
         totals.total_units_ordered,
         totalReceived,
-        poHasTracking(existing.tracking)
+        poHasTracking(liveTracking)
       );
       if (reconciledPoStatus !== null) {
         headerUpdate.po_status = reconciledPoStatus;

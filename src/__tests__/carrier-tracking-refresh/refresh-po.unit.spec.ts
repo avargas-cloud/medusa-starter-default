@@ -1,19 +1,27 @@
 /**
  * Unit tests for refreshPoTrackingEta — the Expected-Delivery write-back.
  *
- * Covers the two robustness rules added on 2026-07-02:
+ * Covers the robustness rules added on 2026-07-02:
  *  1. A transient carrier failure never wipes a previously known ETA.
  *  2. The carrier date always drives Expected Delivery when known — it
  *     overwrites any prior value (including a staff-entered date); a manual
  *     date is only a fallback while the carrier has no date.
  *  3. Once delivered, Expected Delivery reflects the ACTUAL delivery date, and
  *     a settled delivered entry is not re-queried.
+ *
+ * Updated 2026-07-30: tracking moved from the PO's `tracking` JSON column to
+ * tables, and then the carrier numbers were split out of the shipment into
+ * `purchase_order_tracking_number` (one delivery, several waybills). Rows are
+ * therefore read and written through knex instead of the module service.
+ *
+ * The HEADER policy is unchanged across both moves, and these tests are the
+ * proof of that — every expectation below is the same as before either one. The
+ * service is now called ONLY to write `expected_at`; the last test asserts that
+ * by name, so a stray write to the frozen JSON column would fail here.
  */
 
-import type {
-  CarrierTrackingResult,
-  TrackingEntry,
-} from "../../lib/carrier-tracking/types";
+import type { CarrierTrackingResult } from "../../lib/carrier-tracking/types";
+import type { RefreshableNumber } from "../../lib/carrier-tracking/refresh-po";
 
 const mockFetch = jest.fn<Promise<CarrierTrackingResult>, [string, string]>();
 
@@ -26,25 +34,40 @@ jest.mock("../../lib/carrier-tracking/index", () => {
 });
 
 // Imported AFTER the mock is registered so it binds to the mocked fetch.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 import { refreshPoTrackingEta } from "../../lib/carrier-tracking/refresh-po";
 
 const future = (days: number): string =>
   new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 
-function entry(over: Partial<TrackingEntry> = {}): TrackingEntry {
+function entry(over: Partial<RefreshableNumber> = {}): RefreshableNumber {
   return {
-    id: "potrk_1",
+    id: "potrkn_1",
+    purchase_order_id: "po_1",
     provider: "UPS",
     tracking_number: "1ZTEST",
-    tracking_url: "",
-    created_at: new Date().toISOString(),
-    created_by_user_id: null,
     carrier_eta: null,
     carrier_status: "pending",
-    carrier_eta_fetched_at: null,
     carrier_detail: null,
     ...over,
+  };
+}
+
+/**
+ * Stands in for the knex connection: SELECTs return the fixture rows, every
+ * other statement is recorded. Recording the SQL (not just the bindings) is
+ * what lets the transient-error test assert that `carrier_eta` was never in
+ * the UPDATE at all — asserting only on the returned value would pass even if
+ * the row had been blanked on disk.
+ */
+function fakeDb(rows: RefreshableNumber[]) {
+  const writes: Array<{ sql: string; bindings: unknown[] }> = [];
+  return {
+    writes,
+    raw: async (sql: string, bindings: unknown[] = []) => {
+      if (/^\s*SELECT/i.test(sql)) return { rows };
+      writes.push({ sql, bindings });
+      return { rows: [] };
+    },
   };
 }
 
@@ -69,11 +92,9 @@ describe("refreshPoTrackingEta", () => {
       status: "in_transit",
       detail: "On the way",
     });
-    const svc = fakeService();
-    const res = await refreshPoTrackingEta(svc, {
+    const res = await refreshPoTrackingEta(fakeDb([entry()]), fakeService(), {
       id: "po_1",
       expected_at: null,
-      tracking: [entry()],
     });
     expect(res.expected_at?.slice(0, 10)).toBe(eta);
     expect(res.changed).toBe(true);
@@ -87,12 +108,11 @@ describe("refreshPoTrackingEta", () => {
       status: "in_transit",
       detail: null,
     });
-    const svc = fakeService();
-    const res = await refreshPoTrackingEta(svc, {
-      id: "po_1",
-      expected_at: new Date(`${oldEta}T00:00:00.000Z`),
-      tracking: [entry({ carrier_eta: oldEta, carrier_status: "in_transit" })],
-    });
+    const res = await refreshPoTrackingEta(
+      fakeDb([entry({ carrier_eta: oldEta, carrier_status: "in_transit" })]),
+      fakeService(),
+      { id: "po_1", expected_at: new Date(`${oldEta}T00:00:00.000Z`) }
+    );
     expect(res.expected_at?.slice(0, 10)).toBe(newEta);
   });
 
@@ -104,12 +124,11 @@ describe("refreshPoTrackingEta", () => {
       status: "in_transit",
       detail: null,
     });
-    const svc = fakeService();
-    const res = await refreshPoTrackingEta(svc, {
-      id: "po_1",
-      expected_at: new Date(`${manual}T00:00:00.000Z`),
-      tracking: [entry({ carrier_eta: null, carrier_status: "pending" })],
-    });
+    const res = await refreshPoTrackingEta(
+      fakeDb([entry({ carrier_eta: null, carrier_status: "pending" })]),
+      fakeService(),
+      { id: "po_1", expected_at: new Date(`${manual}T00:00:00.000Z`) }
+    );
     expect(res.expected_at?.slice(0, 10)).toBe(carrierEta);
   });
 
@@ -120,12 +139,11 @@ describe("refreshPoTrackingEta", () => {
       status: "in_transit",
       detail: "In transit, no ETA yet",
     });
-    const svc = fakeService();
-    const res = await refreshPoTrackingEta(svc, {
-      id: "po_1",
-      expected_at: new Date(`${manual}T00:00:00.000Z`),
-      tracking: [entry({ carrier_eta: null, carrier_status: "pending" })],
-    });
+    const res = await refreshPoTrackingEta(
+      fakeDb([entry({ carrier_eta: null, carrier_status: "pending" })]),
+      fakeService(),
+      { id: "po_1", expected_at: new Date(`${manual}T00:00:00.000Z`) }
+    );
     expect(res.expected_at?.slice(0, 10)).toBe(manual);
   });
 
@@ -137,26 +155,22 @@ describe("refreshPoTrackingEta", () => {
       status: "delivered",
       detail: "Delivered",
     });
-    const svc = fakeService();
-    const res = await refreshPoTrackingEta(svc, {
-      id: "po_1",
-      expected_at: new Date(`${manual}T00:00:00.000Z`),
+    const res = await refreshPoTrackingEta(
       // Not yet settled (eta null) → re-fetched, comes back delivered.
-      tracking: [entry({ carrier_eta: null, carrier_status: "in_transit" })],
-    });
+      fakeDb([entry({ carrier_eta: null, carrier_status: "in_transit" })]),
+      fakeService(),
+      { id: "po_1", expected_at: new Date(`${manual}T00:00:00.000Z`) }
+    );
     expect(res.expected_at?.slice(0, 10)).toBe(deliveredOn);
   });
 
   it("does not re-query a delivered entry that already has its date", async () => {
     const deliveredOn = future(-2);
-    const svc = fakeService();
-    await refreshPoTrackingEta(svc, {
-      id: "po_1",
-      expected_at: new Date(`${deliveredOn}T00:00:00.000Z`),
-      tracking: [
-        entry({ carrier_eta: deliveredOn, carrier_status: "delivered" }),
-      ],
-    });
+    await refreshPoTrackingEta(
+      fakeDb([entry({ carrier_eta: deliveredOn, carrier_status: "delivered" })]),
+      fakeService(),
+      { id: "po_1", expected_at: new Date(`${deliveredOn}T00:00:00.000Z`) }
+    );
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -167,17 +181,43 @@ describe("refreshPoTrackingEta", () => {
       status: "error",
       detail: "Request failed with status code 500",
     });
-    const svc = fakeService();
-    await refreshPoTrackingEta(svc, {
+    const db = fakeDb([
+      entry({ carrier_eta: known, carrier_status: "in_transit" }),
+    ]);
+    const res = await refreshPoTrackingEta(db, fakeService(), {
       id: "po_1",
       expected_at: new Date(`${known}T00:00:00.000Z`),
-      tracking: [
-        entry({ carrier_eta: known, carrier_status: "in_transit" }),
-      ],
     });
-    const saved = (svc.updates[0].tracking as TrackingEntry[])[0];
+
+    const saved = res.tracking[0];
     expect(saved.carrier_eta).toBe(known); // preserved
     expect(saved.carrier_status).toBe("in_transit"); // preserved
     expect(saved.carrier_detail).toBe("Request failed with status code 500");
+
+    // And it was never blanked on disk either: the soft-null UPDATE touches
+    // only the note and the fetch stamp.
+    const trackingWrite = db.writes.find((w) => /UPDATE/i.test(w.sql));
+    expect(trackingWrite).toBeDefined();
+    expect(trackingWrite?.sql).not.toMatch(/carrier_eta\s*=/);
+    expect(trackingWrite?.sql).not.toMatch(/carrier_status\s*=/);
+  });
+
+  it("writes expected_at through the service, not the tracking table", async () => {
+    const eta = future(9);
+    mockFetch.mockResolvedValue({
+      estimated_delivery: eta,
+      status: "in_transit",
+      detail: null,
+    });
+    const svc = fakeService();
+    await refreshPoTrackingEta(fakeDb([entry()]), svc, {
+      id: "po_1",
+      expected_at: null,
+    });
+    expect(svc.updates).toHaveLength(1);
+    expect(svc.updates[0].id).toBe("po_1");
+    // The header write carries ONLY expected_at — the JSON `tracking` column is
+    // frozen and must never be written again.
+    expect(Object.keys(svc.updates[0]).sort()).toEqual(["expected_at", "id"]);
   });
 });
