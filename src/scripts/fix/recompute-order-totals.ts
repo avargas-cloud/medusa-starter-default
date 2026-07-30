@@ -45,6 +45,20 @@ const CONFIRM = process.env.CONFIRM === "SI";
 /** Restrict to one document number — for rehearsing a single order first. */
 const ONLY = process.env.ONLY ?? "";
 /**
+ * Documentos a dejar AFUERA, separados por coma.
+ *
+ * Existe porque hay documentos cuya derivación NO se puede creer: sus líneas
+ * cargan filas de adjustment de un descuento que el documento no muestra (o que
+ * muestra por otro monto), así que recomputar les escribe un número que sigue
+ * estando mal, sólo que distinto. Al 2026-07-30: E2607 (−960.13), E1497
+ * (−474.02) y E2146 (−217.86). Repararlos exige arreglar los adjustments
+ * primero — es otra operación, sobre documentos ya entregados.
+ */
+const EXCEPT = (process.env.EXCEPT ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+/**
  * How many orders are derived at once.
  *
  * The derivation runs through `loadOrderMoneyBase` per order — deliberately,
@@ -115,6 +129,7 @@ SELECT o.id,
   FROM "order" o
  WHERE o.deleted_at IS NULL
    AND ($1 = '' OR o.metadata->>'document_number' = $1)
+   AND ($2::text[] IS NULL OR NOT (o.metadata->>'document_number' = ANY($2::text[])))
  ORDER BY o.created_at
 `;
 
@@ -168,9 +183,12 @@ async function main() {
     return;
   }
 
-  console.log(`\n${APPLY ? "APPLY" : "DRY RUN"} · ${host}${ONLY ? ` · ONLY=${ONLY}` : ""}\n`);
+  console.log(`\n${APPLY ? "APPLY" : "DRY RUN"} · ${host}${ONLY ? ` · ONLY=${ONLY}` : ""}${EXCEPT.length ? ` · EXCEPT=${EXCEPT.join(",")}` : ""}\n`);
 
-  const { rows } = await pool.query<Row>(LIST, [ONLY]);
+  const { rows } = await pool.query<Row>(LIST, [
+    ONLY,
+    EXCEPT.length > 0 ? EXCEPT : null,
+  ]);
 
   const planned: Array<{
     r: Row;
