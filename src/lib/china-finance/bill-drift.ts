@@ -30,6 +30,8 @@
  * absorbs the agent's own cent-level rounding so it never raises a false alarm.
  */
 
+import { ACTIVE_BILL_STATUSES } from "../purchase-orders/po-billed-quantities";
+
 export type BillDriftKind =
   | "po_lines"
   | "receipt_lines"
@@ -68,6 +70,26 @@ export interface BillDrift {
    */
   on_confirmed_wire: boolean;
   lines: BillDriftLine[];
+  /**
+   * `warning` = the bill disagrees with a document it is supposed to mirror, and
+   * somebody has to act. `info` = it covers PART of its PO on purpose and there
+   * is nothing to fix yet.
+   *
+   * The distinction exists because a PO may now carry several regular bills, one
+   * per vendor invoice on a split delivery. Comparing such a bill against the
+   * WHOLE order reports the sibling bill's contents as "missing" — VB-1094 was
+   * told it was missing $2,483.17, which is VB-1076's amount to the cent — and
+   * sent the operator to "Update From…", which cannot fix something that is not
+   * broken. Claiming LESS than the order is the normal shape of a partial
+   * invoice. Claiming MORE is still a warning: that one is real.
+   */
+  severity: "warning" | "info";
+  /** Units ordered on the PO (regular bills only). */
+  po_qty?: number;
+  /** Units this bill claims. */
+  bill_qty?: number;
+  /** The other active regular bills sharing this PO. */
+  siblings?: Array<{ number: string | null; qty: number }>;
 }
 
 export interface DriftSettings {
@@ -291,6 +313,53 @@ export async function loadBillDrift(
         [poIds]
       )
     : [];
+
+  // How each active regular bill divides its PO. Needed to tell a legitimate
+  // partial invoice apart from a bill that is genuinely wrong, and to name the
+  // sibling holding the rest instead of reporting it as a shortfall.
+  const poBillShares = poIds.length
+    ? await rows<{
+        parent_id: string;
+        vendor_bill_id: string;
+        number: string | null;
+        qty: number | string;
+      }>(
+        db,
+        `SELECT vb.purchase_order_id            AS parent_id,
+                vb.id                           AS vendor_bill_id,
+                vb.number,
+                COALESCE(SUM(l.qty), 0)::int    AS qty
+           FROM vendor_bill vb
+           LEFT JOIN vendor_bill_line l
+             ON l.vendor_bill_id = vb.id
+            AND l.deleted_at IS NULL
+            AND COALESCE(l.line_type, 'product') = 'product'
+          WHERE vb.purchase_order_id = ANY(?)
+            AND vb.bill_type = 'regular'
+            AND vb.deleted_at IS NULL
+            AND vb.status = ANY(?)
+          GROUP BY vb.purchase_order_id, vb.id, vb.number
+          -- Ordered so the sentence naming these bills reads the same every
+          -- time. Without it the list came back in whatever order the plan
+          -- produced: the same PO rendered "VB-1097, VB-1094" on one bill and
+          -- "VB-1076, VB-1094" on the next.
+          ORDER BY vb.purchase_order_id, vb.number, vb.id`,
+        [poIds, [...ACTIVE_BILL_STATUSES]]
+      )
+    : [];
+  const sharesByPo = new Map<
+    string,
+    Array<{ vendor_bill_id: string; number: string | null; qty: number }>
+  >();
+  for (const share of poBillShares) {
+    const list = sharesByPo.get(share.parent_id) ?? [];
+    list.push({
+      vendor_bill_id: share.vendor_bill_id,
+      number: share.number,
+      qty: Number(share.qty ?? 0),
+    });
+    sharesByPo.set(share.parent_id, list);
+  }
 
   // A receipt-pinned bill is compared against EVERYTHING received on its PO, not
   // just the pinned receipt. A PO's goods can arrive across several receipts
@@ -539,16 +608,42 @@ export async function loadBillDrift(
 
       if (driftLines.length > 0) {
         const delta = driftLines.reduce((n, l) => n + l.delta_cents, 0);
+        const kind: BillDriftKind =
+          pinned || rcByBill.has(b.id) ? "receipt_lines" : "po_lines";
+
+        // A receipt-less regular bill mirrors a vendor invoice, not the order.
+        // How the vendor splits a shipment is the vendor's decision, so
+        // covering only part of the PO is the expected shape, not a defect —
+        // and the PO's other units are on the sibling bills, by name. Claiming
+        // MORE than the order stays a warning: that one cannot be legitimate.
+        const shares = sharesByPo.get(b.purchase_order_id) ?? [];
+        const poQty = (poByOrder.get(b.purchase_order_id) ?? []).reduce(
+          (n, l) => n + Number(l.qty ?? 0),
+          0
+        );
+        const billQty = shares.find((s) => s.vendor_bill_id === b.id)?.qty ?? 0;
+        const siblings = shares
+          .filter((s) => s.vendor_bill_id !== b.id && s.qty > 0)
+          .map(({ number, qty }) => ({ number, qty }));
+        const claimedOnPo =
+          billQty + siblings.reduce((n, s) => n + s.qty, 0);
+        const partialAwaitingReceipts =
+          kind === "po_lines" && delta < 0 && claimedOnPo <= poQty;
+
         out.set(b.id, {
           vendor_bill_id: b.id,
           vendor_bill_number: b.number,
-          kind: pinned || rcByBill.has(b.id) ? "receipt_lines" : "po_lines",
+          kind,
           delta_cents: delta,
           bill_total_cents: billTotal,
           expected_cents: billTotal - delta,
           source_label: sourceLabel ?? "source",
           on_confirmed_wire: !!b.on_confirmed_wire,
           lines: driftLines,
+          severity: partialAwaitingReceipts ? "info" : "warning",
+          po_qty: poQty,
+          bill_qty: billQty,
+          siblings,
         });
       }
       continue;
@@ -580,6 +675,7 @@ export async function loadBillDrift(
           source_label: parent.number ?? "goods bill",
           on_confirmed_wire: !!b.on_confirmed_wire,
           lines: [],
+          severity: "warning",
         });
       }
       continue;
@@ -602,6 +698,7 @@ export async function loadBillDrift(
           source_label: parent.number ?? "goods bill",
           on_confirmed_wire: !!b.on_confirmed_wire,
           lines: [],
+          severity: "warning",
         });
       }
     }
@@ -622,6 +719,73 @@ export function describeDrift(d: BillDrift): string {
     `${c < 0 ? "-" : ""}$${(Math.abs(c) / 100).toFixed(2)}`;
   const gap = money(Math.abs(d.delta_cents));
   const over = d.delta_cents > 0;
+
+  // A partial bill with no receipts yet is not broken, so it does not get a
+  // remediation sentence — there is nothing to remedy. It gets an account of
+  // where the PO's units are, which is the question the operator actually has
+  // in front of a bill that shows less than the order.
+  if (d.severity === "info") {
+    const units = (n: number) => `${n} unit${n === 1 ? "" : "s"}`;
+    /** Verb agreement follows the UNIT count, never the number of bills. */
+    const be = (n: number) => (n === 1 ? "is" : "are");
+    const poQty = d.po_qty ?? 0;
+    const billQty = d.bill_qty ?? 0;
+
+    // Per bill, never a lump sum, and never a dangling fragment after a dash.
+    // "— 2 units on VB-1076 and 3 on VB-1097" made the operator work out what
+    // the clause was even about; an earlier version summed the siblings, which
+    // named two documents while hiding which held what. Both go: the rest of
+    // the order gets its own sentence, and every bill is called a bill.
+    const named = (d.siblings ?? []).filter((s) => s.number && s.qty > 0);
+    const namedQty = named.reduce((n, s) => n + s.qty, 0);
+    const left = poQty - billQty - namedQty;
+
+    /** "A, B and C" — Oxford-free serial comma, plain English. */
+    const series = (parts: string[]) =>
+      parts.length <= 1
+        ? (parts[0] ?? "")
+        : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+
+    const onBills =
+      named.length === 1
+        ? `bill ${named[0]?.number}`
+        : series(named.map((s) => `bill ${s.number} with ${units(s.qty)}`));
+
+    const sentences: string[] = [
+      `This bill covers ${billQty} of the ${units(poQty)} on ${d.source_label}.`,
+    ];
+    if (named.length > 0 && left <= 0) {
+      sentences.push(
+        named.length === 1
+          ? `The other ${units(namedQty)} ${be(namedQty)} on ${onBills}.`
+          : `The other ${units(namedQty)} are split across ${onBills}.`
+      );
+    } else if (named.length > 0) {
+      sentences.push(
+        `Another ${units(namedQty)} ${
+          named.length === 1 ? be(namedQty) + " on" : "are split across"
+        } ${onBills}, and ${units(left)} ${be(left)} not on any bill yet.`
+      );
+    } else if (left > 0) {
+      sentences.push(
+        `The other ${units(left)} ${be(left)} not on any bill yet.`
+      );
+    }
+    // Deliberately does NOT say the bill is fine.
+    //
+    // Nothing here can tell a deliberate partial invoice from one that lost a
+    // line by accident: the only document that settles it is the vendor's own
+    // invoice, which lives outside this system. The previous wording ("Nothing
+    // to fix") asserted correctness we cannot establish — and the wording
+    // before that asserted the opposite, calling every partial bill broken.
+    // Both were claims. This states the split and names what is still pending.
+    sentences.push(
+      `Check it against the vendor's invoice — quantities are only verified ` +
+        `once the goods arrive and you attach the item receipt with ` +
+        `“Update From…”.`
+    );
+    return sentences.join(" ");
+  }
 
   const head =
     d.kind === "commission"

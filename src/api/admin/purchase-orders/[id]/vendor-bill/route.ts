@@ -16,6 +16,10 @@ import {
   normalizeRequiredVendorBillReference,
   VENDOR_BILL_REFERENCE_REQUIRED_BODY,
 } from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  resolveRemainingPoQuantities,
+  seedableLines,
+} from "../../../../../lib/purchase-orders/po-billed-quantities";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -98,60 +102,59 @@ export async function POST(
     po.vendor_id
   );
 
-  const existing = await knex.raw(
-    `SELECT id, number
-       FROM vendor_bill
-      WHERE purchase_order_id = ?
-        AND bill_type = 'regular'
-        AND deleted_at IS NULL
-      LIMIT 1`,
-    [purchaseOrderId]
-  );
-  if (existing.rows.length > 0) {
-    const bill = existing.rows[0] as { id: string; number: string | null };
-    return res.status(409).json({
-      error: `This purchase order already has Regular Bill ${bill.number ?? bill.id}`,
-      code: "po_regular_bill_exists",
-      vendor_bill_id: bill.id,
-    });
-  }
-
-  const linesResult = await knex.raw(
-    `SELECT pol.id AS purchase_order_line_id, pol.product_variant_id,
-            pol.sku_snapshot, pol.description_snapshot,
-            GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0)::int AS qty,
-            COALESCE(pol.unit_cost_cents, 0)::int AS unit_cost_cents,
-            pv.metadata
-       FROM purchase_order_line pol
-       LEFT JOIN product_variant pv
-         ON pv.id = pol.product_variant_id AND pv.deleted_at IS NULL
-      WHERE pol.purchase_order_id = ?
-        AND pol.deleted_at IS NULL
-        AND COALESCE(pol.status, 'open') <> 'cancelled'
-        AND GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0) > 0
-      ORDER BY pol.created_at, pol.id`,
-    [purchaseOrderId]
-  );
-  const poLines = linesResult.rows as Array<{
-    purchase_order_line_id: string;
-    product_variant_id: string;
-    sku_snapshot: string;
-    description_snapshot: string;
-    qty: number;
-    unit_cost_cents: number;
-    metadata: Record<string, unknown> | null;
-  }>;
-  if (poLines.length === 0) {
-    return res.status(422).json({
-      error: "Purchase order has no billable items",
-      code: "no_open_lines",
-    });
-  }
-
+  // A PO may carry SEVERAL regular bills. A vendor that ships one order across
+  // two deliveries invoices each one separately, and those invoices routinely
+  // land before the goods do — so the split cannot be carried by item receipts
+  // (there are none yet). It is carried by the quantities: this bill is seeded
+  // with whatever the sibling bills have not claimed. The old guard rejected
+  // outright on the FIRST existing bill without ever looking at quantities,
+  // which made a partial vendor invoice impossible to record.
+  //
+  // Resolved INSIDE the transaction that inserts the lines: the remainder is
+  // read-then-written, so reading it on the outer connection would let two
+  // creates racing on the same PO both see the same free quantity and each
+  // seed it in full.
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
   const billId = `vb_${randomUUID().replace(/-/g, "")}`;
   try {
+    const remainingLines = await resolveRemainingPoQuantities(
+      db,
+      purchaseOrderId
+    );
+    if (remainingLines.length === 0) {
+      if (trx) await trx.rollback();
+      return res.status(422).json({
+        error: "Purchase order has no billable items",
+        code: "no_open_lines",
+      });
+    }
+    const poLines = seedableLines(remainingLines);
+    if (poLines.length === 0) {
+      const existing = await db.raw(
+        `SELECT id, number
+           FROM vendor_bill
+          WHERE purchase_order_id = ?
+            AND bill_type = 'regular'
+            AND status IN ('draft', 'confirmed', 'synced')
+            AND deleted_at IS NULL
+          ORDER BY created_at
+          LIMIT 1`,
+        [purchaseOrderId]
+      );
+      const bill = existing.rows[0] as
+        | { id: string; number: string | null }
+        | undefined;
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        error: bill
+          ? `Every ordered unit on this purchase order is already billed, starting with ${bill.number ?? bill.id}.`
+          : "Every ordered unit on this purchase order is already billed.",
+        code: "po_fully_billed",
+        vendor_bill_id: bill?.id ?? null,
+      });
+    }
+
     const duplicate = await findDuplicateVendorBillReference(db, {
       vendorId: po.vendor_id,
       referenceId,
@@ -227,7 +230,9 @@ export async function POST(
           line.sku_snapshot,
           typeof line.metadata?.mpn === "string" ? line.metadata.mpn : null,
           line.description_snapshot,
-          line.qty,
+          // The REMAINDER, not the ordered quantity: whatever the sibling
+          // bills on this PO already claim stays on them.
+          line.qty_remaining,
           line.unit_cost_cents,
           cbm,
         ]

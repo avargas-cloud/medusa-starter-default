@@ -172,7 +172,15 @@ export async function enqueueQbVendorBillAdd(
   const productLines = lines.filter(
     (l) =>
       (l.line_type ?? "product") === "product" &&
-      (l.line_kind ?? "po_item") !== "freight_charge"
+      (l.line_kind ?? "po_item") !== "freight_charge" &&
+      // A line the operator zeroed out is not part of this invoice. It carries
+      // no money anywhere in our own math — totals, landed allocation and the
+      // PO remainder all ignore it — but the filter above only looked at the
+      // line's TYPE, so it still rode into QuickBooks as an ItemLine with
+      // Quantity 0: a junk row on the Bill in QB Desktop. Zeroing a line is
+      // how a partial vendor invoice gets built, so this is the normal path,
+      // not an edge case.
+      Number(l.qty) > 0
   );
 
   // Sales tax rides INSIDE the item cost, not as its own ExpenseLine.
