@@ -384,6 +384,41 @@ export async function POST(
             `[post-edit-sync] ✅ Injected $${pos_tax_amount} tax to order_summary ${summaryId} and fixed accounting_total`
           );
           results.tax_injected = pos_tax_amount;
+
+          // ── Los TRES campos, o ninguno ───────────────────────────────────
+          //
+          // `metadata.computed_total` era escrito ÚNICAMENTE por `compute-tax`,
+          // o sea por la ruta de ESTIMADOS. Ni la conversión ni esta ruta lo
+          // tocaban, así que quedaba congelado en la foto del estimado para
+          // siempre — y desde el 2026-07-30 es el PRIMER campo que lee la
+          // columna TOTAL de `/orders`.
+          //
+          // Medido en el sandbox sobre la réplica de S11242: agregarle una
+          // línea de $101.62 dejó `current_order_total` en 1799.68 y
+          // `computed_total` en 1699.07. La lista mostraba el total de once
+          // líneas sobre una orden de doce.
+          //
+          // No se vio antes porque el backfill del 2026-07-30 escribió los tres
+          // campos juntos en 1528 órdenes y borró la deriva acumulada el mismo
+          // día en que se midió: 715 de 718 coincidían porque acababan de ser
+          // niveladas, no porque algo las mantuviera niveladas.
+          //
+          // `pos_total` se escribe con el total DERIVADO, no con el que mandó
+          // el navegador. Guardar el del navegador acá es volver a tener dos
+          // fuentes para el mismo número, que es el defecto original.
+          await pool.query(
+            `UPDATE "order"
+                SET metadata = COALESCE(metadata, '{}') || jsonb_build_object(
+                      'computed_total', $1::numeric,
+                      'pos_total',      $1::numeric
+                    )
+              WHERE id = $2`,
+            [newAccountingTotal, id]
+          );
+          results.computed_total = newAccountingTotal;
+          logger.info(
+            `[post-edit-sync] ✅ computed_total y pos_total alineados en $${newAccountingTotal}`
+          );
         }
       } catch (e: any) {
         logger.error(`[post-edit-sync] Tax injection failed: ${e.message}`);
@@ -1091,7 +1126,15 @@ export async function POST(
   // ── Persist POS-computed total BEFORE the reconcile below — pos_total is
   // the source of truth for the reservation clamp ("el POS order define el
   // monto linkeado") and for list-view consistency.
-  if (pos_total != null && pos_total > 0) {
+  //
+  // Sólo corre cuando la derivación de arriba NO escribió. Si escribió, sus
+  // tres campos ya están alineados entre sí y pisar `pos_total` con la cifra
+  // del navegador volvería a dejar dos números distintos para la misma orden.
+  if (
+    results.computed_total == null &&
+    pos_total != null &&
+    pos_total > 0
+  ) {
     try {
       const pool = getDbPool();
       await pool.query(

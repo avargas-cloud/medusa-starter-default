@@ -7,6 +7,7 @@ import { resolveTaxListid } from "../../../../../lib/quickbooks/resolve-tax-list
 import {
   loadLineTaxability,
   loadOrderMoneyBase,
+  resolvePatchedOrderTotal,
   resolveQbParityTax,
 } from "../../../../../lib/order-money/order-tax-lines";
 import { getDbPool } from "../../../../utils/db-pool";
@@ -146,35 +147,6 @@ export async function GET(
       return void res.status(404).json({ message: "Order not found" });
     const { order } = await orderRes.json();
 
-    // NOTE: /admin/orders returns monetary values in DOLLARS/DECIMALS for draft orders in v2.
-    // To match POS and QuickBooks exactly, we MUST calculate in CENTS and match the POS rounding phases.
-    // Round the LINE, not the unit — same convention as loadOrderMoneyBase,
-    // and for the same reason: QuickBooks' own Subtotal is the per-line figure
-    // (verified over the bridge on E1497 and E1976). They only diverge when a
-    // percentage line discount leaves a sub-cent unit price.
-    const itemsSubtotalCents: number = (order?.items ?? []).reduce(
-      (sum: number, item: any) =>
-        sum + Math.round((item.unit_price ?? 0) * (item.quantity ?? 1) * 100),
-      0
-    );
-
-    // POS MATH: Order discounts are accumulated unrounded, then ROUNDED BEFORE subtracting from subtotal.
-    const unroundedDiscountCents: number = (order?.items ?? []).reduce(
-      (sum: number, item: any) =>
-        sum +
-        (item.adjustments ?? []).reduce(
-          (a: number, adj: any) => a + Math.abs(Number(adj.amount) || 0) * 100,
-          0
-        ),
-      0
-    );
-
-    const roundedDiscountCents = Math.round(unroundedDiscountCents);
-    const discountedSubtotalCents: number = Math.max(
-      0,
-      itemsSubtotalCents - roundedDiscountCents
-    );
-
     // ── Taxable-only base ──────────────────────────────────────────────────
     // The tax must be charged on the taxable lines alone. This route used to
     // apply the rate to `discountedSubtotalCents`, which is EVERY line, so an
@@ -220,6 +192,29 @@ export async function GET(
     // On order S10255 that gap is 45c of subtotal and 3c of tax against what
     // QuickBooks billed. Same helper everywhere, or the routes drift again.
     const taxMoneyBase = await loadOrderMoneyBase(getDbPool(), id);
+
+    // ── Subtotal and discount: from the SHARED base, not from a second sum ──
+    //
+    // This route used to build both by hand off `order.items` — a per-line sum
+    // for the subtotal and an UNROUNDED accumulation for the discount, rounded
+    // once at the end. That second convention is what made an estimate and its
+    // converted order land a cent apart on 7 of the 31 discounted orders, and
+    // it is the one the customer's printed document does NOT use.
+    //
+    // Reading both off `loadOrderMoneyBase` means an estimate, its conversion
+    // (`convert-force`) and every later edit (`post-edit-sync`) are no longer
+    // "three routes that agree": they are one derivation called three times.
+    const roundedDiscountCents = Math.round(
+      taxMoneyBase.adjustmentsDollars * 100
+    );
+    // `netDollars` is already net of the adjustments; the subtotal this route
+    // reports is the figure BEFORE the order-level discount.
+    const itemsSubtotalCents: number =
+      Math.round(taxMoneyBase.netDollars * 100) + roundedDiscountCents;
+    const discountedSubtotalCents: number = Math.max(
+      0,
+      itemsSubtotalCents - roundedDiscountCents
+    );
 
     // Only `taxableBase` is used here — the rate is applied further down, after
     // it has been resolved from the order's own tax lines. Passing 0 keeps that
@@ -444,8 +439,30 @@ export async function GET(
     // NOTE: order.total from Medusa is not reliable without the tax-discount-aware patch applied.
     // metadata.computed_total is the canonical total used by POS and QB sync.
     // TODO(medusa-upgrade): remove computed_total once order.total is trustworthy post-patch.
-    const computedTotal =
-      (discountedSubtotalCents + shippingSubtotalCents) / 100 + amount;
+    // The total comes from the SAME resolver the order routes use, so an
+    // estimate and the order it becomes cannot land on different numbers.
+    //
+    // It also brings the refuse-no-guess guard with it, which this route did
+    // not have: a non-finite line used to be summed as-is and shipped, while
+    // `post-edit-sync` refuses to write a total it cannot stand behind. That
+    // total is the clamp ceiling for `order_money_projection`, so a wrong one
+    // silently zeroes a real deposit — an estimate had no reason to be the one
+    // path allowed to produce it.
+    const resolvedTotal = resolvePatchedOrderTotal({
+      base: taxMoneyBase,
+      posTaxAmount: amount,
+      discount: roundedDiscountCents / 100,
+    });
+    if (!resolvedTotal.ok) {
+      throw new Error(
+        `order total not derivable for ${id}: ${resolvedTotal.reason}. ` +
+          `Refusing to save computed_total — it is the clamp ceiling for order_money_projection.`
+      );
+    }
+    for (const w of resolvedTotal.warnings) {
+      console.warn(`[compute-tax] ⚠️  ${w}`);
+    }
+    const computedTotal = resolvedTotal.total;
     saveOrderMeta(req, id, {
       computed_tax_amount: amount,
       computed_tax_rate: rate,

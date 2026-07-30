@@ -690,6 +690,27 @@ export async function POST(
             console.log(
               `[convert-force] ✅ order_summary: tax=$${liveTaxTotal.toFixed(2)} total=$${newTotal.toFixed(2)}`
             );
+
+            // Los TRES campos, o ninguno — ver la nota extensa en
+            // `post-edit-sync`. Convertir re-derivaba el total y lo escribía
+            // SÓLO en `order_summary`, dejando `metadata.computed_total` con la
+            // cifra que le puso `compute-tax` cuando el documento todavía era
+            // un estimado. Mientras las dos derivaciones coincidan no se nota;
+            // el día que difieran, la lista y el documento se contradicen sin
+            // que nada falle. Va en la MISMA transacción que el summary.
+            await client.query(
+              `UPDATE "order"
+                  SET metadata = COALESCE(metadata, '{}') || jsonb_build_object(
+                        'computed_total', $1::numeric,
+                        'pos_total',      $1::numeric
+                      )
+                WHERE id = $2`,
+              [newTotal, id]
+            );
+            console.log(
+              `[convert-force] ✅ computed_total y pos_total alineados en $${newTotal.toFixed(2)}`
+            );
+
             await fixPaymentCollection(newTotal);
           }
         }
