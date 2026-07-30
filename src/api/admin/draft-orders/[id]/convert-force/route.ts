@@ -14,6 +14,7 @@ import { USA_LOC } from "../../../../../lib/locations";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 import {
   replaceOrderTaxLines,
+  representedDiscountDollars,
   resolvePatchedOrderTotal,
   loadOrderMoneyBase,
   resolveQbParityTax,
@@ -599,20 +600,18 @@ export async function POST(
           //
           //     Reading through the same client keeps it inside the transaction
           //     and removes the round-trip entirely.
+          // El descuento sale de la MISMA base que el resto de la derivación.
+          //
+          // Antes se leía `order_summary.totals.discount_total`, que es el
+          // agregado de Medusa sobre estos mismos adjustments: no puede aportar
+          // información que la base no tenga (medido: NULL en 1615 de 1616
+          // órdenes, y en la única poblada vale lo mismo que las líneas), pero sí
+          // aporta su convención. Ahí nacía el centavo — 138.08 contra los 138.07
+          // que QuickBooks facturó en la Invoice 19614.
           const taxBaseForDoc = await loadOrderMoneyBase(client, id);
           const parity = resolveQbParityTax(
             taxBaseForDoc,
-            Number(
-              (
-                await client.query<{ d: string }>(
-                  `SELECT COALESCE((totals->>'discount_total')::numeric, 0) d
-                     FROM order_summary
-                    WHERE order_id = $1 AND deleted_at IS NULL
-                    ORDER BY version DESC LIMIT 1`,
-                  [id]
-                )
-              ).rows[0]?.d ?? 0
-            ),
+            representedDiscountDollars(taxBaseForDoc),
             taxRate
           );
           let liveTaxTotal = parity.tax;
@@ -629,7 +628,6 @@ export async function POST(
           );
           if (sumRes.rows[0]) {
             const { id: sumId, totals } = sumRes.rows[0];
-            const discountTotal = Number(totals.discount_total || 0);
 
             // Round the aggregate ONCE. Medusa accumulates tax per line and
             // leaves the decimals hanging (99.98 × 7% → 6.9986); QuickBooks
@@ -647,7 +645,9 @@ export async function POST(
             const resolved = resolvePatchedOrderTotal({
               base: moneyBase,
               posTaxAmount: qbParityTax,
-              discount: discountTotal,
+              // Misma fuente que la línea de arriba: el descuento vive en las
+              // líneas, no en el agregado del summary.
+              discount: representedDiscountDollars(moneyBase),
             });
             if (!resolved.ok) {
               console.error(

@@ -10,6 +10,7 @@ import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile
 import { getDbPool } from "../../../../utils/db-pool";
 import {
   replaceOrderTaxLines,
+  representedDiscountDollars,
   resolvePatchedOrderTotal,
   resolveQbParityTax,
   loadOrderMoneyBase,
@@ -275,16 +276,6 @@ export async function POST(
         if (summaryRes.rows[0]) {
           const { id: summaryId, totals } = summaryRes.rows[0];
 
-          // Prefer pos_discount_amount (POS dollar truth); fall back to fixed discount_value.
-          const forcedDiscount =
-            pos_discount_amount && pos_discount_amount > 0
-              ? pos_discount_amount
-              : discount_value &&
-                  discount_value > 0 &&
-                  discount_type !== "percent"
-                ? discount_value
-                : totals.discount_total || 0;
-
           // The old formula was `original_order_total + pos_tax − discount`, and
           // `original_order_total` carries the native tax on SOME orders — 43 of
           // them came out overstated by a flat 6.535–6.563%, i.e. 7/107, the
@@ -293,6 +284,24 @@ export async function POST(
           // held separately), so the total is derived from the order's own lines
           // and shipping instead of by arithmetic on another derived figure.
           const moneyBase = await loadOrderMoneyBase(pool, id);
+
+          // Prefer pos_discount_amount (POS dollar truth); fall back to fixed discount_value.
+          //
+          // El último recurso ya NO es `totals.discount_total`. Ese campo es el
+          // agregado de Medusa sobre los MISMOS adjustments que la base ya leyó:
+          // medido sobre 1616 órdenes está NULL en 1615, y en la única poblada
+          // vale lo mismo que las líneas — o sea que jamás aporta información,
+          // sólo su convención de redondeo, que es la que separaba el total
+          // guardado del que QuickBooks factura. La base dice lo mismo, en la
+          // convención correcta.
+          const forcedDiscount =
+            pos_discount_amount && pos_discount_amount > 0
+              ? pos_discount_amount
+              : discount_value &&
+                  discount_value > 0 &&
+                  discount_type !== "percent"
+                ? discount_value
+                : representedDiscountDollars(moneyBase);
           const resolved = resolvePatchedOrderTotal({
             base: moneyBase,
             posTaxAmount: pos_tax_amount,
@@ -531,15 +540,21 @@ export async function POST(
         const { order: recheckOrder } = await recheckRes.json();
         // Authoritative discount = sum of live adjustments. Falls back to
         // Medusa's `discount_total` if items aren't returned for any reason.
+        //
+        // Redondeado POR LÍNEA, igual que `loadOrderMoneyBase` y que el POS.
+        // Acumularlo crudo era una TERCERA convención en el mismo archivo, y se
+        // compara más abajo contra la figura del POS con un umbral de medio
+        // centavo: en la orden 2811 daba 138.0792 contra 138.07, o sea 0.0092 de
+        // diferencia, suficiente para disparar la "recuperación de descuento" y
+        // reescribir adjustments que estaban perfectos. La discrepancia que ese
+        // guard busca es un descuento PERDIDO, no un decimal colgando.
         const liveAdjSum: number = Array.isArray(recheckOrder?.items)
-          ? recheckOrder.items.reduce(
-              (s: number, it: any) =>
-                s +
-                ((it?.adjustments ?? []) as any[])
-                  .filter((a: any) => !a?.tax_line_id)
-                  .reduce((a: number, b: any) => a + Number(b?.amount ?? 0), 0),
-              0
-            )
+          ? recheckOrder.items.reduce((s: number, it: any) => {
+              const lineRaw = ((it?.adjustments ?? []) as any[])
+                .filter((a: any) => !a?.tax_line_id)
+                .reduce((a: number, b: any) => a + Number(b?.amount ?? 0), 0);
+              return s + Math.round(lineRaw * 100);
+            }, 0) / 100
           : 0;
         const medusaDiscount =
           liveAdjSum > 0
