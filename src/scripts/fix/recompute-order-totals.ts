@@ -44,7 +44,6 @@ const APPLY = process.env.APPLY === "true";
 const CONFIRM = process.env.CONFIRM === "SI";
 /** Restrict to one document number — for rehearsing a single order first. */
 const ONLY = process.env.ONLY ?? "";
-const BATCH = 200;
 /**
  * How many orders are derived at once.
  *
@@ -92,6 +91,12 @@ SELECT o.id,
           FROM order_summary s
          WHERE s.order_id = o.id AND s.version = o.version
          LIMIT 1)                     AS old_list_c,
+       -- The RAW field being canonicalised, NULL when absent. Coherence has to
+       -- be judged on this and not on old_doc_c: 111 orders whose pos_total
+       -- already equalled the derivation were scored "coherent" and so never
+       -- received a computed_total at all, leaving the field the POS is about
+       -- to read as its first choice missing on exactly those rows.
+       NULLIF(o.metadata->>'computed_total','')::numeric AS old_computed,
        -- An order covered by exactly ONE invoice whose line count matches has
        -- an issued document to answer to. A partial invoice legitimately totals
        -- less, so it is deliberately NOT counted as one.
@@ -121,6 +126,7 @@ type Row = {
   age_days: number | null;
   old_doc_c: string | null;
   old_list_c: string | null;
+  old_computed: string | null;
   inv_n: string | null;
   inv_total: string | null;
   inv_lines: string | null;
@@ -228,7 +234,9 @@ async function main() {
 
       const oldDoc = Number(r.old_doc_c ?? 0);
       const oldList = Number(r.old_list_c ?? 0);
-      if (total === oldDoc && total === oldList) {
+      const oldComputed =
+        r.old_computed === null ? null : Math.round(Number(r.old_computed) * 100);
+      if (oldComputed !== null && total === oldComputed && total === oldList) {
         unchanged++;
         continue;
       }
@@ -322,61 +330,78 @@ async function main() {
     return;
   }
 
+  // Set-based, one transaction, three statements — not three per order.
+  //
+  // The first version issued 3 UPDATEs per order and took ~9 minutes against
+  // Railway for 1083 orders, because 3249 sequential round trips is what that
+  // costs. The DERIVATION still runs one order at a time through
+  // `loadOrderMoneyBase`, deliberately, so this script cannot drift from the
+  // formula production uses; only the WRITE is batched. Rewriting the
+  // arithmetic in SQL to go faster would buy a minute and cost the single
+  // definition of what an order is worth.
+  //
+  // `unnest` rather than a VALUES list: the parameter count stays at 5
+  // regardless of how many orders are written, so there is no row count at
+  // which this quietly hits Postgres' 65535-parameter ceiling.
+  const ids = planned.map((p) => p.r.id);
+  const versions = planned.map((p) => p.r.version);
+  const totals = planned.map((p) => p.total / 100);
+  const subtotals = planned.map((p) => p.subtotal / 100);
+  const discounts = planned.map((p) => p.discount / 100);
+  const taxes = planned.map((p) => p.tax / 100);
+
+  const client = await pool.connect();
   let written = 0;
-  for (let i = 0; i < planned.length; i += BATCH) {
-    const slice = planned.slice(i, i + BATCH);
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      for (const p of slice) {
-        // The list value and the document value move together or not at all.
-        await client.query(
-          `UPDATE order_summary
-              SET totals = COALESCE(totals, '{}'::jsonb)
-                         || jsonb_build_object('current_order_total', $2::numeric)
-            WHERE order_id = $1 AND version = $3`,
-          [p.r.id, p.total / 100, p.r.version]
-        );
-        await client.query(
-          `UPDATE "order"
-              SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
-            WHERE id = $1`,
-          [
-            p.r.id,
-            JSON.stringify({
-              computed_subtotal: p.subtotal / 100,
-              computed_discount: p.discount / 100,
-              computed_tax_amount: p.tax / 100,
-              computed_total: p.total / 100,
-            }),
-          ]
-        );
-        // `pos_total` is the THIRD field holding this number, and on the
-        // /orders list it is the one that wins: `getOrderTotal` reads
-        // metadata.pos_total first, then order.total, then the summary. Leaving
-        // it behind would repair the document and the summary while the list
-        // kept rendering the stale figure — the same contradiction, relocated.
-        //
-        // Updated only where it ALREADY exists. Creating it on the 1265 orders
-        // without one would change which branch of `getOrderTotal` wins for
-        // them, and that is a behaviour change nobody asked for.
-        await client.query(
-          `UPDATE "order"
-              SET metadata = metadata || jsonb_build_object('pos_total', $2::numeric)
-            WHERE id = $1 AND metadata->>'pos_total' IS NOT NULL`,
-          [p.r.id, p.total / 100]
-        );
-        written++;
-      }
-      await client.query("COMMIT");
-      console.log(`  batch ${i / BATCH + 1}: ${slice.length} written`);
-    } catch (e: any) {
-      await client.query("ROLLBACK").catch(() => {});
-      console.error(`\n  BATCH ROLLED BACK at offset ${i}: ${e.message}\n`);
-      process.exitCode = 1;
-      client.release();
-      break;
-    }
+  try {
+    await client.query("BEGIN");
+
+    // The list value.
+    const a = await client.query(
+      `UPDATE order_summary s
+          SET totals = COALESCE(s.totals, '{}'::jsonb)
+                     || jsonb_build_object('current_order_total', v.total)
+         FROM (SELECT * FROM unnest($1::text[], $2::int[], $3::numeric[])
+                 AS t(id, ver, total)) v
+        WHERE s.order_id = v.id AND s.version = v.ver`,
+      [ids, versions, totals]
+    );
+
+    // The document value, plus the pieces the POS renders under it.
+    const b = await client.query(
+      `UPDATE "order" o
+          SET metadata = COALESCE(o.metadata, '{}'::jsonb)
+                       || jsonb_build_object(
+                            'computed_subtotal',   v.subtotal,
+                            'computed_discount',   v.discount,
+                            'computed_tax_amount', v.tax,
+                            'computed_total',      v.total)
+         FROM (SELECT * FROM unnest($1::text[], $2::numeric[], $3::numeric[],
+                                    $4::numeric[], $5::numeric[])
+                 AS t(id, total, subtotal, discount, tax)) v
+        WHERE o.id = v.id`,
+      [ids, totals, subtotals, discounts, taxes]
+    );
+
+    // The third field, updated ONLY where it already exists — creating it would
+    // change which branch of getOrderTotal wins for the 1265 orders without one.
+    const c = await client.query(
+      `UPDATE "order" o
+          SET metadata = o.metadata || jsonb_build_object('pos_total', v.total)
+         FROM (SELECT * FROM unnest($1::text[], $2::numeric[]) AS t(id, total)) v
+        WHERE o.id = v.id AND o.metadata->>'pos_total' IS NOT NULL`,
+      [ids, totals]
+    );
+
+    await client.query("COMMIT");
+    written = b.rowCount ?? 0;
+    console.log(
+      `  summary rows ${a.rowCount} · order metadata ${b.rowCount} · pos_total ${c.rowCount}`
+    );
+  } catch (e: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(`\n  ROLLED BACK, nothing written: ${e.message}\n`);
+    process.exitCode = 1;
+  } finally {
     client.release();
   }
 

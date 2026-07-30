@@ -60,10 +60,21 @@ SELECT p.doc_kind,
        p.order_version                                      AS photo_version,
        o.version                                            AS now_version,
        p.doc_date,
+       -- The SAME precedence the photo used, or this compares two different
+       -- fields and calls the difference damage: the photo took an order's
+       -- pos_total, and reading computed_total here reported every order that
+       -- has no computed_total as having dropped to $0.00.
        CASE p.doc_kind
          WHEN 'invoice' THEN (SELECT i.total FROM pos_invoice i WHERE i.id = p.doc_id)
-         ELSE ROUND(COALESCE(
-                NULLIF(o.metadata->>'computed_total','')::numeric, 0) * 100)
+         ELSE COALESCE(
+                CASE WHEN p.doc_kind = 'order'
+                     THEN ROUND(NULLIF(o.metadata->>'pos_total','')::numeric * 100) END,
+                ROUND(NULLIF(o.metadata->>'computed_total','')::numeric * 100),
+                (SELECT ROUND(COALESCE(
+                          NULLIF(s2.totals->>'current_order_total','')::numeric, 0) * 100)
+                   FROM order_summary s2
+                  WHERE s2.order_id = p.order_id AND s2.version = o.version
+                  LIMIT 1))
        END                                                  AS now_c,
        (SELECT ROUND(COALESCE(
                  NULLIF(s.totals->>'current_order_total','')::numeric, 0) * 100)
@@ -154,7 +165,7 @@ async function main() {
 
   const line = (r: Row) =>
     `    ${String(r.ref_number ?? r.doc_id).padEnd(10)} ${r.doc_kind.padEnd(9)} ` +
-    `${String(r.doc_date ?? "").padEnd(11)} photo ${money(Number(r.photo_c)).padStart(13)} → ` +
+    `${String(r.doc_date ?? "").slice(0, 10).padEnd(11)} photo ${money(Number(r.photo_c)).padStart(13)} → ` +
     `now ${money(Number(r.now_c ?? 0)).padStart(13)}   ` +
     `(${((Number(r.now_c ?? 0) - Number(r.photo_c)) / 100).toFixed(2)})`;
 
@@ -165,6 +176,22 @@ async function main() {
     totalMatched += n;
   }
   console.log(`    ${"total".padEnd(10)} ${totalMatched}\n`);
+
+  // A document photographed at $0.00 had no total anywhere — the fix gave it
+  // one. That is not the POS contradicting the customer's copy, and counting it
+  // as such buries the handful that genuinely moved under a pile of fills.
+  const filled = moved.filter((r) => Number(r.photo_c) === 0);
+  const reallyMoved = moved.filter((r) => Number(r.photo_c) !== 0);
+  if (filled.length) {
+    console.log(
+      `── had no total at all, now they do (${filled.length}) — a fill, not a change ──`
+    );
+    console.log(filled.slice(0, 10).map(line).join("\n"));
+    if (filled.length > 10) console.log(`    … ${filled.length - 10} more`);
+    console.log("");
+  }
+  moved.length = 0;
+  moved.push(...reallyMoved);
 
   if (moved.length) {
     const byKind = new Map<string, number>();
