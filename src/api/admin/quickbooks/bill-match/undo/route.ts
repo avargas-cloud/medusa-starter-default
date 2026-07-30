@@ -67,6 +67,50 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       return;
     }
 
+    // ── Acoplamiento ──
+    // Un adopted es, por diseño, un espejo header-only sin costos posteados ni
+    // pagos propios: los 66 vivos en producción tienen CERO cost events y CERO
+    // china_finance_bill. O sea que hoy este guard no rechaza a nadie, y es
+    // justamente por eso que va ahora — mientras el invariante sea cierto y se
+    // pueda afirmar. Si mañana un adopted queda pagado por un wire confirmado,
+    // borrarlo dejaría la aplicación del wire apuntando a un bill inexistente:
+    // plata huérfana, invisible, y sin nada que explique el descuadre. El
+    // DELETE de un bill propio rechaza por la misma razón (`on_confirmed_wire`);
+    // acá se usan los mismos códigos para que la UI no tenga que aprender dos
+    // vocabularios.
+    const couplingResult = await client.query<{ cost_events: number; confirmed_wire_apps: number }>(
+      `SELECT
+         (SELECT COUNT(*) FROM variant_cost_event WHERE vendor_bill_id = $1)::int AS cost_events,
+         (SELECT COUNT(*)
+            FROM china_wire_transfer_application cwta
+            JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+            JOIN china_finance_bill cfb ON cfb.id = cwta.bill_id
+           WHERE cfb.vendor_bill_id = $1 AND cwt.status = 'confirmed')::int AS confirmed_wire_apps`,
+      [vendor_bill_id]
+    );
+    // Una query de puros agregados escalares SIEMPRE devuelve una fila, pero si
+    // alguna vez no la devolviera, el default seguro es 0 = "sin acoplamiento":
+    // el guard no debe inventar un bloqueo a partir de una fila ausente, y el
+    // borrado que habilita es soft y auditado, no destructivo.
+    const coupling = couplingResult.rows[0] ?? { cost_events: 0, confirmed_wire_apps: 0 };
+    if (coupling.confirmed_wire_apps > 0) {
+      res.status(409).json({
+        error: "on_confirmed_wire",
+        message:
+          "This bill is paid by a confirmed wire transfer. Reverse the payment before removing it.",
+      });
+      return;
+    }
+    if (coupling.cost_events > 0) {
+      res.status(409).json({
+        error: "bill_has_posted_costs",
+        message:
+          "This bill posted costs to inventory. Removing it would leave those costs applied with no bill to explain them.",
+        cost_events: coupling.cost_events,
+      });
+      return;
+    }
+
     const actor = ((req as unknown as { auth_context?: { actor_id?: string } }).auth_context?.actor_id) ?? "system";
     const undoNote =
       `${bill.notes ?? ""} [UNDONE by ${actor} on ${new Date().toISOString()}${reason ? `: ${reason}` : ""}]`;
