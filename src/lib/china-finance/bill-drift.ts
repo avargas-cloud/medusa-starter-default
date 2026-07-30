@@ -139,6 +139,14 @@ interface SourceLineRow {
   qty: number | string;
   unit_cost_cents: number | string | null;
   total_cents?: number | string | null;
+  /**
+   * What a unit costs according to the PURCHASE ORDER. Only used to value a
+   * source line the bill does not carry at all — that line has no bill-side
+   * cost to fall back to, and `unit_cost_cents` (a receipt's optional
+   * `unit_cost_cents_override`) is NULL on every receipt line in production,
+   * so without this the shortfall was always valued at $0.00.
+   */
+  fallback_unit_cost_cents?: number | string | null;
 }
 
 /** pg returns `bigint`/`numeric` aggregates as strings — never trust the type. */
@@ -367,6 +375,22 @@ export async function loadBillDrift(
   // the live data: every Veetech PO has exactly ONE regular bill, even the ones
   // with two receipts, so aggregating cannot double-count. Scoping to the single
   // pinned receipt made VB-1004 look $111.50 short when its quantities are exact.
+  //
+  // The aggregation key is the PO LINE, never the SKU. [SUPERSEDED 2026-07-31 —
+  // this used to `GROUP BY sku_snapshot`.] A SKU is not unique within a PO: a
+  // placeholder like `Sample-Product` names two different samples on two
+  // different lines. Grouping by it fused them into one "qty 2" row and threw
+  // away the very field that told them apart, and VB-1048 — whose bill, PO and
+  // receipt agree unit for unit — was reported $42.10 short. The PO line id is
+  // NOT NULL on every receipt line and populated on every bill line (measured:
+  // 525/525 and 287/287 in production), so this is the stronger key everywhere,
+  // not a trade. Same shape and same COALESCE as `resolveReceiptLineUnion` in
+  // `lib/purchase-orders/vendor-bill-receipts.ts`, which is how the rest of the
+  // system has always read a receipt set — this file was the outlier.
+  //
+  // The join to `purchase_order_line` deliberately does NOT filter `deleted_at`:
+  // dropping a received line because its PO line was soft-deleted would erase
+  // goods that physically arrived and manufacture a shortfall.
   const pinnedPoIds = Array.from(
     new Set(
       bills
@@ -377,18 +401,20 @@ export async function loadBillDrift(
   const receiptLines = pinnedPoIds.length
     ? await rows<SourceLineRow>(
         db,
-        `SELECT MIN(rl.id) AS key_id,
+        `SELECT rl.purchase_order_line_id AS key_id,
                 r.purchase_order_id AS parent_id,
-                rl.sku_snapshot AS sku,
+                MAX(rl.sku_snapshot) AS sku,
                 SUM(rl.qty_received_now)::bigint AS qty,
-                MAX(rl.unit_cost_cents_override) AS unit_cost_cents
+                MAX(rl.unit_cost_cents_override) AS unit_cost_cents,
+                MAX(pol.unit_cost_cents) AS fallback_unit_cost_cents
            FROM purchase_order_receipt_line rl
            JOIN purchase_order_receipt r ON r.id = rl.purchase_order_receipt_id
+           LEFT JOIN purchase_order_line pol ON pol.id = rl.purchase_order_line_id
           WHERE r.purchase_order_id = ANY(?)
             AND rl.deleted_at IS NULL
             AND r.deleted_at IS NULL
             AND r.status IN ('applied','synced')
-          GROUP BY r.purchase_order_id, rl.sku_snapshot`,
+          GROUP BY r.purchase_order_id, rl.purchase_order_line_id`,
         [pinnedPoIds]
       )
     : [];
@@ -426,18 +452,20 @@ export async function loadBillDrift(
   const boundReceiptLines = regularBillIds.length
     ? await rows<SourceLineRow>(
         db,
-        `SELECT MIN(rl.id) AS key_id,
+        `SELECT rl.purchase_order_line_id AS key_id,
                 r.vendor_bill_id AS parent_id,
-                rl.sku_snapshot AS sku,
+                MAX(rl.sku_snapshot) AS sku,
                 SUM(rl.qty_received_now)::bigint AS qty,
-                MAX(rl.unit_cost_cents_override) AS unit_cost_cents
+                MAX(rl.unit_cost_cents_override) AS unit_cost_cents,
+                MAX(pol.unit_cost_cents) AS fallback_unit_cost_cents
            FROM purchase_order_receipt_line rl
            JOIN purchase_order_receipt r ON r.id = rl.purchase_order_receipt_id
+           LEFT JOIN purchase_order_line pol ON pol.id = rl.purchase_order_line_id
           WHERE r.vendor_bill_id = ANY(?)
             AND rl.deleted_at IS NULL
             AND r.deleted_at IS NULL
             AND r.status IN ('applied','synced')
-          GROUP BY r.vendor_bill_id, rl.sku_snapshot`,
+          GROUP BY r.vendor_bill_id, rl.purchase_order_line_id`,
         [regularBillIds]
       )
     : [];
@@ -474,8 +502,8 @@ export async function loadBillDrift(
     return m;
   };
   const poByOrder = groupByParent(poLines);
-  // Both are keyed by purchase_order_id — the received side is aggregated per SKU
-  // across every applied receipt on the order.
+  // Both are keyed by purchase_order_id — the received side is aggregated per PO
+  // LINE across every applied receipt on the order.
   const rcByOrder = groupByParent(receiptLines);
   // Keyed by vendor_bill_id — only the receipts BOUND to that bill (D6).
   const rcByBill = groupByParent(boundReceiptLines);
@@ -492,16 +520,21 @@ export async function loadBillDrift(
        * Compares the bill's lines against ONE source line set and returns the
        * drift lines (empty = in sync with that source).
        *
-       * Matching: against receipts the received side is aggregated PER SKU, so
-       * SKU is the key (a bill line's receipt_line_id points at one specific
-       * receipt line — unusable against an aggregate). Against a PO the line FK
-       * is authoritative, with SKU as the fallback for a line whose PO line was
+       * Matching: the PO line id is authoritative on BOTH sources — the PO's
+       * own lines are keyed by it, and the received side is now aggregated by
+       * it too — with SKU as the fallback for a line whose PO line was
        * replaced. A consumed source line is never matched twice.
+       *
+       * [SUPERSEDED 2026-07-31] There used to be a second, SKU-only mode for
+       * receipts, on the reasoning that a bill line's `receipt_line_id` points
+       * at one specific receipt line and is unusable against an aggregate.
+       * That premise is true and the conclusion did not follow: the bill also
+       * carries `purchase_order_line_id`, which survives aggregation. Worse,
+       * that mode returned WITHOUT consulting `seen`, so two bill lines sharing
+       * a SKU both matched the same aggregated row and each reported the other's
+       * units as missing (VB-1048, −$42.10 against a bill that was exact).
        */
-      const compareAgainst = (
-        source: SourceLineRow[],
-        bySkuOnly: boolean
-      ): BillDriftLine[] => {
+      const compareAgainst = (source: SourceLineRow[]): BillDriftLine[] => {
         const srcById = new Map<string, SourceLineRow>();
         const srcBySku = new Map<string, SourceLineRow>();
         for (const s of source) {
@@ -511,7 +544,6 @@ export async function loadBillDrift(
         const drift: BillDriftLine[] = [];
         const seen = new Set<string>();
         const resolve = (l: LineRow): SourceLineRow | undefined => {
-          if (bySkuOnly) return l.sku ? srcBySku.get(l.sku) : undefined;
           const byFk = l.purchase_order_line_id
             ? srcById.get(l.purchase_order_line_id)
             : undefined;
@@ -550,10 +582,20 @@ export async function loadBillDrift(
           }
         }
         // Source lines the bill is missing entirely.
+        //
+        // Valued at the receipt's cost override when there is one, otherwise at
+        // the PO's unit cost — NEVER at zero. `unit_cost_cents_override` is
+        // optional by design ("null means use the PO line's unit_cost_cents
+        // unchanged" — purchase_order_receipt_line.ts) and is unset on all 525
+        // receipt lines in production, so reading it alone valued EVERY missing
+        // line at $0.00. That made a real shortfall render as "the amounts
+        // cancel out, so the total is unchanged": VB-1053, paid by a confirmed
+        // wire, is short one line worth $11.78 and reported Δ $0.00 — while its
+        // commission sibling VB-1054 was left carrying the only visible signal.
         for (const s of source) {
           if (seen.has(s.key_id)) continue;
           const srcQty = num(s.qty);
-          const srcCost = num(s.unit_cost_cents);
+          const srcCost = num(s.unit_cost_cents ?? s.fallback_unit_cost_cents);
           const sourceLineTotal =
             s.total_cents == null
               ? Math.round(srcQty * srcCost)
@@ -576,16 +618,13 @@ export async function loadBillDrift(
       let driftLines: BillDriftLine[];
       let sourceLabel: string | null | undefined;
       if (pinned || boundSource) {
-        const boundDrift = boundSource
-          ? compareAgainst(boundSource, true)
-          : null;
+        const boundDrift = boundSource ? compareAgainst(boundSource) : null;
         if (boundDrift && boundDrift.length === 0) {
           driftLines = [];
           sourceLabel = boundLabelByBill.get(b.id);
         } else {
           const poWideDrift = compareAgainst(
-            rcByOrder.get(b.purchase_order_id) ?? [],
-            true
+            rcByOrder.get(b.purchase_order_id) ?? []
           );
           if (poWideDrift.length === 0) {
             driftLines = [];
@@ -599,10 +638,7 @@ export async function loadBillDrift(
           }
         }
       } else {
-        driftLines = compareAgainst(
-          poByOrder.get(b.purchase_order_id) ?? [],
-          false
-        );
+        driftLines = compareAgainst(poByOrder.get(b.purchase_order_id) ?? []);
         sourceLabel = b.po_number;
       }
 
