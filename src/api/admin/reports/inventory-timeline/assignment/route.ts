@@ -1,4 +1,10 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import { randomUUID } from "crypto"
 
 /**
@@ -34,6 +40,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   }
 
   const body = (req.body ?? {}) as { inventory_item_id?: unknown; lots?: unknown }
+  // PIN de supervisor, verificado ACÁ y no en la pantalla. El gate existía sólo
+  // en la UI y se comparaba en el navegador, así que un request directo a esta
+  // ruta la ejecutaba sin encontrar ninguna puerta.
+  {
+    const pinDb = pg as unknown as PinConn;
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pinDb,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
+  }
+
   const inventoryItemId = typeof body.inventory_item_id === "string" ? body.inventory_item_id.trim() : ""
   if (!inventoryItemId) {
     return res.status(400).json({ error: "inventory_item_id is required" })

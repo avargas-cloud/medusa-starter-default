@@ -13,6 +13,12 @@ import type {
 
 import { generateEntityId } from "@medusajs/utils";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../lib/pos/verify-supervisor-pin";
 import { rebuildTransferChinaReservations } from "../../../../lib/inventory-transfer-reservations";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
 
@@ -127,6 +133,24 @@ export async function PATCH(
 
   const { id } = req.params as { id: string };
   const knex = resolveKnex(req);
+
+  // PIN de supervisor, verificado ACÁ. La pantalla de Transfer to USA pedía PIN
+  // para "habilitar la edición" y comparaba en el navegador: un PATCH directo a
+  // esta ruta editaba el transfer —y con él las reservas de stock en China— sin
+  // encontrar ninguna puerta.
+  {
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: knex as unknown as PinConn,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)
+        ?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
+  }
 
   const lookup = await knex.raw(
     `SELECT id, status, linked_purchase_order_id FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,

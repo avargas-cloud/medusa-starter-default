@@ -13,6 +13,12 @@ import type {
 } from "@medusajs/framework/http";
 
 import { withDb } from "../_lib/db";
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../lib/pos/verify-supervisor-pin";
 
 // The JSON lives at src/scripts/sync/ — resolve from workspace root
 const CATEGORIES_JSON = path.resolve(
@@ -209,6 +215,25 @@ export async function PUT(
 
   if (!category || !Array.isArray(skus)) {
     return res.status(400).json({ error: "category and skus[] are required" });
+  }
+
+  // PIN de supervisor. La pantalla de Purchasing Analysis pedia PIN para editar
+  // las listas de categoria y comparaba en el navegador: un PUT directo a esta
+  // ruta reescribia la lista sin encontrar ninguna puerta. Las listas de
+  // categoria alimentan las sugerencias de compra, asi que un cambio silencioso
+  // mueve decisiones de plata sin dejar rastro de quien lo hizo.
+  {
+    const pinDb = req.scope.resolve("__pg_connection__") as unknown as PinConn;
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pinDb,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body: pinBody } = pinGuardResponse(guard);
+      return res.status(status).json(pinBody);
+    }
   }
 
   // Deduplicate and trim

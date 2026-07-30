@@ -13,6 +13,12 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../lib/pos/verify-supervisor-pin";
 import type { IUserModuleService } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
 import { randomUUID } from "crypto";
@@ -643,6 +649,31 @@ export async function PATCH(
       .status(404)
       .json({ error: "Purchase order not found", code: "not_found" });
   }
+
+  // PIN de supervisor para editar un documento YA ENVIADO. Un draft se edita
+  // libre (todavia no salio a nadie); a partir de submitted el documento ya fue
+  // comunicado al proveedor y su edicion mueve compromisos, por eso la pantalla
+  // pedia PIN. Ese gate vivia SOLO en la UI y se comparaba en el navegador: un
+  // PATCH directo a esta ruta editaba el documento sin encontrar ninguna puerta.
+  //
+  // La condicion la decide ESTA ruta leyendo el status, nunca el cliente.
+  if (String((existing as { status?: string }).status ?? "") !== "draft") {
+    const pinDb = req.scope.resolve("__pg_connection__") as unknown as PinConn;
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pinDb,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body: pinBody } = pinGuardResponse(guard);
+      return res.status(status).json({
+        ...pinBody,
+        document_status: (existing as { status?: string }).status ?? null,
+      });
+    }
+  }
+
 
   // Terminal states (closed, cancelled, voided) are fully frozen.
   // Draft, submitted, partially_received AND received allow edits (the per-item

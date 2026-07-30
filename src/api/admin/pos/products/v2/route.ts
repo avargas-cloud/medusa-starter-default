@@ -1,4 +1,10 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 
 import {
   createPosProductV2Workflow,
@@ -40,6 +46,23 @@ export const POST = async (
   res: MedusaResponse
 ) => {
   const logger = req.scope.resolve("logger");
+  // PIN de supervisor, verificado ACÁ y no en la pantalla. El gate existía sólo
+  // en la UI y se comparaba en el navegador, así que un request directo a esta
+  // ruta la ejecutaba sin encontrar ninguna puerta.
+  {
+    const pinDb = req.scope.resolve("__pg_connection__") as unknown as PinConn;
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pinDb,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
+  }
+
   const validationError = validate(req.body);
   if (validationError) {
     return res.status(400).json({ error: validationError });
