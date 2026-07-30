@@ -16,8 +16,12 @@
  *   • delta===0 → skipped entirely (no read, no move)
  */
 
+// Keeps a handle on the compensation function too. The previous mock returned
+// only the forward function, which is why the compensation looked untestable
+// from a unit spec — a property of the mock, not of the step.
 jest.mock("@medusajs/framework/workflows-sdk", () => ({
-  createStep: (_name: string, fn: unknown) => fn,
+  createStep: (_name: string, fn: unknown, compensateFn: unknown) =>
+    Object.assign(fn as object, { __compensate: compensateFn }),
   StepResponse: class StepResponse {
     data: unknown;
     compensation: unknown;
@@ -150,6 +154,62 @@ describe("adjustFoReceiptStockStep", () => {
     await expect(
       stepFn({ location_id: CHINA, lines: [line(-5)] }, { container: build(inventory, raw) })
     ).rejects.toThrow(/RESERVED_BLOCK/);
+  });
+
+  describe("compensation", () => {
+    type CompensateFn = (
+      ctx:
+        | { location_id: string; adjusted: Array<{ inventory_item_id: string; delta_applied: number; receipt_line_id: string }> }
+        | undefined,
+      opts: { container: { resolve: jest.Mock } }
+    ) => Promise<void>;
+
+    const compensate = (adjustFoReceiptStockStep as unknown as { __compensate: CompensateFn })
+      .__compensate;
+
+    const adjusted = (delta_applied: number, id = "iitem_1") => ({
+      receipt_line_id: "rl_1",
+      inventory_item_id: id,
+      delta_applied,
+    });
+
+    it("reverses the move UNGUARDED so it always applies", async () => {
+      await compensate(
+        { location_id: CHINA, adjusted: [adjusted(5)] },
+        { container: build(inventory, raw) }
+      );
+
+      const [sql, bindings] = raw.mock.calls[0];
+      // Reversal of +5, and only 4 bindings: no guard clause. A compensation
+      // undoes our own write, so availability must not be able to refuse it —
+      // otherwise a reservation taken in between would strand the stock.
+      expect(bindings).toEqual([-5, -5, "iitem_1", CHINA]);
+      expect(sql).not.toMatch(/reserved_quantity/);
+    });
+
+    it("does nothing when there is no compensation context", async () => {
+      await compensate(undefined, { container: build(inventory, raw) });
+      expect(raw).not.toHaveBeenCalled();
+    });
+
+    it("keeps reversing the remaining lines when one reversal throws", async () => {
+      const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+      raw
+        .mockRejectedValueOnce(new Error("deadlock"))
+        .mockResolvedValue({ rowCount: 1 });
+
+      await compensate(
+        { location_id: CHINA, adjusted: [adjusted(3, "iitem_a"), adjusted(4, "iitem_b")] },
+        { container: build(inventory, raw) }
+      );
+
+      // The second line must still be reversed — a partial compensation is how
+      // stock silently drifts.
+      expect(raw).toHaveBeenCalledTimes(2);
+      expect(raw.mock.calls[1][1]).toEqual([-4, -4, "iitem_b", CHINA]);
+      expect(spy).toHaveBeenCalled();
+      spy.mockRestore();
+    });
   });
 
   it("skips lines with delta === 0", async () => {
