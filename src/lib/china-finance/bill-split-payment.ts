@@ -63,21 +63,30 @@ export async function splitBillForPartialPayment(
   const groupId = bill.split_group_id ?? bill.id;
   await db.raw(`SELECT pg_advisory_xact_lock(hashtext('cf_group:' || ?))`, [groupId]);
 
-  // Re-read the amount + the bill's application under lock. The bill must be
-  // sitting on a DRAFT wire (that's what "pay part now" means).
+  // Re-read the amount + the bill's DRAFT application under lock. The bill must
+  // be sitting on a draft wire (that's what "pay part now" means), and the draft
+  // one specifically: a bill may now hold more than one application — a bill
+  // paid short keeps its confirmed one and gets a second for the remainder — so
+  // joining the table plainly would return several rows and `[0]` would pick
+  // whichever the plan produced.
   const locked = (
-    await q<{ amount_cents: number; app_id: string | null; wire_id: string | null; wire_status: string | null }>(
+    await q<{ amount_cents: number; app_id: string | null; wire_id: string | null }>(
       db,
-      `SELECT b.amount_cents, a.id AS app_id, a.wire_transfer_id AS wire_id, w.status AS wire_status
+      `SELECT b.amount_cents, a.app_id, a.wire_id
          FROM china_finance_bill b
-         LEFT JOIN china_wire_transfer_application a ON a.bill_id = b.id
-         LEFT JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
+         LEFT JOIN LATERAL (
+           SELECT app.id AS app_id, app.wire_transfer_id AS wire_id
+             FROM china_wire_transfer_application app
+             JOIN china_wire_transfer w ON w.id = app.wire_transfer_id
+            WHERE app.bill_id = b.id AND w.status = 'draft'
+            LIMIT 1
+         ) a ON TRUE
         WHERE b.id = ? FOR UPDATE OF b`,
       [billId]
     )
   )[0];
   if (!locked) throw new Error(`split: bill ${billId} vanished`);
-  if (!locked.app_id || locked.wire_status !== "draft") {
+  if (!locked.app_id) {
     throw new Error(`split: bill ${billId} must be on a draft wire to split a partial payment`);
   }
   if (!Number.isInteger(payNowCents) || payNowCents < 1 || payNowCents >= locked.amount_cents) {
@@ -158,12 +167,33 @@ export async function mergePartialToAmount(
   const groupId = target.split_group_id ?? billId;
   await db.raw(`SELECT pg_advisory_xact_lock(hashtext('cf_group:' || ?))`, [groupId]);
 
-  const members = await q<{ id: string; amount_cents: number; partial_seq: number | null; app_id: string | null; wire_id: string | null; wire_status: string | null }>(
+  // ONE row per partial, whatever its applications. Two different questions are
+  // asked of them below and they need different answers, so both come back:
+  //
+  //   has_app      — is this partial spoken for AT ALL? A donor must be
+  //                  unassigned; treating a partial that carries a CONFIRMED
+  //                  application as unassigned would let the loop below delete
+  //                  or shrink money already wired.
+  //   draft_app_id — the row to follow when the target's amount changes.
+  //
+  // Plainly joining the applications table would also fan `members` out to one
+  // row per application, and `groupTotal` sums `amount_cents` over it — a
+  // partial with two applications would have counted its amount twice.
+  const members = await q<{ id: string; amount_cents: number; partial_seq: number | null; has_app: boolean; draft_app_id: string | null }>(
     db,
-    `SELECT b.id, b.amount_cents, b.partial_seq, a.id AS app_id, a.wire_transfer_id AS wire_id, w.status AS wire_status
+    `SELECT b.id, b.amount_cents, b.partial_seq, a.has_app, a.draft_app_id
        FROM china_finance_bill b
-       LEFT JOIN china_wire_transfer_application a ON a.bill_id = b.id
-       LEFT JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
+       LEFT JOIN LATERAL (
+         SELECT EXISTS (
+                  SELECT 1 FROM china_wire_transfer_application app
+                   WHERE app.bill_id = b.id
+                ) AS has_app,
+                (SELECT app.id
+                   FROM china_wire_transfer_application app
+                   JOIN china_wire_transfer w ON w.id = app.wire_transfer_id
+                  WHERE app.bill_id = b.id AND w.status = 'draft'
+                  LIMIT 1) AS draft_app_id
+       ) a ON TRUE
       WHERE b.split_group_id = ? ORDER BY b.partial_seq ASC FOR UPDATE OF b`,
     [groupId]
   );
@@ -179,7 +209,7 @@ export async function mergePartialToAmount(
   // Donors = UNASSIGNED siblings, but NEVER the root (it anchors vendor_bill_id /
   // identity and must survive as the collapse target). Highest seq first.
   const donors = members
-    .filter((m) => m.id !== billId && !m.app_id && m.id !== groupId)
+    .filter((m) => m.id !== billId && !m.has_app && m.id !== groupId)
     .sort((a, b) => (b.partial_seq ?? 0) - (a.partial_seq ?? 0));
   for (const d of donors) {
     if (extra <= 0) break;
@@ -197,8 +227,8 @@ export async function mergePartialToAmount(
   }
 
   await db.raw(`UPDATE china_finance_bill SET amount_cents = ?, updated_at = now() WHERE id = ?`, [newAmountCents, billId]);
-  if (tgt.app_id && tgt.wire_status === "draft") {
-    await db.raw(`UPDATE china_wire_transfer_application SET applied_cents = ?, updated_at = now() WHERE id = ?`, [newAmountCents, tgt.app_id]);
+  if (tgt.draft_app_id) {
+    await db.raw(`UPDATE china_wire_transfer_application SET applied_cents = ?, updated_at = now() WHERE id = ?`, [newAmountCents, tgt.draft_app_id]);
   }
 
   const remaining = Number(

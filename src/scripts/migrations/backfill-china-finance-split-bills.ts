@@ -335,11 +335,14 @@ async function main() {
       await client.query("ROLLBACK");
       console.log("DRY_RUN — rolled back, no changes persisted.");
     } else {
-      // Data is now one-application-per-row: safe to add the UNIQUE backstops.
-      await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cwta_bill_once ON china_wire_transfer_application(bill_id)`);
+      // UNIQUE(wire, bill) only. [CHANGED 2026-07-31] This used to also create
+      // UNIQUE(bill_id), which pinned a bill to a single wire for life and made
+      // a bill paid short impossible to finish paying — see migration
+      // 1782000000000. Re-creating it here would silently undo that migration
+      // on any database where this backfill is ever re-run.
       await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cwta_wire_bill ON china_wire_transfer_application(wire_transfer_id, bill_id)`);
       await client.query("COMMIT");
-      console.log("✅ committed + UNIQUE(bill_id) / UNIQUE(wire,bill) backstops created.");
+      console.log("✅ committed + UNIQUE(wire,bill) backstop created.");
     }
   } catch (e) {
     await client.query("ROLLBACK").catch(() => undefined);
