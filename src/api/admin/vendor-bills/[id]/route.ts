@@ -570,6 +570,34 @@ export async function GET(
     received_at: string;
     units: number;
     bound_to: { bill_id: string; number: string | null } | null;
+    /**
+     * PO lines this receipt received that the bill carries NO product line for.
+     *
+     * `bound_to` answers "is this receipt attached to this bill?", which the
+     * picker showed as a grey "already on VB-####" chip — and that reads as
+     * "everything of this receipt is already billed", which is a different
+     * claim and can be false. VB-1053 is bound to both of its receipts and is
+     * still missing a line that one of them received. The operator could see
+     * the bill disagreed with its receipts and had no way to tell WHICH receipt
+     * held the difference.
+     *
+     * Per line, not summed, so the modal can dedupe across checked receipts: a
+     * PO line received in two receipts is missing from both, and adding the two
+     * counts would report it twice.
+     */
+    missing_lines: Array<{ po_line_id: string; value_cents: number }>;
+    /**
+     * PO lines this receipt received that the bill DOES carry. Quantities are
+     * per receipt so the picker can compare the checked union against the bill:
+     * a PO line received across two receipts cannot have its shortfall blamed
+     * on either one, so a quantity disagreement is reported for the selection
+     * as a whole and never on a row.
+     */
+    shared_lines: Array<{
+      po_line_id: string;
+      received_qty: number;
+      bill_qty: number;
+    }>;
   }> = [];
   let suggested_receipt_ids: string[] = [];
   if (header.purchase_order_id) {
@@ -602,6 +630,79 @@ export async function GET(
       bound_bill_id: string | null;
       bound_bill_number: string | null;
     };
+    // Per receipt, the PO lines it received that this bill carries no product
+    // line for. Kept per line (never a count) so the picker can dedupe: a PO
+    // line received in two receipts is missing from both, and adding the counts
+    // would report one missing line as two. Its VALUE does add up, though —
+    // each receipt contributes its own units of that line.
+    //
+    // Cost falls back to the PO's unit cost, matching `resolveReceiptLineUnion`:
+    // `unit_cost_cents_override` means "the vendor charged something else this
+    // shipment" and is null on every receipt line in production, so reading it
+    // alone would price every missing line at $0.00.
+    // The bill's side goes in CORRELATED SUBQUERIES, never a join: a bill may
+    // carry the same PO line on two rows, and joining would fan the receipt
+    // rows out and inflate the received quantity being summed.
+    const receiptLineResult = await knex.raw(
+      `SELECT porl.purchase_order_receipt_id AS receipt_id,
+              porl.purchase_order_line_id    AS po_line_id,
+              COALESCE(SUM(porl.qty_received_now), 0)::int AS received_qty,
+              (COALESCE(SUM(porl.qty_received_now), 0)
+               * COALESCE(MAX(porl.unit_cost_cents_override),
+                          MAX(pol.unit_cost_cents), 0))::int AS value_cents,
+              (SELECT COUNT(*) FROM vendor_bill_line v
+                WHERE v.vendor_bill_id = ? AND v.deleted_at IS NULL
+                  AND COALESCE(v.line_type, 'product') = 'product'
+                  AND v.purchase_order_line_id = porl.purchase_order_line_id
+              )::int AS bill_line_count,
+              (SELECT COALESCE(SUM(v.qty), 0) FROM vendor_bill_line v
+                WHERE v.vendor_bill_id = ? AND v.deleted_at IS NULL
+                  AND COALESCE(v.line_type, 'product') = 'product'
+                  AND v.purchase_order_line_id = porl.purchase_order_line_id
+              )::int AS bill_qty
+         FROM purchase_order_receipt_line porl
+         JOIN purchase_order_receipt por ON por.id = porl.purchase_order_receipt_id
+         LEFT JOIN purchase_order_line pol ON pol.id = porl.purchase_order_line_id
+        WHERE por.purchase_order_id = ?
+          AND por.status IN ('applied', 'synced')
+          AND por.deleted_at IS NULL
+          AND porl.deleted_at IS NULL
+        GROUP BY porl.purchase_order_receipt_id, porl.purchase_order_line_id
+       HAVING COALESCE(SUM(porl.qty_received_now), 0) > 0
+        ORDER BY porl.purchase_order_receipt_id, porl.purchase_order_line_id`,
+      [id, id, header.purchase_order_id]
+    );
+    const missingByReceipt = new Map<
+      string,
+      Array<{ po_line_id: string; value_cents: number }>
+    >();
+    const sharedByReceipt = new Map<
+      string,
+      Array<{ po_line_id: string; received_qty: number; bill_qty: number }>
+    >();
+    for (const m of receiptLineResult.rows as Array<{
+      receipt_id: string;
+      po_line_id: string;
+      received_qty: number | string;
+      value_cents: number | string;
+      bill_line_count: number | string;
+      bill_qty: number | string;
+    }>) {
+      if (Number(m.bill_line_count) === 0) {
+        const list = missingByReceipt.get(m.receipt_id) ?? [];
+        list.push({ po_line_id: m.po_line_id, value_cents: Number(m.value_cents) });
+        missingByReceipt.set(m.receipt_id, list);
+      } else {
+        const list = sharedByReceipt.get(m.receipt_id) ?? [];
+        list.push({
+          po_line_id: m.po_line_id,
+          received_qty: Number(m.received_qty),
+          bill_qty: Number(m.bill_qty),
+        });
+        sharedByReceipt.set(m.receipt_id, list);
+      }
+    }
+
     bindable_receipts = (bindableResult.rows as BindableRow[]).map((r) => ({
       id: r.id,
       number: r.number,
@@ -611,6 +712,8 @@ export async function GET(
       bound_to: r.bound_bill_id
         ? { bill_id: r.bound_bill_id, number: r.bound_bill_number }
         : null,
+      missing_lines: missingByReceipt.get(r.id) ?? [],
+      shared_lines: sharedByReceipt.get(r.id) ?? [],
     }));
     receipts = bindable_receipts
       .filter((r) => r.bound_to?.bill_id === id)
