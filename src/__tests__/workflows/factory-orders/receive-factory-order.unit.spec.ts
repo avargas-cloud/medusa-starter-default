@@ -44,6 +44,11 @@ import { persistFoReceiptStep } from "../../../workflows/factory-orders/steps/pe
 import { syncReceiptInventoryMeiliStep } from "../../../workflows/shared/steps/sync-receipt-inventory-meili-step";
 import { receiveFactoryOrderWorkflow } from "../../../workflows/factory-orders/receive-factory-order";
 import type { ReceiveFactoryOrderWorkflowInput } from "../../../workflows/factory-orders/receive-factory-order";
+// The workflow asserts the receipt lands at China Warehouse (defense-in-depth,
+// receive-factory-order.ts). Read the same constant it reads instead of pinning
+// a literal ULID here: CHINA_LOC honours CHINA_WAREHOUSE_LOCATION_ID, so a spec
+// with the id inlined would go red the moment that env var is set.
+import { CHINA_LOC } from "../../../lib/locations";
 
 // ─── Typed mock references ────────────────────────────────────────────────────
 
@@ -81,7 +86,7 @@ function buildInput(
     fo_id: "fo-001",
     fo_number: "FO-1001",
     received_by_user_id: "usr-001",
-    stock_location_id: "loc-china",
+    stock_location_id: CHINA_LOC,
     received_at: new Date("2026-01-15"),
     notes: null,
     lines: lineOverrides.map((o, i) =>
@@ -156,5 +161,19 @@ describe("receiveFactoryOrderWorkflow — MeiliSearch sync step", () => {
     expect(mockAllocateSeq).toHaveBeenCalledTimes(1);
     expect(mockApplyStock).toHaveBeenCalledTimes(1);
     expect(mockPersistReceipt).toHaveBeenCalledTimes(1);
+  });
+
+  // The location guard is what turned this whole suite red for two months: the
+  // fixture passed an invented id and every test died before reaching its
+  // assertion. Pin the guard explicitly so the next time it changes, one test
+  // says so instead of six failing for a reason none of them is about.
+  it("rejects a receipt aimed at any location other than China Warehouse", () => {
+    const input = { ...buildInput(), stock_location_id: "sloc_miami" };
+
+    expect(() => runWorkflow(input)).toThrow(/must be China Warehouse/);
+    expect(mockAllocateSeq).not.toHaveBeenCalled();
+    expect(mockApplyStock).not.toHaveBeenCalled();
+    expect(mockPersistReceipt).not.toHaveBeenCalled();
+    expect(mockSyncMeili).not.toHaveBeenCalled();
   });
 });
