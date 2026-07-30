@@ -307,6 +307,17 @@ export type OrderMoneyBase = {
    * customer's discount twice.
    */
   bakedDiscountDollars: number;
+  /**
+   * Cuántas líneas llevan un descuento propio.
+   *
+   * No es informativo: es la única forma de distinguir un DESCUENTO de un
+   * DESACUERDO DE CONVENCIÓN. El descuento de una línea se redondea acá al
+   * centavo, así que cada línea con descuento puede separarse hasta medio
+   * centavo de cualquier figura agregada de ese mismo descuento. Con 11 líneas
+   * (orden 2811) la separación máxima es 5.5¢ — y sin este número, un centavo
+   * de esa separación es indistinguible de un centavo de descuento real.
+   */
+  discountedLineCount: number;
 };
 
 /**
@@ -387,6 +398,7 @@ export async function loadOrderMoneyBase(
   let adjCents = 0;
   let taxableAdjCents = 0;
   let bakedCents = 0;
+  let discountedLines = 0;
 
   for (const row of lines.rows) {
     // NET (`unit_price`), which already carries any per-line discount. The
@@ -452,6 +464,10 @@ export async function loadOrderMoneyBase(
     }
     grossCents += lineGross;
     adjCents += lineAdj;
+    // Cada línea con descuento aporta hasta medio centavo de desacuerdo entre
+    // esta convención y cualquier agregado. Contarlas es lo que después permite
+    // distinguir ese desacuerdo de un descuento real — ver `roundingSlackCents`.
+    if (lineAdj !== 0) discountedLines += 1;
     if (row.taxable !== false) {
       taxableGrossCents += lineGross;
       taxableAdjCents += lineAdj;
@@ -485,6 +501,7 @@ export async function loadOrderMoneyBase(
     shippingDollars: round2(Number(ship.rows[0]?.s ?? 0)),
     adjustmentsDollars: round2(adjustmentsDollars),
     bakedDiscountDollars: round2(bakedDiscountDollars),
+    discountedLineCount: discountedLines,
   };
 }
 
@@ -518,14 +535,91 @@ export function computeQbParityTax(
  * 3740.63). Only the part of the discount that is not already inside the line
  * adjustments is subtracted, or it comes off twice.
  */
+/**
+ * El descuento que la base YA carga, en dólares y en la convención per-línea.
+ *
+ * Existe para que un caller pueda decir "el descuento es el que está en las
+ * líneas" sin volver a derivarlo. Medido sobre las 1616 órdenes de producción:
+ * `order_summary.totals.discount_total` está NULL en 1615 y en la única poblada
+ * vale exactamente lo mismo que los adjustments — o sea que como ENTRADA es
+ * estrictamente redundante y lo único que puede aportar es su propia convención.
+ * La información que la base NO tiene llega por el body del request del POS
+ * (`pos_discount_amount`), nunca por el summary.
+ */
+export function representedDiscountDollars(base: OrderMoneyBase): number {
+  return round2(base.adjustmentsDollars + base.bakedDiscountDollars);
+}
+
+export type DiscountResidual = {
+  /** Lo que hay que restar de verdad: el descuento que la base NO carga. */
+  residualCents: number;
+  /**
+   * Lo que se descartó por ser desacuerdo de convención, no descuento.
+   * Mayor que cero significa: el caller trajo el MISMO descuento que la base ya
+   * tiene, expresado en la otra convención. No es una condición benigna — es la
+   * señal de que hay dos fuentes vivas para una misma cantidad.
+   */
+  conventionGapCents: number;
+};
+
+/**
+ * Cuánto puede exceder la figura del caller a la de la base SIN que eso sea un
+ * descuento.
+ *
+ * El descuento de cada línea se redondea al centavo (`Math.round(adj * 100)`),
+ * así que cada línea con descuento se separa hasta medio centavo de un agregado
+ * del mismo descuento. Con n líneas descontadas, la separación máxima posible
+ * es n/2 centavos. Por encima de eso ya no puede ser redondeo.
+ */
+function roundingSlackCents(base: OrderMoneyBase): number {
+  return Math.ceil(base.discountedLineCount / 2);
+}
+
+/**
+ * Separa un DESCUENTO de un DESACUERDO DE CONVENCIÓN.
+ *
+ * Por qué existe: la resta del residual no puede, por sí sola, distinguir "el
+ * caller anuncia un centavo más de descuento" de "el caller expresó el mismo
+ * descuento con otro redondeo". Son aritméticamente idénticos y contablemente
+ * opuestos. Medido en la orden 2811 / QB Invoice 19614: la base por línea da
+ * 138.07 y cualquier agregado del mismo descuento da 138.08, así que el residual
+ * salía 1¢ y el total caía a 1699.06 — un centavo por debajo de lo que
+ * QuickBooks facturó y de lo que dice el papel que tiene el cliente.
+ *
+ * La regla:
+ *   • la base no carga NADA  → el descuento del caller es real, se aplica entero
+ *     (el caso E2606: $15.99 anunciados y todavía sin materializar en ninguna línea)
+ *   • la base ya carga algo y la diferencia entra en el slack de redondeo
+ *     → es la misma cantidad en otra convención, NO se resta, y se denuncia
+ *   • la diferencia excede el slack → es descuento de verdad, se resta
+ *
+ * El costo aceptado: un descuento genuino MENOR que el slack (centavos, sobre
+ * una orden que ya trae descuentos por línea) queda absorbido. Se elige eso
+ * antes que restar un artefacto de redondeo, porque el primero no existe como
+ * caso de negocio y el segundo ya rompió documentos reales.
+ */
+export function resolveDiscountResidual(
+  base: OrderMoneyBase,
+  discount: number
+): DiscountResidual {
+  const representedCents =
+    toCents(base.adjustmentsDollars) + toCents(base.bakedDiscountDollars);
+  const rawResidualCents = Math.max(0, toCents(discount) - representedCents);
+  if (representedCents === 0 || rawResidualCents === 0) {
+    return { residualCents: rawResidualCents, conventionGapCents: 0 };
+  }
+  if (rawResidualCents <= roundingSlackCents(base)) {
+    return { residualCents: 0, conventionGapCents: rawResidualCents };
+  }
+  return { residualCents: rawResidualCents, conventionGapCents: 0 };
+}
+
 export function resolveQbParityTax(
   base: OrderMoneyBase,
   discount: number,
   ratePercent: number
 ): { taxableBase: number; tax: number } {
-  const representedCents =
-    toCents(base.adjustmentsDollars) + toCents(base.bakedDiscountDollars);
-  const residualCents = Math.max(0, toCents(discount) - representedCents);
+  const { residualCents } = resolveDiscountResidual(base, discount);
   const taxableCents = Math.max(
     0,
     toCents(base.taxableNetDollars) - residualCents
@@ -601,15 +695,31 @@ export function resolvePatchedOrderTotal(
   // Measuring the caller's figure against just the adjustments double-charged
   // the baked kind; measuring against just the baked kind would double-charge
   // the adjustment kind.
-  const representedCents =
-    toCents(base.adjustmentsDollars) + toCents(base.bakedDiscountDollars);
-  const residualCents = Math.max(0, toCents(discount) - representedCents);
+  const { residualCents, conventionGapCents } = resolveDiscountResidual(
+    base,
+    discount
+  );
   const residualDiscount = residualCents / 100;
   if (discount > 0 && residualDiscount < discount) {
     warnings.push(
       `discount ${discount} is already represented in the base ` +
         `(baked ${base.bakedDiscountDollars} + adjustments ${base.adjustmentsDollars}); ` +
         `subtracting only the ${residualDiscount} residual`
+    );
+  }
+  // Esto NO es un detalle de redondeo: es un caller trayendo la misma cantidad
+  // en otra convención. Antes se restaba en silencio y el total quedaba un
+  // centavo por debajo del documento que tiene el cliente. Se nombra fuerte
+  // porque la corrección de acá es que el caller deje de traerlo, no que este
+  // resolver lo siga absorbiendo para siempre.
+  if (conventionGapCents > 0) {
+    warnings.push(
+      `CONVENTION GAP: discount ${discount} exceeds the base's own ` +
+        `${base.adjustmentsDollars + base.bakedDiscountDollars} by ` +
+        `${conventionGapCents}¢ over ${base.discountedLineCount} discounted ` +
+        `line(s) — that is per-line rounding, not a discount. Not subtracted. ` +
+        `The caller is deriving the discount from an aggregate; it should read ` +
+        `the same per-line source the base does.`
     );
   }
 

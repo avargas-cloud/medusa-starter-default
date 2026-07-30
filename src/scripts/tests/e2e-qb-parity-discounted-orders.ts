@@ -243,9 +243,15 @@ async function loadStored(
 type Failure = { doc: string; what: string; detail: string };
 
 async function main(): Promise<void> {
+  // El SSL es de Railway. La sandbox de Docker no lo soporta y rechaza la
+  // conexión ("The server does not support SSL connections"), así que pedirlo
+  // siempre volvía inalcanzable la URL que este mismo archivo propone en su
+  // bloque de uso (E2E_DATABASE_URL=…@localhost:5499).
+  const connectionString = resolveDatabaseUrl();
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(connectionString);
   const pool = new Pool({
-    connectionString: resolveDatabaseUrl(),
-    ssl: { rejectUnauthorized: false },
+    connectionString,
+    ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
   });
   const failures: Failure[] = [];
   const skipped: string[] = [];
