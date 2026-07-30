@@ -20,8 +20,10 @@ export const RECOMPUTE_ORDER_MONEY_SQL = `
         v_unapplied   bigint;
         v_total       bigint;
         v_deposit     bigint;
+        v_received    bigint;
         v_mirror      numeric;
         v_applied_d   numeric;
+        v_received_d  numeric;
       BEGIN
         IF p_order_id IS NULL THEN
           RETURN;
@@ -115,6 +117,23 @@ export const RECOMPUTE_ORDER_MONEY_SQL = `
           v_deposit := v_order_only + v_unapplied;  -- fail-open: no readable total
         END IF;
 
+        -- EVERY dollar this order has received: the two halves put back
+        -- together. Not a third derivation -- deliberately built from the two
+        -- values above so it cannot disagree with them, and so it inherits the
+        -- ceiling for free (deposit is already clamped to total - applied, so
+        -- received never exceeds the order and a genuine overpayment stays
+        -- unlinked customer credit, exactly as the operator's rule says).
+        --
+        -- WHY IT EXISTS: the two halves answer "what can I still spend" and
+        -- "what did invoices consume". A DOCUMENT asks neither -- it asks what
+        -- the customer has paid on this order, and its Balance is total minus
+        -- that. Handing it the unused half made S11179, deposited in full,
+        -- print a Balance equal to the part already billed. Adding the halves
+        -- in the frontend was the first fix and it was wrong: it duplicated the
+        -- formula across screen, print and email, and mixed this mirror with a
+        -- live query against a different endpoint.
+        v_received := v_applied + v_deposit;
+
         INSERT INTO order_money_projection AS omp (
           order_id, applied_cents, order_only_cents, unapplied_cents,
           order_total_cents, deposit_cents, calculator_version, computed_at
@@ -142,24 +161,24 @@ export const RECOMPUTE_ORDER_MONEY_SQL = `
         -- embedded in a JS template literal closes the string and breaks the
         -- parse -- a gotcha this repo has already paid for twice.
         --
-        -- BOTH numbers are mirrored on purpose. referential_deposit keeps its
-        -- name so the POS list, order detail, print templates and estimates
-        -- keep working untouched; applied_total is what Paid Amt reads.
-        -- Mirroring the pair here means no reader needs a new query and the
+        -- ALL THREE numbers are mirrored on purpose. referential_deposit keeps
+        -- its name so the POS list, order detail, print templates and estimates
+        -- keep working untouched; applied_total is what Paid Amt reads;
+        -- deposit_total is what the DOCUMENT reads (see v_received above).
+        -- Mirroring them here means no reader needs a new query and the
         -- Meili doc needs no enrichment step: query.graph already carries the
-        -- metadata column, so both values ride along for free.
+        -- metadata column, so all three values ride along for free.
         v_mirror  := round(v_deposit / 100.0, 2);
         v_applied_d := round(v_applied / 100.0, 2);
+        v_received_d := round(v_received / 100.0, 2);
 
+        -- Concatenation, not three nested jsonb_set calls: for top-level keys
+        -- the two are equivalent, and the nesting stops being readable at three.
         UPDATE "order"
-        SET metadata = jsonb_set(
-              jsonb_set(
-                COALESCE(metadata, '{}'::jsonb),
-                '{referential_deposit}',
-                to_jsonb(v_mirror)
-              ),
-              '{applied_total}',
-              to_jsonb(v_applied_d)
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+              'referential_deposit', to_jsonb(v_mirror),
+              'applied_total',       to_jsonb(v_applied_d),
+              'deposit_total',       to_jsonb(v_received_d)
             ),
             updated_at = now()
         WHERE id = p_order_id
@@ -174,10 +193,16 @@ export const RECOMPUTE_ORDER_MONEY_SQL = `
             -- That is the double count showing up as In Deposit == Paid Amt.
             NOT (COALESCE(metadata, '{}'::jsonb) ? 'referential_deposit')
             OR NOT (COALESCE(metadata, '{}'::jsonb) ? 'applied_total')
+            -- deposit_total is new: EVERY order is missing it until this runs,
+            -- and an order at 0 received would compare 0 against 0 and never
+            -- get the key -- the exact bug 1781700000000 exists to fix.
+            OR NOT (COALESCE(metadata, '{}'::jsonb) ? 'deposit_total')
             OR round(COALESCE(NULLIF(metadata->>'referential_deposit', '')::numeric, 0), 2)
               IS DISTINCT FROM v_mirror
             OR round(COALESCE(NULLIF(metadata->>'applied_total', '')::numeric, 0), 2)
               IS DISTINCT FROM v_applied_d
+            OR round(COALESCE(NULLIF(metadata->>'deposit_total', '')::numeric, 0), 2)
+              IS DISTINCT FROM v_received_d
           );
       END;
       $$ LANGUAGE plpgsql
