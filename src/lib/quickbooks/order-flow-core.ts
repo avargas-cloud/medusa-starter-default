@@ -618,24 +618,78 @@ export function buildQbItems(
  * but order.discount_total returned 0 — so handlers that gate on
  * discount_total alone silently dropped the Discount line in QB.
  */
+/**
+ * El descuento de orden que se le MANDA a QuickBooks, en la única convención
+ * que reproduce lo que QB terminó facturando: **redondeado POR LÍNEA** y
+ * después sumado.
+ *
+ * Por qué importa acá y no es cosmético: QB no calcula este número, se lo
+ * mandamos hecho — `buildQbOrderDiscountLines` manda el monto exacto en dólares
+ * justamente "so QB doesn't recalculate via %". Así que la cifra que sale de
+ * esta función ES el descuento del documento contable.
+ *
+ * Esta función alimenta los caminos que NO tienen un `pos_invoice` del que
+ * copiar: Estimate (`qb-draft-order-subscriber`), Sales Order
+ * (`handle-order-placed`) y los fallbacks de invoice y sales receipt. Los que sí
+ * lo tienen usan el snapshot, que ya venía per-línea — de ahí que Invoice 19614
+ * fuera correcta mientras el resto podía no serlo.
+ *
+ * Medido en sandbox contra 7 documentos reales con descuento
+ * (`src/scripts/checks/probe-qb-discount-resolver.ts`): la convención agregada
+ * se desviaba en E2146 (−0.04), E2607 (+0.01) y S11242 (+0.01).
+ *
+ * NO deduplica adjustments por versión, y es correcto: se verificó que
+ * `query.graph` ya los entrega acotados a la versión vigente — S11242 tiene 5
+ * versiones y 3 filas por línea en SQL crudo, y por acá llegan 11 filas que
+ * suman una vez. `loadOrderMoneyBase` sí deduplica porque lee SQL directo, sin
+ * ese filtro.
+ */
 export function getEffectiveOrderDiscount(order: any): number {
-  const fromTotal = Number(order?.discount_total);
-  if (Number.isFinite(fromTotal) && fromTotal > 0) return fromTotal;
-
+  // PRIMERO los adjustments, porque son la fuente POR LÍNEA.
+  //
+  // `discount_total` iba primero y esa precedencia es la que hacía fallar el
+  // caso real: Medusa lo calcula como un agregado (S11242: 138.0792), así que
+  // redondearlo da 138.08 y nunca se llega a mirar las líneas. QuickBooks
+  // facturó 138.07 en la Invoice 19614 y el `pos_invoice` del cliente dice lo
+  // mismo. Un agregado NO PUEDE expresar el redondeo por línea: no es que esté
+  // mal calculado, es que perdió la información antes de llegar acá.
+  //
+  // El orden nuevo también alinea este resolver con `loadOrderMoneyBase`, que
+  // ya derivaba el total del documento desde los adjustments. Cuando los dos
+  // leían fuentes distintas, el total guardado y el descuento enviado a QB
+  // podían discrepar sin que nada fallara.
   const items = Array.isArray(order?.items) ? order.items : [];
-  let fromAdjustments = 0;
+  let cents = 0;
   for (const it of items) {
     const adjs = Array.isArray(it?.adjustments) ? it.adjustments : [];
+    // La línea se acumula sin redondear y se redondea UNA vez, igual que
+    // `loadOrderMoneyBase`: varias filas de adjustment sobre la misma línea son
+    // partes de un mismo descuento de línea, no líneas distintas.
+    let lineDollars = 0;
     for (const a of adjs) {
       if (a?.deleted_at) continue;
       const amt = Number(a?.amount);
-      if (Number.isFinite(amt) && amt > 0) fromAdjustments += amt;
+      if (Number.isFinite(amt) && amt > 0) lineDollars += amt;
     }
+    cents += Math.round(lineDollars * 100);
   }
-  if (fromAdjustments > 0) return fromAdjustments;
+  if (cents > 0) return cents / 100;
+
+  // Sin adjustments, `discount_total` es lo mejor que hay: un descuento que
+  // nunca se distribuyó a las líneas. Acá el agregado no pierde nada porque no
+  // existe un desglose que respetar.
+  const fromTotal = Number(order?.discount_total);
+  if (Number.isFinite(fromTotal) && fromTotal > 0) return round2(fromTotal);
 
   const fromMetadata = Number(order?.metadata?.computed_discount);
-  return Number.isFinite(fromMetadata) && fromMetadata > 0 ? fromMetadata : 0;
+  return Number.isFinite(fromMetadata) && fromMetadata > 0
+    ? round2(fromMetadata)
+    : 0;
+}
+
+/** Redondeo a centavos por el entero, no por EPSILON. */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 export function buildQbOrderDiscountLines(

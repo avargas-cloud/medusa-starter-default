@@ -365,15 +365,27 @@ export async function loadOrderMoneyBase(
     [orderId]
   );
 
-  // Integer cents, and the SAME rounding convention the POS uses (and therefore
-  // the one whose figures have matched QuickBooks): the gross is rounded per
-  // line, the discounts are accumulated UNROUNDED and rounded once before being
-  // subtracted. Summing unrounded dollars instead drifts — measured at 3¢ on an
-  // $8k taxable base, which is enough to stop matching QB to the cent.
+  // Integer cents, and the SAME rounding convention the POS uses: BOTH the
+  // gross and the discount are rounded PER LINE, then summed.
+  //
+  // The discount used to be accumulated unrounded and rounded once at the end.
+  // That is the convention QuickBooks uses for the TAX, so it looked right by
+  // analogy — but the discount does not reach QuickBooks the way the tax does.
+  // `buildQbOrderDiscountLines` sends an "exact dollar amount so QB doesn't
+  // recalculate via %", and that amount comes from the POS, which rounds each
+  // line to the cent (`computeTotals`, store-pos/lib/pos-totals.ts). So the
+  // customer's printed document and the QuickBooks document both carry the
+  // per-line figure, and only the stored order total carried the aggregate one.
+  //
+  // Measured on order 2811 / S11242 (QB Invoice 19614, read back over the
+  // bridge): per-line 138.07 → total 1699.07, which is what `pos_invoice` holds
+  // AND what QuickBooks billed. The aggregate gave 138.08 → 1699.06, one cent
+  // under the paper the customer is holding. 7 of the 31 discounted orders in
+  // production differ between the two, by 1¢ to 4¢.
   let grossCents = 0;
   let taxableGrossCents = 0;
-  let adjUnroundedCents = 0;
-  let taxableAdjUnroundedCents = 0;
+  let adjCents = 0;
+  let taxableAdjCents = 0;
   let bakedCents = 0;
 
   for (const row of lines.rows) {
@@ -431,28 +443,26 @@ export async function loadOrderMoneyBase(
     //
     // For a price already at two decimals the two are identical.
     const lineGross = Math.round(unit * qty * 100);
-    const lineAdj = adj * 100;
+    // Rounded HERE, per line — see the note above the accumulators.
+    const lineAdj = Math.round(adj * 100);
     // How much the per-line discount already took off this line, if any.
     const originalUnit = Number(row.original_unit_price ?? 0);
     if (originalUnit > unit) {
       bakedCents += (Math.round(originalUnit * 100) - Math.round(unit * 100)) * qty;
     }
     grossCents += lineGross;
-    adjUnroundedCents += lineAdj;
+    adjCents += lineAdj;
     if (row.taxable !== false) {
       taxableGrossCents += lineGross;
-      taxableAdjUnroundedCents += lineAdj;
+      taxableAdjCents += lineAdj;
     }
   }
 
-  const netCents = Math.max(0, grossCents - Math.round(adjUnroundedCents));
-  const taxableNetCents = Math.max(
-    0,
-    taxableGrossCents - Math.round(taxableAdjUnroundedCents)
-  );
+  const netCents = Math.max(0, grossCents - adjCents);
+  const taxableNetCents = Math.max(0, taxableGrossCents - taxableAdjCents);
   const netDollars = netCents / 100;
   const taxableNetDollars = taxableNetCents / 100;
-  const adjustmentsDollars = Math.round(adjUnroundedCents) / 100;
+  const adjustmentsDollars = adjCents / 100;
   const bakedDiscountDollars = bakedCents / 100;
 
   const ship = await runner.query<{ s: string | number | null }>(
