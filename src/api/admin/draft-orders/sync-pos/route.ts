@@ -362,10 +362,21 @@ export async function POST(
               order_id: resolvedId,
               discount_type,
               discount_value,
+              // Se manda SIEMPRE el código vivo, sin compararlo con
+              // `currentPromoCode`.
+              //
+              // Esa comparación era contra lo que mandó el cliente, no contra el
+              // código que esta ruta va a aplicar: el POS puede mandar
+              // `ORDER-DISCOUNT-10%` mientras `discount_type/value` resuelven a
+              // `CPOS-PCT-1000`, así que los dos "coincidían" y el descuento
+              // anterior quedaba vivo. Medido en sandbox: el nuevo 10% salía
+              // 43.20 (10% de 432.00) en vez de 48.00, porque se calculó sobre el
+              // neto que todavía tenía restado el anterior.
+              //
+              // Mandarlo de más es inofensivo: `/admin/pos-discount` descarta el
+              // código que está por aplicar antes de remover nada.
               existing_promo_code:
-                savedPromoCode && savedPromoCode !== currentPromoCode
-                  ? savedPromoCode
-                  : undefined,
+                savedPromoCode ?? currentPromoCode ?? undefined,
             }),
           }).catch((e) => {
             logger.warn(`Custom discount failed on update: ${e.message}`);
