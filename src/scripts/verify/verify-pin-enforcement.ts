@@ -187,6 +187,49 @@ if (!failures.some((f) => f.includes("orders/[id]"))) {
   notes.push(`✓ las ${ORDER_EDIT_ROUTES.length} rutas de edición de orden gatean el origen web`);
 }
 
+// ── 4b · rutas que DEBEN gatear, se nombren o no al PIN ──────────────────────
+/**
+ * El chequeo 3 audita los archivos que MENCIONAN el PIN: garantiza que ninguno
+ * lo haga a mano, pero es ciego a la falla inversa — una ruta que debería pedir
+ * PIN y no dice nada nunca entra en su barrido, así que sale limpia.
+ *
+ * Así vivió `pos/prices/[productId]` sin NINGUNA autorización de servidor: su
+ * único gate era una comparación en React, y el verificador no tenía por qué
+ * mirarla. El agujero salió por el chequeo del frontend (el modal leía el
+ * valor), no por acá.
+ *
+ * Por eso estas rutas se afirman por NOMBRE, igual que las 9 de edición de
+ * orden: son escrituras de dinero cuyo gate no puede depender de que el archivo
+ * se acuerde de nombrar la clave.
+ */
+const MUST_GATE_ROUTES = [
+  ["api/admin/pos/prices/[productId]/route.ts", "escribe el precio retail y el wholesale de un ítem"],
+  ["api/admin/quickbooks/bill-match/adopt/route.ts", "registra un bill de QuickBooks contra un PO"],
+  ["api/admin/quickbooks/bill-match/undo/route.ts", "revierte un bill-match adoptado"],
+  ["api/admin/quickbooks/customer-credits/import/route.ts", "importa un crédito de QB como saldo redimible"],
+];
+for (const [rel, what] of MUST_GATE_ROUTES) {
+  const p = path.join(BACKEND_SRC, rel);
+  if (!fs.existsSync(p)) {
+    failures.push(
+      `${rel} no existe donde se esperaba — si se movió o se renombró, ` +
+        `actualizar esta lista: el gate se afirma por nombre y una ruta que se ` +
+        `mueve deja de estar cubierta en silencio.`
+    );
+    continue;
+  }
+  if (!SHARED.test(stripComments(fs.readFileSync(p, "utf8")))) {
+    failures.push(
+      `${rel} ${what} y no llama a guardSupervisorPin(). Como todo cajero es un ` +
+        `usuario admin, sin el gate cualquier token válido ejecuta la operación ` +
+        `con un POST directo — el modal de la pantalla no autoriza nada.`
+    );
+  }
+}
+if (!failures.some((f) => MUST_GATE_ROUTES.some(([rel]) => f.startsWith(rel)))) {
+  notes.push(`✓ las ${MUST_GATE_ROUTES.length} rutas de escritura de dinero llaman al guard`);
+}
+
 // ── 5 · la ruta nativa de stores sigue protegida ─────────────────────────────
 const mw = path.join(BACKEND_SRC, "api/middlewares.ts");
 const mwSrc = fs.existsSync(mw) ? fs.readFileSync(mw, "utf8") : "";

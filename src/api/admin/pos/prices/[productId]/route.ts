@@ -1,6 +1,14 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+
 const WHOLESALE_PRICE_LIST_ID = "plist_01KFTSDZZNTQRSYNMB4YST1HYA";
 
 interface PriceUpdateBody {
@@ -47,6 +55,26 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   // __pg_connection__ is a Knex instance in Medusa v2
   const knex = (req.scope as any).resolve("__pg_connection__");
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
+
+  // ── Supervisor PIN ──────────────────────────────────────────────────────────
+  // Esta ruta escribe el precio retail Y el wholesale de un ítem. Hasta ahora no
+  // pedía NADA: el único gate era una comparación de PIN en React dentro de
+  // ItemDetailModal, o sea legible con F12 y salteable editando el estado. Y como
+  // todo cajero es un usuario admin (así está diseñada la auth del POS), cualquier
+  // token válido podía repreciar el catálogo con un POST directo.
+  //
+  // Va DESPUÉS de la validación de forma a propósito: un body malformado no debe
+  // gastar un intento del contador de PIN.
+  const guard = await guardSupervisorPin({
+    scope: req.scope as unknown as { resolve: (k: string) => unknown },
+    db: knex as PinConn,
+    pin: extractSupervisorPin(req),
+    actorId: resolveActorId(req),
+  });
+  if (!guard.ok) {
+    const { status, body } = pinGuardResponse(guard);
+    return res.status(status).json(body);
+  }
 
   try {
     // 1. Get variant + price_set via Medusa graph.

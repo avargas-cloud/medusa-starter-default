@@ -8,6 +8,13 @@ import {
   normalizeRequiredVendorBillReference,
   VENDOR_BILL_REFERENCE_REQUIRED_BODY,
 } from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 
 interface AdoptBody {
   po_id?: string;
@@ -33,7 +40,9 @@ interface AdoptBody {
  * durable double-adopt guard; a race surfaces here as HTTP 409.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
-  const { po_id, txn_id, mode, supervisor_pin, reason } = (req.body ?? {}) as AdoptBody;
+  // El PIN no se destructura: lo lee `extractSupervisorPin` (header primero, body
+  // como fallback para no romper callers viejos).
+  const { po_id, txn_id, mode, reason } = (req.body ?? {}) as AdoptBody;
 
   if (!po_id || !txn_id || (mode !== "adopted" && mode !== "full")) {
     res.status(400).json({ error: "po_id, txn_id and mode ('adopted'|'full') are required" });
@@ -43,17 +52,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   try {
     await client.connect();
-    await client.query(`SELECT pg_advisory_lock(hashtext($1))`, [txn_id]);
 
     // ── Supervisor PIN (server-side; the UI gate is not enough) ──
-    const { rows: storeRows } = await client.query<{ metadata: Record<string, unknown> | null }>(
-      `SELECT metadata FROM store WHERE metadata->>'pos_supervisor_pin' IS NOT NULL LIMIT 1`
-    );
-    const storedPin = storeRows[0]?.metadata?.pos_supervisor_pin as string | undefined;
-    if (!storedPin || String(supervisor_pin ?? "") !== String(storedPin)) {
-      res.status(403).json({ error: "Invalid supervisor PIN" });
+    // La comparación estaba copiada a mano acá porque el helper pedía knex y acá
+    // hay un Client de pg; al copiarla se quedó sin límite de intentos, que es lo
+    // único que separa "hay que saber el PIN" de "hay que adivinarlo" (4 dígitos =
+    // 10.000 combinaciones). `pgAsPinConn` cierra esa brecha.
+    //
+    // Va ANTES del advisory lock a propósito: un caller no autorizado no debería
+    // poder tomar el lock de un txn_id y serializar los adopts legítimos.
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pgAsPinConn(client),
+      pin: extractSupervisorPin(req),
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      res.status(status).json(body);
       return;
     }
+
+    await client.query(`SELECT pg_advisory_lock(hashtext($1))`, [txn_id]);
 
     // ── Resolve PO + agency flag ──
     const { rows: poRows } = await client.query<{

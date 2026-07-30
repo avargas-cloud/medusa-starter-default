@@ -1,6 +1,14 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+
 interface UndoBody {
   vendor_bill_id?: string;
   supervisor_pin?: string;
@@ -15,7 +23,9 @@ interface UndoBody {
  * adopted bills can be undone here (owned bills go through their own lifecycle).
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
-  const { vendor_bill_id, supervisor_pin, reason } = (req.body ?? {}) as UndoBody;
+  // El PIN no se destructura: lo lee `extractSupervisorPin`, que mira el header
+  // `x-supervisor-pin` primero y cae al body para no romper callers viejos.
+  const { vendor_bill_id, reason } = (req.body ?? {}) as UndoBody;
   if (!vendor_bill_id) {
     res.status(400).json({ error: "vendor_bill_id is required" });
     return;
@@ -25,12 +35,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   try {
     await client.connect();
 
-    const { rows: storeRows } = await client.query<{ metadata: Record<string, unknown> | null }>(
-      `SELECT metadata FROM store WHERE metadata->>'pos_supervisor_pin' IS NOT NULL LIMIT 1`
-    );
-    const storedPin = storeRows[0]?.metadata?.pos_supervisor_pin as string | undefined;
-    if (!storedPin || String(supervisor_pin ?? "") !== String(storedPin)) {
-      res.status(403).json({ error: "Invalid supervisor PIN" });
+    // ── Supervisor PIN ──
+    // Antes esta comparación estaba copiada a mano acá (y en adopt, y en el import
+    // de créditos) porque el helper pedía una conexión knex y acá hay un Client de
+    // pg. Al copiarla se quedó sin límite de intentos, que es lo único que separa
+    // "hay que saber el PIN" de "hay que adivinarlo": 4 dígitos son 10.000
+    // combinaciones. `pgAsPinConn` existe justo para cerrar esa brecha.
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pgAsPinConn(client),
+      pin: extractSupervisorPin(req),
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      res.status(status).json(body);
       return;
     }
 

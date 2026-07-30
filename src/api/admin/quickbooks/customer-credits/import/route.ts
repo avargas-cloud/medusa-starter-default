@@ -3,6 +3,13 @@ import { Client } from "pg";
 
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+import {
   buildCreditMemoQuery,
   buildReceivePaymentQuery,
   parseCreditMemos,
@@ -56,8 +63,9 @@ export async function POST(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
-  const { customer_id, txn_id, doc_type, supervisor_pin } = (req.body ??
-    {}) as ImportBody;
+  // El PIN no se destructura: lo lee `extractSupervisorPin` (header primero, body
+  // como fallback para no romper callers viejos).
+  const { customer_id, txn_id, doc_type } = (req.body ?? {}) as ImportBody;
 
   if (!customer_id || !txn_id || !doc_type) {
     res
@@ -73,24 +81,30 @@ export async function POST(
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   try {
     await client.connect();
+
+    // ── Supervisor PIN (defense in depth — the frontend gate is not enough) ──
+    // La comparación estaba copiada a mano acá porque el helper pedía knex y acá
+    // hay un Client de pg; al copiarla se quedó sin límite de intentos, que es lo
+    // único que separa "hay que saber el PIN" de "hay que adivinarlo" (4 dígitos =
+    // 10.000 combinaciones). `pgAsPinConn` cierra esa brecha.
+    //
+    // Va ANTES del advisory lock a propósito: un caller no autorizado no debería
+    // poder tomar el lock de un txn_id y serializar los imports legítimos.
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: pgAsPinConn(client),
+      pin: extractSupervisorPin(req),
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      res.status(status).json(body);
+      return;
+    }
+
     // Serialize imports of the same QB document. The lock is released when this
     // dedicated connection closes, including error paths.
     await client.query(`SELECT pg_advisory_lock(hashtext($1))`, [txn_id]);
-
-    // ── Supervisor PIN (defense in depth — the frontend gate is not enough) ──
-    const { rows: storeRows } = await client.query<{
-      metadata: Record<string, any> | null;
-    }>(
-      `SELECT metadata FROM store
-        WHERE metadata->>'pos_supervisor_pin' IS NOT NULL LIMIT 1`
-    );
-    const storedPin = storeRows[0]?.metadata?.pos_supervisor_pin as
-      | string
-      | undefined;
-    if (!storedPin || String(supervisor_pin ?? "") !== String(storedPin)) {
-      res.status(403).json({ error: "Invalid supervisor PIN" });
-      return;
-    }
 
     // ── Resolve customer + its QB ListID ──
     const { rows: custRows } = await client.query<{
