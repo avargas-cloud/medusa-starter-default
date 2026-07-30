@@ -22,6 +22,11 @@ import { randomUUID } from "crypto";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../purchase-orders/_lib/format";
 import { recomputeBillFinanceLinks } from "../../../../lib/finance/recompute-bill-finance";
+import {
+  qtyExceedsRemainingMessage,
+  resolveRemainingPoQuantities,
+  type RemainingPoLine,
+} from "../../../../lib/purchase-orders/po-billed-quantities";
 import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
 import {
   buildAdjustmentNote,
@@ -978,6 +983,14 @@ export async function PATCH(
     string,
     { po_qty: number; product_variant_id: string; sku: string; description: string; metadata: Record<string, unknown> | null }
   >();
+  // What each PO line still has unbilled once the OTHER active bills on this
+  // PO are subtracted (this bill excluded — it is the one being saved).
+  //
+  // This is the cap. `po_qty` alone stopped being one the moment a PO could
+  // carry more than one regular bill: a line ordered 1 would accept 1 on this
+  // bill while a sibling bill already holds its 1, and the same unit gets paid
+  // for twice, averaged into cost twice, and posted to QuickBooks twice.
+  const remainingByPoLine = new Map<string, RemainingPoLine>();
 
   if (hasLineEdits || pinProvided || receiptIdsProvided) {
     if (
@@ -1035,6 +1048,33 @@ export async function PATCH(
         metadata: (r.metadata as Record<string, unknown> | null) ?? null,
       });
     }
+
+    for (const line of await resolveRemainingPoQuantities(
+      knex,
+      bill.purchase_order_id,
+      id
+    )) {
+      remainingByPoLine.set(line.purchase_order_line_id, line);
+    }
+  }
+
+  /**
+   * Cap for a PO line, and the message when it is exceeded.
+   *
+   * Falls back to the raw ordered quantity for a line the remainder query
+   * dropped (cancelled, or nothing left ordered — `po_qty` is 0 there anyway),
+   * so a cancelled line keeps rejecting exactly as it did before.
+   */
+  function capFor(poLineId: string, fallbackQty: number) {
+    const remaining = remainingByPoLine.get(poLineId);
+    return {
+      cap: remaining ? remaining.qty_remaining : fallbackQty,
+      message: (sku?: string | null) =>
+        remaining
+          ? qtyExceedsRemainingMessage(remaining, sku)
+          : `Max is the PO quantity (${fallbackQty})${sku ? ` for ${sku}` : ""}. Edit the PO to add more.`,
+      billed_on: remaining?.billed_on ?? null,
+    };
   }
 
   // Staged receipt pin validation.
@@ -1118,14 +1158,36 @@ export async function PATCH(
     if (fullLines!.length < 1) {
       return res.status(422).json({ error: "Vendor bill must keep at least one line", code: "last_line" });
     }
+    // Capped on the SUM per PO line, not per bill line: a bill may carry the
+    // same PO line twice (a repeated SKU), and checking each row on its own
+    // lets two rows of 1 slip past a cap of 1.
+    const desiredByPoLine = new Map<string, number>();
     for (const l of fullLines!) {
       const pol = poLineById.get(l.purchase_order_line_id);
       if (!pol) return res.status(422).json({ error: `Line references a PO line not on this bill's purchase order`, code: "bad_po_line", purchase_order_line_id: l.purchase_order_line_id });
-      if (l.qty > pol.po_qty) {
-        return res.status(422).json({ error: `Max is the PO quantity (${pol.po_qty}) for ${l.sku}. Edit the PO to add more.`, code: "qty_exceeds_po", po_qty: pol.po_qty });
-      }
+      desiredByPoLine.set(
+        l.purchase_order_line_id,
+        (desiredByPoLine.get(l.purchase_order_line_id) ?? 0) + l.qty
+      );
       if (l.id && !existingById.has(l.id)) {
         return res.status(404).json({ error: `Line ${l.id} not found on this bill`, code: "line_not_found" });
+      }
+    }
+    for (const [poLineId, desiredQty] of desiredByPoLine) {
+      const pol = poLineById.get(poLineId)!;
+      const { cap, message, billed_on } = capFor(poLineId, pol.po_qty);
+      if (desiredQty > cap) {
+        return res.status(422).json({
+          error: message(
+            fullLines!.find((l) => l.purchase_order_line_id === poLineId)?.sku ??
+              pol.sku
+          ),
+          code: "qty_exceeds_po",
+          po_qty: pol.po_qty,
+          qty_remaining: cap,
+          billed_on,
+          purchase_order_line_id: poLineId,
+        });
       }
     }
   } else if (hasLineEdits) {
@@ -1136,9 +1198,39 @@ export async function PATCH(
       const l = existingById.get(edit.id);
       if (!l) return res.status(404).json({ error: `Line ${edit.id} not found on this bill`, code: "line_not_found" });
       if (!l.purchase_order_line_id) return res.status(422).json({ error: "Cannot determine PO line for the quantity cap", code: "no_po_line", line_id: edit.id });
-      const cap = poLineById.get(l.purchase_order_line_id)?.po_qty ?? 0;
-      if (edit.qty > cap) {
-        return res.status(422).json({ error: `Max is the PO quantity (${cap}). Edit the purchase order to add more.`, code: "qty_exceeds_po", po_qty: cap, line_id: edit.id });
+    }
+    // Same rule as the full-set branch: cap the RESULTING total per PO line,
+    // which means folding this save's edits and removals into the lines the
+    // bill already carries rather than judging each edited row alone.
+    {
+      const removed = new Set(removedIds);
+      const qtyById = new Map(qtyEdits.map((line) => [line.id, line.qty]));
+      const desiredByPoLine = new Map<string, number>();
+      for (const line of existingProductLines) {
+        if (!line.purchase_order_line_id || removed.has(line.id)) continue;
+        desiredByPoLine.set(
+          line.purchase_order_line_id,
+          (desiredByPoLine.get(line.purchase_order_line_id) ?? 0) +
+            (qtyById.get(line.id) ?? line.qty)
+        );
+      }
+      for (const [poLineId, desiredQty] of desiredByPoLine) {
+        const pol = poLineById.get(poLineId);
+        const { cap, message, billed_on } = capFor(poLineId, pol?.po_qty ?? 0);
+        if (desiredQty > cap) {
+          return res.status(422).json({
+            error: message(
+              existingProductLines.find(
+                (line) => line.purchase_order_line_id === poLineId
+              )?.sku ?? pol?.sku
+            ),
+            code: "qty_exceeds_po",
+            po_qty: pol?.po_qty ?? 0,
+            qty_remaining: cap,
+            billed_on,
+            purchase_order_line_id: poLineId,
+          });
+        }
       }
     }
     for (const rid of removedIds) {

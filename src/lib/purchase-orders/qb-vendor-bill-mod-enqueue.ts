@@ -147,7 +147,15 @@ async function buildPayload(
 
   const lineRows = lineResult.rows as Record<string, unknown>[];
   const productRows = lineRows.filter(
-    (line) => String(line.line_type ?? "product") === "product"
+    (line) =>
+      String(line.line_type ?? "product") === "product" &&
+      // Same rule as the Add (qb-vendor-bill-enqueue.ts): a zeroed line is not
+      // on the invoice, so it is not on the QuickBooks Bill either. The two
+      // paths MUST agree — the Mod's whole contract is to reproduce what the
+      // Add sent. Here omission is also the mechanism: BillMod deletes by
+      // omission, so a line the operator drops to 0 after it was synced is
+      // removed from the QB Bill, which is exactly the intent.
+      Number(line.qty ?? 0) > 0
   );
 
   // WHICH COST BASIS — this must match whatever the Add put in QuickBooks, or

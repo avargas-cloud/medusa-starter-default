@@ -8,6 +8,10 @@ import { z } from "zod";
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../../purchase-orders/_lib/format";
 import { syncPrimaryReceiptPointer } from "../../../../../lib/purchase-orders/vendor-bill-receipts";
+import {
+  resolveRemainingPoQuantities,
+  seedableLines,
+} from "../../../../../lib/purchase-orders/po-billed-quantities";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -138,42 +142,27 @@ export async function POST(
   // billed quantities to be fully received — or explicitly via "Fill from
   // Receipts" / the receipt chips.)
 
-  const poLinesResult = await knex.raw(
-    `WITH po_lines AS (
-       SELECT
-         pol.id AS purchase_order_line_id,
-         pol.product_variant_id,
-         pol.sku_snapshot,
-         pol.description_snapshot,
-         GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0) AS qty,
-         COALESCE(pol.unit_cost_cents, 0) AS unit_cost_cents,
-         pv.metadata
-       FROM purchase_order_line pol
-       LEFT JOIN product_variant pv
-         ON pv.id = pol.product_variant_id AND pv.deleted_at IS NULL
-       WHERE pol.purchase_order_id = ?
-         AND pol.deleted_at IS NULL
-         AND COALESCE(pol.status, 'open') <> 'cancelled'
-     )
-     SELECT * FROM po_lines
-     WHERE qty > 0
-     ORDER BY purchase_order_line_id`,
-    [parsed.data.purchase_order_id]
+  // Seeded with the REMAINDER, not the full order. A PO can carry several
+  // regular bills (one per vendor invoice on a split delivery), so whatever
+  // the sibling bills already claim has to stay on them — otherwise attaching
+  // a PO to a second bill silently doubles every quantity. `id` excludes this
+  // bill from its own sum; it has no lines yet here, but that stays true if
+  // this route is ever reached with lines present.
+  const remainingLines = await resolveRemainingPoQuantities(
+    knex,
+    parsed.data.purchase_order_id,
+    id
   );
-  const poLines = poLinesResult.rows as Array<{
-    purchase_order_line_id: string;
-    product_variant_id: string;
-    sku_snapshot: string;
-    description_snapshot: string;
-    qty: number;
-    unit_cost_cents: number;
-    metadata: Record<string, unknown> | null;
-  }>;
+  const poLines = seedableLines(remainingLines);
 
   if (poLines.length === 0) {
     return res.status(409).json({
-      error: "Purchase order has no open lines to bill",
-      code: "no_open_lines",
+      error:
+        remainingLines.length === 0
+          ? "Purchase order has no open lines to bill"
+          : "Every ordered unit on this purchase order is already billed on another bill.",
+      code:
+        remainingLines.length === 0 ? "no_open_lines" : "po_fully_billed",
     });
   }
 
@@ -215,7 +204,7 @@ export async function POST(
         line.sku_snapshot,
         typeof line.metadata?.mpn === "string" ? line.metadata.mpn : null,
         line.description_snapshot,
-        line.qty,
+        line.qty_remaining,
         line.unit_cost_cents,
         cbm !== null && !Number.isNaN(cbm) ? cbm : null,
       ]

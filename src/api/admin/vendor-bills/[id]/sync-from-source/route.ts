@@ -38,6 +38,11 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../../lib/purchase-orders/vendor-bill-receipts";
+import {
+  qtyExceedsRemainingMessage,
+  resolveRemainingPoQuantities,
+  seedableLines,
+} from "../../../../../lib/purchase-orders/po-billed-quantities";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -169,7 +174,7 @@ export async function POST(
   }
 
   // ── Resolve source lines ────────────────────────────────────────────────────
-  let sourceLines: SourceLine[];
+  let sourceLines: SourceLine[] = [];
   // D6 — the full receipt SET this "Update From Receipt(s)" call resolves to
   // (kept for the persist path below, which binds every id in the set, not
   // just a single legacy pin).
@@ -206,33 +211,65 @@ export async function POST(
     // lib/purchase-orders/vendor-bill-receipts.ts so the two paths never
     // drift on how a receipt set maps to bill lines.
     sourceLines = await resolveReceiptLineUnion(knex, requestedReceiptIds);
+  }
+
+  // What this PO still has unbilled, with THIS bill taken out of the sum (it
+  // is about to be rewritten, so its current lines must not count against it).
+  // A PO can carry several regular bills — one per vendor invoice on a split
+  // delivery — so both sources have to be measured against the remainder
+  // rather than against the raw order.
+  const remainingLines = await resolveRemainingPoQuantities(
+    knex,
+    bill.purchase_order_id!,
+    id
+  );
+
+  if (parsed.data.source !== "receipt") {
+    // 'po' = the planning window: seed the unbilled remainder, not the whole
+    // order, or attaching the PO to a second bill duplicates every quantity.
+    sourceLines = seedableLines(remainingLines).map((line) => ({
+      purchase_order_line_id: line.purchase_order_line_id,
+      product_variant_id: line.product_variant_id,
+      sku: line.sku_snapshot,
+      description: line.description_snapshot,
+      qty: line.qty_remaining,
+      unit_cost_cents: line.unit_cost_cents,
+      metadata: line.metadata,
+    }));
   } else {
-    const linesResult = await knex.raw(
-      `SELECT
-         pol.id AS purchase_order_line_id,
-         pol.product_variant_id,
-         pol.sku_snapshot AS sku,
-         pol.description_snapshot AS description,
-         GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0)::int AS qty,
-         COALESCE(pol.unit_cost_cents, 0)::int AS unit_cost_cents,
-         pv.metadata
-       FROM purchase_order_line pol
-       LEFT JOIN product_variant pv
-         ON pv.id = pol.product_variant_id AND pv.deleted_at IS NULL
-       WHERE pol.purchase_order_id = ?
-         AND pol.deleted_at IS NULL
-         AND COALESCE(pol.status, 'open') <> 'cancelled'
-         AND GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0) > 0
-       ORDER BY pol.id`,
-      [bill.purchase_order_id]
+    // 'receipt' = the accountant matching the bill to the goods that actually
+    // arrived. The receipt's quantities are kept as-is — they are the fact —
+    // but a receipt that would push the PO past what was ordered, because a
+    // sibling bill is holding the difference, is refused by name instead of
+    // being silently double-billed.
+    const remainingByPoLine = new Map(
+      remainingLines.map((line) => [line.purchase_order_line_id, line])
     );
-    sourceLines = linesResult.rows as SourceLine[];
+    for (const source of sourceLines) {
+      const remaining = remainingByPoLine.get(source.purchase_order_line_id);
+      if (!remaining) continue;
+      if (source.qty > remaining.qty_remaining) {
+        return res.status(422).json({
+          error: qtyExceedsRemainingMessage(remaining, source.sku),
+          code: "qty_exceeds_remaining",
+          purchase_order_line_id: source.purchase_order_line_id,
+          qty_remaining: remaining.qty_remaining,
+          billed_on: remaining.billed_on,
+        });
+      }
+    }
   }
 
   if (sourceLines.length === 0) {
     return res.status(409).json({
-      error: "The selected source has no billable lines",
-      code: "no_source_lines",
+      error:
+        parsed.data.source === "receipt" || remainingLines.length === 0
+          ? "The selected source has no billable lines"
+          : "Every ordered unit on this purchase order is already billed on another bill.",
+      code:
+        parsed.data.source === "receipt" || remainingLines.length === 0
+          ? "no_source_lines"
+          : "po_fully_billed",
     });
   }
 
