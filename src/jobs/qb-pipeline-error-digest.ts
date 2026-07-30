@@ -565,7 +565,12 @@ export async function buildDigestEmail(
       admin_path: "/qb-pipeline",
       rows: missingBills.map((r) => ({
         id: r.id,
-        medusa_ref: r.number ?? r.id,
+        // Adopted bills carry no VB number by design, and every bill this section
+        // reports so far is adopted — so falling straight back to the id printed a
+        // raw ULID in the first column an operator reads. The vendor's own
+        // reference is repeated from the next column on purpose: saying
+        // "FTL - 1573151" twice beats saying "vb_01KY92S0J7R2J6Y749WKXWCHJ7" once.
+        medusa_ref: r.number ?? r.qb_ref_number ?? r.id,
         qb_ref: r.qb_ref_number ?? r.qb_txn_id ?? "",
         step: r.qb_source === "adopted" ? "adopted bill" : "bill",
         error: `${r.vendor_name_snapshot ?? "unknown vendor"} — ${
