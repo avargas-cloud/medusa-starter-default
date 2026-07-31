@@ -1,0 +1,149 @@
+/**
+ * The FIFO that decides which delivery still holds the units in the air.
+ *
+ * WHY THIS FILE EXISTS AT ALL
+ * `resolveInboundBySku` is verified end to end against the sandbox — except for
+ * one branch, which the sandbox cannot produce: a PO carrying SEVERAL deliveries
+ * AND having received part of its goods. The sandbox has PO-1119 (two
+ * deliveries, nothing received) and PO-1110 (294 of 344 received, one delivery).
+ * Neither exercises the tie-break, and the tie-break is the whole reason the
+ * function exists. So it is proven here, on synthetic input, or nowhere.
+ */
+
+import { inTransitPerDelivery } from "../../lib/purchase-orders/inbound-by-sku";
+import type { PoShipmentView } from "../../lib/purchase-orders/po-tracking-read";
+
+const LINE = "poline_1";
+
+function shipment(
+  id: string,
+  opts: {
+    scope?: "all_order" | "by_line";
+    qty?: number;
+    carrierStatus?: string;
+  } = {}
+): PoShipmentView {
+  const scope = opts.scope ?? "by_line";
+  return {
+    id,
+    purchase_order_id: "po_1",
+    scope,
+    created_at: `2026-07-0${id.slice(-1)}T00:00:00.000Z`,
+    created_by_user_id: null,
+    numbers: [],
+    lines:
+      scope === "by_line"
+        ? [
+            {
+              purchase_order_line_id: LINE,
+              sku_snapshot: "SKU-1",
+              description_snapshot: "",
+              qty: opts.qty ?? 0,
+            },
+          ]
+        : [],
+    carrier_eta: null,
+    master: {
+      id: `${id}_n`,
+      provider: "fedex",
+      tracking_number: `TRK-${id}`,
+      tracking_url: "",
+      is_master: true,
+      carrier_eta: null,
+      carrier_status: opts.carrierStatus ?? "pending",
+      carrier_eta_fetched_at: null,
+      carrier_detail: null,
+    },
+  };
+}
+
+describe("inTransitPerDelivery", () => {
+  it("leaves every allocation flying when nothing has been received", () => {
+    const out = inTransitPerDelivery(
+      [shipment("s1", { qty: 20 }), shipment("s2", { qty: 30 })],
+      LINE,
+      50,
+      0
+    );
+
+    expect(out.get("s1")).toBe(20);
+    expect(out.get("s2")).toBe(30);
+  });
+
+  // The branch with no fixture in the sandbox.
+  it("consumes received units off the OLDEST delivery first", () => {
+    const out = inTransitPerDelivery(
+      [shipment("s1", { qty: 20 }), shipment("s2", { qty: 30 })],
+      LINE,
+      50,
+      20
+    );
+
+    expect(out.has("s1")).toBe(false); // fully landed
+    expect(out.get("s2")).toBe(30); // untouched
+  });
+
+  it("spills into the next delivery when the first cannot absorb the receipt", () => {
+    const out = inTransitPerDelivery(
+      [shipment("s1", { qty: 20 }), shipment("s2", { qty: 30 })],
+      LINE,
+      50,
+      35
+    );
+
+    expect(out.has("s1")).toBe(false);
+    expect(out.get("s2")).toBe(15); // 30 - the 15 that spilled over
+  });
+
+  it("drops a delivery the carrier already delivered, wherever it sits", () => {
+    const out = inTransitPerDelivery(
+      [
+        shipment("s1", { qty: 20 }),
+        shipment("s2", { qty: 30, carrierStatus: "delivered" }),
+      ],
+      LINE,
+      50,
+      0
+    );
+
+    // s2 landed even though no receipt was posted — carrier state is not a guess.
+    expect(out.get("s1")).toBe(20);
+    expect(out.has("s2")).toBe(false);
+  });
+
+  it("gives an all_order delivery the whole shippable line, cancellations off", () => {
+    const out = inTransitPerDelivery(
+      [shipment("s1", { scope: "all_order" })],
+      LINE,
+      40, // 50 ordered - 10 cancelled
+      0
+    );
+
+    expect(out.get("s1")).toBe(40);
+  });
+
+  it("never emits more than the line can still ship", () => {
+    const out = inTransitPerDelivery(
+      [shipment("s1", { qty: 20 }), shipment("s2", { qty: 30 })],
+      LINE,
+      50,
+      50 // everything already arrived
+    );
+
+    expect(out.size).toBe(0);
+  });
+
+  it("ignores allocations belonging to another line of the same PO", () => {
+    const other = shipment("s1", { qty: 20 });
+    other.lines = [
+      {
+        purchase_order_line_id: "poline_OTHER",
+        sku_snapshot: "SKU-9",
+        description_snapshot: "",
+        qty: 20,
+      },
+    ];
+
+    expect(inTransitPerDelivery([other], LINE, 50, 0).size).toBe(0);
+  });
+});

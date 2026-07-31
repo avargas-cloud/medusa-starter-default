@@ -13,9 +13,10 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getPurchaseOrdersService } from "../_lib/service-resolver";
-
-const ACTIVE_STATUSES = ["submitted", "partially_received"] as const;
-const ACTIVE_LINE_STATUSES = ["open", "partial"] as const;
+import {
+  ACTIVE_PO_STATUSES as ACTIVE_STATUSES,
+  ACTIVE_PO_LINE_STATUSES as ACTIVE_LINE_STATUSES,
+} from "../_lib/po-active-status";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
