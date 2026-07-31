@@ -20,6 +20,10 @@ import { zodErrorToBody } from "./_lib/format";
 import { getPurchaseOrdersService } from "./_lib/service-resolver";
 import { computeTotals, normalizeLine } from "./_lib/totals";
 import {
+  enrichTrackingSummaryMap,
+  type TrackingSummary,
+} from "./_lib/tracking-summary";
+import {
   ALLOWED_STATUS_VALUES,
   createDraftSchema,
   listQuerySchema,
@@ -110,11 +114,22 @@ export async function GET(
     } catch {
       // Non-fatal: fall back to no billed_status decoration.
     }
+    // Tracking lives in its own tables since the deliveries migration; the
+    // `tracking` jsonb column on the model is a frozen pre-migration snapshot
+    // that no writer maintains. Hydrating here is what stops the list from
+    // contradicting the PO's own page. See _lib/tracking-summary.ts.
+    let trackingMap: Map<string, TrackingSummary> = new Map();
+    try {
+      trackingMap = await enrichTrackingSummaryMap(knex, typedRows);
+    } catch {
+      // Non-fatal: fall back to no tracking decoration.
+    }
     purchase_orders = typedRows.map((r) => ({
       ...r,
       china_transfer: ctMap.get(r.id) ?? null,
       billed_status: billedMap.get(r.id)?.billed_status ?? "no",
       billed_qty: billedMap.get(r.id)?.billed_qty ?? 0,
+      tracking_summary: trackingMap.get(r.id) ?? null,
     }));
   } catch {
     // Non-fatal: fall back to raw rows without china_transfer decoration.
