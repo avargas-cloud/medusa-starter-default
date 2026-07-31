@@ -2,9 +2,28 @@
  * China Finance — Rule 6: split a bill for a PARTIAL payment.
  *
  * When staff decide to pay only part of a bill on a DRAFT wire, the bill becomes
- * "Partial #1" (the amount paid, staying on the wire) and a new unassigned
- * "Partial #(k+1)" record is created for the deferred remainder — schedulable on
- * a future wire. Total is preserved: Partial#1 + remainder == the bill's amount.
+ * "Partial #1" (what's already settled plus what's paid now, staying on the
+ * wire) and a new unassigned "Partial #(k+1)" record is created for the deferred
+ * remainder — schedulable on a future wire. Total is preserved:
+ * Partial#1 + remainder == the bill's amount.
+ *
+ * EVERYTHING here is measured against the SCHEDULABLE balance
+ * (`max(amount − Σ confirmed, 0)`), never against `amount_cents` raw. A bill that
+ * was paid in full and then corrected UPWARD still owes only the correction, and
+ * splitting it as if nothing had been paid is not a rounding error — it detaches
+ * the confirmed payment from the money it settled:
+ *
+ *   VB-1053 / V260706-I1 was paid in full at $3,763.37 (wire confirmed Jul 27),
+ *   then a receipt correction raised it to $3,775.15. Paying the $11.78 owed made
+ *   the old code shrink the ROOT — the row carrying that confirmed payment — to
+ *   $11.78 and hand the $3,763.37 to a brand-new unpaid row. The screen then
+ *   reported a $3,751.59 credit that nobody was owed and re-billed $3,763.37 that
+ *   was already paid. The two errors are the same figure with opposite signs, so
+ *   the ledger's bottom line still landed on zero and nothing raised an alarm.
+ *
+ * Hence: the root keeps `confirmed + payNow`, so its settled money always has a
+ * bill to sit on, and only what is genuinely deferred moves to the new row. With
+ * no confirmed payments this reduces exactly to the old behaviour.
  *
  * The wire amount itself is NOT touched here — the Manage Drafts modal owns the
  * wire total (it auto-tracks Σ paid, or a manual override).
@@ -12,6 +31,7 @@
 
 import { randomUUID } from "crypto";
 import type { PgConn } from "./bill-delta-engine";
+import { schedulableCents } from "./schedulable-amount";
 
 export interface SplitResult {
   rootBillId: string;
@@ -89,24 +109,56 @@ export async function splitBillForPartialPayment(
   if (!locked.app_id) {
     throw new Error(`split: bill ${billId} must be on a draft wire to split a partial payment`);
   }
-  if (!Number.isInteger(payNowCents) || payNowCents < 1 || payNowCents >= locked.amount_cents) {
-    throw new Error(`split: pay_now_cents ${payNowCents} must be between 1 and ${locked.amount_cents - 1}`);
+  // Money already settled on CONFIRMED wires. It is not revalidated and not
+  // moved — it only tells us how much of this bill is still open. Read under the
+  // same lock as the amount, or the two could disagree.
+  const confirmedCents = Number(
+    (
+      await q<{ confirmed_cents: string }>(
+        db,
+        `SELECT COALESCE(SUM(app.applied_cents), 0)::bigint AS confirmed_cents
+           FROM china_wire_transfer_application app
+           JOIN china_wire_transfer w ON w.id = app.wire_transfer_id
+          WHERE app.bill_id = ? AND w.status = 'confirmed'`,
+        [billId]
+      )
+    )[0]?.confirmed_cents ?? "0"
+  );
+  const openCents = schedulableCents(locked.amount_cents, confirmedCents);
+
+  if (!Number.isInteger(payNowCents) || payNowCents < 1 || payNowCents > openCents) {
+    throw new Error(
+      `split: pay_now_cents ${payNowCents} must be between 1 and ${openCents} — ` +
+        `the bill is ${locked.amount_cents}¢ with ${confirmedCents}¢ already confirmed`
+    );
+  }
+  // Paying the whole open balance defers nothing, so there is no second partial
+  // to create. Rejected loudly rather than no-op'd: a caller that asked to split
+  // has a wrong idea of what this bill owes, and a silent success would let that
+  // idea survive.
+  if (payNowCents === openCents) {
+    throw new Error(
+      `split: pay_now_cents ${payNowCents} covers the whole open balance — ` +
+        `nothing is deferred, so there is nothing to split. Apply it to the wire instead.`
+    );
   }
   if (locked.wire_id) {
     await db.raw(`SELECT id FROM china_wire_transfer WHERE id = ? FOR UPDATE`, [locked.wire_id]);
   }
 
-  const remainder = locked.amount_cents - payNowCents;
+  const remainder = openCents - payNowCents;
 
-  // Partial #1 = this bill, reduced to what's paid now (promote to a split group
-  // if it wasn't one). Its draft application follows to the same amount.
+  // Partial #1 = this bill, holding what's already settled plus what's paid now
+  // (promote to a split group if it wasn't one). Its DRAFT application follows
+  // `payNowCents` alone — the confirmed applications are untouched, so the row
+  // must stay large enough to carry them.
   await db.raw(
     `UPDATE china_finance_bill
         SET amount_cents = ?, split_group_id = COALESCE(split_group_id, id),
             partial_seq = COALESCE(partial_seq, 1), split_version = split_version + 1,
             updated_at = now()
       WHERE id = ?`,
-    [payNowCents, billId]
+    [confirmedCents + payNowCents, billId]
   );
   await db.raw(
     `UPDATE china_wire_transfer_application SET applied_cents = ?, updated_at = now() WHERE id = ?`,
@@ -228,7 +280,30 @@ export async function mergePartialToAmount(
 
   await db.raw(`UPDATE china_finance_bill SET amount_cents = ?, updated_at = now() WHERE id = ?`, [newAmountCents, billId]);
   if (tgt.draft_app_id) {
-    await db.raw(`UPDATE china_wire_transfer_application SET applied_cents = ?, updated_at = now() WHERE id = ?`, [newAmountCents, tgt.draft_app_id]);
+    // The draft application pays what's OPEN, not the whole partial. Writing
+    // `newAmountCents` here is the mirror of the split bug: on a partial that
+    // already carries a confirmed payment it would re-schedule money that was
+    // wired months ago, inflating the draft wire by exactly that amount.
+    const tgtConfirmed = Number(
+      (
+        await q<{ confirmed_cents: string }>(
+          db,
+          `SELECT COALESCE(SUM(app.applied_cents), 0)::bigint AS confirmed_cents
+             FROM china_wire_transfer_application app
+             JOIN china_wire_transfer w ON w.id = app.wire_transfer_id
+            WHERE app.bill_id = ? AND w.status = 'confirmed'`,
+          [billId]
+        )
+      )[0]?.confirmed_cents ?? "0"
+    );
+    const draftApplied = schedulableCents(newAmountCents, tgtConfirmed);
+    if (draftApplied < 1) {
+      throw new Error(
+        `merge: raising ${billId} to ${newAmountCents}¢ leaves nothing for its draft wire ` +
+          `(${tgtConfirmed}¢ already confirmed) — unassign it from the draft first`
+      );
+    }
+    await db.raw(`UPDATE china_wire_transfer_application SET applied_cents = ?, updated_at = now() WHERE id = ?`, [draftApplied, tgt.draft_app_id]);
   }
 
   const remaining = Number(

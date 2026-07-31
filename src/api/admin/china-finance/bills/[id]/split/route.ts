@@ -49,7 +49,7 @@ export const POST = async (
     if (trx) await trx.rollback();
     const msg = err instanceof Error ? err.message : String(err);
     if (/not found/i.test(msg)) return res.status(404).json({ message: msg });
-    if (/not splittable|must be on a draft|must be between/i.test(msg)) {
+    if (/not splittable|must be on a draft|must be between|nothing to split/i.test(msg)) {
       return res.status(400).json({ message: msg });
     }
     throw err;
