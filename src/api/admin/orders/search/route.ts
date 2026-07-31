@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { hydrateOrderRows } from "../_lib/hydrate-order-rows";
 
 /**
  * GET /admin/orders/search?q=<term>
@@ -11,38 +12,18 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
  *   • company name
  *   • QB SO/Invoice ref numbers
  *
- * Returns the same `{ orders: [...] }` shape as `/admin/orders` so the
- * frontend can swap data sources transparently. Hits are hydrated from
- * Medusa with the standard FIELDS the orders list view needs.
+ * MeiliSearch decides WHICH orders match; the shared projection in
+ * _lib/hydrate-order-rows says what each one IS. Returns the same
+ * `{ orders: [...] }` shape as /admin/orders/filter, which is the point: the
+ * POS swaps between the two by tab, and until 2026-07-31 they disagreed. This
+ * route hydrated through query.graph asking for `payment_status` and
+ * `fulfillment_status`, which Medusa computes rather than stores — query.graph
+ * returns neither and raises nothing — so searching blanked the FULFILLMENT
+ * column and pushed healthy orders into "Missing in QB", whose fallback reads
+ * exactly those two fields.
  */
 
 const ORDERS_INDEX = "orders";
-
-const HYDRATE_FIELDS = [
-  "id",
-  "display_id",
-  "status",
-  "payment_status",
-  "fulfillment_status",
-  "total",
-  "created_at",
-  "email",
-  "metadata",
-  "summary.*",
-  "customer.first_name",
-  "customer.last_name",
-  "customer.email",
-  "customer.phone",
-  "customer.company_name",
-  "billing_address.company",
-  "sales_channel.id",
-  "sales_channel.name",
-  "payment_collections.captured_amount",
-  "payment_collections.refunded_amount",
-  "shipping_methods.name",
-  "shipping_methods.amount",
-  "shipping_methods.tax_total",
-];
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const q = (req.query.q as string | undefined)?.trim() ?? "";
@@ -79,13 +60,17 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const meiliRes = await meili.index(ORDERS_INDEX).search(searchTerm, {
       limit,
-      attributesToRetrieve: ["id", "display_id"],
+      // The index sets displayedAttributes to ["id"], so a hit carries the id
+      // and nothing else no matter what is asked for here. Asking for more is
+      // not an error — it is silently ignored, which is why this used to
+      // request a `display_id` that never once arrived.
+      attributesToRetrieve: ["id"],
       sort: ["created_at_ts:desc"],
       filter: "is_draft = false",
     });
 
     const ids: string[] = meiliRes.hits
-      .map((h: any) => h?.id)
+      .map((h: unknown) => (h as { id?: unknown })?.id)
       .filter((id: unknown): id is string => typeof id === "string" && !!id);
 
     if (ids.length === 0) {
@@ -97,30 +82,23 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       });
     }
 
-    const query = (req.scope as any).resolve("query");
-    const { data: hydrated } = await query.graph({
-      entity: "order",
-      fields: HYDRATE_FIELDS,
-      filters: { id: ids },
-    });
-
-    // Preserve Meili's relevance ordering instead of Medusa's.
-    const byId = new Map<string, any>();
-    for (const o of hydrated || []) {
-      if (o?.id) byId.set(o.id, o);
-    }
-    const ordered = ids.map((id) => byId.get(id)).filter(Boolean);
+    // Hydrated in MeiliSearch's order, which is relevance rather than date —
+    // hydrateOrderRows preserves the sequence it is handed.
+    const orders = await hydrateOrderRows(
+      req,
+      ids.map((id) => ({ id }))
+    );
 
     return res.json({
-      orders: ordered,
+      orders,
       query: meiliRes.query,
       processingTimeMs: meiliRes.processingTimeMs,
       estimatedTotalHits: meiliRes.estimatedTotalHits,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return res.status(500).json({
       error: "search_failed",
-      message: err?.message || "Unknown error",
+      message: err instanceof Error ? err.message : "Unknown error",
       orders: [],
     });
   }
