@@ -305,18 +305,21 @@ export async function POST(
   // Miami increases but China never decreases → phantom double-count.
   const itCheckRows = (
     await knex.raw(
-      `SELECT id, status FROM inventory_transfer
+      `SELECT id, number, status FROM inventory_transfer
         WHERE linked_purchase_order_id = ?
           AND deleted_at IS NULL
           AND status NOT IN ('received', 'voided', 'cancelled')
         LIMIT 1`,
       [id]
     )
-  ).rows as Array<{ id: string; status: string }>;
+  ).rows as Array<{ id: string; number: string | null; status: string }>;
   const pendingTransfer = itCheckRows[0];
   if (pendingTransfer && pendingTransfer.status !== "shipped") {
+    // Human-readable IT number (e.g. "IT-1041"); fall back to the id only if a
+    // legacy row has no number, so the message is never empty.
+    const transferLabel = pendingTransfer.number ?? pendingTransfer.id;
     return res.status(409).json({
-      error: `This PO is linked to an inventory transfer (${pendingTransfer.id}) currently in '${pendingTransfer.status}' status. Mark the transfer as shipped before receiving to ensure China stock is correctly decremented.`,
+      error: `This PO is linked to inventory transfer ${transferLabel}, currently in '${pendingTransfer.status}' status. Mark ${transferLabel} as shipped before receiving to ensure China stock is correctly decremented.`,
       code: "transfer_not_shipped",
     });
   }
