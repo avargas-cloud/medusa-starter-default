@@ -10,6 +10,11 @@ import {
   writePipelineRow,
   getCachedEditSequence,
 } from "../../../../../lib/quickbooks/qb-pipeline";
+import {
+  claimWriteCheckAttempt,
+  releaseWriteCheckClaim,
+  writeCheckIdempotencyKey,
+} from "../../../../../lib/quickbooks/pipeline/claim-write-check";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -31,12 +36,11 @@ const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
  *   - Legacy:    separate record with type='refund'
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
-  const { customer_payment_id, qb_bank_account_id, refund_date } =
-    req.body as {
-      customer_payment_id: string;
-      qb_bank_account_id: string;
-      refund_date?: string;
-    };
+  const { customer_payment_id, qb_bank_account_id, refund_date } = req.body as {
+    customer_payment_id: string;
+    qb_bank_account_id: string;
+    refund_date?: string;
+  };
 
   if (!customer_payment_id || !qb_bank_account_id) {
     return res
@@ -69,7 +73,18 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!isLegacyRefund && !isNewStyleRefund) {
     return res.status(400).json({ error: "Payment is not a refund" });
   }
-  if (payment.qb?.status === "yes") {
+  // `qb.status === 'yes'` alone does NOT mean "this refund has a Write Check":
+  // on a type='credit_memo' payment the credit-memo confirm handler stamps
+  // { status: 'yes', txn_id: <CreditMemo TxnID> } (poll-submitted-rows.ts), so a
+  // store-credit refund whose CM synced first was blocked here forever. The only
+  // marker of a live check is `check_txn_id` (written by the write_check confirm);
+  // status flips to 'voided' after a revert, which must stay re-syncable.
+  // Same predicate as qb-refunds/[id]/revert and /void.
+  const paymentQb = payment.qb as
+    | { status?: string; check_txn_id?: string | null }
+    | null
+    | undefined;
+  if (paymentQb?.status === "yes" && paymentQb.check_txn_id) {
     return res.status(400).json({ error: "Already synced to QuickBooks" });
   }
 
@@ -216,35 +231,71 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.json({ success: true, dry_run: true, refund_date: refundDate });
   }
 
+  // 4b. CLAIM antes de tocar el bridge. El guard 1a de arriba es un SELECT y no
+  //     puede cubrir dos requests concurrentes ni un reintento tras una respuesta
+  //     perdida; esto gana la fila de pipeline primero (índice único parcial
+  //     uq_qb_pipeline_write_check_live) y recién después emite el CheckAdd, que
+  //     NO es idempotente. El id de la fila es el token de la idempotency key.
+  const claim = await claimWriteCheckAttempt({
+    referenceId: customer_payment_id,
+    medusaRefNumber: medusaRef,
+    payload: { bankAccountId: qb_bank_account_id, txnDate: refundDate },
+  });
+  if (!claim.ok) {
+    return res.status(409).json({
+      error:
+        "A QB Write Check for this refund is already in flight. Wait for it to confirm or fail before retrying.",
+      code: "WRITE_CHECK_IN_FLIGHT",
+    });
+  }
+
   // 5. Enqueue CheckAdd to bridge
   let enqueueRes: any;
   try {
-    enqueueRes = await bridgeFetch("POST", "/api/sync/enqueue", {
-      type: "check",
-      action: "add",
-      data: {
-        AccountRef: { ListID: bank.list_id },
-        PayeeEntityRef: { ListID: customerListId },
-        RefNumber: refLabel,
-        TxnDate: refundDate,
-        Memo: `POS Refund - ${refLabel}`,
-        ExpenseLineAdd: [
-          {
-            AccountRef: { FullName: "Accounts Receivable" },
-            Amount: amountDollars,
-            Memo: `Refund for ${refLabel}`,
-            CustomerRef: { ListID: customerListId },
-          },
-        ],
+    enqueueRes = await bridgeFetch(
+      "POST",
+      "/api/sync/enqueue",
+      {
+        type: "check",
+        action: "add",
+        data: {
+          AccountRef: { ListID: bank.list_id },
+          PayeeEntityRef: { ListID: customerListId },
+          RefNumber: refLabel,
+          TxnDate: refundDate,
+          Memo: `POS Refund - ${refLabel}`,
+          ExpenseLineAdd: [
+            {
+              AccountRef: { FullName: "Accounts Receivable" },
+              Amount: amountDollars,
+              Memo: `Refund for ${refLabel}`,
+              CustomerRef: { ListID: customerListId },
+            },
+          ],
+        },
       },
-    });
+      // 1:1 con el cheque que este intento crea. Si el ADD entró pero perdimos la
+      // respuesta, el reintento reusa la fila reclamada ⇒ la misma key ⇒ el bridge
+      // devuelve la op existente en vez de mintear un segundo cheque.
+      { idempotencyKey: writeCheckIdempotencyKey(claim.rowId) }
+    );
   } catch (e: any) {
+    // El ADD no llegó a QuickBooks: liberar el claim para que el operador pueda
+    // reintentar (y que ese reintento conserve la key de este intento).
+    await releaseWriteCheckClaim(
+      claim.rowId,
+      `Bridge enqueue failed: ${e.message}`
+    );
     return res
       .status(500)
       .json({ error: `Bridge enqueue failed: ${e.message}` });
   }
 
   if (!enqueueRes?.operation_id) {
+    await releaseWriteCheckClaim(
+      claim.rowId,
+      "Bridge did not return operation_id"
+    );
     return res
       .status(500)
       .json({ error: "Bridge did not return operation_id" });
