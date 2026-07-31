@@ -451,6 +451,11 @@ export async function resubmitByStep(
               application_id:
                 (payload?.application_id as string | undefined) ??
                 row.reference_id,
+              // This pass already claimed the row (FOR UPDATE SKIP LOCKED →
+              // status 'processing') before calling. Telling the handler which
+              // row we own stops its own claim from mistaking OUR lock for a
+              // rival dispatcher's and refusing to dispatch at all.
+              claimed_pipeline_row_id: row.id,
             },
           },
           container,

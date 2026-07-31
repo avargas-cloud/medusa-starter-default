@@ -84,6 +84,65 @@ async function resolveInvoicePipelineRowId(
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
 
+type ApplyClaim =
+  | { outcome: "claimed" }
+  | { outcome: "no_row" }
+  | { outcome: "held_by_other"; rowId: string; status: string };
+
+/**
+ * Cross-process claim on the apply_payment row, taken immediately before the
+ * bridge call.
+ *
+ * WHY IT IS IN THE DATABASE AND NOT `withQbLockResult`
+ * `qb-locks.ts` is a `Map` in the Node process, so it serialises the SERVER
+ * against itself and the WORKER against itself — and never one against the
+ * other. In production those are two Railway services (medusa-starter-default
+ * and medusa-worker), so the lock is blind to exactly the pair that collides.
+ * On 2026-07-30 the SERVER dispatched the apply for PAY-3309 at 14:14:29 and
+ * the WORKER dispatched the SAME apply at 14:15:29; the SERVER's landed at
+ * 14:16:20 (EditSequence 1785420858 → 1785420980) and the WORKER's died at
+ * 14:17:22 with QuickBooks Error 3200. Postgres is the only thing both
+ * processes share, so the claim has to live there.
+ *
+ * Taken LATE on purpose: every early return above this point (missing document,
+ * quiescence deferral, zero aggregate) leaves the row untouched, so none of them
+ * can strand it in `processing` — the failure mode that already stranded a
+ * payment row in sandbox testing.
+ *
+ * The consolidator passes `preClaimedRowId` because it already claimed the row
+ * with `FOR UPDATE SKIP LOCKED` before calling; re-claiming would see its own
+ * `processing` and refuse.
+ */
+export async function claimApplyPaymentRow(
+  pool: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+  orderId: string,
+  referenceId: string,
+  preClaimedRowId: string | null
+): Promise<ApplyClaim> {
+  const { rows: current } = await pool.query(
+    `SELECT id, status FROM qb_order_pipeline
+      WHERE step = 'apply_payment' AND order_id = $1 AND reference_id = $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [orderId, referenceId]
+  );
+  const row = current[0];
+  // No row at all: preserve the pre-existing behaviour (the handler writes its
+  // own rows via onQueued). Nothing to exclude against.
+  if (!row) return { outcome: "no_row" };
+  if (preClaimedRowId && row.id === preClaimedRowId) return { outcome: "claimed" };
+
+  const { rows: claimed } = await pool.query(
+    `UPDATE qb_order_pipeline
+        SET status = 'processing', updated_at = NOW()
+      WHERE id = $1
+        AND status IN ('waiting', 'pending', 'failed')
+     RETURNING id`,
+    [row.id]
+  );
+  if (claimed.length > 0) return { outcome: "claimed" };
+  return { outcome: "held_by_other", rowId: row.id, status: String(row.status) };
+}
+
 export async function handlePosPaymentApplied({
   event,
   container,
@@ -539,6 +598,24 @@ export async function handlePosPaymentApplied({
       logger.warn(`${LOG_PREFIX} Could not write submitted row: ${e.message}`)
     );
   };
+
+  // ── Cross-process claim ───────────────────────────────────────────────────
+  // Last gate before the bridge. Whichever dispatcher gets here first owns the
+  // dispatch; the loser returns without calling QuickBooks. See
+  // claimApplyPaymentRow for why this cannot be an in-process lock.
+  const claim = await claimApplyPaymentRow(
+    getDbPool(),
+    order_id,
+    applyReferenceId,
+    (event.data?.claimed_pipeline_row_id as string | undefined) ?? null
+  );
+  if (claim.outcome === "held_by_other") {
+    logger.info(
+      `${LOG_PREFIX} ⏭️ apply_payment already claimed by another dispatcher ` +
+        `(row ${claim.rowId} is '${claim.status}') — not dispatching a second ReceivePaymentMod`
+    );
+    return;
+  }
 
   await withQbLockResult(`qb-payment:${paymentTxnId}`, async () => {
     const applyResult = isCreditMemoPayment
