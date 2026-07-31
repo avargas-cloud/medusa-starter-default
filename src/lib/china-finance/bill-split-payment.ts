@@ -318,3 +318,175 @@ export async function mergePartialToAmount(
 
   return { rootBillId: groupId, mergedIntoId: billId, deletedPartialIds, collapsedToUnsplit, newAmountCents };
 }
+
+export interface MaterializeResult {
+  rootBillId: string;
+  paidTrancheId: string;
+  paidCents: number;
+  openTrancheId: string;
+  openCents: number;
+  movedDraftApplications: number;
+}
+
+/**
+ * Show a bill that was PAID SHORT as two ledger records: what was paid, and what
+ * is still owed.
+ *
+ * This is NOT `splitBillForPartialPayment` and must never be folded into it.
+ * That one answers "I am paying part of this now and deferring the rest" — a
+ * decision about the future, taken on a draft wire. This one answers "this was
+ * already paid short, show me the two pieces" — a statement about the past,
+ * whose amounts are dictated by money that has already left the bank. Reusing
+ * the split for it is what inverted VB-1053: the split had no idea the bill was
+ * already paid, so it treated the $11.78 still owed as the paid part.
+ *
+ * The China Finance ledger is a PLANNING tool — it schedules wires to the China
+ * partner and tracks what is owed. It posts nothing, and touches neither
+ * QuickBooks nor the vendor bill. So two records here are two lines of a payment
+ * plan for ONE invoice, not two invoices; the vendor issued one document and it
+ * stays one document.
+ *
+ * WHAT THIS DOES, AND THE ONE PART THAT IS EASY TO GET WRONG
+ * ----------------------------------------------------------
+ *   Partial #1 (the ROOT, keeps `vendor_bill_id`) = Σ CONFIRMED — money gone.
+ *   Partial #2 (new, unassigned identity)         = amount − Σ CONFIRMED.
+ *
+ * and then the part that decides whether the screen makes sense: **the DRAFT
+ * applications move to Partial #2.** Leaving them on the root would put the
+ * already-paid record on two wires at once while the record that actually owes
+ * money has none — which sends it to the bottom of the ledger, away from its due
+ * date and its wire. That is precisely the placement the operator objected to.
+ *
+ * Confirmed applications are never touched, never revalidated, never moved.
+ */
+export async function materializePaidShortTranches(
+  db: PgConn,
+  input: { billId: string }
+): Promise<MaterializeResult> {
+  const { billId } = input;
+
+  const bill = (
+    await q<BillMeta>(
+      db,
+      `SELECT id, type, document_type, sort_order, invoice_number, po_number,
+              po_ref_number, payee, description, document_date::text AS document_date,
+              due_date::text AS due_date, split_group_id
+         FROM china_finance_bill WHERE id = ?`,
+      [billId]
+    )
+  )[0];
+  if (!bill) throw new Error(`materialize: bill ${billId} not found`);
+  if (bill.type === "bank_fee" || bill.document_type === "opening_balance") {
+    throw new Error(`materialize: ${bill.type}/${bill.document_type} bills are not splittable`);
+  }
+  if (bill.split_group_id !== null) {
+    throw new Error(`materialize: bill ${billId} is already shown as partials`);
+  }
+
+  await db.raw(`SELECT pg_advisory_xact_lock(hashtext('cf_group:' || ?))`, [billId]);
+
+  const locked = (
+    await q<{ amount_cents: number }>(
+      db,
+      `SELECT amount_cents FROM china_finance_bill WHERE id = ? FOR UPDATE`,
+      [billId]
+    )
+  )[0];
+  if (!locked) throw new Error(`materialize: bill ${billId} vanished`);
+
+  const confirmedCents = Number(
+    (
+      await q<{ confirmed_cents: string }>(
+        db,
+        `SELECT COALESCE(SUM(app.applied_cents), 0)::bigint AS confirmed_cents
+           FROM china_wire_transfer_application app
+           JOIN china_wire_transfer w ON w.id = app.wire_transfer_id
+          WHERE app.bill_id = ? AND w.status = 'confirmed'`,
+        [billId]
+      )
+    )[0]?.confirmed_cents ?? "0"
+  );
+
+  // Both ends are refused for the same reason: there would be nothing to see.
+  // Nothing confirmed → the bill is simply unpaid, one record already says so.
+  // Confirmed ≥ amount → it is paid (or overpaid, which the credit path shows);
+  // a second record of $0 or a negative one is noise, not evidence.
+  if (confirmedCents <= 0) {
+    throw new Error(
+      `materialize: bill ${billId} has no confirmed payment — there is no short payment to show`
+    );
+  }
+  const openCents = schedulableCents(locked.amount_cents, confirmedCents);
+  if (openCents <= 0) {
+    throw new Error(
+      `materialize: bill ${billId} owes nothing (${locked.amount_cents}¢ with ` +
+        `${confirmedCents}¢ confirmed) — there is no short payment to show`
+    );
+  }
+
+  // Partial #1 — the root, reduced to the money actually gone. It keeps
+  // `vendor_bill_id`, so it stays the row every other reader resolves the
+  // invoice through.
+  await db.raw(
+    `UPDATE china_finance_bill
+        SET amount_cents = ?, split_group_id = id, partial_seq = 1,
+            split_version = split_version + 1, updated_at = now()
+      WHERE id = ?`,
+    [confirmedCents, billId]
+  );
+
+  // Partial #2 — what is still owed. Its description says WHY the record exists,
+  // instead of repeating the parent's "COMMERCIAL INVOICE": a reader landing on
+  // this row months from now should not have to reconstruct that it is the tail
+  // of a short payment. Named after the vendor bill, which is what the operator
+  // reconciles against.
+  const vbNumber = (
+    await q<{ number: string | null }>(
+      db,
+      `SELECT vb.number
+         FROM china_finance_bill b
+         JOIN vendor_bill vb ON vb.id = b.vendor_bill_id
+        WHERE b.id = ?`,
+      [billId]
+    )
+  )[0]?.number;
+  const openDescription = vbNumber
+    ? `Short payment — balance owed on ${vbNumber}`
+    : `Short payment — balance owed on ${bill.invoice_number ?? "this invoice"}`;
+
+  const openId = randomUUID();
+  await db.raw(
+    `INSERT INTO china_finance_bill
+       (id, type, sort_order, vendor_bill_id, wire_transfer_id, document_type,
+        invoice_number, po_number, po_ref_number, payee, description, amount_cents,
+        document_date, due_date, split_group_id, partial_seq, split_version)
+     VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)`,
+    [openId, bill.type, bill.sort_order, bill.document_type, bill.invoice_number,
+     bill.po_number, bill.po_ref_number, bill.payee, openDescription, openCents,
+     bill.document_date, bill.due_date, billId]
+  );
+
+  // The draft reservations belong to the record that still owes the money.
+  // UNIQUE(wire_transfer_id, bill_id) is keyed on the bill, so re-pointing the
+  // row at Partial #2 cannot collide with anything on that wire.
+  const moved = await q<{ id: string }>(
+    db,
+    `UPDATE china_wire_transfer_application app
+        SET bill_id = ?, updated_at = now()
+       FROM china_wire_transfer w
+      WHERE w.id = app.wire_transfer_id
+        AND app.bill_id = ?
+        AND w.status = 'draft'
+      RETURNING app.id`,
+    [openId, billId]
+  );
+
+  return {
+    rootBillId: billId,
+    paidTrancheId: billId,
+    paidCents: confirmedCents,
+    openTrancheId: openId,
+    openCents,
+    movedDraftApplications: moved.length,
+  };
+}

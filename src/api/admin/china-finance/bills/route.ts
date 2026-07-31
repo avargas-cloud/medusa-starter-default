@@ -273,7 +273,17 @@ export const GET = async (
      FROM china_wire_transfer_application cwta
      JOIN china_finance_bill cfb ON cfb.id = cwta.bill_id
      JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
-     LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
+     -- Resolve the vendor bill through the GROUP, not just the row. A split
+     -- keeps vendor_bill_id on the root only, so a plain join leaves every
+     -- sibling with an em-dash under Vendor Bill and a dead PO link: the record
+     -- that owes the money looking like it belongs to no invoice. The column
+     -- stays NULL on purpose (it is what keeps the recompute keyed to one row);
+     -- the NUMBER is inherited for display.
+     LEFT JOIN vendor_bill vb
+       ON vb.id = COALESCE(
+            cfb.vendor_bill_id,
+            (SELECT r.vendor_bill_id FROM china_finance_bill r WHERE r.id = cfb.split_group_id)
+          )
      LEFT JOIN paid ON paid.bill_id = cfb.id
     ORDER BY
       cwt.sent_date ASC NULLS LAST,
@@ -341,7 +351,17 @@ export const GET = async (
        vb.purchase_order_id AS po_id,
        (cfb.due_date IS NOT NULL AND cfb.due_date < ?) AS is_past_due
      FROM china_finance_bill cfb
-     LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
+     -- Resolve the vendor bill through the GROUP, not just the row. A split
+     -- keeps vendor_bill_id on the root only, so a plain join leaves every
+     -- sibling with an em-dash under Vendor Bill and a dead PO link: the record
+     -- that owes the money looking like it belongs to no invoice. The column
+     -- stays NULL on purpose (it is what keeps the recompute keyed to one row);
+     -- the NUMBER is inherited for display.
+     LEFT JOIN vendor_bill vb
+       ON vb.id = COALESCE(
+            cfb.vendor_bill_id,
+            (SELECT r.vendor_bill_id FROM china_finance_bill r WHERE r.id = cfb.split_group_id)
+          )
      LEFT JOIN paid ON paid.bill_id = cfb.id
      WHERE GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) > 0
      ORDER BY
