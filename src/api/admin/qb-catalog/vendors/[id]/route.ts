@@ -1,7 +1,21 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../modules/quickbooks-catalog";
+import { pushVendorModToQuickBooks } from "../../../../../lib/quickbooks/qb-vendor-mod";
+import {
+  decideVendorPush,
+  QB_RELEVANT_FIELDS,
+  syncStampForOutcome,
+  termChanged,
+  toVendorSnapshot,
+} from "../../../../../lib/vendor-terms/push";
 import { updateSingleVendorMeiliWorkflow } from "../../../../../workflows/update-single-vendor-meili";
+
+/**
+ * Columns a VendorMod needs. Derived from the shared list so a field added
+ * there can never be silently missing from the snapshot the Mod sends.
+ */
+const QB_SNAPSHOT_FIELDS = [...QB_RELEVANT_FIELDS, "full_name"] as const;
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
@@ -182,9 +196,12 @@ export const PATCH = async (
     return res.status(400).json({ error: "No editable vendor fields provided" });
   }
 
+  // The FULL row, not just id+metadata: a VendorMod carries the complete
+  // snapshot (omission is how BillMod silently deleted data in this codebase),
+  // and deciding whether to push at all needs the "before" values to compare.
   const { data } = await query.graph({
     entity: "qb_vendor",
-    fields: ["id", "metadata"],
+    fields: ["id", "metadata", "qb_list_id", ...QB_SNAPSHOT_FIELDS],
     filters: { id },
     pagination: { skip: 0, take: 1 },
   });
@@ -237,5 +254,66 @@ export const PATCH = async (
       console.error(`[vendor-patch] Meili sync failed for ${id}:`, e?.message)
     );
 
-  return res.json({ success: true, metadata: merged ?? vendor.metadata ?? null });
+  // ── Push to QuickBooks ──────────────────────────────────────────────────────
+  // Since 2026-08-01 the POS is where vendors are authored, so an edit that
+  // QuickBooks cares about has to reach it. This runs AFTER the local write:
+  // the local row is the source of truth and must not be held hostage to a
+  // bridge round trip (3-60s). What it must never do is fail quietly — the
+  // outcome lands on sync_status/last_error, which the vendor page renders.
+  const after = { ...vendor, ...updates };
+  const decision = decideVendorPush(
+    vendor as Record<string, unknown>,
+    after as Record<string, unknown>
+  );
+
+  if (decision.push) {
+    // Stamp 'waiting' synchronously so the page shows the push is in flight
+    // instead of looking synced while the bridge is still chewing on it.
+    await catalog.updateQbVendors({ id, sync_status: "waiting" });
+
+    const snapshot = toVendorSnapshot(after as Record<string, unknown>);
+    void (async () => {
+      try {
+        const result = await pushVendorModToQuickBooks(snapshot);
+        const stamp = syncStampForOutcome(
+          result.ok
+            ? { ok: true }
+            : {
+                ok: false,
+                statusCode: result.statusCode,
+                statusMessage: result.statusMessage,
+              }
+        );
+        await catalog.updateQbVendors({
+          id,
+          ...stamp,
+          ...(result.ok ? { last_synced_at: new Date() } : {}),
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`[vendor-patch] VendorMod failed for ${id}:`, message);
+        await catalog
+          .updateQbVendors({
+            id,
+            sync_status: "error",
+            last_error: `VendorMod did not reach QuickBooks: ${message}`,
+          })
+          .catch(() => undefined);
+      }
+    })();
+  }
+
+  return res.json({
+    success: true,
+    metadata: merged ?? vendor.metadata ?? null,
+    qb_push: {
+      queued: decision.push,
+      reason: decision.reason,
+      changed: decision.changed,
+      term_changed: termChanged(
+        vendor as Record<string, unknown>,
+        after as Record<string, unknown>
+      ),
+    },
+  });
 };

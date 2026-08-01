@@ -13,6 +13,8 @@ import {
 } from "@medusajs/ui";
 import { useState, useEffect, useCallback, useRef } from "react";
 
+import { VendorTermsPanel } from "./components/vendor-terms-panel";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 // data_scope is stored as comma-separated: "customers" | "orders" | "customers,orders"
 // Future doc types can be added (e.g. "invoices", "vendors")
@@ -1493,6 +1495,11 @@ const SystemDefaultsPage = () => {
               (c) =>
                 c !== "Global" &&
                 c !== "Payment Methods" &&
+                // Vendor terms have their own panel: they are a double field
+                // (name + rule) and the generic renderer only knows `value`, so
+                // it would list them with no rule and allow a rename — the one
+                // edit that orphans every vendor pointing at the term.
+                c !== "Vendor Defaults" &&
                 contextGroups[c] &&
                 Object.keys(contextGroups[c]).length > 0
             )
@@ -1601,6 +1608,8 @@ const SystemDefaultsPage = () => {
                 </div>
               </div>
             ))}
+
+          <VendorTermsPanel />
         </>
       )}
 

@@ -37,6 +37,13 @@ export interface QbTermEntry {
   days: number | null;
   /** Day of month the bill is due — date-driven terms only. */
   day_of_month_due: number | null;
+  /**
+   * Date-driven terms only: QuickBooks rolls the due date to the FOLLOWING
+   * month when the bill lands within this many days of the due day. Without it
+   * a bill dated the 19th under a "due the 20th" term reads as due tomorrow,
+   * which is not what QB bills. `null` for standard terms.
+   */
+  due_next_month_days: number | null;
   is_active: boolean;
 }
 
@@ -109,6 +116,7 @@ export function parseQbTermsMap(polled: unknown): QbTermsMap {
       name,
       days: dateDriven ? null : toNumber(t.StdDueDays),
       day_of_month_due: dateDriven ? toNumber(t.DayOfMonthDue) : null,
+      due_next_month_days: dateDriven ? toNumber(t.DueNextMonthDays) : null,
       is_active: t.IsActive !== "false" && t.IsActive !== false,
     };
   };

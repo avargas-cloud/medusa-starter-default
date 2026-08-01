@@ -116,7 +116,12 @@ export const VendorBill = model.define("vendor_bill", {
   // but BillMod must preserve them by their own QB TxnLineID.
   qb_clearing_lines: model.json().nullable(),
 
-  // Payment terms (Phase 0 — dormant; not yet consumed anywhere).
+  // Payment terms. `payment_terms_days` is what the Due Date is computed from;
+  // `payment_terms_name` records WHICH catalog term produced it. Both are
+  // needed: two terms can share a day count ("Due on Receipt" and "Prepaid" are
+  // both 0; "Net 30" and "Net-30" are both 30 and are distinct terms in the
+  // company file), so the number alone cannot round-trip a selection.
   payment_terms_days: model.number().nullable(),
+  payment_terms_name: model.text().nullable(),
   due_date: model.dateTime().nullable(),
 });

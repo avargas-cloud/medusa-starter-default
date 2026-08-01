@@ -95,6 +95,8 @@ interface VendorBillDetailRow {
   reference_id: string | null;
   document_date: string | null;
   payment_terms_days: number | null;
+  /** WHICH catalog term produced those days — two terms can share a count. */
+  payment_terms_name: string | null;
   due_date: string | null;
   commission_mode: string;
   commission_rate_bps: number;
@@ -165,10 +167,12 @@ const vendorBillPatchSchema = z.object({
   bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
   reference_id: z.string().max(200).nullish(),
   document_date: z.string().datetime().nullish(),
-  // D9 — Payment Terms + Due Date. Terms default from the vendor's
-  // qb_vendor.metadata.default_payment_terms_days; Due Date is overridable.
+  // Payment Terms + Due Date. The term is chosen from the shared catalog
+  // (/admin/vendor-terms); its day count drives the Due Date, which stays
+  // overridable for the one-off bill the vendor dated differently.
   // TermsRef is deliberately never sent to QB — see docs/VENDOR_BILL_QB_SYNC_PLAN.md D9.
   payment_terms_days: z.number().int().min(0).max(365).nullish(),
+  payment_terms_name: z.string().trim().min(1).max(31).nullish(),
   due_date: z.string().datetime().nullish(),
   commission_mode: z.enum(["percent", "fixed"]).optional(),
   commission_rate_bps: z.number().int().min(0).max(100_000).optional(),
@@ -281,6 +285,7 @@ export async function GET(
        vb.reference_id,
        vb.document_date,
        vb.payment_terms_days,
+       vb.payment_terms_name,
        vb.due_date,
        vb.commission_mode,
        vb.commission_rate_bps,
@@ -872,7 +877,11 @@ export async function PATCH(
   // due date without changing the legacy QB document itself.
   if (bill.qb_source === "adopted") {
     const keys = Object.keys(patch);
-    const allowedKeys = new Set(["payment_terms_days", "due_date"]);
+    const allowedKeys = new Set([
+      "payment_terms_days",
+      "payment_terms_name",
+      "due_date",
+    ]);
     if (keys.some((key) => !allowedKeys.has(key))) {
       return res.status(409).json({
         error:
@@ -1048,6 +1057,7 @@ export async function PATCH(
     "reference_id",
     "document_date",
     "payment_terms_days",
+    "payment_terms_name",
     "due_date",
     "commission_mode",
     "commission_rate_bps",

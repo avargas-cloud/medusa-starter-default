@@ -54,6 +54,7 @@ describe("qb-terms", () => {
         name: "Consignment",
         days: 90,
         day_of_month_due: null,
+        due_next_month_days: null,
         is_active: false,
       });
     });
@@ -74,6 +75,28 @@ describe("qb-terms", () => {
         })
       );
       expect(map["120"]).toMatchObject({ days: null, day_of_month_due: 20 });
+    });
+
+    it("carries DueNextMonthDays, which decides whether a bill rolls a month", () => {
+      const map = parseQbTermsMap(
+        polled({
+          DateDrivenTermsRet: [
+            { Name: "120", DayOfMonthDue: "20", DueNextMonthDays: "10" },
+          ],
+        })
+      );
+      expect(map["120"].due_next_month_days).toBe(10);
+    });
+
+    it("never puts a due-next-month window on a standard term", () => {
+      const map = parseQbTermsMap(
+        polled({
+          StandardTermsRet: [
+            { Name: "Net-30", StdDueDays: "30", DueNextMonthDays: "10" },
+          ],
+        })
+      );
+      expect(map["net-30"].due_next_month_days).toBeNull();
     });
 
     it("returns an empty map instead of throwing on an unexpected payload", () => {
