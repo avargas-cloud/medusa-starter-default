@@ -50,6 +50,16 @@ export interface VendorTermMetadata {
   exists_in_qb: boolean;
   /** ISO timestamp of the last reconciliation against the QB Terms list. */
   qb_synced_at: string | null;
+  /**
+   * Is the term still ACTIVE in the QuickBooks Terms list?
+   *
+   * Measured 2026-08-01: QB has 31 terms, only 15 active — and 8 of the
+   * inactive ones are still assigned to 37 live vendors (Net-10 alone has 25).
+   * So an inactive term can be neither hidden nor offered: hiding it would
+   * leave those vendors with no readable term, and offering it invites new
+   * assignments to something the accountant retired.
+   */
+  is_active: boolean;
 }
 
 /** A term option as the rest of the codebase consumes it. */

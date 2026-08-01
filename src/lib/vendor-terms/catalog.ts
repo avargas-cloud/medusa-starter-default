@@ -67,6 +67,9 @@ export function parseTermRow(row: RawTermRow): VendorTermOption | null {
     exists_in_qb: meta.exists_in_qb === true,
     qb_synced_at:
       typeof meta.qb_synced_at === "string" ? meta.qb_synced_at : null,
+    // Absent means "not reconciled yet", which must read as active — marking a
+    // healthy term as retired is the more damaging of the two errors.
+    is_active: meta.is_active !== false,
     sort_order: toInt(row.sort_order) ?? 0,
   };
 }

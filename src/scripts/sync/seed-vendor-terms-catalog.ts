@@ -53,6 +53,7 @@ interface PendingRow {
   day_of_month_due: number | null;
   due_next_month_days: number | null;
   exists_in_qb: boolean;
+  is_active: boolean;
   vendors: number;
 }
 
@@ -94,6 +95,7 @@ export default async function run({
         day_of_month_due: t.day_of_month_due,
         due_next_month_days: null,
         exists_in_qb: false,
+        is_active: true,
         vendors: t.vendors,
       });
     }
@@ -154,6 +156,7 @@ export default async function run({
           day_of_month_due: entry.day_of_month_due,
           due_next_month_days: entry.due_next_month_days,
           exists_in_qb: true,
+          is_active: entry.is_active,
           vendors: existing?.vendors ?? 0,
         });
         if (
@@ -188,7 +191,7 @@ export default async function run({
   for (const [i, r] of rows.entries()) {
     log(
       `  ${String(i + 1).padStart(2)}. ${r.name.padEnd(34)} ${describeRule(r).padEnd(14)} ` +
-        `qb=${r.exists_in_qb ? "yes" : "NO "} vendors=${r.vendors}`
+        `qb=${r.exists_in_qb ? "yes" : "NO "} ${r.is_active ? "active  " : "INACTIVE"} vendors=${r.vendors}`
     );
   }
 
@@ -205,6 +208,7 @@ export default async function run({
       day_of_month_due: r.day_of_month_due,
       due_next_month_days: r.due_next_month_days,
       exists_in_qb: r.exists_in_qb,
+      is_active: r.is_active,
       qb_synced_at: r.exists_in_qb ? new Date().toISOString() : null,
     };
     // ON CONFLICT keys on (context, field_name, value) — the table's own unique.
