@@ -136,4 +136,34 @@ export interface PreviewApprovalLine {
   block_reason: InventoryCountLineBlockReason | null;
   qb_account_list_id: string;
   unit_cost: number | null;
+  /**
+   * Número del count que ya tiene tomado este ítem, o null si está libre.
+   *
+   * El approve va a rechazar la operación entera si alguno viene con valor, así
+   * que el manager tiene que verlo ANTES de apretar — y decidir override 0 en
+   * esa línea en vez de comerse un 409 sobre las 40 restantes.
+   */
+  claimed_by_count_number: string | null;
+  claimed_by_count_id: string | null;
+}
+
+/**
+ * Una línea que ya se resolvió en una pasada anterior (`applied`, `overridden`,
+ * `verified`, `skipped`). Se devuelve SÓLO como contexto de lectura.
+ *
+ * Existe porque el preview cargaba todas las líneas del count mientras el
+ * approve carga únicamente `pending`/`blocked`: en un `partially_applied` eso
+ * re-mostraba el trabajo de la pasada anterior como si estuviera por aplicarse,
+ * y el COST IMPACT sumaba plata que ya se había contabilizado (INVCNT-1047
+ * mostraba −$574.49 cuando el impacto real era $0.00).
+ */
+export interface PreviewResolvedLine {
+  line_id: string;
+  sku: string;
+  product_title: string;
+  status: string;
+  delta_original: number;
+  delta_applied: number | null;
+  qty_at_apply_time: number | null;
+  override_note: string | null;
 }
