@@ -10,8 +10,10 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { Modules } from "@medusajs/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import type { Knex } from "knex";
 
+import { releaseClaimsForCount } from "../../../../lib/inventory-count/item-claims";
 import { buildInventoryCountStockBaseline } from "../../../../lib/inventory-count/stock-baseline";
 import {
   buildEnrichmentMaps,
@@ -251,7 +253,7 @@ export async function DELETE(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
-  const { id } = req.params;
+  const id = req.params.id as string;
   const service = getInventoryCountService(req);
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
@@ -266,6 +268,15 @@ export async function DELETE(
       code: "not_draft",
     });
   }
+
+  // Only drafts reach here and drafts do not hold claims, so this is normally a
+  // no-op. It runs anyway so the rule stays uniform — every terminal header
+  // transition releases — instead of relying on the reader remembering which
+  // transition is exempt and why.
+  await releaseClaimsForCount(
+    req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION) as Knex,
+    id
+  );
 
   const lines = await service.listInventoryCountLines(
     { inventory_count_id: id },

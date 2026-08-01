@@ -15,7 +15,10 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
+import type { Knex } from "knex";
 
+import { releaseClaimsForCount } from "../../../../../lib/inventory-count/item-claims";
 import { voidInventoryCountWorkflow } from "../../../../../workflows/inventory-count/void-inventory-count";
 import {
   ManagerRoleRequiredError,
@@ -122,6 +125,14 @@ export async function POST(
         pipeline_rows_to_void: rowsToVoid,
       },
     });
+
+    // Void is terminal: nothing this count holds will ever be applied, so any
+    // items it was still holding (a partially_applied count keeps claims on its
+    // blocked lines) go back to the pool.
+    await releaseClaimsForCount(
+      req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION) as Knex,
+      id
+    );
 
     return res.status(200).json({
       inventory_count_id: id,

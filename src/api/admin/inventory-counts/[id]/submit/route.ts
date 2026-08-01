@@ -17,8 +17,14 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { Modules } from "@medusajs/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import type { Knex } from "knex";
 
+import {
+  acquireItemClaims,
+  describeClaimConflicts,
+  releaseClaimsForCount,
+} from "../../../../../lib/inventory-count/item-claims";
 import {
   buildInventoryCountStockBaseline,
   calculateInventoryCountDelta,
@@ -45,7 +51,7 @@ export async function POST(
   req: AuthenticatedMedusaRequest<{ memo: string }>,
   res: MedusaResponse
 ) {
-  const { id } = req.params;
+  const id = req.params.id as string;
   const service = getInventoryCountService(req);
 
   const parsed = submitSchema.safeParse(req.body);
@@ -185,6 +191,45 @@ export async function POST(
     });
   }
 
+  // Item exclusivity. Submit is the moment the delta stops being an observation
+  // and becomes an armed correction, so it is the moment the item gets claimed.
+  //
+  // Without this, two counts covering the same SKU each freeze the WHOLE
+  // discrepancy and each applies it in full: stock lands double-corrected and
+  // QuickBooks books the same shrinkage twice. The live-stock comparison above
+  // cannot see it — both counts snapshot the same correct number.
+  //
+  // Runs after the cheap validations so a count that would fail them anyway
+  // does not leave claims behind, and before any write so a rejected submit
+  // changes nothing.
+  const knex = req.scope.resolve(
+    ContainerRegistrationKeys.PG_CONNECTION
+  ) as Knex;
+
+  const claimConflicts = await acquireItemClaims(knex, {
+    inventoryCountId: id,
+    stockLocationId: count.stock_location_id,
+    candidates: lines.map((l) => ({
+      inventory_item_id: l.inventory_item_id,
+      inventory_count_line_id: l.id,
+      sku: l.sku,
+    })),
+  });
+
+  if (claimConflicts.length > 0) {
+    return res.status(409).json({
+      error: describeClaimConflicts(claimConflicts),
+      code: "item_claimed_by_other_count",
+      conflicts: claimConflicts.map((c) => ({
+        sku: c.sku,
+        inventory_item_id: c.inventory_item_id,
+        inventory_count_id: c.inventory_count_id,
+        inventory_count_number: c.inventory_count_number,
+        inventory_count_status: c.inventory_count_status,
+      })),
+    });
+  }
+
   // 2. Compute delta_original per line; freeze qty_at_count_time.
   //    Uncounted lines (qty_counted === null) → delta=0, no adjustment.
   const lineUpdates: Array<Record<string, unknown>> = [];
@@ -217,19 +262,28 @@ export async function POST(
       status: "pending",
     });
   }
-  await service.updateInventoryCountLines(lineUpdates);
+  // The claims are already held at this point, but the module-service writes
+  // below are not part of that transaction. If any of them fails the count
+  // stays a draft, so leaving the claims behind would lock those SKUs against a
+  // count that never became armed. Release them and let the error surface.
+  try {
+    await service.updateInventoryCountLines(lineUpdates);
 
-  // 3. Promote header to submitted (number/seq were assigned at creation)
-  const [updated] = await service.updateInventoryCounts([
-    {
-      id,
-      status: "submitted",
-      memo,
-      submitted_at: new Date(),
-      total_lines: lines.length,
-      total_delta_units: totalDeltaUnits,
-    },
-  ]);
+    // 3. Promote header to submitted (number/seq were assigned at creation)
+    const [updated] = await service.updateInventoryCounts([
+      {
+        id,
+        status: "submitted",
+        memo,
+        submitted_at: new Date(),
+        total_lines: lines.length,
+        total_delta_units: totalDeltaUnits,
+      },
+    ]);
 
-  return res.json({ inventory_count: updated });
+    return res.json({ inventory_count: updated });
+  } catch (err) {
+    await releaseClaimsForCount(knex, id);
+    throw err;
+  }
 }

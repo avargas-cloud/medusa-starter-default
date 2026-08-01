@@ -11,7 +11,10 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
+import type { Knex } from "knex";
 
+import { releaseClaimsForCount } from "../../../../../lib/inventory-count/item-claims";
 import {
   ManagerRoleRequiredError,
   UnauthenticatedError,
@@ -46,7 +49,7 @@ export async function POST(
   }
   const { review_notes } = parsed.data;
 
-  const { id } = req.params;
+  const id = req.params.id as string;
   const service = getInventoryCountService(req);
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
@@ -71,6 +74,16 @@ export async function POST(
       review_notes,
     },
   ]);
+
+  // Reject is terminal and deliberately leaves the LINES untouched (they keep
+  // status 'pending' with their frozen delta as an audit trail). Nothing will
+  // ever apply them, so their hold on the items has to be dropped here — a
+  // line-status-driven release would keep those SKUs locked forever and block
+  // the very recount this rejection is asking for.
+  const knex = req.scope.resolve(
+    ContainerRegistrationKeys.PG_CONNECTION
+  ) as Knex;
+  await releaseClaimsForCount(knex, id);
 
   return res.json({ inventory_count: updated });
 }
