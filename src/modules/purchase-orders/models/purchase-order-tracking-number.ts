@@ -39,6 +39,8 @@ export const PurchaseOrderTrackingNumber = model.define(
 
     // Carrier ETA enrichment — written by lib/carrier-tracking, never by hand.
     carrier_eta: model.text().nullable(), // ISO date YYYY-MM-DD
+    // Staff fallback for carriers without an API. Automatic ETA wins when set.
+    manual_eta: model.text().nullable(), // ISO date YYYY-MM-DD
     carrier_status: model.text().default("pending"),
     carrier_eta_fetched_at: model.dateTime().nullable(),
     carrier_detail: model.text().nullable(),

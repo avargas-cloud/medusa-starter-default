@@ -46,6 +46,7 @@ function entry(over: Partial<RefreshableNumber> = {}): RefreshableNumber {
     provider: "UPS",
     tracking_number: "1ZTEST",
     carrier_eta: null,
+    manual_eta: null,
     carrier_status: "pending",
     carrier_detail: null,
     ...over,
@@ -145,6 +146,43 @@ describe("refreshPoTrackingEta", () => {
       { id: "po_1", expected_at: new Date(`${manual}T00:00:00.000Z`) }
     );
     expect(res.expected_at?.slice(0, 10)).toBe(manual);
+  });
+
+  it("uses a manual tracking ETA for Other without polling a carrier", async () => {
+    const manualEta = future(11);
+    const res = await refreshPoTrackingEta(
+      fakeDb([
+        entry({
+          provider: "Other",
+          tracking_number: "779292549",
+          manual_eta: manualEta,
+          carrier_status: "unavailable",
+        }),
+      ]),
+      fakeService(),
+      { id: "po_1", expected_at: null }
+    );
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(res.expected_at?.slice(0, 10)).toBe(manualEta);
+    expect(res.tracking[0].manual_eta).toBe(manualEta);
+  });
+
+  it("prefers an automatic carrier ETA over the manual fallback", async () => {
+    const manualEta = future(15);
+    const carrierEta = future(7);
+    mockFetch.mockResolvedValue({
+      estimated_delivery: carrierEta,
+      status: "in_transit",
+      detail: "On the way",
+    });
+    const res = await refreshPoTrackingEta(
+      fakeDb([entry({ manual_eta: manualEta })]),
+      fakeService(),
+      { id: "po_1", expected_at: null }
+    );
+
+    expect(res.expected_at?.slice(0, 10)).toBe(carrierEta);
   });
 
   it("uses the actual delivery date once delivered", async () => {

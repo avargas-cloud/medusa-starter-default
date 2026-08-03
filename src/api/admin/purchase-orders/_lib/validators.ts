@@ -96,10 +96,35 @@ const trackingLinesSchema = z
   )
   .optional();
 
+const trackingUrlSchema = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine(
+    (value) => value === "" || /^https?:\/\//i.test(value),
+    "tracking_url must use http or https"
+  )
+  .nullish();
+
+const manualEtaSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "manual_eta must be YYYY-MM-DD")
+  .nullish();
+
+const editableTrackingNumberSchema = z.object({
+  id: z.string().trim().min(1),
+  provider: z.string().trim().min(1).max(50),
+  tracking_number: z.string().trim().min(1).max(200),
+  tracking_url: trackingUrlSchema,
+  manual_eta: manualEtaSchema,
+});
+
 export const addTrackingSchema = z.object({
   provider: z.string().trim().min(1).max(50),
   tracking_number: z.string().trim().min(1).max(200),
-  tracking_url: z.string().trim().max(2000).nullish(),
+  tracking_url: trackingUrlSchema,
+  manual_eta: manualEtaSchema,
   /** Present → attach this number to an existing delivery instead of creating one. */
   shipment_id: z.string().trim().min(1).optional(),
   lines: trackingLinesSchema,
@@ -108,6 +133,16 @@ export const addTrackingSchema = z.object({
 export const updateTrackingSchema = z.object({
   shipment_id: z.string().trim().min(1),
   lines: trackingLinesSchema,
+  numbers: z
+    .array(editableTrackingNumberSchema)
+    .min(1)
+    .max(50)
+    .refine(
+      (numbers) =>
+        new Set(numbers.map((number) => number.id)).size === numbers.length,
+      { message: "The same tracking number id appears more than once." }
+    )
+    .optional(),
 });
 
 /**
@@ -127,11 +162,7 @@ export const deleteTrackingSchema = z
 export const receiveLineSchema = z.object({
   po_line_id: z.string().min(1),
   qty_received_now: z.number().int().positive().max(1_000_000),
-  unit_cost_cents_override: z
-    .number()
-    .min(0)
-    .max(1_000_000_000)
-    .nullish(),
+  unit_cost_cents_override: z.number().min(0).max(1_000_000_000).nullish(),
 });
 
 export const receiveSchema = z.object({

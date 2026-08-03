@@ -49,9 +49,18 @@ export interface TrackingEntry {
   created_by_user_id: string | null;
   // Carrier ETA enrichment (added by the carrier-tracking layer).
   carrier_eta: string | null;
+  // Staff-entered fallback for carriers without an API.
+  manual_eta: string | null;
   carrier_status: CarrierStatus;
   carrier_eta_fetched_at: string | null;
   carrier_detail: string | null;
+}
+
+/** Automatic carrier data is authoritative; manual ETA is its fallback. */
+export function effectiveTrackingEta(
+  entry: Pick<TrackingEntry, "carrier_eta" | "manual_eta">
+): string | null {
+  return entry.carrier_eta ?? entry.manual_eta ?? null;
 }
 
 /** Builds an `unavailable` result with a reason. */

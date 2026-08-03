@@ -42,6 +42,11 @@ export interface NumberInput {
   provider: string;
   tracking_number: string;
   tracking_url: string;
+  manual_eta: string | null;
+}
+
+export interface EditableNumberInput extends NumberInput {
+  id: string;
 }
 
 export interface ShipmentWriteInput {
@@ -70,6 +75,8 @@ export interface TrackingWriteResult {
   scopeConflict?: ScopeConflict;
   /** Populated when ok === false because a carrier number is already on the PO. */
   duplicateNumber?: string;
+  /** The edit payload did not name exactly the shipment's existing numbers. */
+  invalidNumberSet?: boolean;
 }
 
 /**
@@ -199,10 +206,10 @@ async function writeNumbers(
     await trx.raw(
       `INSERT INTO purchase_order_tracking_number
          (id, purchase_order_tracking_id, purchase_order_id, provider,
-          tracking_number, tracking_url, is_master, carrier_eta, carrier_status,
+          tracking_number, tracking_url, is_master, carrier_eta, manual_eta, carrier_status,
           carrier_eta_fetched_at, carrier_detail, created_by_user_id,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, NULL, ?, now(), now())`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'pending', NULL, NULL, ?, now(), now())`,
       [
         newId("potrkn", String(i)),
         shipmentId,
@@ -211,6 +218,7 @@ async function writeNumbers(
         n.tracking_number,
         n.tracking_url,
         i === 0, // the first number is the master
+        n.manual_eta,
         userId,
       ]
     );
@@ -313,10 +321,10 @@ export async function addNumberToShipment(
     await trx.raw(
       `INSERT INTO purchase_order_tracking_number
          (id, purchase_order_tracking_id, purchase_order_id, provider,
-          tracking_number, tracking_url, is_master, carrier_eta, carrier_status,
+          tracking_number, tracking_url, is_master, carrier_eta, manual_eta, carrier_status,
           carrier_eta_fetched_at, carrier_detail, created_by_user_id,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, false, NULL, 'pending', NULL, NULL, ?, now(), now())`,
+       VALUES (?, ?, ?, ?, ?, ?, false, NULL, ?, 'pending', NULL, NULL, ?, now(), now())`,
       [
         newId("potrkn"),
         shipmentId,
@@ -324,6 +332,7 @@ export async function addNumberToShipment(
         number.provider,
         number.tracking_number,
         number.tracking_url,
+        number.manual_eta,
         userId,
       ]
     );
@@ -399,11 +408,12 @@ export async function removeNumberFromShipment(
  * line means "removed" or "not sent". The shipment's own units are excluded
  * from the sibling sum, so re-saving what it already holds is never rejected.
  */
-export async function updateShipmentAllocations(
+export async function updateShipment(
   db: TrackingKnex,
   purchaseOrderId: string,
   shipmentId: string,
   lines: RequestedAllocation[],
+  numbers: EditableNumberInput[] | undefined,
   userId: string | null
 ): Promise<TrackingWriteResult> {
   return db.transaction(async (trx) => {
@@ -430,12 +440,104 @@ export async function updateShipmentAllocations(
     const rejections = validateAllocations(lines, available);
     if (rejections.length > 0) return { ok: false, rejections };
 
+    if (numbers) {
+      const current = (
+        await trx.raw(
+          `SELECT id
+             FROM purchase_order_tracking_number
+            WHERE purchase_order_tracking_id = ?
+              AND purchase_order_id = ?
+              AND deleted_at IS NULL
+            ORDER BY created_at, id
+            FOR UPDATE`,
+          [shipmentId, purchaseOrderId]
+        )
+      ).rows as Array<{ id: string }>;
+      const submittedIds = new Set(numbers.map((number) => number.id));
+      if (
+        current.length !== numbers.length ||
+        current.some((number) => !submittedIds.has(number.id))
+      ) {
+        return { ok: false, invalidNumberSet: true };
+      }
+
+      const duplicateInPayload = numbers.find(
+        (number, index) =>
+          numbers.findIndex(
+            (candidate) => candidate.tracking_number === number.tracking_number
+          ) !== index
+      );
+      if (duplicateInPayload) {
+        return {
+          ok: false,
+          duplicateNumber: duplicateInPayload.tracking_number,
+        };
+      }
+
+      const duplicate = await duplicateNumberOnPo(
+        trx,
+        purchaseOrderId,
+        numbers,
+        shipmentId
+      );
+      if (duplicate) return { ok: false, duplicateNumber: duplicate };
+    }
+
     await trx.raw(
       `UPDATE purchase_order_tracking
           SET scope = ?, updated_by_user_id = ?, updated_at = now()
         WHERE id = ? AND deleted_at IS NULL`,
       [scope, userId, shipmentId]
     );
+
+    for (const number of numbers ?? []) {
+      await trx.raw(
+        `UPDATE purchase_order_tracking_number
+            SET provider = ?,
+                tracking_number = ?,
+                tracking_url = ?,
+                manual_eta = ?,
+                carrier_eta = CASE
+                  WHEN provider <> ? OR tracking_number <> ? THEN NULL
+                  ELSE carrier_eta
+                END,
+                carrier_status = CASE
+                  WHEN provider <> ? OR tracking_number <> ? THEN 'pending'
+                  ELSE carrier_status
+                END,
+                carrier_eta_fetched_at = CASE
+                  WHEN provider <> ? OR tracking_number <> ? THEN NULL
+                  ELSE carrier_eta_fetched_at
+                END,
+                carrier_detail = CASE
+                  WHEN provider <> ? OR tracking_number <> ? THEN NULL
+                  ELSE carrier_detail
+                END,
+                updated_at = now()
+          WHERE id = ?
+            AND purchase_order_tracking_id = ?
+            AND purchase_order_id = ?
+            AND deleted_at IS NULL`,
+        [
+          number.provider,
+          number.tracking_number,
+          number.tracking_url,
+          number.manual_eta,
+          number.provider,
+          number.tracking_number,
+          number.provider,
+          number.tracking_number,
+          number.provider,
+          number.tracking_number,
+          number.provider,
+          number.tracking_number,
+          number.id,
+          shipmentId,
+          purchaseOrderId,
+        ]
+      );
+    }
+
     await trx.raw(
       `DELETE FROM purchase_order_tracking_line
         WHERE purchase_order_tracking_id = ?`,

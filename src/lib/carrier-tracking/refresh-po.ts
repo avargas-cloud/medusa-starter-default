@@ -21,9 +21,10 @@
  * with its own verification, not a side effect of adding shipments.
  */
 
-import { selectExpectedEta } from "./index";
 import { fetchUniqueEtas, lookupKey, type FetchStats } from "./refresh-numbers";
-import type { TrackingEntry } from "./types";
+import { effectiveTrackingEta, type TrackingEntry } from "./types";
+
+import { isTrackable, selectExpectedEta } from "./index";
 
 /** A tracking-number row as this routine reads and writes it. */
 export interface RefreshableNumber {
@@ -32,6 +33,7 @@ export interface RefreshableNumber {
   provider: string;
   tracking_number: string;
   carrier_eta: string | null;
+  manual_eta: string | null;
   carrier_status: TrackingEntry["carrier_status"];
   carrier_detail: string | null;
 }
@@ -65,7 +67,7 @@ export async function loadRefreshableNumbers(
 ): Promise<RefreshableNumber[]> {
   const result = await db.raw(
     `SELECT n.id, n.purchase_order_id, n.provider, n.tracking_number,
-            n.carrier_eta, n.carrier_status, n.carrier_detail
+            n.carrier_eta, n.manual_eta, n.carrier_status, n.carrier_detail
        FROM purchase_order_tracking_number n
        JOIN purchase_order_tracking trk
          ON trk.id = n.purchase_order_tracking_id AND trk.deleted_at IS NULL
@@ -79,6 +81,7 @@ export async function loadRefreshableNumbers(
     provider: (row.provider as string) ?? "",
     tracking_number: (row.tracking_number as string) ?? "",
     carrier_eta: (row.carrier_eta as string | null) ?? null,
+    manual_eta: (row.manual_eta as string | null) ?? null,
     carrier_status:
       (row.carrier_status as TrackingEntry["carrier_status"]) ?? "pending",
     carrier_detail: (row.carrier_detail as string | null) ?? null,
@@ -94,14 +97,20 @@ export async function loadRefreshableNumbers(
 export async function applyEtasToNumbers(
   db: Knex,
   rows: RefreshableNumber[]
-): Promise<{ updated: RefreshableNumber[]; changedIds: Set<string>; stats: FetchStats }> {
+): Promise<{
+  updated: RefreshableNumber[];
+  changedIds: Set<string>;
+  stats: FetchStats;
+}> {
   // Delivered is terminal — stop re-querying once the actual delivery date is
   // captured. (A delivered row predating this behavior may still have a null
   // date, so re-fetch it once to backfill.)
   const settled = (r: RefreshableNumber): boolean =>
     r.carrier_status === "delivered" && r.carrier_eta !== null;
 
-  const toPoll = rows.filter((r) => !settled(r));
+  // Other/manual freight still participates in Expected Delivery, but it has
+  // no carrier adapter to call and Refresh must never disturb its manual ETA.
+  const toPoll = rows.filter((r) => !settled(r) && isTrackable(r));
   const { byKey, stats } = await fetchUniqueEtas(toPoll);
 
   const now = new Date().toISOString();
@@ -182,7 +191,13 @@ export async function settleExpectedAt(
   // transit. If nothing is upcoming but the shipment was delivered, use the
   // ACTUAL delivery date (latest, when several packages) so the date reflects
   // reality instead of a stale future estimate.
-  let selected = selectExpectedEta(numbers as unknown as TrackingEntry[]);
+  const effectiveNumbers = numbers.map((number) => ({
+    ...number,
+    carrier_eta: effectiveTrackingEta(number),
+  }));
+  let selected = selectExpectedEta(
+    effectiveNumbers as unknown as TrackingEntry[]
+  );
   if (!selected) {
     const deliveredDates = numbers
       .filter((n) => n.carrier_status === "delivered")
@@ -199,7 +214,7 @@ export async function settleExpectedAt(
       ? null
       : new Date(po.expected_at as string | Date).toISOString().slice(0, 10);
 
-  let expectedAtOut: string | null =
+  const expectedAtOut: string | null =
     currentExpected === null
       ? null
       : new Date(po.expected_at as string | Date).toISOString();
@@ -211,7 +226,9 @@ export async function settleExpectedAt(
   // "Apply" action.
   if (selected && (selected !== currentExpected || forceApply)) {
     const expectedAt = new Date(`${selected}T00:00:00.000Z`);
-    await service.updatePurchaseOrders([{ id: po.id, expected_at: expectedAt }]);
+    await service.updatePurchaseOrders([
+      { id: po.id, expected_at: expectedAt },
+    ]);
     return { expected_at: expectedAt.toISOString(), changed: true };
   }
 

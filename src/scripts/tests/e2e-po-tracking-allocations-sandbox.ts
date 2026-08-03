@@ -106,8 +106,14 @@ interface TrackingLineView {
 
 interface TrackingNumberView {
   id: string;
+  provider: string;
   tracking_number: string;
+  tracking_url: string;
   is_master: boolean;
+  carrier_eta: string | null;
+  manual_eta: string | null;
+  effective_eta: string | null;
+  carrier_status: string;
 }
 
 interface TrackingView {
@@ -150,9 +156,9 @@ async function login(): Promise<string> {
  */
 async function pickPo(
   db: Knex
-): Promise<{ poId: string; lineId: string; ordered: number }> {
+): Promise<{ poId: string; poNumber: string; lineId: string; ordered: number }> {
   const res = await db.raw(
-    `SELECT pol.purchase_order_id AS po_id, pol.id AS line_id,
+    `SELECT pol.purchase_order_id AS po_id, po.number AS po_number, pol.id AS line_id,
             GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled,0),0)::int AS ordered
        FROM purchase_order_line pol
        JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
@@ -177,7 +183,7 @@ async function pickPo(
       LIMIT 1`
   );
   const row = res.rows[0] as
-    | { po_id: string; line_id: string; ordered: number }
+    | { po_id: string; po_number: string; line_id: string; ordered: number }
     | undefined;
   if (!row)
     abort(
@@ -185,6 +191,7 @@ async function pickPo(
     );
   return {
     poId: row.po_id,
+    poNumber: row.po_number,
     lineId: row.line_id,
     ordered: Number(row.ordered),
   };
@@ -227,19 +234,29 @@ export default async function run({
   }
 
   const token = await login();
-  const { poId, lineId, ordered } = await pickPo(db);
+  const { poId, poNumber, lineId, ordered } = await pickPo(db);
   const pin = await supervisorPin(db);
   const api = `/admin/purchase-orders/${poId}/tracking`;
 
   process.stdout.write(
-    `\nPO ${poId}\nlínea ${lineId} · ordenadas ${ordered}\n\n`
+    `\nPO ${poNumber} (${poId})\nlínea ${lineId} · ordenadas ${ordered}\n\n`
   );
 
   const createdTrackingIds: string[] = [];
-  const expectedBefore = (
-    (await db.raw(`SELECT expected_at FROM purchase_order WHERE id = ?`, [poId]))
-      .rows[0] as { expected_at: Date | null }
-  ).expected_at;
+  const poBefore = (
+    (
+      await db.raw(
+        `SELECT expected_at, po_status FROM purchase_order WHERE id = ?`,
+        [poId]
+      )
+    ).rows[0] as { expected_at: Date | null; po_status: string | null }
+  );
+  const expectedBefore = poBefore.expected_at;
+  const manualEta = new Date(Date.now() + 21 * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const freightUrl =
+    "https://www.rlcarriers.com/freight/shipping/shipment-tracing?pro=779292549&docType=PRO&source=web";
 
   try {
     // ── 0. Control positivo ──────────────────────────────────────────────────
@@ -309,7 +326,80 @@ export default async function run({
       `master=${withTwo?.master?.tracking_number}`
     );
 
-    // ── 1b. Editar el ALL ORDER es la salida ─────────────────────────────────
+    // The row edit is full-snapshot, but removing a number remains an explicit
+    // action. Return this shipment to one number before reproducing the user's
+    // FedEx -> Other correction, so Refresh cannot call any real carrier.
+    const secondary = withTwo?.numbers.find((number) => !number.is_master);
+    if (!secondary) abort("la segunda guía no apareció en el shipment");
+    const singleNumber = await call<TrackingPayload>(token, api, {
+      method: "DELETE",
+      body: { number_id: secondary.id },
+    });
+    const beforeManual = byNumber(singleNumber.body, "1ZE2E_BOXA");
+    if (!beforeManual?.master) abort("el master desapareció antes del edit manual");
+
+    // Simulate stale FedEx enrichment on the mistaken provider. Editing its
+    // identity must clear all of this before the manual ETA becomes effective.
+    await db.raw(
+      `UPDATE purchase_order_tracking_number
+          SET carrier_eta = '2099-12-31',
+              carrier_status = 'error',
+              carrier_eta_fetched_at = now(),
+              carrier_detail = 'FedEx lookup failed'
+        WHERE id = ?`,
+      [beforeManual.master.id]
+    );
+
+    const corrected = await call<TrackingPayload>(token, api, {
+      method: "PUT",
+      body: {
+        shipment_id: boxAId,
+        lines: [],
+        numbers: [
+          {
+            id: beforeManual.master.id,
+            provider: "Other",
+            tracking_number: "779292549",
+            tracking_url: freightUrl,
+            manual_eta: manualEta,
+          },
+        ],
+      },
+    });
+    const manualShipment = byNumber(corrected.body, "779292549");
+    const manualNumber = manualShipment?.master;
+    check(
+      "1b. corregir FedEx -> Other guarda PRO, link y ETA manual",
+      corrected.status === 200 &&
+        manualNumber?.provider === "Other" &&
+        manualNumber.tracking_url === freightUrl &&
+        manualNumber.manual_eta === manualEta &&
+        manualNumber.effective_eta === manualEta,
+      `status=${corrected.status} provider=${manualNumber?.provider} url=${manualNumber?.tracking_url} manual=${manualNumber?.manual_eta} effective=${manualNumber?.effective_eta}`
+    );
+    check(
+      "1b2. cambiar provider/tracking limpia el estado automático viejo",
+      manualNumber?.carrier_eta === null &&
+        manualNumber?.carrier_status === "pending",
+      `carrier_eta=${manualNumber?.carrier_eta} status=${manualNumber?.carrier_status}`
+    );
+
+    const refreshedManual = await call<TrackingPayload>(
+      token,
+      `${api}/refresh`,
+      { method: "POST", body: {} }
+    );
+    const afterManualRefresh = byNumber(refreshedManual.body, "779292549")?.master;
+    check(
+      "1b3. Refresh ETAs no borra ni consulta como FedEx el ETA manual de Other",
+      refreshedManual.status === 200 &&
+        afterManualRefresh?.manual_eta === manualEta &&
+        afterManualRefresh?.effective_eta === manualEta &&
+        afterManualRefresh?.carrier_eta === null,
+      `status=${refreshedManual.status} manual=${afterManualRefresh?.manual_eta} effective=${afterManualRefresh?.effective_eta} carrier=${afterManualRefresh?.carrier_eta}`
+    );
+
+    // ── 1c. Editar el ALL ORDER es la salida ─────────────────────────────────
     const converted = await call<TrackingPayload>(token, api, {
       method: "PUT",
       body: {
@@ -318,7 +408,7 @@ export default async function run({
       },
     });
     check(
-      "1b. editar el ALL ORDER marcando lo que llegó lo convierte a por-ítem",
+      "1c. editar el ALL ORDER marcando lo que llegó lo convierte a por-ítem",
       converted.status === 200 &&
         converted.body.tracking.find((t) => t.id === boxAId)?.scope === "by_line",
       `status=${converted.status} scope=${converted.body.tracking.find((t) => t.id === boxAId)?.scope}`
@@ -356,7 +446,7 @@ export default async function run({
     );
     check(
       "3b. el 409 dice dónde están las unidades que faltan",
-      Boolean(over.body.rejections?.[0]?.message?.includes("1ZE2E_BOXA")),
+      Boolean(over.body.rejections?.[0]?.message?.includes("779292549")),
       `mensaje="${over.body.rejections?.[0]?.message ?? ""}"`
     );
 
@@ -442,7 +532,7 @@ export default async function run({
       "6. bajar la línea con unidades en camino → 409 nombrando la guía",
       shrink.status === 409 &&
         shrink.body.code === "line_claimed_by_tracking" &&
-        Boolean(shrink.body.rejections?.[0]?.message?.includes("1ZE2E_BOXA")),
+        Boolean(shrink.body.rejections?.[0]?.message?.includes("779292549")),
       `status=${shrink.status} code=${shrink.body.code} msg="${shrink.body.rejections?.[0]?.message ?? ""}"`
     );
 
@@ -523,18 +613,18 @@ export default async function run({
       `quedaron ${orphans.n} filas`
     );
 
-    // ── 8. La cabecera no se movió ───────────────────────────────────────────
+    // ── 8. El ETA manual alimenta Expected Delivery ──────────────────────────
     const expectedAfter = (
       (await db.raw(`SELECT expected_at FROM purchase_order WHERE id = ?`, [poId]))
         .rows[0] as { expected_at: Date | null }
     ).expected_at;
-    const same =
-      (expectedBefore === null && expectedAfter === null) ||
-      String(expectedBefore) === String(expectedAfter);
+    const expectedAfterIso = expectedAfter
+      ? new Date(expectedAfter).toISOString().slice(0, 10)
+      : null;
     check(
-      "8. expected_at del PO NO cambió (la cabecera conserva su política)",
-      same,
-      `antes=${String(expectedBefore)} después=${String(expectedAfter)}`
+      "8. expected_at del PO usa el ETA manual de Other",
+      expectedAfterIso === manualEta,
+      `antes=${String(expectedBefore)} después=${String(expectedAfter)} esperado=${manualEta}`
     );
   } finally {
     // Limpieza: las cajas del test se van; las allocations caen por CASCADE.
@@ -549,7 +639,13 @@ export default async function run({
         USING purchase_order_tracking_number n
         WHERE n.purchase_order_tracking_id = trk.id
           AND n.tracking_number IN
-              ('1ZE2E_BOXA','1ZE2E_BOXA_2','770000E2EB','1ZE2E_OVER','1ZE2E_SIDEBYSIDE')`
+              ('1ZE2E_BOXA','1ZE2E_BOXA_2','779292549','770000E2EB','1ZE2E_OVER','1ZE2E_SIDEBYSIDE')`
+    );
+    await db.raw(
+      `UPDATE purchase_order
+          SET expected_at = ?, po_status = ?, updated_at = now()
+        WHERE id = ?`,
+      [expectedBefore, poBefore.po_status, poId]
     );
   }
 

@@ -35,6 +35,8 @@
  * column; reconciling the two is a separate, later decision.
  */
 
+import { effectiveTrackingEta } from "../carrier-tracking/types";
+
 export type TrackingCoverage = "all_order" | "by_line" | "mixed" | "none";
 
 type Knex = {
@@ -47,7 +49,12 @@ export interface TrackingNumberView {
   tracking_number: string;
   tracking_url: string;
   is_master: boolean;
+  /** Automatic result returned by a supported carrier API. */
   carrier_eta: string | null;
+  /** Staff-entered fallback, primarily for provider Other. */
+  manual_eta: string | null;
+  /** Automatic ETA when known, otherwise the manual fallback. */
+  effective_eta: string | null;
   carrier_status: string;
   carrier_eta_fetched_at: string | null;
   carrier_detail: string | null;
@@ -135,6 +142,7 @@ export async function resolvePoShipments(
                           'tracking_url',          n.tracking_url,
                           'is_master',             n.is_master,
                           'carrier_eta',           n.carrier_eta,
+                          'manual_eta',            n.manual_eta,
                           'carrier_status',        n.carrier_status,
                           'carrier_eta_fetched_at', n.carrier_eta_fetched_at,
                           'carrier_detail',        n.carrier_detail
@@ -179,6 +187,11 @@ export async function resolvePoShipments(
         tracking_url: n.tracking_url ?? "",
         is_master: Boolean(n.is_master),
         carrier_eta: isoDate(n.carrier_eta),
+        manual_eta: isoDate(n.manual_eta),
+        effective_eta: effectiveTrackingEta({
+          carrier_eta: isoDate(n.carrier_eta),
+          manual_eta: isoDate(n.manual_eta),
+        }),
         carrier_status: n.carrier_status ?? "pending",
         carrier_eta_fetched_at: isoStamp(n.carrier_eta_fetched_at),
         carrier_detail: n.carrier_detail ?? null,
@@ -194,16 +207,18 @@ export async function resolvePoShipments(
       numbers,
       // Not there until the last piece lands.
       carrier_eta: numbers.reduce<string | null>(
-        (acc, n) => laterOf(acc, n.carrier_eta),
+        (acc, n) => laterOf(acc, n.effective_eta),
         null
       ),
       master: numbers.find((n) => n.is_master) ?? numbers[0] ?? null,
-      lines: ((row.lines as TrackingAllocationView[] | null) ?? []).map((l) => ({
-        purchase_order_line_id: l.purchase_order_line_id,
-        sku_snapshot: l.sku_snapshot ?? "",
-        description_snapshot: l.description_snapshot ?? "",
-        qty: Number(l.qty ?? 0),
-      })),
+      lines: ((row.lines as TrackingAllocationView[] | null) ?? []).map(
+        (l) => ({
+          purchase_order_line_id: l.purchase_order_line_id,
+          sku_snapshot: l.sku_snapshot ?? "",
+          description_snapshot: l.description_snapshot ?? "",
+          qty: Number(l.qty ?? 0),
+        })
+      ),
     };
   });
 }
@@ -217,7 +232,9 @@ export async function resolvePoShipments(
  * screen that quietly renders such a PO as normal would hide real nonsense.
  * `verify-po-tracking-allocations.ts` fails on it.
  */
-export function trackingCoverage(shipments: PoShipmentView[]): TrackingCoverage {
+export function trackingCoverage(
+  shipments: PoShipmentView[]
+): TrackingCoverage {
   if (shipments.length === 0) return "none";
   const hasAllOrder = shipments.some((s) => s.scope === "all_order");
   const hasByLine = shipments.some((s) => s.scope === "by_line");
@@ -277,7 +294,10 @@ export function poLineTrackingViews(
       });
 
       // Latest delivery wins: the line is not complete until the last lands.
-      existing.carrier_eta = laterOf(existing.carrier_eta, shipment.carrier_eta);
+      existing.carrier_eta = laterOf(
+        existing.carrier_eta,
+        shipment.carrier_eta
+      );
 
       byLine.set(alloc.purchase_order_line_id, existing);
     }

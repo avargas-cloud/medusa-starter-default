@@ -3,7 +3,7 @@
  *
  * GET    /admin/purchase-orders/:id/tracking  — shipments + allocatable lines
  * POST   /admin/purchase-orders/:id/tracking  — add a shipment, or a number to one
- * PUT    /admin/purchase-orders/:id/tracking  — set what a shipment carries
+ * PUT    /admin/purchase-orders/:id/tracking  — edit shipment numbers + cargo
  * DELETE /admin/purchase-orders/:id/tracking  — remove a shipment, or one number
  *
  * Tracking is inbound logistics for the PO (delivery FROM the vendor). It is
@@ -32,41 +32,46 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
-import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
-import { zodErrorToBody } from "../../_lib/format";
-import { getPurchaseOrdersService } from "../../_lib/service-resolver";
 import {
-  addTrackingSchema,
-  deleteTrackingSchema,
-  updateTrackingSchema,
-} from "../../_lib/validators";
-import {
-  addNumberToShipment,
-  createShipment,
-  deleteShipment,
-  removeNumberFromShipment,
-  updateShipmentAllocations,
-  type ScopeConflict,
-  type TrackingKnex,
-  type TrackingWriteResult,
-} from "../../_lib/tracking-writes";
+  loadRefreshableNumbers,
+  settleExpectedAt,
+} from "../../../../../lib/carrier-tracking/refresh-po";
+import { PO_STATUS_RECEIVED_DRIVEN_SET } from "../../../../../lib/purchase-orders/po-received-status";
 import { resolveAllocatablePoLines } from "../../../../../lib/purchase-orders/po-tracking-allocations";
 import {
   resolvePoShipments,
   trackingCoverage,
   type PoShipmentView,
 } from "../../../../../lib/purchase-orders/po-tracking-read";
+import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
+import { zodErrorToBody } from "../../_lib/format";
 import {
   PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE,
   PO_STATUS_SHIPPED_WAITING,
   reconcileShippedPoStatus,
 } from "../../_lib/po-shipping-status";
-import { PO_STATUS_RECEIVED_DRIVEN_SET } from "../../../../../lib/purchase-orders/po-received-status";
+import { getPurchaseOrdersService } from "../../_lib/service-resolver";
+import {
+  addNumberToShipment,
+  createShipment,
+  deleteShipment,
+  removeNumberFromShipment,
+  updateShipment,
+  type ScopeConflict,
+  type TrackingKnex,
+  type TrackingWriteResult,
+} from "../../_lib/tracking-writes";
+import {
+  addTrackingSchema,
+  deleteTrackingSchema,
+  updateTrackingSchema,
+} from "../../_lib/validators";
 
 interface PoHeaderLike {
   id: string;
   status: string;
   po_status: string | null;
+  expected_at: Date | string | null;
 }
 
 const FROZEN_STATUSES = ["cancelled", "voided"];
@@ -178,6 +183,13 @@ function scopeConflictBody(conflict: ScopeConflict) {
 
 /** Route a failed write to the 409 that explains it. */
 function conflictBody(result: TrackingWriteResult) {
+  if (result.invalidNumberSet) {
+    return {
+      error:
+        "The tracking-number list changed while this shipment was open. Reload it and try again.",
+      code: "stale_tracking_numbers",
+    };
+  }
   if (result.scopeConflict) return scopeConflictBody(result.scopeConflict);
   if (result.duplicateNumber) {
     return {
@@ -194,6 +206,16 @@ function conflictBody(result: TrackingWriteResult) {
     code: "allocation_exceeds_remaining",
     rejections: result.rejections,
   };
+}
+
+/** Apply stored automatic/manual ETAs without making a carrier request. */
+async function settleStoredExpectedAt(
+  service: ReturnType<typeof getPurchaseOrdersService>,
+  db: TrackingKnex,
+  po: PoHeaderLike
+): Promise<void> {
+  const numbers = await loadRefreshableNumbers(db, po.id);
+  await settleExpectedAt(service, po, numbers);
 }
 
 export async function GET(
@@ -230,7 +252,8 @@ export async function POST(
   if (!ctx) return;
 
   const parsed = addTrackingSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json(zodErrorToBody(parsed.error));
+  if (!parsed.success)
+    return res.status(400).json(zodErrorToBody(parsed.error));
 
   const db = getDb(req);
   const { id } = req.params as { id: string };
@@ -238,6 +261,7 @@ export async function POST(
     provider: parsed.data.provider,
     tracking_number: parsed.data.tracking_number,
     tracking_url: parsed.data.tracking_url ?? "",
+    manual_eta: parsed.data.manual_eta ?? null,
   };
 
   const result = parsed.data.shipment_id
@@ -276,15 +300,17 @@ export async function POST(
     }
   }
 
+  await settleStoredExpectedAt(getPurchaseOrdersService(req), db, ctx.po);
+
   return res.status(201).json(await trackingPayload(db, id));
 }
 
 /**
- * Set what a delivery carries — the operation that splits a PO.
+ * Edit a delivery's carrier numbers and what it carries.
  *
  * Sending no lines means "the whole PO"; sending lines means "these quantities".
- * The carrier numbers are untouched here: they are managed by POST/DELETE,
- * because changing a label and changing the cargo are different decisions.
+ * The existing number set is edited in place: add/remove remain explicit
+ * POST/DELETE actions, so an omitted row can never disappear by accident.
  */
 export async function PUT(
   req: AuthenticatedMedusaRequest,
@@ -294,7 +320,8 @@ export async function PUT(
   if (!ctx) return;
 
   const parsed = updateTrackingSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json(zodErrorToBody(parsed.error));
+  if (!parsed.success)
+    return res.status(400).json(zodErrorToBody(parsed.error));
 
   const db = getDb(req);
   const { id } = req.params as { id: string };
@@ -306,14 +333,23 @@ export async function PUT(
       .json({ error: "Shipment not found", code: "not_found" });
   }
 
-  const result = await updateShipmentAllocations(
+  const result = await updateShipment(
     db,
     id,
     parsed.data.shipment_id,
     parsed.data.lines ?? [],
+    parsed.data.numbers?.map((number) => ({
+      id: number.id,
+      provider: number.provider,
+      tracking_number: number.tracking_number,
+      tracking_url: number.tracking_url ?? "",
+      manual_eta: number.manual_eta ?? null,
+    })),
     ctx.userId
   );
   if (!result.ok) return res.status(409).json(conflictBody(result));
+
+  await settleStoredExpectedAt(getPurchaseOrdersService(req), db, ctx.po);
 
   const payload = await trackingPayload(db, id);
   await reconcilePoStatusAfterTracking(
@@ -337,13 +373,18 @@ export async function DELETE(
   if (!ctx) return;
 
   const parsed = deleteTrackingSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json(zodErrorToBody(parsed.error));
+  if (!parsed.success)
+    return res.status(400).json(zodErrorToBody(parsed.error));
 
   const db = getDb(req);
   const { id } = req.params as { id: string };
 
   if (parsed.data.number_id) {
-    const removed = await removeNumberFromShipment(db, id, parsed.data.number_id);
+    const removed = await removeNumberFromShipment(
+      db,
+      id,
+      parsed.data.number_id
+    );
     if (!removed.ok) {
       return res.status(409).json(
         removed.lastNumber
