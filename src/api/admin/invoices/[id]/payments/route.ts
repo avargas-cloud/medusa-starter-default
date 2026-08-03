@@ -8,6 +8,7 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
@@ -245,9 +246,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // subscriber is the retry net if the order isn't eligible yet.
     if (invoice.order_id) {
       try {
-        await maybeCompleteOrder(req.scope, invoice.order_id);
-      } catch {
-        /* non-fatal */
+        const completion = await maybeCompleteOrder(
+          req.scope,
+          invoice.order_id,
+          { source: "invoice_payment_recorded" }
+        );
+        if (!completion.completed) {
+          const eventBus = req.scope.resolve(Modules.EVENT_BUS);
+          await eventBus.emit({
+            name: "pos.order.completion_requested",
+            data: { order_id: invoice.order_id },
+          });
+        }
+      } catch (completionError: unknown) {
+        console.warn(
+          `[invoices/:id/payments] completion retry edge failed: ${(completionError as Error).message}`
+        );
       }
     }
 

@@ -45,24 +45,112 @@ import { getDbPool } from "../api/utils/db-pool";
  * wrapping. A completeOrderWorkflow failure (transient) is captured as
  * { completed: false, reason } and self-heals on the next edge.
  */
+export type CompletionAttemptSource =
+  | "customer_payment_applied"
+  | "invoice_payment_recorded"
+  | "order_completion_event"
+  | "scheduled_reconciler"
+  | "unspecified";
+
+export type CompletionSkipReason =
+  | "busy"
+  | "deleted"
+  | "draft_order"
+  | "invalid_order_id"
+  | "no_invoice"
+  | "not_fully_fulfilled"
+  | "not_fully_paid"
+  | "open_credit_memo"
+  | "order_not_found"
+  | "status_not_pending"
+  | "workflow_error";
+
+export interface CompletionFacts {
+  capturedCents?: number;
+  detail?: string;
+  effectivePaidCents?: number;
+  invoiceCount?: number;
+  invoicedCents?: number;
+  openCreditMemos?: number;
+  orderStatus?: string;
+  paidCents?: number;
+  unfulfilledItems?: number;
+}
+
 export type MaybeCompleteResult =
-  | { completed: true }
-  | { completed: false; reason: string };
+  | {
+      completed: true;
+      outcome: "completed";
+      reason: null;
+      facts: CompletionFacts;
+    }
+  | {
+      completed: false;
+      outcome: "skipped";
+      reason: CompletionSkipReason;
+      facts: CompletionFacts;
+    };
+
+export interface MaybeCompleteOptions {
+  source?: CompletionAttemptSource;
+}
 
 const LOG = "[auto-complete]";
 
 export async function maybeCompleteOrder(
   container: any,
-  orderId: string
+  orderId: string,
+  options: MaybeCompleteOptions = {}
 ): Promise<MaybeCompleteResult> {
   if (!orderId?.startsWith("order_")) {
-    return { completed: false, reason: "invalid order id" };
+    return {
+      completed: false,
+      outcome: "skipped",
+      reason: "invalid_order_id",
+      facts: {},
+    };
   }
 
+  const source = options.source ?? "unspecified";
   const lockKey = `complete-order:${orderId}`;
   const pool = getDbPool();
   const client = await pool.connect();
   let locked = false;
+  const facts: CompletionFacts = {};
+
+  const finish = async (
+    result: MaybeCompleteResult
+  ): Promise<MaybeCompleteResult> => {
+    try {
+      await client.query(
+        `INSERT INTO order_completion_attempt
+          (order_id, source, outcome, reason, facts)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [
+          orderId,
+          source,
+          result.outcome,
+          result.reason,
+          JSON.stringify(result.facts),
+        ]
+      );
+    } catch (auditError: unknown) {
+      console.warn(
+        `${LOG} audit unavailable for ${orderId}: ${(auditError as Error).message}`
+      );
+    }
+    return result;
+  };
+
+  const skip = async (
+    reason: CompletionSkipReason
+  ): Promise<MaybeCompleteResult> =>
+    finish({
+      completed: false,
+      outcome: "skipped",
+      reason,
+      facts: { ...facts },
+    });
 
   try {
     const lockRes = await client.query(
@@ -71,7 +159,7 @@ export async function maybeCompleteOrder(
     );
     if (!lockRes.rows[0]?.ok) {
       // another invocation is mid-completion for this order; the next edge retries
-      return { completed: false, reason: "busy" };
+      return skip("busy");
     }
     locked = true;
 
@@ -81,21 +169,23 @@ export async function maybeCompleteOrder(
       [orderId]
     );
     const ord = ordRes.rows[0];
-    if (!ord) return { completed: false, reason: "order not found" };
-    if (ord.deleted_at) return { completed: false, reason: "deleted" };
-    if (ord.is_draft_order) return { completed: false, reason: "draft order" };
+    if (!ord) return skip("order_not_found");
+    facts.orderStatus = String(ord.status);
+    if (ord.deleted_at) return skip("deleted");
+    if (ord.is_draft_order) return skip("draft_order");
     if (ord.status !== "pending") {
-      return { completed: false, reason: `status=${ord.status}` };
+      return skip("status_not_pending");
     }
 
     // Must have at least one non-voided invoice (never auto-close un-invoiced)
     const invRes = await client.query(
       `SELECT COUNT(*)::int AS n FROM pos_invoice
-        WHERE order_id = $1 AND status != 'voided'`,
+        WHERE order_id = $1 AND status != 'voided' AND deleted_at IS NULL`,
       [orderId]
     );
-    if ((invRes.rows[0]?.n ?? 0) === 0) {
-      return { completed: false, reason: "no invoice" };
+    facts.invoiceCount = Number(invRes.rows[0]?.n ?? 0);
+    if (facts.invoiceCount === 0) {
+      return skip("no_invoice");
     }
 
     // Guard 2: every CURRENT-version item fully fulfilled
@@ -103,44 +193,58 @@ export async function maybeCompleteOrder(
       `SELECT COUNT(*) FILTER (WHERE oi.fulfilled_quantity < oi.quantity)::int AS unfulfilled
          FROM order_item oi
          JOIN "order" o ON o.id = oi.order_id
-        WHERE oi.order_id = $1 AND oi.version = o.version`,
+        WHERE oi.order_id = $1
+          AND oi.version = o.version
+          AND oi.deleted_at IS NULL`,
       [orderId]
     );
-    if (Number(fulfillRes.rows[0]?.unfulfilled ?? 1) > 0) {
-      return { completed: false, reason: "not fully fulfilled" };
+    facts.unfulfilledItems = Number(fulfillRes.rows[0]?.unfulfilled ?? 1);
+    if (facts.unfulfilledItems > 0) {
+      return skip("not_fully_fulfilled");
     }
 
     // Guard 3: fully paid (cents vs cents, captured payment_collection fallback)
     const payRes = await client.query(
       `SELECT
          COALESCE((SELECT SUM(amount_paid) FROM pos_invoice
-                    WHERE order_id = $1 AND status != 'voided'), 0) AS paid_cents,
+                    WHERE order_id = $1 AND status != 'voided'
+                      AND deleted_at IS NULL), 0) AS paid_cents,
          COALESCE((SELECT SUM(total) FROM pos_invoice
-                    WHERE order_id = $1 AND status != 'voided'), 0) AS invoiced_cents,
+                    WHERE order_id = $1 AND status != 'voided'
+                      AND deleted_at IS NULL), 0) AS invoiced_cents,
          COALESCE((SELECT SUM(pc.captured_amount - COALESCE(pc.refunded_amount, 0))
                      FROM order_payment_collection opc
-                     JOIN payment_collection pc ON pc.id = opc.payment_collection_id
-                    WHERE opc.order_id = $1), 0) AS captured_dollars`,
+                     JOIN payment_collection pc
+                       ON pc.id = opc.payment_collection_id
+                      AND pc.deleted_at IS NULL
+                    WHERE opc.order_id = $1
+                      AND opc.deleted_at IS NULL), 0) AS captured_dollars`,
       [orderId]
     );
-    const paidCents = Number(payRes.rows[0]?.paid_cents ?? 0);
-    const invoicedCents = Number(payRes.rows[0]?.invoiced_cents ?? 0);
-    const capturedCents = Math.round(
+    facts.paidCents = Number(payRes.rows[0]?.paid_cents ?? 0);
+    facts.invoicedCents = Number(payRes.rows[0]?.invoiced_cents ?? 0);
+    facts.capturedCents = Math.round(
       Number(payRes.rows[0]?.captured_dollars ?? 0) * 100
     );
-    const effectivePaidCents = Math.max(paidCents, capturedCents);
-    if (invoicedCents === 0 || effectivePaidCents < invoicedCents - 1) {
-      return { completed: false, reason: "not fully paid" };
+    facts.effectivePaidCents = Math.max(facts.paidCents, facts.capturedCents);
+    if (
+      facts.invoicedCents === 0 ||
+      facts.effectivePaidCents < facts.invoicedCents - 1
+    ) {
+      return skip("not_fully_paid");
     }
 
     // Guard 4: no draft/open credit memos
     const cmRes = await client.query(
       `SELECT COUNT(*)::int AS n FROM pos_credit_memo
-        WHERE order_id = $1 AND status NOT IN ('completed', 'voided')`,
+        WHERE order_id = $1
+          AND status NOT IN ('completed', 'voided')
+          AND deleted_at IS NULL`,
       [orderId]
     );
-    if ((cmRes.rows[0]?.n ?? 0) > 0) {
-      return { completed: false, reason: "draft credit memo" };
+    facts.openCreditMemos = Number(cmRes.rows[0]?.n ?? 0);
+    if (facts.openCreditMemos > 0) {
+      return skip("open_credit_memo");
     }
 
     // All conditions satisfied → complete natively in Medusa.
@@ -153,24 +257,34 @@ export async function maybeCompleteOrder(
     // Emit custom event so purchasing-snapshot-on-event recomputes immediately.
     try {
       const eventBus = container.resolve(Modules.EVENT_BUS);
-      await eventBus.emit({ name: "pos.order.fulfilled", data: { id: orderId } });
+      await eventBus.emit({
+        name: "pos.order.fulfilled",
+        data: { id: orderId },
+      });
     } catch {
       /* non-fatal */
     }
 
     console.log(`${LOG} ✅ order ${orderId} completed`);
-    return { completed: true };
-  } catch (err: any) {
+    return finish({
+      completed: true,
+      outcome: "completed",
+      reason: null,
+      facts: { ...facts },
+    });
+  } catch (error: unknown) {
     // completeOrderWorkflow can throw transiently; the next order edge re-runs
     // this helper and closes the order once settled.
-    const reason = `workflow: ${err?.message?.slice(0, 120) ?? "unknown error"}`;
-    console.warn(`${LOG} ⚠️ order ${orderId} ${reason}`);
-    return { completed: false, reason };
+    facts.detail = (error as Error).message?.slice(0, 240) ?? "unknown error";
+    console.warn(`${LOG} ⚠️ order ${orderId} workflow_error: ${facts.detail}`);
+    return skip("workflow_error");
   } finally {
     let unlockFailed = false;
     if (locked) {
       try {
-        await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [lockKey]);
+        await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [
+          lockKey,
+        ]);
       } catch {
         // Couldn't release the session lock — destroy this pooled connection so
         // it isn't reused while still holding the lock (would block this order).

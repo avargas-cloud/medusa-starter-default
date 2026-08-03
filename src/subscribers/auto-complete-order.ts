@@ -15,6 +15,7 @@ import { maybeCompleteOrder } from "../lib/maybe-complete-order";
  *   order.placed                 { id }
  *   order.updated                { id }         — cheap retry net (covers the QB
  *                                                 metadata writeback, etc.)
+ *   pos.order.completion_requested { order_id } — a payment edge soft-bailed
  *
  * NOT subscribed:
  *   - order.payment_captured: Medusa core never emits it (registerMedusaPayment
@@ -42,9 +43,15 @@ export default async function autoCompleteOrderSubscriber({
   if (!orderId?.startsWith("order_")) return;
 
   try {
-    const result = await maybeCompleteOrder(container, orderId);
+    const result = await maybeCompleteOrder(container, orderId, {
+      source: "order_completion_event",
+    });
     if (result.completed) {
       console.log(`[auto-complete] order ${orderId} completed via ${name}`);
+    } else if (result.reason === "busy" || result.reason === "workflow_error") {
+      console.warn(
+        `[auto-complete] retryable skip on ${name} for ${orderId}: ${result.reason}`
+      );
     }
   } catch (err: any) {
     // maybeCompleteOrder never throws, but stay defensive — never block events.
@@ -61,5 +68,6 @@ export const config: SubscriberConfig = {
     "order.fulfillment_created",
     "order.placed",
     "order.updated",
+    "pos.order.completion_requested",
   ],
 };

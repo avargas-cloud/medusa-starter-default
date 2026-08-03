@@ -4,13 +4,14 @@
  * Body: { invoice_id: string, amount: number, applied_by?: string, metadata?: object }
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
-import { getDbPool } from "../../../../utils/db-pool";
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
 import { handlePosPaymentApplied } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { writePipelineRow } from "../../../../../lib/quickbooks/pipeline/row-mutations";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import { getDbPool } from "../../../../utils/db-pool";
 import {
   getAppliedInvoiceTotal,
   getNum,
@@ -97,7 +98,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // and never more than what the deposit has available. The unused portion
     // stays on the CustomerPayment as available credit for future invoices.
     const invoiceTotal = getNum((invoice as any).total);
-    const invoiceAmountPaid = await getAppliedInvoiceTotal(req.scope, invoice_id);
+    const invoiceAmountPaid = await getAppliedInvoiceTotal(
+      req.scope,
+      invoice_id
+    );
     const invoiceBalanceDue = Math.max(0, invoiceTotal - invoiceAmountPaid);
 
     if (invoiceBalanceDue <= 0) {
@@ -290,9 +294,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // subscriber is the retry net if the order isn't eligible yet.
     if (invoice.order_id) {
       try {
-        await maybeCompleteOrder(req.scope, invoice.order_id);
-      } catch {
-        /* non-fatal */
+        const completion = await maybeCompleteOrder(
+          req.scope,
+          invoice.order_id,
+          { source: "customer_payment_applied" }
+        );
+        if (!completion.completed) {
+          const eventBus = req.scope.resolve(Modules.EVENT_BUS);
+          await eventBus.emit({
+            name: "pos.order.completion_requested",
+            data: { order_id: invoice.order_id },
+          });
+        }
+      } catch (completionError: unknown) {
+        console.warn(
+          `[customer-payments/:id/apply] completion retry edge failed: ${(completionError as Error).message}`
+        );
       }
     }
 
