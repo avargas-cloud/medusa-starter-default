@@ -202,8 +202,24 @@ describe("vendor-terms/catalog row mapping", () => {
       due_next_month_days: null,
       exists_in_qb: true,
       qb_synced_at: null,
+      is_active: true,
       sort_order: 9,
     });
+  });
+
+  it("defaults is_active to true and preserves a retired term", () => {
+    expect(parseTermRow(row())!.is_active).toBe(true);
+    expect(
+      parseTermRow(
+        row({
+          metadata: {
+            days: 30,
+            day_of_month_due: null,
+            is_active: false,
+          },
+        })
+      )!.is_active
+    ).toBe(false);
   });
 
   it("coerces numbers that Postgres handed back as strings", () => {
