@@ -10,6 +10,7 @@
 import { INVOICE_MODULE } from "../../modules/invoices";
 import {
   allocateNextNumber,
+  buildInvoiceRequestHash,
   claimInvoiceCreate,
   finalizeInvoiceCreate,
   type TxManager,
@@ -217,6 +218,46 @@ export default async function verifyIdempotencyPhase2({ container }: any) {
     threw = true;
   }
   check("T5 finalize fail-closed: missing claim throws", threw);
+
+  // ── T7: warranty confirmation participates in the request fingerprint ───
+  const warrantyFingerprintInput = {
+    order_id: "idemp-zero-warranty",
+    customer_id: "idemp-customer",
+    subtotal: 0,
+    discount: 0,
+    shipping: 0,
+    tax: 0,
+    total: 0,
+    amount_paid: 0,
+    payment_method: null,
+    card_brand: null,
+    items: [
+      {
+        sku: "WARRANTY-PROBE",
+        variant_id: "variant-probe",
+        quantity: 1,
+        unit_price: 0,
+        total: 0,
+        net_total: 0,
+      },
+    ],
+  } as const;
+  const withoutWarranty = buildInvoiceRequestHash({
+    ...warrantyFingerprintInput,
+    zero_total_reason: null,
+  });
+  const withWarranty = buildInvoiceRequestHash({
+    ...warrantyFingerprintInput,
+    zero_total_reason: "warranty",
+  });
+  const warrantyReplay = buildInvoiceRequestHash({
+    ...warrantyFingerprintInput,
+    zero_total_reason: "warranty",
+  });
+  check(
+    "T7 warranty evidence changes the hash and remains replay-stable",
+    withoutWarranty !== withWarranty && withWarranty === warrantyReplay
+  );
 
   // Cleanup test dedup rows (leave counters as-is — gaps from T2/T5 are expected).
   await pg.raw(`DELETE FROM invoice_create_attempt WHERE dedup_key LIKE 'header:idemp-%' OR dedup_key LIKE 'header:orphan-%'`);

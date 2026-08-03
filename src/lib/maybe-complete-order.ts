@@ -63,6 +63,7 @@ export type CompletionSkipReason =
   | "open_credit_memo"
   | "order_not_found"
   | "status_not_pending"
+  | "zero_total_unclassified"
   | "workflow_error";
 
 export interface CompletionFacts {
@@ -75,6 +76,8 @@ export interface CompletionFacts {
   orderStatus?: string;
   paidCents?: number;
   unfulfilledItems?: number;
+  warrantyZeroTotalInvoices?: number;
+  zeroTotalInvoices?: number;
 }
 
 export type MaybeCompleteResult =
@@ -212,6 +215,20 @@ export async function maybeCompleteOrder(
          COALESCE((SELECT SUM(total) FROM pos_invoice
                     WHERE order_id = $1 AND status != 'voided'
                       AND deleted_at IS NULL), 0) AS invoiced_cents,
+         COALESCE((SELECT COUNT(*) FROM pos_invoice
+                    WHERE order_id = $1 AND status != 'voided'
+                      AND deleted_at IS NULL AND total = 0), 0) AS zero_total_invoices,
+         COALESCE((SELECT COUNT(*) FROM pos_invoice
+                    WHERE order_id = $1 AND status != 'voided'
+                      AND deleted_at IS NULL AND total = 0
+                      AND status = 'paid'
+                      AND metadata->'zero_total_evidence'->>'schema' = '1'
+                      AND metadata->'zero_total_evidence'->>'reason' = 'warranty'
+                      AND COALESCE(metadata->'zero_total_evidence'->>'confirmed_at', '') != ''
+                      AND COALESCE(metadata->'zero_total_evidence'->>'confirmed_by', '') != ''
+                      AND metadata->'zero_total_evidence'->>'source'
+                            IN ('pos_confirmation', 'legacy_backfill')), 0)
+           AS warranty_zero_total_invoices,
          COALESCE((SELECT SUM(pc.captured_amount - COALESCE(pc.refunded_amount, 0))
                      FROM order_payment_collection opc
                      JOIN payment_collection pc
@@ -223,14 +240,24 @@ export async function maybeCompleteOrder(
     );
     facts.paidCents = Number(payRes.rows[0]?.paid_cents ?? 0);
     facts.invoicedCents = Number(payRes.rows[0]?.invoiced_cents ?? 0);
+    facts.zeroTotalInvoices = Number(
+      payRes.rows[0]?.zero_total_invoices ?? 0
+    );
+    facts.warrantyZeroTotalInvoices = Number(
+      payRes.rows[0]?.warranty_zero_total_invoices ?? 0
+    );
     facts.capturedCents = Math.round(
       Number(payRes.rows[0]?.captured_dollars ?? 0) * 100
     );
     facts.effectivePaidCents = Math.max(facts.paidCents, facts.capturedCents);
     if (
-      facts.invoicedCents === 0 ||
-      facts.effectivePaidCents < facts.invoicedCents - 1
+      facts.invoicedCents === 0 &&
+      (facts.zeroTotalInvoices !== facts.invoiceCount ||
+        facts.warrantyZeroTotalInvoices !== facts.invoiceCount)
     ) {
+      return skip("zero_total_unclassified");
+    }
+    if (facts.effectivePaidCents < facts.invoicedCents - 1) {
       return skip("not_fully_paid");
     }
 

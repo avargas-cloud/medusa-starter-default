@@ -27,6 +27,7 @@ export function buildInvoiceRequestHash(input: {
   amount_paid: number;
   total: number;
   payment_method?: string | null;
+  zero_total_reason?: "warranty" | null;
   items: Array<{
     sku?: string | null;
     variant_id?: string | null;
@@ -44,6 +45,7 @@ export function buildInvoiceRequestHash(input: {
     ap: Math.round(input.amount_paid),
     t: Math.round(input.total),
     pm: input.payment_method ?? null,
+    ztr: input.zero_total_reason ?? null,
     // Order-independent so item reordering doesn't defeat the fingerprint.
     i: input.items
       .map((it) => ({

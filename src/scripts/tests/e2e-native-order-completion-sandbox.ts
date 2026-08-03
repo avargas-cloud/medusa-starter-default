@@ -24,6 +24,8 @@ const MEILI_URL = process.env.MEILISEARCH_HOST ?? "http://localhost:7799";
 const MEILI_KEY = process.env.MEILISEARCH_API_KEY ?? "sandbox_master_key";
 const EMAIL = process.env.SANDBOX_EMAIL ?? "sandbox@test.com";
 const PASSWORD = process.env.SANDBOX_PASSWORD ?? "sandbox123";
+const RUN_NONCE = (Date.now() % 9_000) + 1_000;
+const RUN_QUANTITY_BASE = 10 + (Math.floor(Date.now() / 1_000) % 30);
 
 interface FixtureSeed {
   customerId: string;
@@ -106,6 +108,29 @@ async function api<T>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+async function apiRaw(
+  token: string,
+  path: string,
+  init: { method?: string; body?: unknown; idempotencyKey?: string } = {}
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await fetch(`${API_URL}${path}`, {
+    method: init.method ?? "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(init.idempotencyKey
+        ? { "Idempotency-Key": init.idempotencyKey }
+        : {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    body: text ? (JSON.parse(text) as Record<string, unknown>) : {},
+  };
+}
+
 async function loadSeed(db: Pool): Promise<FixtureSeed> {
   const result = await db.query<FixtureSeed>(
     `SELECT
@@ -150,7 +175,9 @@ async function createOrder(
   quantity: number,
   tag: string
 ): Promise<TestOrder> {
-  const unitPrice = 1_100 + quantity;
+  // Avoid convert-force's legitimate rapid duplicate detector when this suite
+  // is rerun against the same snapshot within its deduplication window.
+  const unitPrice = RUN_NONCE + quantity;
   const totalCents = unitPrice * quantity;
   const regions = await api<{ regions: Array<{ id: string }> }>(
     token,
@@ -261,6 +288,215 @@ async function createOrder(
   };
 }
 
+async function createZeroWarrantyOrder(
+  token: string,
+  db: Pool,
+  seed: FixtureSeed,
+  tag: string
+): Promise<TestOrder> {
+  const quantity = 1;
+  const warrantyCustomerResult = await db.query<{
+    id: string;
+    email: string;
+  }>(
+    `SELECT id, email
+       FROM customer
+      WHERE deleted_at IS NULL
+        AND has_account = true
+        AND id <> $1
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [seed.customerId]
+  );
+  const warrantyCustomer = warrantyCustomerResult.rows[0];
+  assert(warrantyCustomer, "sandbox sin segundo customer para aislar el fixture $0");
+  const regions = await api<{ regions: Array<{ id: string }> }>(
+    token,
+    "/admin/regions?limit=1"
+  );
+  const regionId = regions.regions[0]?.id;
+  assert(regionId, "sandbox sin región");
+
+  const documentNumber = `E2E-WARRANTY-${tag}-${Date.now()}`;
+  const draft = await api<{ draft_order: { id: string } }>(
+    token,
+    "/admin/draft-orders",
+    {
+      method: "POST",
+      body: {
+        email: warrantyCustomer.email,
+        customer_id: warrantyCustomer.id,
+        region_id: regionId,
+        items: [],
+        metadata: {
+          pos_created: true,
+          document_number: documentNumber,
+          native_completion_e2e: tag,
+          warranty_demo: true,
+        },
+      },
+    }
+  );
+  const orderId = draft.draft_order.id;
+
+  await api(token, `/admin/draft-orders/${orderId}/add-item-force`, {
+    method: "POST",
+    body: {
+      variant_id: seed.variantId,
+      quantity,
+      unit_price: 0,
+      custom_title: `${seed.title} — warranty replacement`,
+      sort_order: 0,
+    },
+  });
+  await api(token, `/admin/draft-orders/${orderId}/convert-force`, {
+    method: "POST",
+    body: {},
+  });
+
+  const orderResult = await db.query<{
+    display_id: number;
+    is_draft_order: boolean;
+    line_item_id: string;
+  }>(
+    `SELECT o.display_id, o.is_draft_order, li.id AS line_item_id
+       FROM "order" o
+       JOIN order_item oi
+         ON oi.order_id = o.id
+        AND oi.version = o.version
+        AND oi.deleted_at IS NULL
+       JOIN order_line_item li ON li.id = oi.item_id
+      WHERE o.id = $1
+      LIMIT 1`,
+    [orderId]
+  );
+  const row = orderResult.rows[0];
+  assert(row && row.is_draft_order === false, `${tag}: el draft $0 no se convirtió`);
+
+  const invoiceBody = {
+    order_id: orderId,
+    order_display_id: row.display_id,
+    customer_id: warrantyCustomer.id,
+    items: [
+      {
+        variant_id: seed.variantId,
+        sku: seed.sku,
+        description: `${seed.title} — warranty replacement`,
+        quantity,
+        unit_price: 0,
+        total: 0,
+        net_total: 0,
+      },
+    ],
+    subtotal: 0,
+    discount: 0,
+    shipping: 0,
+    tax: 0,
+    total: 0,
+    amount_paid: 0,
+    payment_method: null,
+    order_document_number: documentNumber,
+    send_email: false,
+    is_sales_receipt: false,
+  };
+
+  const counterBefore = await db.query<{ value: string }>(
+    `SELECT value FROM document_number_counter WHERE name = 'medusa_invoice'`
+  );
+  const rejected = await apiRaw(token, "/admin/invoices", {
+    method: "POST",
+    idempotencyKey: `warranty-required-${orderId}`,
+    body: invoiceBody,
+  });
+  assert(
+    rejected.status === 400 &&
+      rejected.body.code === "ZERO_TOTAL_WARRANTY_CONFIRMATION_REQUIRED",
+    `${tag}: $0 sin garantía no fue rechazado correctamente (${rejected.status})`
+  );
+
+  const positiveWithWarranty = await apiRaw(token, "/admin/invoices", {
+    method: "POST",
+    idempotencyKey: `warranty-positive-${orderId}`,
+    body: {
+      ...invoiceBody,
+      items: invoiceBody.items.map((item) => ({
+        ...item,
+        unit_price: 100,
+        total: 100,
+        net_total: 100,
+      })),
+      subtotal: 100,
+      total: 100,
+      zero_total_reason: "warranty",
+    },
+  });
+  assert(
+    positiveWithWarranty.status === 400 &&
+      positiveWithWarranty.body.code === "ZERO_TOTAL_REASON_NOT_ALLOWED",
+    `${tag}: invoice positivo aceptó evidencia de garantía (${positiveWithWarranty.status})`
+  );
+
+  const counterAfterRejects = await db.query<{ value: string }>(
+    `SELECT value FROM document_number_counter WHERE name = 'medusa_invoice'`
+  );
+  const rejectedSideEffects = await db.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM pos_invoice WHERE order_id = $1`,
+    [orderId]
+  );
+  assert(
+    counterAfterRejects.rows[0]?.value === counterBefore.rows[0]?.value &&
+      Number(rejectedSideEffects.rows[0]?.count ?? 0) === 0,
+    `${tag}: un rechazo $0 consumió contador o creó invoice`
+  );
+
+  const created = await api<{ invoice: { id: string } }>(
+    token,
+    "/admin/invoices",
+    {
+      method: "POST",
+      idempotencyKey: `warranty-confirmed-${orderId}`,
+      body: { ...invoiceBody, zero_total_reason: "warranty" },
+    }
+  );
+  const evidence = await db.query<{
+    confirmed_at: string | null;
+    confirmed_by: string | null;
+    reason: string | null;
+    schema: string | null;
+    source: string | null;
+    status: string;
+  }>(
+    `SELECT status,
+            metadata->'zero_total_evidence'->>'schema' AS schema,
+            metadata->'zero_total_evidence'->>'reason' AS reason,
+            metadata->'zero_total_evidence'->>'confirmed_at' AS confirmed_at,
+            metadata->'zero_total_evidence'->>'confirmed_by' AS confirmed_by,
+            metadata->'zero_total_evidence'->>'source' AS source
+       FROM pos_invoice
+      WHERE id = $1`,
+    [created.invoice.id]
+  );
+  const stamped = evidence.rows[0];
+  assert(
+    stamped?.status === "paid" &&
+      stamped.schema === "1" &&
+      stamped.reason === "warranty" &&
+      stamped.source === "pos_confirmation" &&
+      Boolean(stamped.confirmed_at) &&
+      Boolean(stamped.confirmed_by),
+    `${tag}: invoice $0 no guardó evidencia server-stamped válida`
+  );
+
+  return {
+    displayId: row.display_id,
+    invoiceId: created.invoice.id,
+    lineItemId: row.line_item_id,
+    orderId,
+    quantity,
+    totalCents: 0,
+  };
+}
+
 async function fulfill(
   token: string,
   seed: FixtureSeed,
@@ -368,7 +604,13 @@ export default async function run({ container }: ExecArgs): Promise<void> {
 
   try {
     console.log("\nA — pago final tardío completa por la ruta HTTP");
-    const normal = await createOrder(token, db, seed, 1, "NORMAL");
+    const normal = await createOrder(
+      token,
+      db,
+      seed,
+      RUN_QUANTITY_BASE,
+      "NORMAL"
+    );
     created.push(normal);
     await fulfill(token, seed, normal);
     await pay(token, seed, normal, 400, `E2E-NORMAL-PART-${Date.now()}`);
@@ -404,7 +646,13 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     await waitForMeiliClosed(normal.orderId);
 
     console.log("B — lock busy y recuperación por reconciliador");
-    const locked = await createOrder(token, db, seed, 2, "LOCKED");
+    const locked = await createOrder(
+      token,
+      db,
+      seed,
+      RUN_QUANTITY_BASE + 1,
+      "LOCKED"
+    );
     created.push(locked);
     await fulfill(token, seed, locked);
     await pay(token, seed, locked, 500, `E2E-LOCKED-PART-${Date.now()}`);
@@ -455,7 +703,13 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     await waitForMeiliClosed(locked.orderId);
 
     console.log("C — crédito abierto, void sin evento y recuperación durable");
-    const credit = await createOrder(token, db, seed, 3, "CREDIT");
+    const credit = await createOrder(
+      token,
+      db,
+      seed,
+      RUN_QUANTITY_BASE + 2,
+      "CREDIT"
+    );
     created.push(credit);
     await pay(
       token,
@@ -540,6 +794,37 @@ export default async function run({ container }: ExecArgs): Promise<void> {
       completedAfter === completedBefore,
       "C: se registró una segunda finalización"
     );
+
+    console.log("D — invoice $0 exige garantía y luego cierra nativamente");
+    const warranty = await createZeroWarrantyOrder(
+      token,
+      db,
+      seed,
+      "ZERO-WARRANTY"
+    );
+    created.push(warranty);
+    assert(
+      (await orderStatus(db, warranty.orderId)) === "pending",
+      "D: invoice $0 cerró antes del fulfillment"
+    );
+    await waitForAudit(
+      db,
+      warranty.orderId,
+      (row) => row.reason === "not_fully_fulfilled",
+      "audit not_fully_fulfilled D"
+    );
+    await fulfill(token, seed, warranty);
+    await waitFor(
+      "orden D completed",
+      async () => (await orderStatus(db, warranty.orderId)) === "completed"
+    );
+    await waitForAudit(
+      db,
+      warranty.orderId,
+      (row) => row.outcome === "completed",
+      "audit completed D"
+    );
+    await waitForMeiliClosed(warranty.orderId);
 
     console.log("\n✅ E2E native completion PASS");
     for (const order of created) {

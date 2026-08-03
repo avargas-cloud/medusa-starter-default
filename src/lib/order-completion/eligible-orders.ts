@@ -78,15 +78,32 @@ export async function listEligiblePendingOrders(
            AND pi2.deleted_at IS NULL
            AND pi2.status != 'voided'
        ) - 1
-       -- Match the authoritative helper: a $0 invoice is not evidence of a
-       -- settled sale and must not become a candidate on every cron sweep.
+       -- A zero-total order is completable only when EVERY active invoice is a
+       -- server-stamped paid warranty invoice. This mirrors maybeCompleteOrder.
        AND (
-         SELECT COALESCE(SUM(pi4.total), 0)
-         FROM pos_invoice pi4
-         WHERE pi4.order_id = o.id
-           AND pi4.deleted_at IS NULL
-           AND pi4.status != 'voided'
-       ) > 0
+         (SELECT COALESCE(SUM(pi4.total), 0)
+            FROM pos_invoice pi4
+           WHERE pi4.order_id = o.id
+             AND pi4.deleted_at IS NULL
+             AND pi4.status != 'voided') > 0
+         OR NOT EXISTS (
+           SELECT 1
+             FROM pos_invoice pi4
+            WHERE pi4.order_id = o.id
+              AND pi4.deleted_at IS NULL
+              AND pi4.status != 'voided'
+              AND (
+                pi4.total != 0
+                OR pi4.status != 'paid'
+                OR pi4.metadata->'zero_total_evidence'->>'schema' IS DISTINCT FROM '1'
+                OR pi4.metadata->'zero_total_evidence'->>'reason' IS DISTINCT FROM 'warranty'
+                OR COALESCE(pi4.metadata->'zero_total_evidence'->>'confirmed_at', '') = ''
+                OR COALESCE(pi4.metadata->'zero_total_evidence'->>'confirmed_by', '') = ''
+                OR COALESCE(pi4.metadata->'zero_total_evidence'->>'source', '')
+                     NOT IN ('pos_confirmation', 'legacy_backfill')
+              )
+         )
+       )
        AND NOT EXISTS (
          SELECT 1
          FROM pos_credit_memo cm

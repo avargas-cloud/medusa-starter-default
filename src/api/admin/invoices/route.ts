@@ -26,6 +26,12 @@ import { getDbPool } from "../../utils/db-pool";
 import { sortDocItemsByInsertion } from "./_lib/item-order";
 import { maybeCompleteOrder } from "../../../lib/maybe-complete-order";
 import {
+  buildZeroTotalEvidence,
+  ZERO_TOTAL_WARRANTY_REASON,
+  type ZeroTotalEvidence,
+  type ZeroTotalReason,
+} from "../../../lib/order-completion/zero-total-evidence";
+import {
   allocateNextNumber,
   buildInvoiceRequestHash,
   claimInvoiceCreate,
@@ -349,6 +355,8 @@ interface CreateInvoiceBody {
   is_sales_receipt?: boolean;
   /** If set, a CustomerPayment was already created by the terminal route — skip creating a new one and link this ID instead */
   terminal_payment_id?: string;
+  /** Required when the server-derived invoice total is exactly zero cents. */
+  zero_total_reason?: ZeroTotalReason;
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -584,6 +592,35 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
   }
 
+  let zeroTotalEvidence: ZeroTotalEvidence | null = null;
+  if (derivedTotal === 0) {
+    if (body.zero_total_reason !== ZERO_TOTAL_WARRANTY_REASON) {
+      return res.status(400).json({
+        error:
+          "A $0 invoice requires explicit warranty confirmation before it can be created.",
+        code: "ZERO_TOTAL_WARRANTY_CONFIRMATION_REQUIRED",
+      });
+    }
+    const actorId = (
+      req as unknown as { auth_context?: { actor_id?: string } }
+    ).auth_context?.actor_id;
+    if (!actorId) {
+      return res.status(401).json({
+        error: "Authenticated staff identity is required for warranty evidence.",
+        code: "ZERO_TOTAL_WARRANTY_ACTOR_REQUIRED",
+      });
+    }
+    zeroTotalEvidence = buildZeroTotalEvidence({
+      confirmedBy: actorId,
+      source: "pos_confirmation",
+    });
+  } else if (body.zero_total_reason !== undefined) {
+    return res.status(400).json({
+      error: "Warranty confirmation is only valid for a $0 invoice.",
+      code: "ZERO_TOTAL_REASON_NOT_ALLOWED",
+    });
+  }
+
   const balance_due = derivedTotal - body.amount_paid;
 
   // Normalize payment_method + card_brand into the canonical split format.
@@ -780,6 +817,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     amount_paid: body.amount_paid,
     total: derivedTotal,
     payment_method: resolvedPaymentMethod ?? null,
+    zero_total_reason: body.zero_total_reason ?? null,
     items: body.items ?? [],
   });
   const dedupKey = resolveInvoiceDedupKey({
@@ -843,6 +881,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         metadata: {
           is_sales_receipt: !!body.is_sales_receipt,
           qb_ref_number: qb_metadata_ref_number,
+          ...(zeroTotalEvidence
+            ? { zero_total_evidence: zeroTotalEvidence }
+            : {}),
         },
       },
       ctx
