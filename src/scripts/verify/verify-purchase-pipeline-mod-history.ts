@@ -187,6 +187,55 @@ async function main(): Promise<void> {
       );
     }
 
+    // ── 8 · The # column numbers RECORDS, one each, with no gaps ──────────
+    const [numbering] = await q<{
+      total: string;
+      uniq: string;
+      lo: string;
+      hi: string;
+    }>(
+      `SELECT COUNT(*) AS total, COUNT(DISTINCT seq_label) AS uniq,
+              MIN(seq)::text AS lo, MAX(seq)::text AS hi
+         FROM (${FEED}) f`
+    );
+    check(
+      "every row has its own number, contiguous from 1",
+      numbering.total === numbering.uniq &&
+        numbering.lo === "1" &&
+        numbering.hi === numbering.total,
+      `${numbering.total} rows, ${numbering.uniq} distinct, range ${numbering.lo}-${numbering.hi}`
+    );
+
+    // ── 9 · Filtering must not renumber ───────────────────────────────────
+    // The number is computed over the whole feed on purpose: if it were applied
+    // after the WHERE, typing in the search box would renumber the table under
+    // the operator, and a number quoted in an audit note would stop meaning
+    // anything.
+    const [sample] = await q<{ id: string; seq_label: string }>(
+      `SELECT id, seq_label FROM (${FEED}) f
+        WHERE f.step = 'mod_purchase_order'
+        ORDER BY created_at DESC LIMIT 1`
+    );
+    if (sample) {
+      const [filtered] = await q<{ seq_label: string }>(
+        `SELECT seq_label FROM (${FEED}) f WHERE f.status = $1 AND f.id = $2`,
+        ["synced", sample.id]
+      );
+      const [searched] = await q<{ seq_label: string }>(
+        `SELECT seq_label FROM (${FEED}) f
+          WHERE COALESCE(po_number, '') ILIKE $1 AND f.id = $2`,
+        ["%PO-%", sample.id]
+      );
+      const stable =
+        (!filtered || filtered.seq_label === sample.seq_label) &&
+        (!searched || searched.seq_label === sample.seq_label);
+      check(
+        "a row keeps its number under filter and search",
+        stable,
+        `#${sample.seq_label} unfiltered, #${filtered?.seq_label ?? "n/a"} filtered, #${searched?.seq_label ?? "n/a"} searched`
+      );
+    }
+
     console.log(
       `\n${failed === 0 ? "✅" : "❌"} ${passed} passed, ${failed} failed\n`
     );

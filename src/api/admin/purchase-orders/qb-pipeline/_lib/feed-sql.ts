@@ -39,7 +39,47 @@
  */
 
 export const PURCHASE_PIPELINE_FEED_SQL = `
-      SELECT * FROM (
+      SELECT numbered.*, numbered.seq::text AS seq_label FROM (
+      SELECT
+        feed.id,
+        -- One running number per RECORD, oldest = 1. Before this, the column
+        -- showed the DOCUMENT's number, so a PO with sixteen mods printed
+        -- sixteen rows all labelled #125 and the table read as duplicated.
+        --
+        -- Computed here, over the WHOLE feed, and deliberately not in the outer
+        -- query: numbering after the WHERE would renumber every row whenever
+        -- the operator typed in the search box or switched the status filter.
+        -- Ordered ASCENDING so a new operation always takes a higher number
+        -- than everything already recorded, instead of pushing the rows below
+        -- it down by one. It is still a POSITION, not an identity: deleting a
+        -- row, or inserting one with an older created_at, shifts what comes
+        -- after it.
+        --
+        -- ONE window function, with seq_label derived from it in the wrapper
+        -- above: two independent ROW_NUMBER() calls that must agree can drift
+        -- apart silently, and the label and the sort key disagreeing is exactly
+        -- the kind of bug nobody reports because the number still "looks fine".
+        ROW_NUMBER() OVER (ORDER BY feed.created_at ASC, feed.id ASC) AS seq,
+        feed.parent_id,
+        feed.po_number,
+        feed.draft_number,
+        feed.receipt_number,
+        feed.vendor_bill_number,
+        feed.status,
+        feed.qb_operation_id,
+        feed.qb_list_id,
+        feed.qb_txn_number,
+        feed.last_error,
+        feed.retries,
+        feed.coalesced_edits,
+        feed.next_retry_at,
+        feed.synced_at,
+        feed.created_at,
+        feed.updated_at,
+        feed.vendor_name,
+        feed.step
+      FROM (
+
         -- ── Purchase Order pipeline (ADD / void) ─────────────────────────
         -- delegated = this row's live state belongs to a chained mod that has
         -- its own row below. Showing the mirrored status here too would both
@@ -477,4 +517,5 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
         WHERE qvb.deleted_at IS NULL
           AND qvb.void_status IS NOT NULL
       ) feed
+      ) numbered
     `;
