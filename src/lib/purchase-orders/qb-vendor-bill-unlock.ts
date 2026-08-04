@@ -27,7 +27,6 @@ export type ClaimUnlockResult =
   | { ok: false; code: "bill_not_synced"; message: string }
   | { ok: false; code: "bill_rebuild_not_required"; message: string }
   | { ok: false; code: "adopted_bill_readonly"; message: string }
-  | { ok: false; code: "china_agent_unlock_blocked"; message: string }
   | { ok: false; code: "unlock_already_in_flight"; message: string };
 
 export interface ClaimUnlockInput {
@@ -152,27 +151,25 @@ export async function claimUnlock(
                        OR qv.metadata @> '{"is_china_agent": true}'::jsonb, false)`,
       [bill.purchase_order_id]
     );
+    // [REMOVED 2026-08-04] `china_agent_unlock_blocked`.
+    //
     // China-agent bills carry negative clearing lines that cancel their sibling
     // freight/commission bills, so deleting one leaves those siblings
-    // uncancelled in A/P until the operator re-confirms. That is why this path
-    // was closed to them.
+    // uncancelled in A/P until the operator re-confirms. That window is why the
+    // path was closed to them — but closing it did not avoid the problem, it
+    // only removed the way out: a China-agent bill with a new PO-linked line
+    // cannot be corrected by BillMod either (QuickBooks creates PO links on Add
+    // only), so those bills had NO path at all.
     //
-    // For a CONTRACTION REPAIR the owner accepted that window (2026-08-04): the
-    // repair is a deliberate correction that ends in a confirm, and the real
-    // risk is not the window but someone never finishing — which the
-    // TO CONFIRM! markers address instead. The block stands for every other
-    // trigger, where nobody weighed that trade-off.
-    if (
-      agentResult.rows.length > 0 &&
-      input.trigger !== "po_contraction_repair"
-    ) {
-      return {
-        ok: false,
-        code: "china_agent_unlock_blocked",
-        message:
-          "China-agent bills use the linked split-bill workflow and cannot be rebuilt here",
-      };
-    }
+    // The owner weighed the window and accepted it: the repair is a deliberate
+    // correction that ends in a confirm, and the real risk is not the window
+    // but someone never finishing — which the TO CONFIRM! markers address.
+    //
+    // Everything that made this dangerous still guards it: the rebuild still
+    // requires a genuinely new PO-linked line (unless it is a contraction
+    // repair), the route still demands a supervisor PIN and a reason, and the
+    // preflight now refuses any bill with a payment applied to it.
+    void agentResult;
 
     const existingResult = await trx.raw(
       `SELECT qvb.id, qvb.intent, qvb.status, qvb.void_status,

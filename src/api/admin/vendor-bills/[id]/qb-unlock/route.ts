@@ -11,10 +11,13 @@
  * Body: { supervisor_pin: string, reason: string }
  *
  * 202 { status: 'rebuild_queued', ...operation ids } on success. 409 with one
- * of `bill_not_synced` / `china_agent_unlock_blocked` /
- * `bill_rebuild_not_required` / `unlock_already_in_flight` (see
- * `claimUnlock`); 404 `bill_not_found`; 403 `invalid_supervisor_pin`; 400
- * `validation_error`.
+ * of `bill_not_synced` / `bill_rebuild_not_required` /
+ * `unlock_already_in_flight` (see `claimUnlock`); 404 `bill_not_found`; 403
+ * `invalid_supervisor_pin`; 400 `validation_error`.
+ *
+ * `china_agent_unlock_blocked` is gone (2026-08-04): a China-agent bill with a
+ * new PO-linked line had no path at all, since BillMod cannot create PO links
+ * either. See `claimUnlock` for what still guards the delete.
  */
 
 import type {
