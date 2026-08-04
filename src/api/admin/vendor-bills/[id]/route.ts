@@ -29,6 +29,12 @@ import {
 } from "../../../../lib/purchase-orders/po-billed-quantities";
 import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
 import {
+  deriveClearingDrift,
+  type ClearingDrift,
+  type PersistedClearingLine,
+} from "../../../../lib/purchase-orders/qb-vendor-bill-clearing-lines";
+import { loadClearingSiblings } from "../../../../lib/purchase-orders/load-clearing-siblings";
+import {
   buildAdjustmentNote,
   diffBillLines,
   type AdjLineState,
@@ -827,6 +833,40 @@ export async function GET(
       }
     : null;
 
+  // B1.5 — "a linked bill was edited; this one needs review".
+  //
+  // Every bill syncs to QuickBooks on its own (owner decision, 2026-08-04), so
+  // correcting a commission sends ITS Mod and leaves this bill's negative
+  // clearing line quoting the old figure. QuickBooks' A/P is then off by the
+  // difference, on a document that looks entirely normal from either screen.
+  // Measured in production the day this was written: VB-1053 clears $564.51
+  // while VB-1054 is $566.27 — $1.76 adrift since July, and nothing said so.
+  //
+  // DERIVED, never flagged: a column would need setting by every path that can
+  // move a sibling's total and clearing by every path that re-sends this bill,
+  // and the first one anybody forgets makes the banner lie. This is recomputed
+  // from the two things being compared, so it cannot go stale and it clears
+  // itself once a Mod carries the current figures over.
+  //
+  // Only for a bill that is actually IN QuickBooks: one that never got there
+  // has no A/P to be wrong about, and its Add will build the lines from these
+  // same siblings.
+  let clearing_drift: ClearingDrift | null = null;
+  if (header.bill_type === "regular" && header.qb_txn_id) {
+    const clearingSiblings = await loadClearingSiblings(knex, id);
+    const persistedResult = await knex.raw(
+      `SELECT COALESCE(qb_clearing_lines, '[]'::jsonb) AS lines
+         FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+      [id]
+    );
+    const persisted = ((persistedResult.rows[0] as { lines?: unknown })
+      ?.lines ?? []) as PersistedClearingLine[];
+    if (clearingSiblings.length > 0 || persisted.length > 0) {
+      const drifted = deriveClearingDrift(persisted, clearingSiblings);
+      clearing_drift = drifted.stale ? drifted : null;
+    }
+  }
+
   const revisionsResult = await knex.raw(
     `SELECT r.revision_number, r.status, r.input_hash, r.confirmed_at,
             r.confirmed_by_user_id,
@@ -855,6 +895,7 @@ export async function GET(
       suggested_receipt_ids,
       qb,
       qb_pipeline,
+      clearing_drift,
       revisions,
     },
   });

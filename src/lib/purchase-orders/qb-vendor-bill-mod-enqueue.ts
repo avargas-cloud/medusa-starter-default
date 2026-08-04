@@ -359,6 +359,60 @@ export async function enqueueChinaAgencyVendorBillModGroup(
 }
 
 /**
+ * Queues a BillMod for the REGULAR bill alone, changing nothing about it.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Every bill syncs on its own, so correcting a commission sends ITS Mod and
+ * leaves the regular bill's negative clearing line quoting the old figure —
+ * QuickBooks' A/P is then off by the difference. The regular bill does not
+ * become dirty when that happens (its own document did not change), so Save is
+ * disabled and, once it is `confirmed`/`synced`, there is no Confirm button
+ * either: 16 of the 17 synced regular bills in production have no way to
+ * re-send. Without this the banner would be a warning with no exit, and the
+ * only workaround would be editing a line to dirty the form — fixing a sync by
+ * MODIFYING the document, which is exactly what must not happen.
+ *
+ * NOT THE GROUP: the siblings already went to QuickBooks when they were edited,
+ * so re-sending them would be redundant, and it could drag a sibling that is
+ * mid-repair. This bill travels alone, the same discipline as
+ * `enqueueVendorBillModSingle`.
+ *
+ * TOUCHES NO COSTS. It creates no revision and posts no AVCO/COGS: the payload
+ * is built from the bill exactly as it stands, and the clearing amounts come
+ * from the siblings' CURRENT totals (`retainedClearing`), which is what makes
+ * re-sending settle the drift.
+ */
+export async function enqueueRegularBillModAlone(
+  db: VendorBillModKnex,
+  regularBillId: string
+): Promise<VendorBillModEnqueueResult> {
+  if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
+    return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill'" };
+  }
+  const bill = await loadBill(db, regularBillId);
+  if (!bill) return { queued: false, reason: "vendor bill not found" };
+  if (bill.bill_type !== "regular") {
+    return { queued: false, reason: "not a regular bill" };
+  }
+  if (bill.qb_source === "adopted") {
+    return { queued: false, reason: "adopted_bill_readonly" };
+  }
+  if (!bill.qb_txn_id) {
+    return { queued: false, reason: "bill is not linked to QuickBooks" };
+  }
+  if (!bill.purchase_order_id) {
+    return { queued: false, reason: "bill has no purchase order" };
+  }
+
+  const groupId = randomUUID();
+  // Its own context: `buildPayload` reads `regular.purchase_order_id` and the
+  // sibling pointers, and a regular bill carries both.
+  await enqueueOneBillMod(db, bill, bill, groupId);
+  return { queued: true, groupId, billIds: [bill.id] };
+}
+
+/**
  * Freezes ONE bill's BillMod payload and its pipeline rows.
  *
  * Extracted so the group path and the single-bill path share it byte for byte:

@@ -12,10 +12,17 @@
  *  - Fires ONLY when `QB_VENDOR_BILL_MODE === 'bill'` — while the flag is off
  *    NOTHING is queued (deliberate: pre-flip confirms must not accumulate
  *    waiting rows that would all dispatch the moment the flag flips).
- *  - Phase 1 scope is LOCAL vendors: bills whose PO vendor is a China
- *    purchasing agent (`qb_vendor.metadata.is_china_agent`, read LIVE per the
- *    2026-07-06 rule) are SKIPPED — their 4-bill negative-clearing structure
- *    ships in Phase 2.
+ *  - BOTH document shapes ship (Phase 2, 2026-08-04). A bill with LINKED SIBLING
+ *    bills (service/freight/tariff) carries item lines at the FULL LANDED cost
+ *    plus one NEGATIVE ExpenseLine per sibling cancelling it, so A/P nets to
+ *    what is owed. The vendor's `is_china_agent` flag decides NOTHING here — it
+ *    is a POS relationship, invisible to QuickBooks; the structure of the
+ *    document is its own fingerprint (see §shape below).
+ *    Those lines are derived from the siblings' CURRENT totals
+ *    (`qb-vendor-bill-clearing-lines.ts`) and PERSISTED to
+ *    `vendor_bill.qb_clearing_lines` — that column is how the Mod later knows
+ *    which shape this document has, so failing to write it makes the first
+ *    edit restate the bill at raw cost.
  *  - One row per bill (UPDATE-first, INSERT-fallback — 2026-07-15 rule); a
  *    re-confirm after reopen reuses the row, bumping nothing: the poller's
  *    object-state gate refuses a second BillAdd for a generation whose
@@ -46,6 +53,11 @@ import {
   purchaseOperationKey,
 } from "./qb-purchase-dependency-chain";
 import { allocateLineTotalsCents } from "./landed-allocation";
+import {
+  deriveClearingLines,
+  type DerivedClearingLine,
+} from "./qb-vendor-bill-clearing-lines";
+import { loadClearingSiblings } from "./load-clearing-siblings";
 
 export type EnqueueKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
@@ -84,6 +96,8 @@ interface LineRow {
   description: string | null;
   qty: number;
   unit_cost_cents: number;
+  /** Full landed cost — what a China-agent bill's item lines carry. */
+  landed_unit_cost_cents: number | null;
   amount_cents: number | null;
   freight_account_list_id: string | null;
   qb_account_list_id: string | null;
@@ -147,23 +161,36 @@ export async function enqueueQbVendorBillAdd(
   const po = (poResult.rows[0] ?? null) as PoRow | null;
   if (!po) return { queued: false, reason: "purchase order not found" };
 
-  // Phase 2 scope fence — China-agent bills use the 4-bill clearing structure.
-  if (po.vendor_id) {
-    const agentResult = await knex.raw(
-      `SELECT 1 FROM qb_vendor
-        WHERE id = ? AND deleted_at IS NULL
-          AND COALESCE((metadata ->> 'is_china_agent') = 'true'
-                       OR metadata @> '{"is_china_agent": true}'::jsonb, false)`,
-      [po.vendor_id]
-    );
-    if (agentResult.rows.length > 0) {
-      return { queued: false, reason: "china-agent bill — Phase 2 handles QB dispatch" };
-    }
-  }
+  // WHICH DOCUMENT SHAPE — decided by the bill's STRUCTURE, not by its vendor.
+  //
+  //  · Bill WITH linked sibling bills — their cost is already folded into the
+  //    landed item cost, so item lines go at the FULL LANDED figure plus one
+  //    NEGATIVE ExpenseLine per sibling cancelling it. A/P nets to what is owed.
+  //  · Bill WITHOUT siblings — item lines at the raw cost with sales tax folded
+  //    in, and freight as its own positive ExpenseLine.
+  //
+  // It used to branch on `qb_vendor.metadata.is_china_agent`. That flag is a
+  // POS-level relationship, not something QuickBooks knows or cares about, and
+  // it happens to coincide with the structure only by history: all 20 regular
+  // bills with linked siblings are China-agent today, and no local one has any.
+  // Coincidence is not a rule — a China-agent bill with no siblings would look
+  // for clearing lines that do not exist, and a local bill with a freight
+  // sibling would post the freight TWICE. What QuickBooks needs to know is
+  // whether the siblings' money is already inside the item cost.
+  //
+  // Matches how the Mod already decides (`usesClearingStructure =
+  // qb_clearing_lines.length > 0`) — the structure is its own fingerprint.
+  //
+  // Until 2026-08-04 this shape simply refused ("Phase 2 handles QB dispatch"),
+  // leaving those bills with no path to QuickBooks at all: four orphans worth
+  // $2,325.25, and VB-1059 unable to come back after its rebuild.
+  const siblings = await loadClearingSiblings(knex, vendorBillId);
+  const usesClearingStructure = siblings.length > 0;
 
   const linesResult = await knex.raw(
     `SELECT vbl.id, vbl.line_kind, vbl.line_type, vbl.sku, vbl.description,
-            vbl.qty, vbl.unit_cost_cents, vbl.amount_cents,
+            vbl.qty, vbl.unit_cost_cents, vbl.landed_unit_cost_cents,
+            vbl.amount_cents,
             vbl.freight_account_list_id, vbl.qb_account_list_id,
             vbl.purchase_order_line_id,
             pol.qb_txn_line_id AS qb_po_txn_line_id,
@@ -219,20 +246,41 @@ export async function enqueueQbVendorBillAdd(
   const itemLines = productLines.map((l, i) => {
     const taxShare = taxByLine[i] ?? 0;
     const qty = Number(l.qty);
+    // The China shape carries the FULL landed cost — commission and freight are
+    // already inside it, which is exactly why the negative clearing lines below
+    // have to cancel their sibling bills. Sales tax does not apply here: it is a
+    // USA-vendor charge. This must match what the Mod sends
+    // (`usesClearingStructure` → `landed_unit_cost_cents`), or the first edit
+    // silently restates the bill.
+    const unitCost = usesClearingStructure
+      ? Number(l.landed_unit_cost_cents || l.unit_cost_cents)
+      : qty > 0 && taxShare > 0
+        ? (l.unit_cost_cents * qty + taxShare) / qty
+        : l.unit_cost_cents;
     return {
       vendor_bill_line_id: l.id,
       purchase_order_line_id: l.purchase_order_line_id,
       sku: l.sku,
       qb_po_txn_line_id: l.qb_po_txn_line_id,
       quantity: l.qty,
-      unit_cost_cents:
-        qty > 0 && taxShare > 0
-          ? (l.unit_cost_cents * qty + taxShare) / qty
-          : l.unit_cost_cents,
+      unit_cost_cents: unitCost,
       qb_item_list_id: l.variant_qb_item_list_id,
       description: l.description,
     };
   });
+
+  // The negative clearing lines. Built from the siblings' CURRENT totals —
+  // the POS is the truth — so a rebuild also settles any drift they carry.
+  let clearingLines: DerivedClearingLine[] = [];
+  if (usesClearingStructure) {
+    const derived = deriveClearingLines(siblings);
+    if (!derived.ok) {
+      // Fail closed. Posting without a clearing line overstates A/P by exactly
+      // that sibling's amount, on a document that looks entirely normal.
+      return { queued: false, reason: derived.reason };
+    }
+    clearingLines = derived.lines;
+  }
   // Non-item charges, all positive ExpenseLines. Keep this set identical to
   // what the Mod path retains — QB deletes by omission on BillMod.
   const expenseLines: Array<{
@@ -321,8 +369,39 @@ export async function enqueueQbVendorBillAdd(
     rebuild_generation: bill.rebuild_generation,
     po_txn_id: po.qb_purchase_order_list_id,
     item_lines: itemLines,
-    expense_lines: expenseLines,
+    // The clearing lines ride with the positive charges: to QuickBooks they are
+    // all ExpenseLines, and only their sign differs.
+    expense_lines: [
+      ...expenseLines,
+      ...clearingLines.map((c) => ({
+        vendor_bill_line_id: null,
+        account_list_id: c.account_list_id,
+        amount_cents: c.amount_cents,
+        memo: c.account_full_name,
+      })),
+    ],
   };
+
+  // PERSIST the clearing lines, and do it before queueing.
+  //
+  // This is not bookkeeping — it is what tells the NEXT operation which shape
+  // this document has. `qb-vendor-bill-mod-enqueue.ts` decides between the
+  // China and local forms with `usesClearingStructure =
+  // (qb_clearing_lines ?? []).length > 0`. If the Add sends clearing lines but
+  // does not record them, the first Mod reads an empty array, treats the bill
+  // as local, sends item lines at the RAW cost — and silently restates the
+  // whole document in QuickBooks.
+  //
+  // VB-1059 is the live proof this matters: its rebuild TxnDel cleared the
+  // column, which is why it lost the shape along with the link.
+  if (usesClearingStructure) {
+    await knex.raw(
+      `UPDATE vendor_bill
+          SET qb_clearing_lines = ?::jsonb, updated_at = NOW()
+        WHERE id = ? AND deleted_at IS NULL`,
+      [JSON.stringify(clearingLines), vendorBillId]
+    );
+  }
 
   // One-row-per-bill: UPDATE-first, INSERT-fallback (2026-07-15 rule). Only a
   // non-terminal-in-flight row is reused; an already-synced row is left alone

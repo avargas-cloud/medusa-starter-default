@@ -63,8 +63,13 @@ function fakeKnex(lines: Line[]) {
           }],
         };
       }
-      // Not a China agent — keeps this on the local/USA path.
       if (q.includes("FROM qb_vendor")) return { rows: [] };
+      // No linked sibling bills — that, and not the vendor's flag, is what puts
+      // this bill on the raw-cost shape with no negative clearing lines.
+      // MUST stay ahead of the `vendor_bill_line` branch: the sibling query
+      // reads that table in subqueries, so a looser match would hand it the
+      // product lines and it would try to clear a bill against itself.
+      if (q.includes("FROM vendor_bill reg")) return { rows: [] };
       if (q.includes("FROM vendor_bill_line")) {
         return {
           rows: lines.map((l) => ({
