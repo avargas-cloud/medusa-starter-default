@@ -3,18 +3,16 @@
  *
  * A linked commission bill was edited. It sent ITS own Mod, and the regular
  * bill was left cancelling the OLD figure in QuickBooks, so A/P over there is
- * off by the difference. The regular bill is not dirty — its own document never
- * changed — so Save is disabled, and once it is `confirmed`/`synced` there is
- * no Confirm button either. `enqueueRegularBillModAlone` is the way out.
+ * off by the difference. The repair is the ordinary path — Edit → Reopen →
+ * Save → Confirm — whose Confirm queues the group Mod.
  *
  * What this proves, and why each part matters:
  *
  *   · the Mod carries the sibling's CURRENT amount, not the one QuickBooks was
  *     handed in July — that is the whole repair;
- *   · it queues the REGULAR bill only, never the siblings, which already went
- *     out on their own and may be mid-repair;
- *   · it moves NO costs: no revision, no variant_cost_event. Re-sending must be
- *     a sync operation, not an accounting one.
+ *   · the regular keeps its clearing shape (landed item cost + negative lines);
+ *   · queueing moves NO costs: no revision, no variant_cost_event. Sending to
+ *     QuickBooks is a sync operation, not an accounting one.
  *
  *   ./node_modules/.bin/tsx src/scripts/tests/e2e-regular-bill-resync-sandbox.ts
  */
@@ -252,7 +250,7 @@ async function main(): Promise<void> {
     },
   };
 
-  const { enqueueRegularBillModAlone } = await import(
+  const { enqueueChinaAgencyVendorBillModGroup } = await import(
     "../../lib/purchase-orders/qb-vendor-bill-mod-enqueue"
   );
   const { deriveClearingDrift } = await import(
@@ -287,20 +285,24 @@ async function main(): Promise<void> {
 
     // ── The way out ─────────────────────────────────────────────────────────
     console.log("\nRe-send to QuickBooks");
-    const res = await enqueueRegularBillModAlone(knexLike as never, f.regularId);
+    const res = await enqueueChinaAgencyVendorBillModGroup(
+      knexLike as never,
+      f.regularId
+    );
     check("el Mod se encola", res.queued === true, JSON.stringify(res));
     check(
-      "y toca UN SOLO bill — el regular, nunca los hermanos",
-      res.billIds?.length === 1 && res.billIds[0] === f.regularId,
+      "y el regular viaja con sus hermanos — se confirman como una unidad",
+      res.billIds?.includes(f.regularId) === true,
       JSON.stringify(res.billIds)
     );
 
     const rows = await db.query<{ step: string; payload: Record<string, unknown> }>(
-      `SELECT step, payload FROM qb_order_pipeline WHERE order_id = $1`,
-      [f.poId]
+      `SELECT step, payload FROM qb_order_pipeline
+        WHERE order_id = $1 AND reference_id = $2`,
+      [f.poId, f.regularId]
     );
     check(
-      "una sola fila de pipeline, y es un vendor_bill_mod",
+      "el regular tiene su fila, y es un vendor_bill_mod",
       rows.rows.length === 1 && rows.rows[0].step === "vendor_bill_mod",
       rows.rows.map((r) => r.step).join(", ")
     );
@@ -364,41 +366,22 @@ async function main(): Promise<void> {
       String(stillSynced.rows[0]?.status)
     );
 
-    // ── El hermano se reenvía por su propia puerta ───────────────────────────
-    // El caso de VB-1061: su monto local es el correcto, el que quedó atrás es
-    // QuickBooks, y reabrirlo está —bien— prohibido mientras el documento viva
-    // allá. `enqueueRegularBillModAlone` no es su puerta.
-    console.log("\nEl hermano tiene su propia puerta");
-    const onService = await enqueueRegularBillModAlone(
-      knexLike as never,
-      f.serviceId
-    );
-    check(
-      "un bill de comisión NO entra por la del regular",
-      onService.queued === false && onService.reason === "not a regular bill",
-      JSON.stringify(onService)
-    );
-
-    const { enqueueVendorBillModSingle } = await import(
-      "../../lib/purchase-orders/qb-vendor-bill-mod-enqueue"
-    );
-    const sibResend = await enqueueVendorBillModSingle(
-      knexLike as never,
-      f.serviceId
-    );
-    check(
-      "pero SÍ se reenvía solo, sin reabrirlo ni tocarle una línea",
-      sibResend.queued === true && sibResend.billIds?.length === 1,
-      JSON.stringify(sibResend)
-    );
+    // ── El hermano viajó en el MISMO grupo, con su monto de hoy ─────────────
+    console.log("\nEl hermano viajó con él");
     const sibRows = await db.query<{ payload: Record<string, unknown> }>(
       `SELECT payload FROM qb_order_pipeline
-        WHERE order_id = $1 AND reference_id = $2 AND step = 'vendor_bill_mod'`,
+        WHERE order_id = $1 AND reference_id = $2 AND step = 'vendor_bill_mod'
+        ORDER BY created_at DESC LIMIT 1`,
       [f.poId, f.serviceId]
     );
     const sibPayload = sibRows.rows[0]?.payload as {
-      expense_lines: Array<{ amount_cents: number }>;
+      expense_lines?: Array<{ amount_cents: number }>;
     };
+    check(
+      "el bill de comisión también se encoló",
+      sibRows.rows.length === 1,
+      `${sibRows.rows.length} filas`
+    );
     check(
       "y va por su monto ACTUAL ($566.27), que es lo que QuickBooks no tiene",
       sibPayload?.expense_lines?.[0]?.amount_cents === 56627,
