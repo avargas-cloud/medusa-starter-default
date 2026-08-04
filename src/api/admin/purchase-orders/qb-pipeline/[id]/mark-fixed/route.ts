@@ -8,6 +8,8 @@
  *   - qbrcpipe_<ulid>__mod      → qb_item_receipt_pipeline MOD lane
  *   - qbrcpipe_<ulid>__void     → qb_item_receipt_pipeline VOID/DELETE lane
  *   - qbvbpipe_<ulid>__vendor_bill_add
+ *   - <uuid>__purchase_order_mod / <uuid>__item_receipt_mod
+ *                               → qb_order_pipeline chained MOD rows
  *   - <uuid>__vendor_bill_mod
  *   - <uuid>__vendor_bill_rebuild_preflight / __vendor_bill_rebuild_delete
  *     are intentionally NOT mark-fixable; skipping either verification would
@@ -46,6 +48,37 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       error:
         "Reviewed Vendor Bill rebuild steps cannot be marked fixed. Retry the step so QuickBooks verifies the real Bill state.",
       code: "vendor_bill_rebuild_mark_fixed_blocked",
+    });
+  }
+
+  // ── Chained MOD history rows (append-only qb_order_pipeline) ─────────────
+  // Decided before the generic `__mod` suffix below, which these ids also end
+  // with and which resolves against the legacy ItemReceipt table.
+  const chainedModStep = rawId.endsWith("__purchase_order_mod")
+    ? "purchase_order_mod"
+    : rawId.endsWith("__item_receipt_mod")
+      ? "item_receipt_mod"
+      : null;
+  if (chainedModStep) {
+    const orderPipelineId = rawId.slice(0, -`__${chainedModStep}`.length);
+    const rows = await knex
+      .raw(
+        `SELECT id, status FROM qb_order_pipeline
+          WHERE id = ?::uuid AND step = ? LIMIT 1`,
+        [orderPipelineId, chainedModStep]
+      )
+      .then((r: any) => r.rows);
+    if (!rows[0])
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    // 'fixed' also unblocks whatever waits behind it in this PO's chain, which
+    // is the point: the operator resolved it in QuickBooks by hand.
+    await markDelegatedOperationFixed(knex, orderPipelineId);
+    return res.json({
+      success: true,
+      message:
+        chainedModStep === "purchase_order_mod"
+          ? "Purchase Order modification marked as fixed"
+          : "Item Receipt modification marked as fixed",
     });
   }
 

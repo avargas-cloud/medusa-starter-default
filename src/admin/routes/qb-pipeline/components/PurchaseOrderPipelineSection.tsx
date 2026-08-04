@@ -19,7 +19,11 @@ type PoStatus =
   | "completed"
   | "error"
   | "synced"
-  | "failed_permanent";
+  | "failed_permanent"
+  // Terminal and NOT a success: the operation was abandoned, usually because
+  // its dependency was. Neither Retry nor Mark Fixed is offered — re-running an
+  // operation that was deliberately set aside is a new decision.
+  | "skipped";
 type PoStep =
   | "purchase_order"
   | "void_purchase_order"
@@ -50,6 +54,12 @@ interface PoRow {
   qb_txn_number: string | null;
   last_error: string | null;
   retries: number;
+  /**
+   * Later edits this queued operation absorbed before it was sent to
+   * QuickBooks. Rendered next to the step so a collapsed row reads as one
+   * operation carrying N edits, never as edits that silently vanished.
+   */
+  coalesced_edits: number;
   synced_at: string | null;
   created_at: string;
   updated_at: string | null;
@@ -63,6 +73,7 @@ interface Counts {
   error: number;
   synced: number;
   failed_permanent: number;
+  skipped: number;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -106,6 +117,7 @@ function StatusBadge({ status }: { status: PoStatus }) {
     error: { color: "red", label: "Error" },
     synced: { color: "green", label: "Synced" },
     failed_permanent: { color: "red", label: "Failed" },
+    skipped: { color: "grey", label: "Skipped" },
   };
   const s = map[status] ?? { color: "grey" as BadgeColor, label: status };
   return (
@@ -195,6 +207,14 @@ function PipelinePoRow({
             <span className="font-medium text-ui-fg-base">
               {STEP_LABEL[step] ?? step}
             </span>
+            {row.coalesced_edits > 0 && (
+              <span
+                className="text-[10px] font-semibold text-amber-600"
+                title={`${row.coalesced_edits + 1} edits were merged into this single QuickBooks update because none of them had been sent yet`}
+              >
+                ×{row.coalesced_edits + 1}
+              </span>
+            )}
           </span>
         </td>
 
@@ -359,6 +379,7 @@ export const PurchaseOrderPipelineSection = () => {
     error: 0,
     synced: 0,
     failed_permanent: 0,
+    skipped: 0,
   });
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -499,6 +520,7 @@ export const PurchaseOrderPipelineSection = () => {
               { key: "error", label: "Error", color: "red" },
               { key: "synced", label: "Synced", color: "green" },
               { key: "failed_permanent", label: "Failed", color: "red" },
+              { key: "skipped", label: "Skipped", color: "grey" },
             ] as { key: keyof Counts; label: string; color: BadgeColor }[]
           ).map(({ key, label, color }) => {
             const count = counts[key] ?? 0;
@@ -544,6 +566,7 @@ export const PurchaseOrderPipelineSection = () => {
             <option value="error">Error</option>
             <option value="synced">Synced</option>
             <option value="failed_permanent">Failed</option>
+            <option value="skipped">Skipped</option>
           </select>
           <span className="text-xs text-ui-fg-muted ml-auto">
             {total} total operation{total !== 1 ? "s" : ""}

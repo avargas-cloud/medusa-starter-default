@@ -11,6 +11,9 @@
  *                                 (void_status, void_operation_id, void_*...)
  *   - qbvbpipe_<ulid>__vendor_bill_add
  *                               → qb_vendor_bill_pipeline ADD lane
+ *   - <uuid>__purchase_order_mod
+ *   - <uuid>__item_receipt_mod  → qb_order_pipeline chained MOD rows (one row
+ *                                 per mod; the legacy table only mirrors them)
  *   - <uuid>__vendor_bill_mod   → qb_order_pipeline Vendor Bill MOD row
  *   - <uuid>__vendor_bill_rebuild_preflight
  *   - <uuid>__vendor_bill_rebuild_delete
@@ -125,6 +128,49 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         rebuildStep === "vendor_bill_rebuild_preflight"
           ? "Vendor Bill payment preflight re-queued"
           : "Vendor Bill rebuild delete re-queued",
+    });
+  }
+
+  // ── Chained MOD history rows (append-only qb_order_pipeline) ─────────────
+  // MUST be decided before the generic `__mod` suffix below: these ids end in
+  // "__mod" too, and the generic branch would look them up in the legacy
+  // ItemReceipt table and 404.
+  const chainedModStep = rawId.endsWith("__purchase_order_mod")
+    ? "purchase_order_mod"
+    : rawId.endsWith("__item_receipt_mod")
+      ? "item_receipt_mod"
+      : null;
+  if (chainedModStep) {
+    const orderPipelineId = rawId.slice(0, -`__${chainedModStep}`.length);
+    const rows = await knex
+      .raw(
+        `SELECT id, status FROM qb_order_pipeline
+          WHERE id = ?::uuid AND step = ? LIMIT 1`,
+        [orderPipelineId, chainedModStep]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    // 'skipped' is excluded on purpose: it is a terminal decision (usually the
+    // dependency was abandoned), and re-dispatching the same payload that was
+    // set aside is a new decision, not a retry.
+    if (!["pending", "waiting", "failed"].includes(String(row.status))) {
+      return res
+        .status(409)
+        .json({ error: `Cannot retry ${chainedModStep} in status '${row.status}'` });
+    }
+    // Re-arm through the shared helper so a row still blocked by its parent
+    // stays 'waiting': a retry must never let an operation jump its PO chain.
+    // The legacy mirror row is left alone — the poller already skips delegated
+    // mods, and the consolidator re-mirrors on dispatch.
+    await rearmDelegatedOperation(knex, orderPipelineId);
+    return res.json({
+      success: true,
+      message:
+        chainedModStep === "purchase_order_mod"
+          ? "Purchase Order modification re-queued"
+          : "Item Receipt modification re-queued",
     });
   }
 
