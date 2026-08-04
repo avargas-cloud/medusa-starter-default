@@ -49,6 +49,7 @@ interface ReceiptLine {
   purchase_order_line_id: string;
   product_variant_id: string;
   inventory_item_id: string;
+  sku_snapshot: string | null;
   qty_received_now: number;
   stock_applied: boolean;
 }
@@ -109,11 +110,20 @@ export async function DELETE(
       ) => Promise<{ rows: unknown[] }>;
     };
   }).resolve("__pg_connection__");
+  // Only a POSTED bill blocks the delete. A draft is not yet an accounting
+  // fact: nothing has moved AVCO, nothing was sent to QuickBooks, and the
+  // bill's own drift banner is what reports lines no longer backed by a
+  // receipt. Blocking on draft made the common correction — "this receipt was
+  // wrong, redo it" — impossible without first dismantling a bill the operator
+  // was still filling in. (2026-08-04)
+  //
+  // The receipt is detached from whatever draft bills remain linked before its
+  // row is destroyed; see lib/purchase-orders/unbind-receipt-from-bills.ts.
   const activeBilling = await billingKnex.raw(
     `SELECT DISTINCT vb.id, vb.number, vb.status
        FROM vendor_bill vb
       WHERE vb.deleted_at IS NULL
-        AND vb.status IN ('draft', 'confirmed', 'synced')
+        AND vb.status IN ('confirmed', 'synced')
         AND (
           vb.purchase_order_receipt_id = ?
           OR EXISTS (
@@ -140,9 +150,12 @@ export async function DELETE(
     [receiptId, receiptId, receiptId]
   );
   if (activeBilling.rows.length > 0) {
+    const names = (activeBilling.rows as Array<{ number: string | null }>)
+      .map((b) => b.number)
+      .filter(Boolean)
+      .join(", ");
     return res.status(409).json({
-      error:
-        "This receipt is linked to an active Vendor Bill. Reduce or cancel the bill first; deleting the receipt would break the QuickBooks chain.",
+      error: `This receipt is billed on a confirmed Vendor Bill${names ? ` (${names})` : ""}. Reopen or cancel that bill first; deleting the receipt would break the QuickBooks chain.`,
       code: "receipt_has_active_vendor_bill",
       bills: activeBilling.rows,
     });
@@ -150,8 +163,10 @@ export async function DELETE(
 
   // A legacy/header-only bill may not expose a direct receipt-line link.
   // Protect the global invariant too: deleting this receipt must never leave
-  // total active billed qty above the remaining applied receipt qty on a PO
-  // line.
+  // total POSTED billed qty above the remaining applied receipt qty on a PO
+  // line. Drafts are excluded here for the same reason as above — a draft
+  // claiming more than was received is exactly the state the bill's drift
+  // banner is built to show, not an error to refuse. (2026-08-04)
   const billedFloorAfterDelete = await billingKnex.raw(
     `WITH deleting AS (
        SELECT purchase_order_line_id, SUM(qty_received_now)::int AS qty
@@ -182,7 +197,7 @@ export async function DELETE(
           AND vb.deleted_at IS NULL
           AND vb.purchase_order_id = ?
           AND vb.bill_type = 'regular'
-          AND vb.status IN ('draft', 'confirmed', 'synced')
+          AND vb.status IN ('confirmed', 'synced')
         WHERE vbl.deleted_at IS NULL
           AND COALESCE(vbl.line_type, 'product') = 'product'
           AND vbl.purchase_order_line_id IN (
@@ -219,6 +234,7 @@ export async function DELETE(
     receipt_line_id: string;
     po_line_id: string;
     inventory_item_id: string;
+    sku: string | null;
     qty_applied: number;
   }> = [];
   // Parallel list for Transfer-to-USA China stock restoration
@@ -238,6 +254,7 @@ export async function DELETE(
       receipt_line_id: l.id,
       po_line_id: l.purchase_order_line_id,
       inventory_item_id: l.inventory_item_id,
+      sku: l.sku_snapshot ?? null,
       qty_applied: l.qty_received_now,
     }));
     transferLines = applied.map((l) => ({
@@ -291,7 +308,7 @@ export async function DELETE(
       );
     }
 
-    return res.json({ delete: result });
+    return res.json({ delete: result, warnings: result.warnings ?? [] });
   } catch (err) {
     const e = err as any;
     const message =
@@ -316,6 +333,7 @@ interface ReceiptLineRow {
   id: string;
   purchase_order_line_id: string;
   inventory_item_id: string;
+  sku_snapshot: string | null;
   qty_received_now: number;
   stock_applied: boolean;
 }
@@ -484,6 +502,7 @@ export async function PATCH(
     po_line_id: string;
     inventory_item_id: string;
     product_variant_id: string;
+    sku: string | null;
     new_qty: number;
     delta: number;
   }> = [];
@@ -537,6 +556,7 @@ export async function PATCH(
         po_line_id: pol.id,
         inventory_item_id: rl.inventory_item_id,
         product_variant_id: pol.product_variant_id,
+        sku: rl.sku_snapshot ?? null,
         new_qty: change.new_qty,
         delta,
       });
@@ -552,10 +572,12 @@ export async function PATCH(
           ) => Promise<{ rows: unknown[] }>;
         };
       }).resolve("__pg_connection__");
+      // Only POSTED bills define a billed floor. A draft that claims more than
+      // was received is the state the bill's drift banner exists to report,
+      // not a reason to refuse the receipt correction. (2026-08-04)
       const billingResult = await billingKnex.raw(
         `SELECT vbl.purchase_order_line_id,
                 COALESCE(SUM(vbl.qty), 0)::int AS billed_qty,
-                BOOL_OR(vb.status = 'draft') AS has_draft_revision,
                 jsonb_agg(DISTINCT jsonb_build_object(
                   'id', vb.id,
                   'number', vb.number,
@@ -567,7 +589,7 @@ export async function PATCH(
             AND vb.deleted_at IS NULL
             AND vb.purchase_order_id = ?
             AND vb.bill_type = 'regular'
-            AND vb.status IN ('draft', 'confirmed', 'synced')
+            AND vb.status IN ('confirmed', 'synced')
           WHERE vbl.purchase_order_line_id = ANY(?)
             AND vbl.deleted_at IS NULL
             AND COALESCE(vbl.line_type, 'product') = 'product'
@@ -579,14 +601,12 @@ export async function PATCH(
           billingResult.rows as Array<{
             purchase_order_line_id: string;
             billed_qty: number | string;
-            has_draft_revision: boolean;
             bills: unknown;
           }>
         ).map((row) => [
           row.purchase_order_line_id,
           {
             billed_qty: Number(row.billed_qty ?? 0),
-            has_draft_revision: Boolean(row.has_draft_revision),
             bills: row.bills,
           },
         ])
@@ -621,7 +641,6 @@ export async function PATCH(
           ...line,
           ...(billedByPoLine.get(line.po_line_id) ?? {
             billed_qty: 0,
-            has_draft_revision: false,
             bills: [],
           }),
         }))
@@ -643,17 +662,10 @@ export async function PATCH(
           lines: belowBilled,
         });
       }
-      const draftBills = affected.filter(
-        (line) => line.has_draft_revision
-      );
-      if (draftBills.length > 0) {
-        return res.status(409).json({
-          error:
-            "The linked Vendor Bill has an unconfirmed revision. Confirm its BillMod before reducing this receipt.",
-          code: "vendor_bill_revision_pending",
-          lines: draftBills,
-        });
-      }
+      // [REMOVED 2026-08-04] `vendor_bill_revision_pending` used to reject a
+      // reduction whenever a draft revision existed. It became unreachable the
+      // moment drafts stopped counting toward the billed floor above — leaving
+      // it would have been dead code that still reads like a protection.
     }
   }
 
@@ -729,14 +741,29 @@ export async function PATCH(
       );
     }
 
-    return res.json({ update: result });
+    return res.json({ update: result, warnings: result.warnings ?? [] });
   } catch (err) {
+    // Medusa's orchestrator does not always throw an Error: a failing step
+    // surfaces as an aggregate carrying `errors[].error`. Testing only for
+    // `instanceof Error` therefore collapsed EVERY step failure into the
+    // useless string "Failed to update receipt" — the operator saw a receipt
+    // refuse to save with no reason given, and the real message (negative
+    // stock, QB pipeline state) never left the server. DELETE already
+    // unwrapped this shape; PATCH did not. (2026-08-04)
+    const e = err as any;
     const message =
-      err instanceof Error ? err.message : "Failed to update receipt";
+      err instanceof Error
+        ? err.message
+        : typeof e?.message === "string"
+          ? e.message
+          : Array.isArray(e?.errors) &&
+              typeof e.errors[0]?.error?.message === "string"
+            ? e.errors[0].error.message
+            : "Failed to update receipt";
     console.error("[update-receipt] FAILED", {
       message,
-      stack: err instanceof Error ? err.stack : undefined,
-      cause: err instanceof Error ? (err as any).cause : undefined,
+      stack: err instanceof Error ? err.stack : e?.stack,
+      cause: err instanceof Error ? (err as any).cause : e?.cause,
     });
     return res.status(400).json({ error: message, code: "update_failed" });
   }

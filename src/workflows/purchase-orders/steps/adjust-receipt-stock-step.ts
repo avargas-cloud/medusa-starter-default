@@ -16,10 +16,17 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
+import {
+  buildStockWarning,
+  type ReceiptStockWarning,
+} from "../../../lib/purchase-orders/receipt-stock-warnings";
+
 export interface AdjustReceiptStockStepInputLine {
   receipt_line_id: string;
   po_line_id: string;
   inventory_item_id: string;
+  /** For warning wording only; never used to match or write. */
+  sku?: string | null;
   delta: number;
 }
 
@@ -39,6 +46,7 @@ export interface ReceiptAdjustedDelta {
 
 export interface AdjustReceiptStockStepOutput {
   adjusted: ReceiptAdjustedDelta[];
+  warnings: ReceiptStockWarning[];
 }
 
 interface CompensationContext {
@@ -77,6 +85,7 @@ export const adjustReceiptStockStep = createStep(
     ) as unknown as InventoryServiceLike;
 
     const adjusted: ReceiptAdjustedDelta[] = [];
+    const warnings: ReceiptStockWarning[] = [];
 
     for (const line of input.lines) {
       if (line.delta === 0) continue;
@@ -91,22 +100,21 @@ export const adjustReceiptStockStep = createStep(
       const preStock = levels[0]?.stocked_quantity ?? 0;
       const preReserved = Number(levels[0]?.reserved_quantity ?? 0);
 
-      // Guard: don't drive stock negative when reversing units.
-      if (line.delta < 0 && preStock + line.delta < 0) {
-        throw new Error(
-          `Cannot reduce qty on receipt line ${line.receipt_line_id}: stock at location is ${preStock}, edit would result in ${preStock + line.delta}.`
-        );
-      }
-
-      // Guard: don't strand reservations (apartado). With reservations now
-      // surviving invoicing until dispatch/pickup, a receipt reduction that
-      // leaves stocked < reserved would depress availability negative for
-      // sold-but-undelivered goods. Same rule as the FO receipt steps
-      // (atomic-stock-move): unwind the reservation/transfer/sale first.
-      if (line.delta < 0 && preStock + line.delta < preReserved) {
-        throw new Error(
-          `Cannot reduce qty on receipt line ${line.receipt_line_id}: would leave stock at ${preStock + line.delta}, below the ${preReserved} reserved (apartado). Unwind the reservation/transfer/sale first.`
-        );
+      // Negative stock and stranded reservations WARN, they do not block.
+      // Both were hard throws until 2026-08-04; see
+      // lib/purchase-orders/receipt-stock-warnings.ts for why the policy
+      // reversed. The correction instrument is an inventory count, and
+      // refusing the edit only delayed it.
+      if (line.delta < 0) {
+        const warning = buildStockWarning({
+          receipt_line_id: line.receipt_line_id,
+          inventory_item_id: line.inventory_item_id,
+          sku: line.sku ?? null,
+          stock_before: preStock,
+          stock_after: preStock + line.delta,
+          reserved: preReserved,
+        });
+        if (warning) warnings.push(warning);
       }
 
       await inventoryService.adjustInventory(
@@ -126,7 +134,7 @@ export const adjustReceiptStockStep = createStep(
     }
 
     return new StepResponse(
-      { adjusted },
+      { adjusted, warnings },
       { location_id: input.location_id, adjusted }
     );
   },

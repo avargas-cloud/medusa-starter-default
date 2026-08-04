@@ -2,9 +2,9 @@
  * src/workflows/purchase-orders/delete-purchase-order-receipt.ts
  *
  * Hard-delete a PurchaseOrderReceipt. The receipt row is removed from the
- * database (FK CASCADE wipes lines + vendor_bill + qb_item_receipt_pipeline)
- * and a DELETE request is sent to QuickBooks Desktop to remove the mirror
- * ItemReceipt.
+ * database (FK CASCADE wipes lines + qb_item_receipt_pipeline; bills are
+ * detached first, never cascaded) and a DELETE request is sent to QuickBooks
+ * Desktop to remove the mirror ItemReceipt.
  *
  *   1. contraApplyReceiptStockStep  — -qty on inventory_levels (compensable).
  *                                     No-op if was_already_voided=true.
@@ -27,6 +27,7 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 
 import { contraApplyReceiptStockStep } from "./steps/contra-apply-receipt-stock-step";
+import type { ReceiptStockWarning } from "../../lib/purchase-orders/receipt-stock-warnings";
 import { persistDeleteReceiptStep } from "./steps/persist-delete-receipt-step";
 import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
@@ -34,6 +35,7 @@ export interface DeletePoReceiptWorkflowInputLine {
   receipt_line_id: string;
   po_line_id: string;
   inventory_item_id: string;
+  sku?: string | null;
   qty_applied: number;
 }
 
@@ -61,6 +63,8 @@ export interface DeletePoReceiptWorkflowOutput {
   qb_delete_queued: boolean;
   po_status_after: "submitted" | "partially_received" | "received";
   total_units_received: number;
+  /** Stock positions the reversal left negative or below reserved. */
+  warnings: ReceiptStockWarning[];
 }
 
 export const deletePurchaseOrderReceiptWorkflow = createWorkflow(
@@ -97,6 +101,7 @@ export const deletePurchaseOrderReceiptWorkflow = createWorkflow(
       qb_delete_queued: data.persisted.qb_delete_queued,
       po_status_after: data.persisted.po_status_after,
       total_units_received: data.persisted.total_units_received,
+      warnings: data.reversed.warnings,
     }));
 
     return new WorkflowResponse(response);

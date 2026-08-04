@@ -28,6 +28,7 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 
 import { adjustReceiptStockStep } from "./steps/adjust-receipt-stock-step";
+import type { ReceiptStockWarning } from "../../lib/purchase-orders/receipt-stock-warnings";
 import { enqueueQbItemReceiptModStep } from "./steps/enqueue-qb-item-receipt-mod-step";
 import { persistUpdateReceiptStep } from "./steps/persist-update-receipt-step";
 import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
@@ -36,6 +37,7 @@ export interface UpdatePoReceiptWorkflowInputLine {
   receipt_line_id: string;
   po_line_id: string;
   inventory_item_id: string;
+  sku?: string | null;
   new_qty: number;
   delta: number;
 }
@@ -61,6 +63,8 @@ export interface UpdatePoReceiptWorkflowOutput {
   total_units_received: number;
   qb_mod_enqueued: boolean;
   qb_mod_pipeline_id: string | null;
+  /** Stock positions the edit left negative or below reserved. */
+  warnings: ReceiptStockWarning[];
 }
 
 export const updatePurchaseOrderReceiptWorkflow = createWorkflow(
@@ -76,6 +80,7 @@ export const updatePurchaseOrderReceiptWorkflow = createWorkflow(
           receipt_line_id: l.receipt_line_id,
           po_line_id: l.po_line_id,
           inventory_item_id: l.inventory_item_id,
+          sku: l.sku ?? null,
           delta: l.delta,
         })),
     }));
@@ -120,6 +125,7 @@ export const updatePurchaseOrderReceiptWorkflow = createWorkflow(
         total_units_received: data.persisted.total_units_received,
         qb_mod_enqueued: data.modResult.enqueued,
         qb_mod_pipeline_id: data.modResult.pipeline_id,
+        warnings: data.adjusted.warnings,
       })
     );
 

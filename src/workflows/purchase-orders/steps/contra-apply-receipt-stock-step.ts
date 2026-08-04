@@ -5,9 +5,12 @@
  * receipt is voided. For each receipt line with a non-zero qty_applied we
  * call adjustInventory with the NEGATED value.
  *
- * Hard rule: if reversing would leave stock negative, the step throws with
- * a "Manual reconciliation required" message — we never silently let a
- * void leave the ledger in a broken state.
+ * [SUPERSEDED → 2026-08-04] The old hard rule threw "Manual reconciliation
+ * required" when reversing would leave stock negative. It now WARNS instead:
+ * a receipt whose units were already sold is precisely the case that needs
+ * undoing, and blocking it stranded the receipt while the inventory count
+ * that resolves the discrepancy still had to happen. See
+ * lib/purchase-orders/receipt-stock-warnings.ts.
  *
  * Compensation re-applies the original +delta if a subsequent step fails.
  */
@@ -15,10 +18,17 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
+import {
+  buildStockWarning,
+  type ReceiptStockWarning,
+} from "../../../lib/purchase-orders/receipt-stock-warnings";
+
 export interface ContraApplyReceiptStockStepInputLine {
   receipt_line_id: string;
   po_line_id: string;
   inventory_item_id: string;
+  /** For warning wording only; never used to match or write. */
+  sku?: string | null;
   qty_applied: number; // the original (positive) qty to reverse
 }
 
@@ -38,6 +48,7 @@ export interface ReceiptReversedDelta {
 
 export interface ContraApplyReceiptStockStepOutput {
   reversed: ReceiptReversedDelta[];
+  warnings: ReceiptStockWarning[];
 }
 
 interface CompensationContext {
@@ -76,6 +87,7 @@ export const contraApplyReceiptStockStep = createStep(
     ) as unknown as InventoryServiceLike;
 
     const reversed: ReceiptReversedDelta[] = [];
+    const warnings: ReceiptStockWarning[] = [];
 
     for (const line of input.lines) {
       if (line.qty_applied === 0) continue;
@@ -91,20 +103,17 @@ export const contraApplyReceiptStockStep = createStep(
       const preReserved = Number(levels[0]?.reserved_quantity ?? 0);
       const reverseBy = -line.qty_applied;
 
-      if (preStock + reverseBy < 0) {
-        throw new Error(
-          `Cannot void receipt line ${line.receipt_line_id}: reversing qty_applied=${line.qty_applied} on stock=${preStock} would result in negative stock. Units were likely sold or transferred already; manual reconciliation required.`
-        );
-      }
-
-      // Guard: don't strand reservations (apartado). Same rule as the FO
-      // receipt steps — a void that leaves stocked < reserved would depress
-      // availability negative for sold-but-undelivered goods.
-      if (preStock + reverseBy < preReserved) {
-        throw new Error(
-          `Cannot void receipt line ${line.receipt_line_id}: would leave stock at ${preStock + reverseBy}, below the ${preReserved} reserved (apartado). Unwind the reservation/transfer/sale first.`
-        );
-      }
+      // Negative stock and stranded reservations WARN, they do not block
+      // (2026-08-04). An inventory count is what settles the discrepancy.
+      const warning = buildStockWarning({
+        receipt_line_id: line.receipt_line_id,
+        inventory_item_id: line.inventory_item_id,
+        sku: line.sku ?? null,
+        stock_before: preStock,
+        stock_after: preStock + reverseBy,
+        reserved: preReserved,
+      });
+      if (warning) warnings.push(warning);
 
       await inventoryService.adjustInventory(
         line.inventory_item_id,
@@ -123,7 +132,7 @@ export const contraApplyReceiptStockStep = createStep(
     }
 
     return new StepResponse(
-      { reversed },
+      { reversed, warnings },
       { location_id: input.location_id, reversed }
     );
   },

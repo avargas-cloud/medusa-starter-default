@@ -3,8 +3,12 @@
  *
  * Hard-delete persistence for a PurchaseOrderReceipt. Mirrors
  * persistVoidReceiptStep but ends in actual row deletion (FK CASCADE wipes
- * receipt lines, vendor_bill, qb_item_receipt_pipeline) instead of leaving
- * a 'voided' tombstone.
+ * receipt lines and qb_item_receipt_pipeline) instead of leaving a 'voided'
+ * tombstone.
+ *
+ * `vendor_bill` also cascades off this row, which is NOT wanted: deleting a
+ * receipt must never destroy a vendor's invoice. Both paths below therefore
+ * call `unbindReceiptFromBills` first — see that module for the full rationale.
  *
  * Two delete paths:
  *
@@ -34,6 +38,7 @@ import {
   poHasTracking,
   reconcileReceivedPoStatus,
 } from "../../../lib/purchase-orders/po-received-status";
+import { unbindReceiptFromBills } from "../../../lib/purchase-orders/unbind-receipt-from-bills";
 
 import type { ReceiptReversedDelta } from "./contra-apply-receipt-stock-step";
 
@@ -69,6 +74,19 @@ export const persistDeleteReceiptStep = createStep(
     const logger = (container as any).resolve("logger") as
       | { info?: (msg: string) => void }
       | undefined;
+
+    // Raw SQL — see persist-receipt-step.ts for rationale (production
+    // incident 2026-04-27, silent service.updateXxx no-op).
+    const knex = (
+      container as unknown as {
+        resolve: (k: string) => {
+          raw: (
+            sql: string,
+            b?: unknown[]
+          ) => Promise<{ rows: unknown[]; rowCount?: number }>;
+        };
+      }
+    ).resolve("__pg_connection__");
 
     // Source of truth for the Path A vs Path B branch: the route handler
     // passes the freshly-read qb_item_receipt_list_id. We DO NOT re-read
@@ -136,19 +154,6 @@ export const persistDeleteReceiptStep = createStep(
             ? "received"
             : "partially_received";
 
-      // Raw SQL — see persist-receipt-step.ts for rationale (production
-      // incident 2026-04-27, silent service.updateXxx no-op).
-      const knex = (
-        container as unknown as {
-          resolve: (k: string) => {
-            raw: (
-              sql: string,
-              b?: unknown[]
-            ) => Promise<{ rowCount?: number }>;
-          };
-        }
-      ).resolve("__pg_connection__");
-
       for (const lu of lineUpdates) {
         const r = await knex.raw(
           `UPDATE purchase_order_line
@@ -203,9 +208,27 @@ export const persistDeleteReceiptStep = createStep(
       totalReceivedAfter = po.total_units_received;
     }
 
+    // Sever every receipt↔bill link BEFORE the row can be destroyed.
+    // `vendor_bill.purchase_order_receipt_id` is ON DELETE CASCADE, so a bill
+    // still pointing here would be hard-deleted along with all its lines —
+    // silently, at the database level. Draft bills reach this step now that
+    // they no longer block the delete, so this is what keeps "delete the
+    // receipt" from also destroying the vendor's invoice.
+    //
+    // Placed before the Path A/B branch on purpose: Path A deletes the row
+    // immediately, and Path B leaves a tombstone that the QB poller hard-
+    // deletes later — the cascade fires on both, just at different times.
+    const unbound = await unbindReceiptFromBills(knex, input.receipt_id);
+    if (unbound.unbound_bill_ids.length > 0) {
+      logger?.info?.(
+        `[persist-delete-receipt] receipt=${input.receipt_id} unbound from ${unbound.unbound_bill_ids.length} bill(s): ${unbound.unbound_bill_ids.join(", ")} (cleared ${unbound.cleared_bill_lines} bill line pointer(s))`
+      );
+    }
+
     if (!isQbSynced) {
       // Path A — never synced (or already QB-deleted via prior void). Safe to
-      // hard-delete now; CASCADE wipes lines + pipeline + vendor_bill.
+      // hard-delete now; CASCADE wipes lines + pipeline. Bills are already
+      // detached above, so none can be taken by it.
       await service.deletePurchaseOrderReceipts([input.receipt_id]);
 
       return new StepResponse(

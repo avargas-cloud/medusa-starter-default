@@ -951,10 +951,30 @@ export async function PATCH(
           bindings?: unknown[]
         ) => Promise<{ rows: unknown[]; rowCount?: number }>;
       };
+      // TWO counts, because warning and blocking are different questions
+      // (2026-08-04):
+      //   billed_qty        — every active bill, drafts included. Drives the
+      //                       confirmation modal, so the operator is still told
+      //                       that a bill claims these units.
+      //   posted_billed_qty — confirmed/synced only. Drives the BLOCK.
+      //
+      // A draft bill routinely claims units the PO has not received and may
+      // never receive: the vendor invoices before the goods ship, which is the
+      // normal partial-delivery flow. Blocking a PO correction on a draft froze
+      // the PO behind an invoice that was simply entered early — and the real
+      // cap already lives downstream, where it matters:
+      // `resolveRemainingPoQuantities` caps a bill's quantities against the
+      // PO's ordered qty at the bill's own Save, and Confirm revalidates. So a
+      // draft left over-claiming after a PO reduction is caught where money is
+      // posted, and reported as drift in the meantime.
       const billingResult = await knex.raw(
         `SELECT vbl.purchase_order_line_id,
                 COALESCE(SUM(vbl.qty), 0)::int AS billed_qty,
-                BOOL_OR(vb.status = 'draft') AS has_draft_revision,
+                COALESCE(
+                  SUM(vbl.qty) FILTER (
+                    WHERE vb.status IN ('confirmed', 'synced')
+                  ), 0
+                )::int AS posted_billed_qty,
                 BOOL_OR(vb.qb_source = 'adopted') AS has_adopted_bill,
                 jsonb_agg(DISTINCT jsonb_build_object(
                   'id', vb.id,
@@ -980,7 +1000,7 @@ export async function PATCH(
           billingResult.rows as Array<{
             purchase_order_line_id: string;
             billed_qty: number | string;
-            has_draft_revision: boolean;
+            posted_billed_qty: number | string;
             has_adopted_bill: boolean;
             bills: unknown;
           }>
@@ -988,7 +1008,7 @@ export async function PATCH(
           row.purchase_order_line_id,
           {
             billed_qty: Number(row.billed_qty ?? 0),
-            has_draft_revision: Boolean(row.has_draft_revision),
+            posted_billed_qty: Number(row.posted_billed_qty ?? 0),
             has_adopted_bill: Boolean(row.has_adopted_bill),
             bills: row.bills,
           },
@@ -1026,15 +1046,18 @@ export async function PATCH(
           ...line,
           ...(billingByLine.get(line.line_id) ?? {
             billed_qty: 0,
-            has_draft_revision: false,
+            posted_billed_qty: 0,
             has_adopted_bill: false,
             bills: [],
           }),
         }))
         .filter((line) => line.billed_qty > 0);
 
+      // Only POSTED quantities are a floor. Money has moved for those: they are
+      // in QuickBooks and they moved AVCO, so dropping the PO under them would
+      // leave a Bill in QB with no PO to back it.
       const belowBilled = affected.filter(
-        (line) => line.next_qty < line.billed_qty
+        (line) => line.next_qty < line.posted_billed_qty
       );
       if (belowBilled.length > 0) {
         return res.status(409).json({
@@ -1045,15 +1068,13 @@ export async function PATCH(
         });
       }
 
-      const draftBills = affected.filter((line) => line.has_draft_revision);
-      if (draftBills.length > 0) {
-        return res.status(409).json({
-          error:
-            "The linked Vendor Bill has an unconfirmed revision. Confirm and queue its BillMod before reducing the PO.",
-          code: "vendor_bill_revision_pending",
-          lines: draftBills,
-        });
-      }
+      // [REMOVED 2026-08-04] `vendor_bill_revision_pending` rejected the
+      // reduction whenever a linked bill sat in draft, demanding its BillMod be
+      // confirmed first. It blocked corrections that broke nothing: PO-1110's
+      // ECTSK-RFRC1C5A went 50 → 20 with 20 received and 20 billed on a DRAFT
+      // bill — 20 ≤ 20 ≤ 20, the invariant held exactly — and the save was
+      // refused anyway. A draft is the document still being fitted to the PO,
+      // not a fact the PO has to respect.
 
       if (affected.length > 0 && body.confirm_billed_reduction !== true) {
         return res.status(409).json({

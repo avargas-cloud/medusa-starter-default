@@ -172,8 +172,13 @@ export const enqueueQbItemReceiptModStep = createStep(
     const lines: any[] = lineRows?.rows ?? lineRows ?? [];
 
     if (lines.length === 0) {
+      // QuickBooks has no representation for an ItemReceipt with zero lines,
+      // and a Mod cannot remove the last one — that operation is a DELETE.
+      // Zeroing every line is the operator asking for exactly that, so say so
+      // instead of failing with an internal message about payload shape.
+      // (Before 2026-08-04 this surfaced as a bare "Failed to update receipt".)
       throw new Error(
-        `enqueueQbItemReceiptMod: receipt ${input.receipt_id} has no lines with qty_received_now > 0 — nothing to send`
+        `Setting every line to 0 is the same as removing receipt ${header.receipt_number} — QuickBooks cannot hold an item receipt with no lines. Use Delete Receipt instead.`
       );
     }
 

@@ -590,7 +590,12 @@ export async function GET(
      * PO line received in two receipts is missing from both, and adding the two
      * counts would report it twice.
      */
-    missing_lines: Array<{ po_line_id: string; value_cents: number }>;
+    missing_lines: Array<{
+      po_line_id: string;
+      sku: string | null;
+      received_qty: number;
+      value_cents: number;
+    }>;
     /**
      * PO lines this receipt received that the bill DOES carry. Quantities are
      * per receipt so the picker can compare the checked union against the bill:
@@ -600,6 +605,7 @@ export async function GET(
      */
     shared_lines: Array<{
       po_line_id: string;
+      sku: string | null;
       received_qty: number;
       bill_qty: number;
     }>;
@@ -651,6 +657,10 @@ export async function GET(
     const receiptLineResult = await knex.raw(
       `SELECT porl.purchase_order_receipt_id AS receipt_id,
               porl.purchase_order_line_id    AS po_line_id,
+              -- Grouped by PO LINE, so every row folded here shares one SKU;
+              -- MAX just picks it. (A SKU is not unique within a PO, which is
+              -- exactly why the grouping key is the line and not the SKU.)
+              MAX(porl.sku_snapshot)         AS sku,
               COALESCE(SUM(porl.qty_received_now), 0)::int AS received_qty,
               (COALESCE(SUM(porl.qty_received_now), 0)
                * COALESCE(MAX(porl.unit_cost_cents_override),
@@ -677,17 +687,33 @@ export async function GET(
         ORDER BY porl.purchase_order_receipt_id, porl.purchase_order_line_id`,
       [id, id, header.purchase_order_id]
     );
+    // `sku` and `received_qty` ride along so the picker can show WHAT it is
+    // about to put on the bill, not just how many lines and how much money
+    // (2026-08-04). The 2026-07-31 decision to keep SKUs out of the receipt
+    // ROW stands — they made it too long; these render in a table BELOW the
+    // checked row, which is where there is room for them.
     const missingByReceipt = new Map<
       string,
-      Array<{ po_line_id: string; value_cents: number }>
+      Array<{
+        po_line_id: string;
+        sku: string | null;
+        received_qty: number;
+        value_cents: number;
+      }>
     >();
     const sharedByReceipt = new Map<
       string,
-      Array<{ po_line_id: string; received_qty: number; bill_qty: number }>
+      Array<{
+        po_line_id: string;
+        sku: string | null;
+        received_qty: number;
+        bill_qty: number;
+      }>
     >();
     for (const m of receiptLineResult.rows as Array<{
       receipt_id: string;
       po_line_id: string;
+      sku: string | null;
       received_qty: number | string;
       value_cents: number | string;
       bill_line_count: number | string;
@@ -695,12 +721,18 @@ export async function GET(
     }>) {
       if (Number(m.bill_line_count) === 0) {
         const list = missingByReceipt.get(m.receipt_id) ?? [];
-        list.push({ po_line_id: m.po_line_id, value_cents: Number(m.value_cents) });
+        list.push({
+          po_line_id: m.po_line_id,
+          sku: m.sku ?? null,
+          received_qty: Number(m.received_qty),
+          value_cents: Number(m.value_cents),
+        });
         missingByReceipt.set(m.receipt_id, list);
       } else {
         const list = sharedByReceipt.get(m.receipt_id) ?? [];
         list.push({
           po_line_id: m.po_line_id,
+          sku: m.sku ?? null,
           received_qty: Number(m.received_qty),
           bill_qty: Number(m.bill_qty),
         });
