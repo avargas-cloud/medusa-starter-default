@@ -15,6 +15,8 @@ import {
   normalizeRequiredVendorBillReference,
   VENDOR_BILL_REFERENCE_REQUIRED_BODY,
 } from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import { enqueueQbVendorBillAdd } from "../../../../../lib/purchase-orders/qb-vendor-bill-enqueue";
+import { enqueueVendorBillModSingle } from "../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -123,6 +125,37 @@ export async function POST(
     [vbNumber, userId, id]
   );
 
+  // Send it to QuickBooks. Until 2026-08-04 this route confirmed the bill and
+  // returned — no enqueue at all — so a service/freight/tariff bill was a
+  // finished document in the POS that QuickBooks had never heard of. Four of
+  // them ($2,325.25, all 2026-07-29) sat that way, and VB-1061 was edited to
+  // $346.43 while QuickBooks kept quoting $328.60.
+  //
+  // Each bill goes ALONE (owner decision): the group Mod would drag the regular
+  // bill along, and that one may be mid-repair. The regular's clearing lines go
+  // stale as a result, which is what `qbResyncPending` on it is for.
+  let qbQueued: { queued: boolean; reason?: string } = { queued: false };
+  try {
+    const billRow = await knex.raw(
+      `SELECT qb_txn_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+      [id]
+    );
+    const qbTxnId = (billRow.rows[0] as { qb_txn_id: string | null } | undefined)
+      ?.qb_txn_id;
+    qbQueued = qbTxnId
+      ? await enqueueVendorBillModSingle(knex as never, id)
+      : await enqueueQbVendorBillAdd(knex as never, id);
+  } catch (qbErr) {
+    // A QuickBooks enqueue failure must not un-confirm the bill: the local
+    // document is correct and the sync is retryable. It is reported, never
+    // swallowed — a silent catch here is how this gap stayed invisible.
+    console.error("[vendor-bill-confirm] QB enqueue failed:", qbErr);
+    qbQueued = {
+      queued: false,
+      reason: qbErr instanceof Error ? qbErr.message : "enqueue failed",
+    };
+  }
+
   const headerResult = await knex.raw(
     `SELECT *
      FROM vendor_bill
@@ -142,5 +175,8 @@ export async function POST(
       ...(headerResult.rows[0] ?? {}),
       lines: lineResult.rows,
     },
+    // Whether QuickBooks was told. `queued: false` with a reason is a real
+    // answer the POS can show — silence was what let four bills go missing.
+    qb_sync: qbQueued,
   });
 }

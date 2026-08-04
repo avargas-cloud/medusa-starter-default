@@ -109,12 +109,22 @@ export async function enqueueQbVendorBillAdd(
        FROM vendor_bill vb
        LEFT JOIN qb_vendor_bill_pipeline qvb
          ON qvb.vendor_bill_id = vb.id AND qvb.deleted_at IS NULL
+      -- service / freight / tariff bills are their own documents in
+      -- QuickBooks too — 36 of them already live there. This filter said
+      -- 'regular' only, so their confirm had nowhere to send them and four
+      -- bills totalling $2,325.25 sat confirmed in the POS while QuickBooks
+      -- never saw them (VB-1071/1072/1074/1075, all 2026-07-29).
+      --
+      -- No new builder was needed: both payload builders already accept a bill
+      -- with no item lines — they only refuse when there are NO lines at all —
+      -- and an account-only bill yields itemLines: [] with expenseLines: [n].
+      -- (2026-08-04)
       WHERE vb.id = ? AND vb.deleted_at IS NULL
-        AND vb.bill_type = 'regular'`,
+        AND vb.bill_type IN ('regular', 'service', 'freight', 'tariff')`,
     [vendorBillId]
   );
   const bill = (billResult.rows[0] ?? null) as BillRow | null;
-  if (!bill) return { queued: false, reason: "bill not found or not regular" };
+  if (!bill) return { queued: false, reason: "bill not found" };
   // Fail-closed fence (durable invariant): an ADOPTED bill mirrors a QB bill
   // that already exists in QuickBooks — it must NEVER be (re)dispatched to QB,
   // even if some future caller reaches enqueue on one. Adopted bills (both the

@@ -13,6 +13,7 @@ import type {
 import { z } from "zod";
 
 import { zodErrorToBody } from "../../../../purchase-orders/_lib/format";
+import { enqueueVendorBillModSingle } from "../../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import { getPurchaseOrdersService } from "../../../../purchase-orders/_lib/service-resolver";
 import { recomputeBillFinanceLinks } from "../../../../../../lib/finance/recompute-bill-finance";
 
@@ -228,7 +229,49 @@ export async function PATCH(
     [...bindings, lineId, id]
   );
 
-  return res.json({ vendor_bill_line: updated.rows[0] ?? null });
+  // Tell QuickBooks. This route is how a service / freight / tariff bill's
+  // amount is actually edited — the bill PATCH refuses non-regular line edits,
+  // so everything comes through here — and until 2026-08-04 it wrote the row
+  // and returned. VB-1061 went from $328.60 to $346.43 in the POS while
+  // QuickBooks kept quoting the old figure, with nothing on any screen or in
+  // any log to say the two had parted ways.
+  //
+  // Only a bill that already LIVES in QuickBooks gets a Mod. One that has not
+  // been sent yet needs nothing here: its Add goes out when it is confirmed.
+  //
+  // Sent ALONE, never as the sibling group (owner decision): the group Mod
+  // would drag the regular bill along, and that one may be mid-repair. The
+  // trade-off is that the regular's negative clearing lines keep quoting the
+  // old amount until it is re-sent — which is what its resync flag is for.
+  let qbSync: { queued: boolean; reason?: string } = { queued: false };
+  if (row.line_type === "qb_account") {
+    try {
+      const billRow = await knex.raw(
+        `SELECT qb_txn_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+        [id]
+      );
+      const qbTxnId = (
+        billRow.rows[0] as { qb_txn_id: string | null } | undefined
+      )?.qb_txn_id;
+      if (qbTxnId) {
+        qbSync = await enqueueVendorBillModSingle(knex as never, id);
+      }
+    } catch (qbErr) {
+      // The line is already saved and correct; a failed enqueue must not undo
+      // it. Reported rather than swallowed — a silent catch here is precisely
+      // how the gap stayed invisible for eleven days.
+      console.error("[vendor-bill-line] QB Mod enqueue failed:", qbErr);
+      qbSync = {
+        queued: false,
+        reason: qbErr instanceof Error ? qbErr.message : "enqueue failed",
+      };
+    }
+  }
+
+  return res.json({
+    vendor_bill_line: updated.rows[0] ?? null,
+    qb_sync: qbSync,
+  });
 }
 
 export async function DELETE(

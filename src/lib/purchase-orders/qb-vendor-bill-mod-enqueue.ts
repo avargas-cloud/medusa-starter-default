@@ -353,6 +353,29 @@ export async function enqueueChinaAgencyVendorBillModGroup(
   }
 
   for (const bill of bills) {
+    await enqueueOneBillMod(db, bill, regular, groupId);
+  }
+  return { queued: true, groupId, billIds: bills.map((b) => b.id) };
+}
+
+/**
+ * Freezes ONE bill's BillMod payload and its pipeline rows.
+ *
+ * Extracted so the group path and the single-bill path share it byte for byte:
+ * two copies of "how a BillMod is queued" is two chances for them to drift, and
+ * the Mod's whole contract is reproducing exactly what the Add sent.
+ *
+ * `context` supplies the purchase order for the dependency chain — the regular
+ * bill for a group, or the bill itself when it syncs alone.
+ */
+async function enqueueOneBillMod(
+  db: VendorBillModKnex,
+  bill: BillRow,
+  context: BillRow,
+  groupId: string
+): Promise<void> {
+  {
+    const regular = context;
     const payload = await buildPayload(db, bill, regular, groupId);
     const existing = await db.raw(
       `SELECT id, status
@@ -435,5 +458,58 @@ export async function enqueueChinaAgencyVendorBillModGroup(
       [operation.id, vendorBillPipelineId]
     );
   }
-  return { queued: true, groupId, billIds: bills.map((bill) => bill.id) };
+}
+
+/**
+ * Queues a BillMod for ONE service / freight / tariff bill, on its own.
+ *
+ * WHY SEPARATE FROM THE GROUP (owner decision, 2026-08-04)
+ * -------------------------------------------------------
+ * `enqueueChinaAgencyVendorBillModGroup` sends the regular bill and its
+ * service/freight/tariff siblings together, all or nothing. That is right when
+ * the group is being confirmed as a unit — and wrong when an operator corrects
+ * one service bill, because it would drag a regular bill that may be mid-repair
+ * (draft, deleted from QuickBooks, half-edited) along with it.
+ *
+ * So each of these bills syncs independently. `buildPayload` only needs the
+ * "regular" argument to resolve a purchase order for the dependency chain, and
+ * a service bill carries its own `purchase_order_id` — so it acts as its own
+ * context and no sibling is touched.
+ *
+ * THE COST OF THAT INDEPENDENCE, and why the UI has to close it: on a China
+ * agent PO the NEGATIVE CLEARING LINES live on the REGULAR bill and cancel
+ * these siblings. Changing a service bill alone leaves those clearing lines
+ * quoting the old figure, so QuickBooks' A/P is off by the difference until the
+ * regular bill is re-sent. The regular is therefore flagged as needing a resync
+ * — that flag is not decoration, it is what closes the gap.
+ */
+export async function enqueueVendorBillModSingle(
+  db: VendorBillModKnex,
+  vendorBillId: string
+): Promise<VendorBillModEnqueueResult> {
+  if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
+    return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill'" };
+  }
+  const bill = await loadBill(db, vendorBillId);
+  if (!bill) return { queued: false, reason: "vendor bill not found" };
+  if (bill.bill_type === "regular") {
+    // The regular bill keeps the group path: its clearing lines are computed
+    // against the siblings, so sending it alone is a different operation.
+    return { queued: false, reason: "regular bills use the group Mod" };
+  }
+  if (bill.qb_source === "adopted") {
+    return { queued: false, reason: "adopted_bill_readonly" };
+  }
+  if (!bill.qb_txn_id) {
+    return { queued: false, reason: "bill is not linked to QuickBooks" };
+  }
+  if (!bill.purchase_order_id) {
+    return { queued: false, reason: "bill has no purchase order" };
+  }
+
+  const groupId = randomUUID();
+  // `bill` is its own context: buildPayload reads `regular.purchase_order_id`
+  // only, and this bill has one.
+  await enqueueOneBillMod(db, bill, bill, groupId);
+  return { queued: true, groupId, billIds: [bill.id] };
 }
