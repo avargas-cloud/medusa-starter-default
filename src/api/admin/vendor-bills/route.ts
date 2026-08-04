@@ -237,6 +237,18 @@ export async function GET(
        vb.tariff_included,
        vb.tariff_amount_cents,
        vb.created_at,
+       -- A bill deleted from QuickBooks so its PO could be corrected, and not
+       -- re-created yet. It is a plain 'draft' otherwise, which is precisely
+       -- the state that must not look ordinary in a list: it is absent from
+       -- A/P until someone confirms it. (2026-08-04)
+       (vb.status = 'draft'
+        AND vb.qb_txn_id IS NULL
+        AND EXISTS (
+          SELECT 1 FROM qb_vendor_bill_pipeline p
+           WHERE p.vendor_bill_id = vb.id
+             AND p.deleted_at IS NULL
+             AND p.intent = 'rebuild_ready'
+        )) AS awaiting_qb_reconfirm,
        COALESCE(agg.line_count, 0)         AS line_count,
        COALESCE(agg.product_qty, 0)        AS product_qty,
        COALESCE(agg.item_subtotal_cents, 0) AS item_subtotal_cents,

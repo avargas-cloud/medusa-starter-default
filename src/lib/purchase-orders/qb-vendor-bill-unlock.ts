@@ -33,6 +33,19 @@ export type ClaimUnlockResult =
 export interface ClaimUnlockInput {
   reason: string;
   actorId: string;
+  /**
+   * Why the rebuild is being claimed.
+   *
+   * `new_po_line` is the original flow: a Bill grew a PO-linked line, which
+   * `BillMod` cannot create, so the document has to be rebuilt.
+   *
+   * `po_contraction_repair` is the 2026-08-04 repair path: the PO is being
+   * reduced below what QuickBooks' Bill claims, and QB refuses the PO Mod
+   * (error 3060) until that claim is gone. There may be no new line at all,
+   * and the guards below are relaxed ONLY for this trigger — the original
+   * flow keeps the exact behaviour it was written with.
+   */
+  trigger?: "new_po_line" | "po_contraction_repair";
 }
 
 interface BillRow {
@@ -114,7 +127,13 @@ export async function claimUnlock(
         LIMIT 1`,
       [vendorBillId]
     );
-    if (unlinkedPoLineResult.rows.length === 0) {
+    // A contraction repair has no new line to look for — the Bill is being
+    // deleted so the PO can SHRINK below what QuickBooks says is billed. Asking
+    // for a new line here would reject exactly the case the repair exists for.
+    if (
+      unlinkedPoLineResult.rows.length === 0 &&
+      input.trigger !== "po_contraction_repair"
+    ) {
       return {
         ok: false,
         code: "bill_rebuild_not_required",
@@ -133,7 +152,20 @@ export async function claimUnlock(
                        OR qv.metadata @> '{"is_china_agent": true}'::jsonb, false)`,
       [bill.purchase_order_id]
     );
-    if (agentResult.rows.length > 0) {
+    // China-agent bills carry negative clearing lines that cancel their sibling
+    // freight/commission bills, so deleting one leaves those siblings
+    // uncancelled in A/P until the operator re-confirms. That is why this path
+    // was closed to them.
+    //
+    // For a CONTRACTION REPAIR the owner accepted that window (2026-08-04): the
+    // repair is a deliberate correction that ends in a confirm, and the real
+    // risk is not the window but someone never finishing — which the
+    // TO CONFIRM! markers address instead. The block stands for every other
+    // trigger, where nobody weighed that trade-off.
+    if (
+      agentResult.rows.length > 0 &&
+      input.trigger !== "po_contraction_repair"
+    ) {
       return {
         ok: false,
         code: "china_agent_unlock_blocked",

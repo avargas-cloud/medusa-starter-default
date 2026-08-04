@@ -20,6 +20,49 @@ export function isAlreadyMissingBillDeleteError(error: string): boolean {
   );
 }
 
+/**
+ * LinkedTxn types that mean money has already moved against this Bill.
+ *
+ * A Bill raised from a PO always carries benign links too — the PurchaseOrder
+ * itself (amount 0) and its ItemReceipts — so the check is by TYPE, never by
+ * "has any link".
+ */
+const BILL_PAYMENT_LINK_TYPES = new Set([
+  "BillPaymentCheck",
+  "BillPaymentCreditCard",
+  "VendorCredit",
+]);
+
+/**
+ * Payment links found on a `BillRet`, or `null` when QuickBooks did not return
+ * the `LinkedTxn` key at all.
+ *
+ * The null case is NOT "no payments" — it is "we could not look", and the two
+ * must never collapse: the caller is about to hard-delete an accounting
+ * document. Same distinction `extractCheckLinkedTxns` makes for checks.
+ */
+export function extractBillPaymentLinks(
+  billRet: unknown
+): Array<{ txnId: string; txnType: string }> | null {
+  const ret = (Array.isArray(billRet) ? billRet[0] : billRet) as Record<
+    string,
+    unknown
+  > | null;
+  if (!ret || !("LinkedTxn" in ret)) return null;
+  const raw = ret.LinkedTxn;
+  const list: unknown[] = Array.isArray(raw) ? raw : [raw];
+  const out: Array<{ txnId: string; txnType: string }> = [];
+  for (const item of list) {
+    const link = item as Record<string, unknown> | null;
+    if (!link?.TxnID) continue;
+    const txnType = String(link.TxnType ?? "");
+    if (BILL_PAYMENT_LINK_TYPES.has(txnType)) {
+      out.push({ txnId: String(link.TxnID), txnType });
+    }
+  }
+  return out;
+}
+
 export async function completeVendorBillRebuildPreflight(
   row: ResubmitRow,
   operation: Record<string, unknown>
@@ -106,7 +149,35 @@ export async function completeVendorBillRebuildPreflight(
       "QuickBooks BillQuery did not return IsPaid or AmountDue; rebuild safety could not be verified"
     );
   }
-  const paid = paymentState === "paid";
+
+  // `IsPaid` alone only catches a bill paid IN FULL, and the `AmountDue <= 0`
+  // arm below it is dead code: AmountDue is the invoice TOTAL in this
+  // integration, not the open balance — QuickBooks never lowers it when you
+  // pay (rule of 2026-07-30). So a PARTIALLY paid bill reported `unpaid` and
+  // this preflight cleared it for a hard delete with payments applied to it.
+  //
+  // The bridge already sends IncludeLinkedTxns, so the evidence was arriving
+  // and simply was not being read. (2026-08-04)
+  // When QuickBooks already calls the bill paid, that is conclusive on its own
+  // and the linked list adds nothing — demanding it there would invent a new
+  // way to fail for a case that was never in doubt. The list is only consulted
+  // for the bills QuickBooks calls UNPAID, which is exactly where it lies.
+  let paymentLinks: Array<{ txnId: string; txnType: string }> = [];
+  if (paymentState !== "paid") {
+    const links = extractBillPaymentLinks(response?.BillRet);
+    if (links === null) {
+      // Absent is NOT "no payments" — it is "we could not look", right before a
+      // hard delete. A Bill raised from a PO always carries at least the PO
+      // link, so in practice this means the query came back without linked
+      // transactions at all.
+      throw new Error(
+        "QuickBooks BillQuery returned no LinkedTxn list; payment links could not be verified before deleting the Bill"
+      );
+    }
+    paymentLinks = links;
+  }
+
+  const paid = paymentState === "paid" || paymentLinks.length > 0;
   const editSequence = stringValue(bill.EditSequence);
   const refNumber = stringValue(bill.RefNumber);
   await pool.query(
@@ -121,8 +192,19 @@ export async function completeVendorBillRebuildPreflight(
   );
 
   if (paid) {
+    // This string is the operator-facing explanation: it is stored on the
+    // pipeline row and rendered on the Vendor Bill, so it must name what was
+    // found AND what to do about it — a bare "blocked" sends someone to
+    // QuickBooks with no idea what to look for.
+    const detail =
+      paymentLinks.length > 0
+        ? `${paymentLinks.length} payment transaction(s) are applied to it (${[
+            ...new Set(paymentLinks.map((l) => l.txnType)),
+          ].join(", ")})`
+        : "QuickBooks reports it as paid in full";
     const message =
-      "REBUILD BLOCKED: the Bill is paid in QuickBooks. Unapply the payment, then retry the preflight.";
+      `REBUILD BLOCKED: this Bill cannot be deleted because ${detail}. ` +
+      `Open it in QuickBooks, unapply or delete the payment, then retry.`;
     if (legacyId) {
       await pool.query(
         `UPDATE qb_vendor_bill_pipeline

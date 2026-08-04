@@ -801,6 +801,23 @@ export async function PATCH(
     existing as PoHeader & Record<string, unknown>
   );
 
+  /**
+   * Reduced PO lines that a QuickBooks-resident Bill still claims.
+   *
+   * Filled by the billing checks inside the line-diff block, read at the QB
+   * enqueue far below — hence the handler-level scope. Non-empty means the PO
+   * Mod would be refused with error 3060 and is therefore NOT enqueued; the
+   * response carries these lines so the POS can ask for the Bill to be
+   * corrected and confirmed first. (2026-08-04)
+   */
+  const qbRepairRequired: Array<{
+    po_line_id: string;
+    sku: string;
+    previous_qty: number;
+    next_qty: number;
+    vendor_bill_number: string | null;
+  }> = [];
+
   // Reconcile lines if provided — DIFF by id (update existing, insert new,
   // delete missing) instead of full hard-delete + re-insert. This preserves
   // each line's qb_txn_line_id so subsequent QB Mods can target the existing
@@ -975,6 +992,16 @@ export async function PATCH(
                     WHERE vb.status IN ('confirmed', 'synced')
                   ), 0
                 )::int AS posted_billed_qty,
+                -- Does a Bill that LIVES IN QUICKBOOKS carry this line? That is
+                -- what decides whether the PO Mod is about to be refused with
+                -- error 3060 — QuickBooks validates against its own copy, not
+                -- ours, and a local draft's edits have not reached it.
+                BOOL_OR(vb.qb_txn_id IS NOT NULL) AS has_qb_bill,
+                COALESCE(
+                  (ARRAY_AGG(vb.number ORDER BY vb.number)
+                     FILTER (WHERE vb.qb_txn_id IS NOT NULL))[1],
+                  NULL
+                ) AS qb_bill_number,
                 BOOL_OR(vb.qb_source = 'adopted') AS has_adopted_bill,
                 jsonb_agg(DISTINCT jsonb_build_object(
                   'id', vb.id,
@@ -1001,6 +1028,8 @@ export async function PATCH(
             purchase_order_line_id: string;
             billed_qty: number | string;
             posted_billed_qty: number | string;
+            has_qb_bill: boolean;
+            qb_bill_number: string | null;
             has_adopted_bill: boolean;
             bills: unknown;
           }>
@@ -1009,11 +1038,32 @@ export async function PATCH(
           {
             billed_qty: Number(row.billed_qty ?? 0),
             posted_billed_qty: Number(row.posted_billed_qty ?? 0),
+            has_qb_bill: Boolean(row.has_qb_bill),
+            qb_bill_number: row.qb_bill_number,
             has_adopted_bill: Boolean(row.has_adopted_bill),
             bills: row.bills,
           },
         ])
       );
+
+      // Lines being reduced that a QuickBooks-resident Bill still claims. The
+      // PO Mod for these WILL be refused with error 3060 — QuickBooks compares
+      // against its own copy of the Bill, and a local draft's edits have not
+      // reached it. Enqueuing anyway produces a red pipeline row hours later
+      // that tells the operator nothing actionable, so the enqueue is skipped
+      // and the response says a repair is required instead. (2026-08-04)
+      for (const line of reductions) {
+        const billing = billingByLine.get(line.line_id);
+        if (billing?.has_qb_bill) {
+          qbRepairRequired.push({
+            po_line_id: line.line_id,
+            sku: line.sku,
+            previous_qty: line.previous_qty,
+            next_qty: line.next_qty,
+            vendor_bill_number: billing.qb_bill_number,
+          });
+        }
+      }
 
       const adoptedHeaderOnly = await knex.raw(
         `SELECT vb.id, vb.number
@@ -1376,7 +1426,12 @@ export async function PATCH(
   if (
     EDITABLE_SYNCED_STATUSES.includes(existing.status) &&
     existing.qb_purchase_order_list_id &&
-    requiresQbMod
+    requiresQbMod &&
+    // A PO Mod that reduces a line a QuickBooks-resident Bill still claims is
+    // refused by QuickBooks (3060). It is NOT enqueued: the operator gets
+    // `qb_repair_required` on this response and the repair sequence deletes
+    // the Bill first. The local PO is already saved and correct either way.
+    qbRepairRequired.length === 0
   ) {
     let delegatedPipelineRowIsDurable = false;
     try {
@@ -1519,7 +1574,15 @@ export async function PATCH(
     }
   }
 
-  return res.json({ purchase_order: updated });
+  // The PO itself saved. `qb_repair_required` says QuickBooks could NOT be
+  // updated yet because a Bill living there still claims the reduced units —
+  // the POS turns this into the "update and confirm the Vendor Bill" prompt.
+  // Absent/empty means nothing is pending, never "unknown".
+  return res.json({
+    purchase_order: updated,
+    qb_repair_required:
+      qbRepairRequired.length > 0 ? qbRepairRequired : undefined,
+  });
 }
 
 export async function DELETE(

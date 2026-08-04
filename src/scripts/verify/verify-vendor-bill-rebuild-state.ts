@@ -184,6 +184,11 @@ async function main(): Promise<void> {
           RefNumber: "REF-1",
           IsPaid: false,
           AmountDue: "123.45",
+          // A Bill raised from a PO always links the PO itself. The fixture
+          // carries it because the preflight now REQUIRES the LinkedTxn list
+          // to be present: absent means "we could not check for payments", and
+          // that must never clear a hard delete. (2026-08-04)
+          LinkedTxn: [{ TxnID: "po-verify-1", TxnType: "PurchaseOrder" }],
         },
       })
     );
@@ -208,6 +213,50 @@ async function main(): Promise<void> {
       unpaidState?.qb_is_paid === false &&
         Number(unpaidState?.qb_balance_remaining_cents) === 12345,
       unpaidState
+    );
+
+    // The hole this preflight had until 2026-08-04. QuickBooks reports a
+    // PARTIALLY paid bill as IsPaid=false, and `AmountDue` is the invoice
+    // total, not the open balance — so the old check said "unpaid" and cleared
+    // a bill with money applied to it for hard deletion. The evidence was
+    // already arriving in LinkedTxn and simply was not read.
+    console.log("\n=== Partially paid bill is refused ===");
+    let partialBlocked = false;
+    try {
+      await completeVendorBillRebuildPreflight(
+        preflightRow,
+        qbResult("BillQueryRs", {
+          statusCode: "0",
+          BillRet: {
+            TxnID: txnId,
+            EditSequence: "ES-3",
+            IsPaid: false,
+            AmountDue: "123.45",
+            LinkedTxn: [
+              { TxnID: "po-verify-1", TxnType: "PurchaseOrder" },
+              { TxnID: "pay-verify-1", TxnType: "BillPaymentCheck" },
+            ],
+          },
+        })
+      );
+    } catch (error) {
+      partialBlocked =
+        error instanceof Error &&
+        error.message.includes("payment transaction(s) are applied");
+    }
+    assert(
+      "a bill with a payment link is refused even though QuickBooks calls it unpaid",
+      partialBlocked,
+      { partialBlocked }
+    );
+
+    // Put the row back where the rest of the script expects it.
+    await client.query(
+      `UPDATE qb_vendor_bill_pipeline
+          SET intent = 'rebuild_deleting', status = 'waiting',
+              last_error = NULL, updated_at = NOW()
+        WHERE id = $1`,
+      [pipelineId]
     );
 
     console.log("\n=== Confirmed delete + idempotent replay ===");
