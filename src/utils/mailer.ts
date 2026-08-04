@@ -41,11 +41,46 @@ function normalizeRecipients(field: string | string[] | undefined) {
 }
 
 /**
+ * True when this process must not deliver mail to the outside world.
+ *
+ * The sandbox wrapper (`back-sb`) has always advertised "SMTP DESACTIVADO",
+ * but nothing read that flag — `grep -rn SMTP_DISABLED src/` returned zero
+ * hits — and `medusa develop` dotenv-loads `backend/.env`, which carries the
+ * PRODUCTION Resend key. So every send path reachable from the sandbox
+ * (payment links, invoices, estimates, the QB digest) mailed real people with
+ * the real key. Found 2026-08-04: the sandbox had been running the
+ * `qb-pipeline-error-digest` cron for 5 days and emailing the owner a daily
+ * report of 500 sandbox-only failures, about orders that do not exist in
+ * production (its `custom_order_seq` was 113 ahead).
+ *
+ * The wrapper also sets DISABLE_SCHEDULED_JOBS now, which stops that specific
+ * job — but a wrapper flag only protects the jobs someone remembered to gate.
+ * This check is the one that holds for every caller, so it lives here.
+ */
+function isMailDisabled(): boolean {
+  return (
+    process.env.SMTP_DISABLED === "true" ||
+    process.env.ECOPOWERTECH_ENV === "sandbox"
+  );
+}
+
+/**
  * Send a transactional email via Resend.
- * Returns true if sent, false if API key is missing.
+ * Returns true if sent, false if API key is missing or mail is disabled.
  * Throws on send failure so callers can handle it.
  */
 export async function sendMail(options: MailOptions): Promise<boolean> {
+  if (isMailDisabled()) {
+    console.log(
+      `[mailer] SUPPRESSED (sandbox/SMTP_DISABLED) — would have sent "${options.subject}" to ${[
+        options.to,
+      ]
+        .flat()
+        .join(", ")}`
+    );
+    return false;
+  }
+
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return false;
 
