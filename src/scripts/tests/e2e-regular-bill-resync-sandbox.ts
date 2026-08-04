@@ -364,16 +364,45 @@ async function main(): Promise<void> {
       String(stillSynced.rows[0]?.status)
     );
 
-    // ── Control negativo: un hermano suelto no puede usar esta puerta ────────
-    console.log("\nControl negativo");
+    // ── El hermano se reenvía por su propia puerta ───────────────────────────
+    // El caso de VB-1061: su monto local es el correcto, el que quedó atrás es
+    // QuickBooks, y reabrirlo está —bien— prohibido mientras el documento viva
+    // allá. `enqueueRegularBillModAlone` no es su puerta.
+    console.log("\nEl hermano tiene su propia puerta");
     const onService = await enqueueRegularBillModAlone(
       knexLike as never,
       f.serviceId
     );
     check(
-      "un bill de comisión NO entra por acá — se reenvía solo al editarlo",
+      "un bill de comisión NO entra por la del regular",
       onService.queued === false && onService.reason === "not a regular bill",
       JSON.stringify(onService)
+    );
+
+    const { enqueueVendorBillModSingle } = await import(
+      "../../lib/purchase-orders/qb-vendor-bill-mod-enqueue"
+    );
+    const sibResend = await enqueueVendorBillModSingle(
+      knexLike as never,
+      f.serviceId
+    );
+    check(
+      "pero SÍ se reenvía solo, sin reabrirlo ni tocarle una línea",
+      sibResend.queued === true && sibResend.billIds?.length === 1,
+      JSON.stringify(sibResend)
+    );
+    const sibRows = await db.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM qb_order_pipeline
+        WHERE order_id = $1 AND reference_id = $2 AND step = 'vendor_bill_mod'`,
+      [f.poId, f.serviceId]
+    );
+    const sibPayload = sibRows.rows[0]?.payload as {
+      expense_lines: Array<{ amount_cents: number }>;
+    };
+    check(
+      "y va por su monto ACTUAL ($566.27), que es lo que QuickBooks no tiene",
+      sibPayload?.expense_lines?.[0]?.amount_cents === 56627,
+      JSON.stringify(sibPayload?.expense_lines)
     );
   } finally {
     await cleanup(db, planted);

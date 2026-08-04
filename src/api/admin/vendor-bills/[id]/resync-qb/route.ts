@@ -1,9 +1,12 @@
 /**
  * POST /admin/vendor-bills/:id/resync-qb
  *
- * Re-sends a regular bill to QuickBooks WITHOUT changing it.
+ * Re-sends a bill to QuickBooks WITHOUT changing it.
  *
- * The case it exists for: a linked commission / freight / tariff bill was
+ * Two cases, gated differently — see the branch below for why a sibling bill
+ * carries no gate.
+ *
+ * The case it was built for: a linked commission / freight / tariff bill was
  * edited. Each bill syncs on its own, so that edit went out alone and left this
  * bill's negative clearing line quoting the old figure — QuickBooks' A/P is off
  * by the difference. This bill is not dirty (its own document did not change),
@@ -30,7 +33,10 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
-import { enqueueRegularBillModAlone } from "../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
+import {
+  enqueueRegularBillModAlone,
+  enqueueVendorBillModSingle,
+} from "../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import {
   deriveClearingDrift,
   type PersistedClearingLine,
@@ -70,14 +76,6 @@ export async function POST(
     res.status(404).json({ error: "Vendor bill not found", code: "not_found" });
     return;
   }
-  if (bill.bill_type !== "regular") {
-    res.status(422).json({
-      error:
-        "Only a regular bill carries clearing lines for its linked bills. A service, freight or tariff bill re-sends itself when its amount is edited.",
-      code: "not_a_regular_bill",
-    });
-    return;
-  }
   if (bill.qb_source === "adopted") {
     res.status(409).json({
       error:
@@ -92,6 +90,34 @@ export async function POST(
         "This bill is not in QuickBooks yet, so there is nothing to correct over there. Confirming it sends the current amounts.",
       code: "not_in_quickbooks",
     });
+    return;
+  }
+
+  // A SERVICE / FREIGHT / TARIFF bill re-sends itself, and without a gate.
+  //
+  // For a regular bill we know what QuickBooks holds — `qb_clearing_lines` is
+  // written every time we send one — so the button can be offered only when the
+  // two sides actually disagree. For a sibling there is no such record: its own
+  // `qb_clearing_lines` is a snapshot the July backfill wrote and nothing has
+  // updated since, so treating it as the truth would either hide a real gap or
+  // show a banner that never clears. The operator is the one who knows the bill
+  // was edited without QuickBooks being told — which is exactly what happened
+  // to VB-1061, $346.43 here against $328.60 over there since July, with no
+  // pipeline row ever queued for it.
+  //
+  // Re-sending is a BillMod carrying the bill's current amounts: worst case it
+  // tells QuickBooks something it already knew.
+  if (bill.bill_type !== "regular") {
+    const sent = await enqueueVendorBillModSingle(knex as never, id);
+    if (!sent.queued) {
+      res.status(409).json({
+        error: `QuickBooks sync was not queued: ${sent.reason ?? "unknown reason"}`,
+        code: "resync_not_queued",
+        reason: sent.reason,
+      });
+      return;
+    }
+    res.json({ queued: true, group_id: sent.groupId, bill_ids: sent.billIds });
     return;
   }
 
