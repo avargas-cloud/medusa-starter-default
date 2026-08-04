@@ -19,6 +19,7 @@ import {
   purchaseOperationKey,
 } from "../../../lib/purchase-orders/qb-purchase-dependency-chain";
 import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
+import { toQbRefNumber } from "../../../lib/quickbooks/qb-ref-number";
 
 export interface EnqueueQbItemReceiptStepInputLine {
   receipt_line_id: string;
@@ -107,7 +108,12 @@ export const enqueueQbItemReceiptStep = createStep(
       received_at: new Date(
         input.received_at as unknown as string | Date
       ).toISOString(),
-      vendor_bill_number: input.vendor_bill_number,
+      // The bridge sends this as <RefNumber>, which QuickBooks caps at 11
+      // characters and rejects past it (error 3070) — the whole request fails
+      // and nothing is created. The packing-slip field is free text, so
+      // "Correct Quantity Received" (25 chars) blocked RCP-1166 entirely.
+      // Cut at the boundary; the receipt keeps whatever was typed.
+      vendor_bill_number: toQbRefNumber(input.vendor_bill_number),
       vendor_bill_date: input.vendor_bill_date
         ? new Date(
             input.vendor_bill_date as unknown as string | Date

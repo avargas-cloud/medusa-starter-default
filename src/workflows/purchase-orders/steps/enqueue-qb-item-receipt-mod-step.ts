@@ -28,6 +28,7 @@ import {
   purchaseOperationKey,
 } from "../../../lib/purchase-orders/qb-purchase-dependency-chain";
 import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
+import { toQbRefNumber } from "../../../lib/quickbooks/qb-ref-number";
 
 export interface EnqueueQbItemReceiptModStepInput {
   receipt_id: string;
@@ -202,7 +203,10 @@ export const enqueueQbItemReceiptModStep = createStep(
       qb_po_list_id: header.qb_po_list_id ?? null,
       inventory_site_list_id: null,
       received_at: new Date(header.received_at).toISOString(),
-      vendor_bill_number: header.vendor_bill_number ?? null,
+      // Same 11-character RefNumber cap as the Add. Applied here too because a
+      // Mod that reintroduced the full string would fail the very edit meant to
+      // fix the receipt.
+      vendor_bill_number: toQbRefNumber(header.vendor_bill_number),
       vendor_bill_date: header.vendor_bill_date
         ? new Date(header.vendor_bill_date).toISOString()
         : null,
