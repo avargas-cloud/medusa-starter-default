@@ -33,6 +33,12 @@ const UNKNOWN_OUTCOME_CLASSES = new Set([
   "network",
   "bridge_busy",
   "parser_failed",
+  // HRESULT de nivel QBWC: la sesión se abortó y QuickBooks nunca devolvió
+  // respuesta. Es el caso canónico de esta lista y tiene que estar acá
+  // EXPLÍCITO: sin la entrada, el `class !== "permanent"` de más abajo lo
+  // leería como "QuickBooks rechazó el request, nada se creó" — justo lo
+  // contrario de la verdad (2026-08-05: QB había guardado el Bill VB-1082).
+  "outcome_unknown",
 ]);
 
 /** Transport-level phrasings that never reach a QB verdict. */

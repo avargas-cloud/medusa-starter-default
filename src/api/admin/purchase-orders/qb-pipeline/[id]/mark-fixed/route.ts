@@ -99,9 +99,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (isVendorBillAdd && vendorBillId) {
     const rows = await knex
       .raw(
-        `SELECT id, vendor_bill_id, intent, order_pipeline_id
-           FROM qb_vendor_bill_pipeline
-          WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+        `SELECT p.id, p.vendor_bill_id, p.intent, p.order_pipeline_id,
+                COALESCE(p.qb_txn_id, vb.qb_txn_id) AS qb_txn_id
+           FROM qb_vendor_bill_pipeline p
+           LEFT JOIN vendor_bill vb
+             ON vb.id = p.vendor_bill_id AND vb.deleted_at IS NULL
+          WHERE p.id = ? AND p.deleted_at IS NULL LIMIT 1`,
         [vendorBillId]
       )
       .then((r: any) => r.rows);
@@ -112,6 +115,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res
         .status(409)
         .json({ error: "The original BillAdd is historical" });
+    }
+    // Un BillAdd marcado "fixed" sin TxnID declara éxito sobre un Bill que el
+    // sistema no puede volver a encontrar: el monitor de pagos filtra por
+    // `qb_txn_id IS NOT NULL` (qb-vendor-bill-payment-monitor.ts) y un BillMod
+    // futuro no tiene a qué apuntar. Retry sí resuelve el caso, porque consulta
+    // QuickBooks y ADOPTA el Bill existente con su TxnID (misma precedencia que
+    // los pasos de rebuild, que tampoco se pueden marcar fixed).
+    if (!row.qb_txn_id) {
+      return res.status(409).json({
+        error:
+          "This Bill has no QuickBooks TxnID yet, so marking it fixed would hide it from payment checks forever. Use Retry — it queries QuickBooks first and adopts the Bill if it already exists there, without creating a duplicate.",
+        code: "vendor_bill_add_mark_fixed_without_txn_id",
+      });
     }
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
@@ -259,13 +275,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (id.startsWith("qbrcpipe_")) {
     const rows = await knex
       .raw(
-        `SELECT id FROM qb_item_receipt_pipeline
+        `SELECT id, qb_list_id FROM qb_item_receipt_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [id]
       )
       .then((r: any) => r.rows);
     if (!rows[0])
       return res.status(404).json({ error: "Pipeline entry not found" });
+    // Mismo razonamiento que el BillAdd: sin el identificador de QuickBooks, el
+    // "arreglado" es una afirmación que nada puede verificar después.
+    if (!rows[0].qb_list_id) {
+      return res.status(409).json({
+        error:
+          "This Item Receipt has no QuickBooks ID yet. Use Retry — it queries QuickBooks first and adopts the receipt if it already exists there, without creating a duplicate.",
+        code: "item_receipt_add_mark_fixed_without_qb_id",
+      });
+    }
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
           SET status        = 'synced',

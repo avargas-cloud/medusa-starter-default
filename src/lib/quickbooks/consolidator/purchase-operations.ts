@@ -33,6 +33,15 @@ export interface CompletedPurchaseOperation {
 export const PURCHASE_EXISTENCE_CHECK_KEY = "__purchase_add_existence_check";
 const PURCHASE_EXISTENCE_VERIFIED_RETRY_KEY =
   "__purchase_add_verified_absent_retry";
+/** Cuántas veces se re-armó el check para esta fila (tope anti-loop). */
+const PURCHASE_EXISTENCE_ATTEMPTS_KEY = "__purchase_add_existence_attempts";
+/**
+ * Tope de re-armados automáticos. Si la propia consulta de existencia también
+ * muere a nivel QBWC tres veces seguidas, el problema es del entorno de QB y no
+ * de esta fila: seguir re-armando la dejaría girando invisible. Al agotarse,
+ * cae al camino de falla normal y aparece en el feed para un humano.
+ */
+export const PURCHASE_EXISTENCE_MAX_ATTEMPTS = 3;
 
 export const PURCHASE_OPERATION_STEPS = [
   "purchase_order_mod",
@@ -248,28 +257,52 @@ export async function completePurchaseAddExistenceCheck(
   return { txnId, refNumber, editSequence };
 }
 
+/**
+ * Devuelve `true` si la fila quedó armada para verificar existencia contra
+ * QuickBooks antes de cualquier ADD; `false` si el llamador debe seguir por el
+ * camino de falla normal (paso no soportado o tope de intentos agotado).
+ *
+ * El `false` es la parte importante del contrato: quien llama NO puede asumir
+ * que la fila quedó atendida — si asume, un ADD que agotó el tope se queda en
+ * 'submitted' para siempre, sin operación de bridge que lo destrabe.
+ */
 export async function schedulePurchaseAddExistenceCheck(
   row: ResubmitRow,
   reason: string
-): Promise<void> {
+): Promise<boolean> {
   if (row.step !== "item_receipt_add" && row.step !== "vendor_bill_add") {
-    return;
+    return false;
+  }
+  const attempts = Number(row.payload?.[PURCHASE_EXISTENCE_ATTEMPTS_KEY] ?? 0);
+  if (Number.isFinite(attempts) && attempts >= PURCHASE_EXISTENCE_MAX_ATTEMPTS) {
+    return false;
   }
   const pool = getDbPool();
-  await pool.query(
+  const { rowCount } = await pool.query(
     `UPDATE qb_order_pipeline
         SET status = 'pending',
             payload = COALESCE(payload, '{}'::jsonb) ||
-              jsonb_build_object($2::text, true),
+              jsonb_build_object($2::text, true) ||
+              jsonb_build_object($4::text, $5::int),
             bridge_op_id = NULL,
             submitted_at = NULL,
             next_retry_at = NOW(),
             error = $3,
             updated_at = NOW()
       WHERE id = $1 AND status = 'submitted'`,
-    [row.id, PURCHASE_EXISTENCE_CHECK_KEY, reason]
+    [
+      row.id,
+      PURCHASE_EXISTENCE_CHECK_KEY,
+      reason,
+      PURCHASE_EXISTENCE_ATTEMPTS_KEY,
+      (Number.isFinite(attempts) ? attempts : 0) + 1,
+    ]
   );
+  // La fila dejó de estar 'submitted' entre el poll y este UPDATE (otra pasada
+  // la movió). No se re-armó nada: que el llamador decida, no que lo suponga.
+  if (rowCount !== 1) return false;
   await mirrorPurchaseAddWaiting(row, reason);
+  return true;
 }
 
 async function markPurchaseAddVerifiedAbsent(row: ResubmitRow): Promise<void> {

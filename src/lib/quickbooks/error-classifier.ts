@@ -40,6 +40,14 @@ export type QbErrorClass =
   | "network"
   /** QBWC offline / queue full / bridge unreachable. Retry. */
   | "bridge_busy"
+  /**
+   * HRESULT de nivel QBWC (0x8004xxxx, salvo 0x80040400): la sesión murió sin
+   * que QuickBooks devolviera una respuesta, así que **el resultado dentro de
+   * QuickBooks es desconocido** — el documento pudo haberse commiteado igual.
+   * Un ADD NUNCA se reintenta a ciegas ante esta clase: primero se verifica
+   * existencia (ver `schedulePurchaseAddExistenceCheck`).
+   */
+  | "outcome_unknown"
   /** Default — anything else. No automatic retry. */
   | "permanent";
 
@@ -75,6 +83,17 @@ const RX_NETWORK =
 const RX_BRIDGE_BUSY =
   /qbwc|queue is full|bridge busy|web connector|qb desktop may be offline|qbxml session|timeout waiting for bridge|bridge operation timed out/i;
 
+// HRESULTs del QBSDK. Llegan por `receiveResponseXML` con el cuerpo de
+// respuesta VACÍO: QBWC aborta la sesión y QuickBooks nunca contesta qué hizo.
+// Por eso son su propia clase y no "permanent" — ver `outcome_unknown`.
+//
+// 0x80040400 es la excepción y va aparte: QuickBooks no pudo PARSEAR el XML,
+// o sea que lo rechazó antes de mirar el archivo de la compañía. Ahí sí está
+// probado que no se creó nada, y reintentar el mismo payload malformado sólo
+// repite el error → permanente, como siempre fue.
+const RX_HRESULT_XML_PARSE = /0x80040400/i;
+const RX_HRESULT = /0x8004[0-9a-f]{4}/i;
+
 function asString(v: unknown): string {
   if (v == null) return "";
   return String(v);
@@ -101,6 +120,26 @@ export function classifyQbError(input: {
   if (RX_PO_MISSING.test(message)) {
     return {
       class: "po_missing",
+      isTransient: false,
+      isRecoverable: false,
+      code,
+      rawMessage: message,
+    };
+  }
+
+  // HRESULT antes que cualquier regex de texto: el código describe el estado de
+  // la SESIÓN (murió sin respuesta), y eso pesa más que lo que diga su mensaje
+  // legible. Un texto que casualmente contenga "not found" no convierte un
+  // aborto de sesión en un 3100.
+  if (RX_HRESULT.test(haystack) && !RX_HRESULT_XML_PARSE.test(haystack)) {
+    return {
+      class: "outcome_unknown",
+      // `isTransient` significa "reintentá el MISMO payload tras un backoff".
+      // Para un resultado desconocido eso es exactamente lo que NO se puede
+      // hacer: si el ADD entró, el reintento mintea un documento duplicado.
+      // Queda en false para que `decideRetry` no habilite reintento genérico
+      // en NINGÚN step; el único camino que reabre esta fila es el que primero
+      // le pregunta a QuickBooks (`schedulePurchaseAddExistenceCheck`).
       isTransient: false,
       isRecoverable: false,
       code,

@@ -176,6 +176,14 @@ function PipelinePoRow({
   const isReviewedRebuild =
     step === "preflight_vendor_bill_rebuild" ||
     step === "delete_vendor_bill_rebuild";
+  // Un ADD que todavía no tiene identificador de QuickBooks: no se sabe si el
+  // documento llegó a crearse allá. "Mark Fixed" acá declararía un éxito que
+  // nada puede verificar después (el monitor de pagos filtra por TxnID y un Mod
+  // no tendría a qué apuntar), así que no se ofrece — la ruta también lo
+  // rechaza con 409. Retry sí es correcto: consulta QuickBooks antes de escribir.
+  const isUnidentifiedAdd =
+    (step === "add_vendor_bill" || step === "add_item_receipt") &&
+    !row.qb_list_id;
 
   const updatedAt =
     row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
@@ -327,13 +335,19 @@ function PipelinePoRow({
               <button
                 onClick={() => onRetry(row.id)}
                 disabled={retrying}
+                title={
+                  isUnidentifiedAdd
+                    ? "Retry asks QuickBooks first: if the document is already there it gets adopted, never duplicated."
+                    : undefined
+                }
                 className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-ui-button-neutral hover:bg-ui-button-neutral-hover text-ui-fg-base border border-ui-border-base disabled:opacity-50"
               >
-                {retrying ? "…" : "Retry"}
+                {retrying ? "…" : isUnidentifiedAdd ? "Retry (verifies)" : "Retry"}
               </button>
             )}
             {(row.status === "error" || row.status === "failed_permanent") &&
-              !isReviewedRebuild && (
+              !isReviewedRebuild &&
+              !isUnidentifiedAdd && (
               <button
                 onClick={() => {
                   if (

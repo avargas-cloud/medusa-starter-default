@@ -60,6 +60,7 @@ import {
   isAlreadyMissingBillDeleteError,
   PermanentPurchaseOperationError,
 } from "./vendor-bill-rebuild-operations";
+import { classifyQbError } from "../error-classifier";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -1417,6 +1418,39 @@ export async function pollSubmittedRows(
           }
           continue;
         }
+        // ── ADD con resultado desconocido ────────────────────────────────────
+        // Un HRESULT de nivel QBWC llega con la respuesta VACÍA: la sesión se
+        // abortó y QuickBooks nunca dijo qué hizo. Fallar acá deja la fila
+        // dormida mientras el documento puede estar creado — y el Retry humano
+        // siguiente, sin verificar, lo duplicaría.
+        //
+        // Pasó el 2026-08-05 con VB-1082 / PO-1111: `0x8004041C` DESPUÉS de que
+        // QuickBooks ya había guardado el Bill (TxnID 1CC54C-1785955489). La
+        // fila quedó `failed` con `next_retry_at = NULL` y la cadena entera de
+        // ese PO bloqueada detrás.
+        //
+        // La consulta de existencia es READ-ONLY: si el documento no está,
+        // `markPurchaseAddVerifiedAbsent` despeja el camino y el ADD sale igual.
+        // O sea que el peor caso de verificar es una query de más.
+        if (
+          (row.step === "item_receipt_add" || row.step === "vendor_bill_add") &&
+          classifyQbError({ message: errMsg }).class === "outcome_unknown"
+        ) {
+          const scheduled = await schedulePurchaseAddExistenceCheck(
+            row as ResubmitRow,
+            `QuickBooks abortó la sesión sin responder (${errMsg.slice(0, 120)}); se verifica existencia antes de reintentar`
+          );
+          if (scheduled) {
+            logger.warn(
+              `${LOG_PREFIX} 🔎 ${row.step} ${row.id} falló a nivel QBWC; el resultado en QB es desconocido → existence check read-only antes de cualquier ADD`
+            );
+            continue;
+          }
+          logger.error(
+            `${LOG_PREFIX} 🛑 ${row.step} ${row.id}: existence check exhausted tras un error de sesión; se marca fallida para revisión manual`
+          );
+        }
+
         const decision = await failOrRetryPipelineRow(
           row.id,
           errMsg,
@@ -1608,14 +1642,22 @@ export async function pollSubmittedRows(
           row.step === "item_receipt_add" ||
           row.step === "vendor_bill_add"
         ) {
-          await schedulePurchaseAddExistenceCheck(
+          const scheduled = await schedulePurchaseAddExistenceCheck(
             row as ResubmitRow,
             `Lost bridge operation ${row.bridge_op_id}; verifying QuickBooks before retry`
           );
-          logger.warn(
-            `${LOG_PREFIX} 🔎 Lost ${row.step} operation ${row.bridge_op_id}; scheduled read-only existence check before any retry`
+          if (scheduled) {
+            logger.warn(
+              `${LOG_PREFIX} 🔎 Lost ${row.step} operation ${row.bridge_op_id}; scheduled read-only existence check before any retry`
+            );
+            continue;
+          }
+          // Tope agotado: NO se cae al ADD a ciegas. Falla visible para un
+          // humano, que es lo único correcto cuando ni siquiera se pudo
+          // preguntarle a QuickBooks qué pasó.
+          logger.error(
+            `${LOG_PREFIX} 🛑 ${row.step} ${row.id}: existence check exhausted; failing for manual review instead of re-adding`
           );
-          continue;
         }
         const decision = await failOrRetryPipelineRow(
           row.id,
