@@ -218,9 +218,12 @@ export async function loadAliveCandidates(
     }
   };
 
+  // pos_invoice / pos_credit_memo money columns and customer_payment.amount
+  // already store CENTS (verified 2026-08-07 against two LIVE QB docs: POS
+  // 4438 ↔ QB $41.48+7% tax, POS 13643 ↔ QB $127.50+7% tax) — no *100 here.
   const invoices = await pool.query(
     `SELECT d.id AS reference_id, d.invoice_number AS medusa_ref, d.order_id,
-            ROUND(d.total * 100)::bigint AS pos_total_cents,
+            ROUND(d.total)::bigint AS pos_total_cents,
             COALESCE(NULLIF(d.metadata->>'qb_txn_id', ''), p.qb_txn_id) AS qb_txn_id,
             COALESCE(NULLIF(d.metadata->>'qb_ref_number', ''), p.qb_ref_number) AS qb_ref_number
        FROM pos_invoice d
@@ -243,7 +246,7 @@ export async function loadAliveCandidates(
 
   const creditMemos = await pool.query(
     `SELECT d.id AS reference_id, d.credit_memo_number AS medusa_ref, d.order_id,
-            ROUND(d.total * 100)::bigint AS pos_total_cents,
+            ROUND(d.total)::bigint AS pos_total_cents,
             d.qb_txn_id, NULL::text AS qb_ref_number
        FROM pos_credit_memo d
       WHERE d.status <> 'voided'
@@ -261,7 +264,7 @@ export async function loadAliveCandidates(
     `SELECT cp.id AS reference_id,
             'PAY-' || cp.display_id AS medusa_ref,
             cp.locked_order_id AS order_id,
-            ROUND(cp.amount * 100)::bigint AS pos_total_cents,
+            ROUND(cp.amount)::bigint AS pos_total_cents,
             COALESCE(NULLIF(cp.qb->>'txn_id', ''), p.qb_txn_id) AS qb_txn_id,
             p.qb_ref_number
        FROM customer_payment cp
