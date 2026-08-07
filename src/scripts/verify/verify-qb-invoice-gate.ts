@@ -58,18 +58,22 @@ async function runChecks(queryFn: QueryFn, cleanup?: () => Promise<void>) {
   const scriptDir = __dirname ?? resolvePath(process.cwd(), "src/scripts/verify");
   const srcRoot = resolvePath(scriptDir, "../..");
 
+  // 2026-08-07: the Waiting Orders tab and its two /admin/qb-catalog/
+  // waiting-invoices routes were REMOVED — the gate never held a single
+  // invoice in all of prod history (0 rows ever carried waiting_qb_items,
+  // and the release path sets it to false rather than deleting it, so a
+  // fired-and-released invoice would still be countable). The gate job +
+  // the setter in invoices/route.ts stay: they are the safety net for an
+  // invoice created with variants that lack a QB ListID, and they
+  // self-heal without UI. This check asserts the mechanism only.
   const fileChecks: Array<{ rel: string; expects: string[] }> = [
     {
       rel: "jobs/qb-invoice-waiting-gate.ts",
       expects: ["export default async function", "schedule:"],
     },
     {
-      rel: "api/admin/qb-catalog/waiting-invoices/route.ts",
-      expects: ["export const GET"],
-    },
-    {
-      rel: "api/admin/qb-catalog/waiting-invoices/[id]/mark-manual/route.ts",
-      expects: ["export const POST"],
+      rel: "api/admin/invoices/route.ts",
+      expects: ["waiting_qb_items"],
     },
   ];
 

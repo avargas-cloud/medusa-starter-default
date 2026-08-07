@@ -13,7 +13,6 @@ import { ItemPipelineSection } from "./components/ItemPipelineSection";
 import { PipelinesBreakdown } from "./components/PipelinesBreakdown";
 import { PurchaseOrderPipelineSection } from "./components/PurchaseOrderPipelineSection";
 import { VendorPipelineSection } from "./components/VendorPipelineSection";
-import { WaitingOrdersSection } from "./components/WaitingOrdersSection";
 
 /**
  * Walks up from `el` to find the nearest scrollable ancestor so we can
@@ -109,12 +108,6 @@ const QbPipelinePage = () => {
             Vendors
           </Tabs.Trigger>
           <Tabs.Trigger
-            value="waiting-orders"
-            className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
-          >
-            Waiting Orders
-          </Tabs.Trigger>
-          <Tabs.Trigger
             value="customer-sync"
             className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
           >
@@ -138,9 +131,6 @@ const QbPipelinePage = () => {
         </Tabs.Content>
         <Tabs.Content value="vendors" className="pt-4">
           <VendorPipelineSection />
-        </Tabs.Content>
-        <Tabs.Content value="waiting-orders" className="pt-4">
-          <WaitingOrdersSection />
         </Tabs.Content>
         <Tabs.Content value="customer-sync" className="pt-4">
           <CustomerSyncPipelineSection />
