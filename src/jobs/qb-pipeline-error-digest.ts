@@ -12,6 +12,7 @@ import {
   type OrderDriftHistory,
   type OrderDriftRow,
 } from "./_lib/_order-drift-section";
+import { collectReverseVoidSection } from "./_lib/_qb-reverse-void-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -589,6 +590,13 @@ export async function buildDigestEmail(
       })),
     },
   ];
+
+  // ── 6. Reverse void audit: alive in POS, voided/deleted in QB ───────────
+  // Findings recorded by qb-reverse-void-monitor (the daily QB sweep). Same
+  // repeat-until-resolved policy as section 5; fail-isolated inside the
+  // collector so a table/sweep problem never suppresses the digest.
+  const reverseVoidSection = await collectReverseVoidSection(knex, logger);
+  if (reverseVoidSection) sections.push(reverseVoidSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 
