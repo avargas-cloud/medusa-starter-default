@@ -10,6 +10,9 @@
  *   ./node_modules/.bin/tsx src/scripts/verify/verify-sales-pipeline-mod-history.ts
  *
  * SOURCE_ROOT overrides the scanned source tree (mutation-testing the gate).
+ *
+ * (2026-08-07: Railway solo construye si el commit toca /src/** — este archivo
+ * sirvió de trigger cuando el builder Metal colgó el build de 85b80b13.)
  */
 import * as fs from "fs";
 import * as path from "path";
