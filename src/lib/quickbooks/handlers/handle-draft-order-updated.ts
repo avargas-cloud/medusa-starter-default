@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { updateEstimateInQb } from "../client/estimates";
 import { buildQbItems, resolveProductTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
+import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { getEstimateTxnId, getEstimateRef } from "../qb-metadata-types";
 import {
   coalesceIfInFlight,
@@ -131,6 +132,7 @@ export async function handleDraftOrderUpdated(
         "items.variant.*",
         "items.variant.metadata",
         "customer.*",
+        "customer.metadata",
         "shipping_methods.*",
       ],
       filters: { id: draftOrderId },
@@ -177,11 +179,24 @@ export async function handleDraftOrderUpdated(
       (fullOrder.display_id ? `E${fullOrder.display_id}` : freshTxnId);
     const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep);
 
+    // Case 1 (2026-08-06): a customer change on a pos-estimate must reach the
+    // QB Estimate. Every MOD re-asserts CustomerRef with the LIVE customer.
+    const qbCustomerListId = await resolveOrderQbCustomer({
+      orderId: draftOrderId,
+      cachedListId:
+        (fullOrder.metadata?.qb_list_id as string | undefined) ?? null,
+      liveListId:
+        (fullOrder.customer?.metadata?.qb_list_id as string | undefined) ??
+        null,
+      logger,
+    });
+
     const result = await updateEstimateInQb({
       txnId: freshTxnId,
       items: qbItems,
       memo,
       salesRep,
+      ...(qbCustomerListId ? { customerId: qbCustomerListId } : {}),
     });
 
     if (result.success) {

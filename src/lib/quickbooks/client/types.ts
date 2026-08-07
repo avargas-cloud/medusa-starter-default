@@ -227,6 +227,8 @@ export interface QbCreateEstimatePayload {
 
 export interface QbUpdateEstimatePayload {
   txnId: string;
+  /** QB customer ListID — when present the MOD re-asserts CustomerRef (customer transfers). */
+  customerId?: string;
   items: QbOrderItem[];
   memo?: string;
   taxExempt?: boolean;

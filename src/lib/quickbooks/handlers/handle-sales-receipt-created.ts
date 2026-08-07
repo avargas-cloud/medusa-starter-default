@@ -28,6 +28,7 @@ import {
 
 import { handleFulfillmentCreated } from "./handle-fulfillment-created";
 import { LOG_PREFIX, getQbConfig, getFloat, consumeClosestNet } from "./utils";
+import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { resolveTaxListid } from "../resolve-tax-listid";
 import { invoiceLineDiscountCents } from "../force-sync-doc-payload";
 
@@ -148,7 +149,14 @@ export async function handleSalesReceiptCreated(
     return;
   }
 
-  let qbCustomerId: string | undefined = order.metadata?.qb_list_id;
+  // Live customer wins over the order-metadata cache (re-stamped on drift).
+  let qbCustomerId: string | undefined = await resolveOrderQbCustomer({
+    orderId,
+    cachedListId: (order.metadata?.qb_list_id as string | undefined) ?? null,
+    liveListId:
+      (order.customer?.metadata?.qb_list_id as string | undefined) ?? null,
+    logger,
+  });
 
   if (!qbCustomerId && order.customer_id) {
     const check = await requireQbCustomer({

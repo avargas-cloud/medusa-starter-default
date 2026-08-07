@@ -208,6 +208,7 @@ export async function updateEstimateInQb(
         EditSequence: editSequence,
         items: modItems,
         memo: payload.memo,
+        ...(payload.customerId ? { customerId: payload.customerId } : {}),
         ...(payload.isActive !== undefined
           ? { IsActive: payload.isActive }
           : {}),

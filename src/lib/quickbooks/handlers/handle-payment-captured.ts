@@ -31,13 +31,14 @@ import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client";
 import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types";
 import { writePipelineRow } from "../qb-pipeline";
+import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 
 import { LOG_PREFIX, isPosOrder } from "./utils";
 
 export async function handlePaymentCaptured(
   data: any,
   orderModule: any,
-  customerModule: any,
+  _customerModule: any,
   logger: any
 ) {
   const orderId = data.id || data.order_id;
@@ -69,24 +70,14 @@ export async function handlePaymentCaptured(
     return;
   }
 
-  let qbCustomerId: string | undefined = order.metadata?.qb_list_id;
-
-  if (!qbCustomerId && order.customer_id) {
-    logger.info(
-      `${LOG_PREFIX} qb_list_id not in order.metadata — fetching customer ${order.customer_id}...`
-    );
-    try {
-      const customer = await customerModule.retrieveCustomer(order.customer_id);
-      qbCustomerId = customer.metadata?.qb_list_id;
-      logger.info(
-        `${LOG_PREFIX} Customer metadata: ${JSON.stringify(customer.metadata || {})}`
-      );
-    } catch (custErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not fetch customer: ${custErr.message}`
-      );
-    }
-  }
+  // Live customer wins over the order-metadata cache (re-stamped on drift).
+  // The resolver fetches the live customer ListID itself — this handler's
+  // order fetch does not embed the customer.
+  const qbCustomerId: string | undefined = await resolveOrderQbCustomer({
+    orderId,
+    cachedListId: (order.metadata?.qb_list_id as string | undefined) ?? null,
+    logger,
+  });
 
   if (!qbCustomerId) {
     logger.warn(

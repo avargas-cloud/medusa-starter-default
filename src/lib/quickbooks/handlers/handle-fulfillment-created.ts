@@ -28,6 +28,7 @@ import {
 
 import { handleOrderPlaced } from "./handle-order-placed";
 import { LOG_PREFIX, getQbConfig, getFloat, consumeClosestNet } from "./utils";
+import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { resolveTaxListid } from "../resolve-tax-listid";
 
 function normalizePosInvoicePayloadItems(items: any[]): any[] {
@@ -127,7 +128,15 @@ export async function handleFulfillmentCreated(
     return;
   }
 
-  let qbCustomerId: string | undefined = order.metadata?.qb_list_id;
+  // Live customer wins over the order-metadata cache (re-stamped on drift) —
+  // a stale cache is how invoice 19689 went out under "Any Projects".
+  let qbCustomerId: string | undefined = await resolveOrderQbCustomer({
+    orderId,
+    cachedListId: (order.metadata?.qb_list_id as string | undefined) ?? null,
+    liveListId:
+      (order.customer?.metadata?.qb_list_id as string | undefined) ?? null,
+    logger,
+  });
 
   if (!qbCustomerId && order.customer_id) {
     const check = await requireQbCustomer({

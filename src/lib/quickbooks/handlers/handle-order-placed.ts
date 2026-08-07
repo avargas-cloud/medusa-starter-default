@@ -24,6 +24,7 @@ import {
 } from "../qb-pipeline";
 
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
+import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { resolveTaxListid } from "../resolve-tax-listid";
 
 async function mergeOrderMetadata(
@@ -102,26 +103,25 @@ export async function handleOrderPlaced(
       `${LOG_PREFIX} Order fetched via Query: #${order.display_id}, items=${order.items?.length ?? 0}, shipping_methods=${order.shipping_methods?.length ?? 0}, sales_channel_id=${order.sales_channel_id ?? "none"}`
     );
 
-    // Propagate qb_list_id from customer to order metadata immediately at placement.
-    // This is critical context needed by every subsequent QB operation (SO, invoice, SR,
-    // payment). Without it, any future operation that skips customer lookup will fail.
-    // We do this unconditionally — before any 1h-delay / qb_skip branching — so it
+    // Resolve the QB customer for this order (live customer wins; a stale
+    // order-metadata cache is re-stamped). This is critical context needed by
+    // every subsequent QB operation (SO, invoice, SR, payment). We do this
+    // unconditionally — before any 1h-delay / qb_skip branching — so it
     // happens even for orders that never generate a Sales Order in QB.
     {
-      const customerListId = order.customer?.metadata?.qb_list_id as
-        | string
-        | undefined;
-      if (customerListId && !order.metadata?.qb_list_id) {
-        try {
-          await mergeOrderMetadata(orderId, { qb_list_id: customerListId });
-          logger.info(
-            `${LOG_PREFIX} 📋 Propagated qb_list_id=${customerListId} from customer to order`
-          );
-        } catch (metaErr: any) {
-          logger.warn(
-            `${LOG_PREFIX} ⚠️ Could not propagate qb_list_id: ${metaErr.message}`
-          );
-        }
+      const resolvedListId = await resolveOrderQbCustomer({
+        orderId,
+        cachedListId:
+          (order.metadata?.qb_list_id as string | undefined) ?? null,
+        liveListId:
+          (order.customer?.metadata?.qb_list_id as string | undefined) ?? null,
+        logger,
+      });
+      if (resolvedListId) {
+        order.metadata = {
+          ...(order.metadata || {}),
+          qb_list_id: resolvedListId,
+        };
       }
     }
 

@@ -4,6 +4,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
 import { updateSalesOrderInQb } from "../client/sales-orders";
 import { buildQbItems, resolveProductTaxableMap, resolveLineTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
+import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { getSoTxnId, getSoRef } from "../qb-metadata-types";
 import {
   coalesceIfInFlight,
@@ -134,6 +135,7 @@ export async function handleOrderUpdated(
         "items.variant.*",
         "items.variant.metadata",
         "customer.*",
+        "customer.metadata",
         "shipping_methods.*",
       ],
       filters: { id: orderId },
@@ -186,10 +188,23 @@ export async function handleOrderUpdated(
     );
     const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep);
 
+    // Cases 2-4 (2026-08-06): a customer change on a pos-order must reach the
+    // QB Sales Order. Every MOD re-asserts CustomerRef with the LIVE customer.
+    const qbCustomerListId = await resolveOrderQbCustomer({
+      orderId,
+      cachedListId:
+        (fullOrder.metadata?.qb_list_id as string | undefined) ?? null,
+      liveListId:
+        (fullOrder.customer?.metadata?.qb_list_id as string | undefined) ??
+        null,
+      logger,
+    });
+
     try {
       const result = await updateSalesOrderInQb({
         txnId: freshTxnId,
         items: qbItems,
+        ...(qbCustomerListId ? { customerId: qbCustomerListId } : {}),
         ...(salesRep ? { salesRep } : {}),
       });
 
