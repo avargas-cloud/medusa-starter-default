@@ -7,7 +7,11 @@ import { Modules } from "@medusajs/utils";
 
 import { isValidBatchDay } from "../../../../lib/finance/batch-day";
 import { resolveQbPaymentMethodForPayment } from "../../../../lib/quickbooks/payment-method-sanitizer";
-import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
+import {
+  enqueueSalesMutation,
+  reactivateSalesMutationRow,
+  submitPipelineRowById,
+} from "../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
 
@@ -243,12 +247,17 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
           (payment as any).display_id != null
             ? `PAY-${(payment as any).display_id}`
             : ((payment as any).reference ?? null);
-        await writePipelineRow({
+        // Append-only lane: each date change is its own row. SR-embedded
+        // payments have no ReceivePayment TxnID — the consolidator resolves
+        // the target live, so the row carries the SR marker as-is.
+        await enqueueSalesMutation({
           orderId: (meta.order_id as string | undefined) ?? null,
           referenceId: id,
           referenceType: "customer_payment",
           step: "payment_txndate_change",
-          status: "pending",
+          qbTxnId:
+            qbTxnId && qbTxnId !== "SYNCED_VIA_RECEIPT" ? qbTxnId : null,
+          payload: {},
           medusaRefNumber: paymentLabel,
         }).catch(() => {
           /* non-fatal — consolidator visibility only */
@@ -398,20 +407,22 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
               ?.info?.(
                 `[PAYMENT PATCH] Writing pending pipeline row for SR ${srTxnId} (payment ${paymentLabel}, order ${orderId})`
               );
+            let pmcRowId: string | null = null;
             try {
-              const pipelineRowId = await writePipelineRow({
+              const enqueued = await enqueueSalesMutation({
                 orderId: orderId ?? null,
                 referenceId: id,
                 referenceType: "customer_payment",
                 step: "payment_method_change",
-                status: "pending",
                 qbTxnId: srTxnId,
+                payload: { paymentMethod: qbMethodName },
                 medusaRefNumber: paymentLabel,
               });
+              pmcRowId = enqueued.rowId;
               req.scope
                 .resolve("logger")
                 ?.info?.(
-                  `[PAYMENT PATCH] Pending pipeline row written: ${pipelineRowId}`
+                  `[PAYMENT PATCH] Pending pipeline row written: ${pmcRowId}`
                 );
             } catch (writeErr: any) {
               req.scope
@@ -441,54 +452,29 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
                     ?.info?.(
                       `[PAYMENT PATCH] Queued SalesReceiptMod for ${srTxnId} — PaymentMethod → ${qbMethodName} (opId=${operationId})`
                     );
-                  // On retry, the row may already have been reset to 'pending' by
-                  // onRetryStart (ideal path), OR the subscriber may have marked it
-                  // 'failed' before onRetryStart ran (race). Two-step transition
-                  // covers both: first 'pending' (which reactivates failed rows),
-                  // then 'submitted' (which matches the pending row in-place). Net
-                  // result: always a single row, ending in Submitted with the
-                  // current attempt's opId.
-                  await writePipelineRow({
-                    orderId: orderId ?? null,
-                    referenceId: id,
-                    referenceType: "customer_payment",
-                    step: "payment_method_change",
-                    status: "pending",
-                    qbTxnId: srTxnId,
-                    medusaRefNumber: paymentLabel,
-                  }).catch(() => {});
-                  await writePipelineRow({
-                    orderId: orderId ?? null,
-                    referenceId: id,
-                    referenceType: "customer_payment",
-                    step: "payment_method_change",
-                    status: "submitted",
-                    bridgeOpId: operationId,
-                    qbTxnId: srTxnId,
-                    medusaRefNumber: paymentLabel,
-                  }).catch(() => {});
+                  // Row-id transition (append-only lane): submit works from any
+                  // non-terminal status, so the old two-step pending→submitted
+                  // dance against (doc, step) races is unnecessary — and with N
+                  // rows it would stamp SIBLING operations too.
+                  if (pmcRowId) {
+                    await submitPipelineRowById(pmcRowId, operationId).catch(
+                      () => {}
+                    );
+                  }
                 },
                 onRetryStart: async (failedOpId: string) => {
                   // Fired when 3200 is detected and the helper is about to fetch a
-                  // fresh EditSequence and retry the Mod. Reset the row back to
-                  // 'pending' to null out bridge_op_id — this prevents the Failed
-                  // subscriber from matching the failed op to this row while the
-                  // retry is in flight. onSubmit will transition it back to
-                  // Submitted once the retry Mod is accepted.
+                  // fresh EditSequence and retry the Mod. Reset THIS row back to
+                  // 'pending' (nulls bridge_op_id) so the Failed subscriber can't
+                  // match the dead op while the retry is in flight.
                   req.scope
                     .resolve("logger")
                     ?.info?.(
                       `[PAYMENT PATCH] Retrying after stale EditSequence — resetting pipeline row (failed opId=${failedOpId})`
                     );
-                  await writePipelineRow({
-                    orderId: orderId ?? null,
-                    referenceId: id,
-                    referenceType: "customer_payment",
-                    step: "payment_method_change",
-                    status: "pending",
-                    qbTxnId: srTxnId,
-                    medusaRefNumber: paymentLabel,
-                  }).catch(() => {});
+                  if (pmcRowId) {
+                    await reactivateSalesMutationRow(pmcRowId).catch(() => {});
+                  }
                 },
               }
             );
@@ -540,6 +526,22 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
               }
 
               if (editSeq) {
+                // Own row for this method change (append-only lane) — created
+                // just before dispatch, transitioned by id after.
+                let rpRowId: string | null = null;
+                try {
+                  const enqueued = await enqueueSalesMutation({
+                    referenceId: id,
+                    referenceType: "customer_payment",
+                    step: "payment_method_change",
+                    qbTxnId,
+                    payload: { paymentMethod: qbMethodName },
+                    medusaRefNumber: paymentLabel,
+                  });
+                  rpRowId = enqueued.rowId;
+                } catch {
+                  /* bookkeeping only */
+                }
                 const modResp = await bridgeFetch(
                   "PUT",
                   `/api/payments/${qbTxnId}`,
@@ -553,15 +555,12 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
                   ?.info?.(
                     `[PAYMENT PATCH] Queued ReceivePaymentMod for ${qbTxnId} — PaymentMethod → ${qbMethodName}`
                   );
-                await writePipelineRow({
-                  referenceId: id,
-                  referenceType: "customer_payment",
-                  step: "payment_method_change",
-                  status: "submitted",
-                  bridgeOpId: modResp?.operationId ?? null,
-                  qbTxnId: qbTxnId,
-                  medusaRefNumber: paymentLabel,
-                }).catch(() => {});
+                if (rpRowId) {
+                  await submitPipelineRowById(
+                    rpRowId,
+                    modResp?.operationId ?? null
+                  ).catch(() => {});
+                }
                 // Poll Mod result to cache the fresh EditSequence for future mods
                 if (modResp?.operationId) {
                   try {

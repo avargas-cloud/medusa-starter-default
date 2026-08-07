@@ -200,8 +200,13 @@ const VOID_BLOCKING_STEPS: Record<string, readonly string[]> = {
   void_invoice: ["invoice", "invoice_update"],
   void_sales_receipt: ["sales_receipt", "sales_receipt_update"],
   void_credit_memo: ["credit_memo", "credit_memo_mod"],
-  void_sales_order: ["sales_order", "so_close", "so_reopen"],
-  void_estimate: ["estimate", "estimate_cancel", "estimate_deactivate"],
+  void_sales_order: ["sales_order", "sales_order_mod", "so_close", "so_reopen"],
+  void_estimate: [
+    "estimate",
+    "estimate_mod",
+    "estimate_cancel",
+    "estimate_deactivate",
+  ],
   void_inventory_adjustment: ["inventory_adjustment"],
   // El borrado de un ReceivePayment espera a que el pago quede quieto: borrarlo
   // mientras un cambio de método o de fecha viaja hacia el mismo documento
@@ -216,8 +221,8 @@ const VOID_BLOCKING_STEPS: Record<string, readonly string[]> = {
   // order-canceled (QB no tiene void real de Estimate: se desactiva). Bloquea
   // sobre el ADD del estimate, no sobre `void_estimate` — que si existiera sería
   // la otra mitad del mismo par y se bloquearían mutuamente.
-  estimate_deactivate: ["estimate"],
-  estimate_cancel: ["estimate"],
+  estimate_deactivate: ["estimate", "estimate_mod"],
+  estimate_cancel: ["estimate", "estimate_mod"],
 };
 
 export type VoidBlockerInput = {

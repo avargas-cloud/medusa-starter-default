@@ -44,7 +44,11 @@ import { handleOrderUpdated } from "../handlers/handle-order-updated";
 import { handlePaymentCustomerTransfer } from "../handlers/handle-payment-customer-transfer";
 import { handlePosPaymentApplied } from "../handlers/handle-pos-payment-applied";
 import { handleSalesReceiptCreated } from "../handlers/handle-sales-receipt-created";
-import { failOrRetryPipelineRow, failPipelineRow } from "../qb-pipeline";
+import {
+  failOrRetryPipelineRow,
+  failPipelineRow,
+  skipPipelineRowById,
+} from "../qb-pipeline";
 import {
   describeBlockers,
   findVoidBlockers,
@@ -201,9 +205,42 @@ export async function resubmitByStep(
               logger,
               true // isCron — skips the 1h POS delay guard
             );
+          } else {
+            // Append-only lane: the MOD went out on (or parked as) its own
+            // estimate_mod row — this legacy 'estimate' row was only the
+            // vehicle that woke the consolidator. Settle it so it can't churn
+            // processing→recovery forever.
+            await skipPipelineRowById(
+              row.id,
+              "Superseded by append-only estimate_mod row",
+              { includeProcessing: true }
+            );
           }
         }
         break;
+
+      case "estimate_mod": {
+        if (!row.order_id) {
+          await failPipelineRow(row.id, "estimate_mod: row has no order_id");
+          break;
+        }
+        // Deterministic MOD — an estimate_mod row NEVER falls back to CREATE
+        // (a mod that turns into an ADD mints a duplicate QB document). The
+        // handler transitions THIS row by id (we already hold the claim).
+        const outcome = await handleDraftOrderUpdated(
+          row.order_id,
+          container,
+          logger,
+          { isCron: true, awaitSerialized: true, pipelineRowId: row.id }
+        );
+        if (outcome === "skipped") {
+          await failPipelineRow(
+            row.id,
+            "estimate_mod: no QB Estimate TxnID on order metadata — nothing to modify"
+          );
+        }
+        break;
+      }
 
       case "sales_order":
         if (!row.order_id) break;
@@ -227,9 +264,38 @@ export async function resubmitByStep(
               logger,
               true
             );
+          } else {
+            // Append-only lane: the MOD went out on (or parked as) its own
+            // sales_order_mod row — settle this legacy vehicle row.
+            await skipPipelineRowById(
+              row.id,
+              "Superseded by append-only sales_order_mod row",
+              { includeProcessing: true }
+            );
           }
         }
         break;
+
+      case "sales_order_mod": {
+        if (!row.order_id) {
+          await failPipelineRow(row.id, "sales_order_mod: row has no order_id");
+          break;
+        }
+        // Deterministic MOD — never falls back to CREATE. The handler
+        // transitions THIS row by id (we already hold the claim).
+        const outcome = await handleOrderUpdated(row.order_id, container, logger, {
+          isCron: true,
+          awaitSerialized: true,
+          pipelineRowId: row.id,
+        });
+        if (outcome === "skipped") {
+          await failPipelineRow(
+            row.id,
+            "sales_order_mod: no QB Sales Order TxnID on order metadata — nothing to modify"
+          );
+        }
+        break;
+      }
 
       case "sales_receipt": {
         // Read full payload from row if present (qb-invoice-waiting-gate

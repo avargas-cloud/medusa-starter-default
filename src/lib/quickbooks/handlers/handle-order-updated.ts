@@ -7,43 +7,43 @@ import { parseSalesRepInitials } from "../parse-sales-rep";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { getSoTxnId, getSoRef } from "../qb-metadata-types";
 import {
-  coalesceIfInFlight,
-  writePipelineRow,
+  claimSalesMutationRow,
+  enqueueSalesMutation,
+  failPipelineRow,
+  findLatestInFlightRow,
   pollUntilQbConfirmed,
+  submitPipelineRowById,
 } from "../qb-pipeline";
 import { withQbSerialized } from "../qb-serializer";
 
 /**
  * Handle Sales Order MOD (update existing QB Sales Order).
  *
- * Gold-standard sequential-save pattern (mirrors handle-draft-order-updated.ts):
- *   1. coalesceIfInFlight — if a prior SO MOD is still submitted, mark next_payload
- *      and return. Consolidator will resubmit after the prior op confirms.
- *   2. writePipelineRow(pending) — pre-flight row for immediate UI feedback.
- *   3. withQbSerialized — per-order in-memory lock + DB in-flight check to
- *      guarantee strictly sequential bridge calls.
- *   4. Inside the lock: idempotent re-reset to pending, then bridge MOD,
- *      then writePipelineRow(submitted) → pollUntilQbConfirmed or
- *      writePipelineRow(failed).
+ * Append-only lane (2026-08-06) — mirrors handle-draft-order-updated.ts: every
+ * edit gets its OWN `sales_order_mod` pipeline row via enqueueSalesMutation;
+ * the ADD's `sales_order` row keeps its confirm forever. All status
+ * transitions thread the row's UUID (claim → submit → confirm/fail).
  *
- * Callable from:
- *   - post-edit-sync route (user-initiated edit)
- *   - consolidator resubmitByStep (coalesced save picked up after confirm)
- *   - pipeline retry endpoint (manual retry of failed MOD)
+ * Sequential-save behaviour:
+ *   - Edits while a previous edit is still queued coalesce at enqueue time.
+ *   - Edits while the CREATE is still in flight park as a 'waiting' row behind
+ *     the ADD (depends_on); the wake pass promotes it after the confirm and
+ *     the dispatcher resolves the fresh TxnID from metadata.
+ *   - withQbSerialized still guarantees sequential bridge calls per order
+ *     across sales_order + sales_order_mod.
  *
  * Returns:
- *   - "coalesced" — next_payload was set on an in-flight row; nothing else to do.
- *   - "scheduled" — serialized callback was scheduled in the background.
- *   - "skipped"   — order has no qb_sales_order.txn_id (use CREATE path instead).
+ *   - "coalesced" — absorbed by a queued row or parked behind the in-flight ADD.
+ *   - "scheduled" — serialized dispatch scheduled (or ran, when awaited).
+ *   - "skipped"   — order has no qb_sales_order.txn_id and no in-flight ADD.
  */
 export async function handleOrderUpdated(
   orderId: string,
   container: any,
   logger: any,
-  opts?: { isCron?: boolean; awaitSerialized?: boolean }
+  opts?: { isCron?: boolean; awaitSerialized?: boolean; pipelineRowId?: string }
 ): Promise<"coalesced" | "scheduled" | "skipped"> {
   const LOG_PREFIX = "[QB-ORDER-UPDATED]";
-  const isCron = opts?.isCron ?? false;
 
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
 
@@ -76,39 +76,50 @@ export async function handleOrderUpdated(
   }
 
   const qbTxnId = getSoTxnId(order.metadata);
+  const qbRef = getSoRef(order.metadata) ?? null;
+  const medusaRef = order.display_id ? `S${order.display_id}` : null;
+
   if (!qbTxnId) {
+    if (opts?.pipelineRowId) {
+      // Consolidator dispatched a sales_order_mod row but no TxnID ever
+      // persisted — nothing to modify. The caller fails the row.
+      return "skipped";
+    }
+    const inFlightAdd = await findLatestInFlightRow(orderId, ["sales_order"]);
+    if (inFlightAdd) {
+      const parked = await enqueueSalesMutation({
+        step: "sales_order_mod",
+        orderId,
+        qbTxnId: null,
+        payload: {},
+        medusaRefNumber: medusaRef,
+        dependsOn: inFlightAdd.id,
+        status: "waiting",
+      });
+      logger.info(
+        `${LOG_PREFIX} ⏸ SO CREATE in-flight for ${orderId} — edit parked as waiting sales_order_mod row ${parked.rowId}`
+      );
+      return "coalesced";
+    }
     logger.info(
       `${LOG_PREFIX} No qb_sales_order.txn_id on ${orderId} — cannot MOD (use CREATE)`
     );
     return "skipped";
   }
 
-  const qbRef = getSoRef(order.metadata) ?? null;
-  const medusaRef = order.display_id ? `S${order.display_id}` : null;
-
-  // 1. Coalesce rapid saves — if a prior MOD is 'submitted', mark next_payload.
-  if (!isCron) {
-    const coalesced = await coalesceIfInFlight(orderId, null, "sales_order");
-    if (coalesced) {
-      logger.info(
-        `${LOG_PREFIX} ⏸ SO MOD in-flight for ${orderId} — save coalesced into next_payload`
-      );
-      return "coalesced";
-    }
-  }
-
-  // 2. Pre-flight pending row for UI.
-  try {
-    await writePipelineRow({
+  // Own row for this edit (insert, or coalesce into the un-dispatched tail).
+  let rowId = opts?.pipelineRowId ?? null;
+  if (!rowId) {
+    const enqueued = await enqueueSalesMutation({
+      step: "sales_order_mod",
       orderId,
-      step: "sales_order",
-      status: "pending",
-      intent: "mod",
       qbTxnId,
-      qbRefNumber: qbRef,
+      payload: {},
       medusaRefNumber: medusaRef,
+      qbRefNumber: qbRef,
     });
-    // Also reflect "pending" on the order metadata so the UI badge updates.
+    rowId = enqueued.rowId;
+    // Reflect "pending" on the order metadata so the UI badge updates.
     try {
       await getDbPool().query(
         `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
@@ -117,13 +128,20 @@ export async function handleOrderUpdated(
     } catch {
       /* best-effort */
     }
-  } catch (preErr: any) {
-    logger.warn(
-      `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${preErr.message}`
-    );
   }
+  const dispatchRowId = rowId;
 
   const runCallback = async (): Promise<void> => {
+    if (!opts?.pipelineRowId) {
+      const claimed = await claimSalesMutationRow(dispatchRowId);
+      if (!claimed) {
+        logger.info(
+          `${LOG_PREFIX} sales_order_mod ${dispatchRowId} no longer claimable — another dispatcher owns it`
+        );
+        return;
+      }
+    }
+
     // Fetch freshest order state for MOD payload.
     const {
       data: [fullOrder],
@@ -142,33 +160,13 @@ export async function handleOrderUpdated(
     });
     if (!fullOrder) {
       logger.warn(`${LOG_PREFIX} Order ${orderId} vanished before MOD`);
+      await failPipelineRow(dispatchRowId, "Order vanished before MOD");
       return;
     }
 
-    // Re-read the freshest qb_sales_order.txn_id from metadata inside the lock.
-    // If it changed between pre-flight and execution (e.g. consolidator persisted
-    // a new txnId after a CREATE confirm), we use the latest. Falls back to the
-    // pre-flight value to avoid aborting on transient fetch glitches.
+    // Freshest TxnID inside the lock — the consolidator may have persisted a
+    // newer one after a prior CREATE confirmed.
     const freshTxnId = getSoTxnId(fullOrder.metadata) ?? qbTxnId;
-    const freshRef = getSoRef(fullOrder.metadata) ?? qbRef;
-
-    // In-lock idempotent reset — guarantees writePipelineRow(submitted/failed) below
-    // has a 'pending' row to UPDATE rather than INSERTing a duplicate under race.
-    try {
-      await writePipelineRow({
-        orderId,
-        step: "sales_order",
-        status: "pending",
-        intent: "mod",
-        qbTxnId: freshTxnId,
-        qbRefNumber: freshRef,
-        medusaRefNumber: medusaRef,
-      });
-    } catch (lockErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ In-lock pending reset failed: ${lockErr.message}`
-      );
-    }
 
     const typedOrder = fullOrder as unknown as MedusaOrderForQb;
     const pgConn = container.resolve("__pg_connection__");
@@ -200,6 +198,17 @@ export async function handleOrderUpdated(
       logger,
     });
 
+    const markMetadataError = async (): Promise<void> => {
+      try {
+        await getDbPool().query(
+          `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
+          [orderId]
+        );
+      } catch {
+        /* best-effort */
+      }
+    };
+
     try {
       const result = await updateSalesOrderInQb({
         txnId: freshTxnId,
@@ -209,63 +218,28 @@ export async function handleOrderUpdated(
       });
 
       if (result.success) {
-        const rowId = await writePipelineRow({
-          orderId,
-          step: "sales_order",
-          status: "submitted",
-          bridgeOpId: result.data?.operationId || null,
-          qbTxnId: freshTxnId,
-          qbRefNumber: freshRef,
-          medusaRefNumber: medusaRef,
-        });
-        const outcome = await pollUntilQbConfirmed(rowId);
+        await submitPipelineRowById(
+          dispatchRowId,
+          result.data?.operationId || null
+        );
+        const outcome = await pollUntilQbConfirmed(dispatchRowId);
         if (outcome === "timeout") {
-          logger.warn(`${LOG_PREFIX} Poll timed out for rowId=${rowId}`);
+          logger.warn(`${LOG_PREFIX} Poll timed out for rowId=${dispatchRowId}`);
         }
       } else {
-        await writePipelineRow({
-          orderId,
-          step: "sales_order",
-          status: "failed",
-          qbTxnId: freshTxnId,
-          qbRefNumber: freshRef,
-          medusaRefNumber: medusaRef,
-          error: result.error,
-        });
-        try {
-          await getDbPool().query(
-            `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
-            [orderId]
-          );
-        } catch {
-          /* best-effort */
-        }
+        await failPipelineRow(dispatchRowId, result.error ?? "QB SO MOD failed");
+        await markMetadataError();
       }
     } catch (err: any) {
       logger.error(`${LOG_PREFIX} Exception during SO MOD: ${err.message}`);
-      await writePipelineRow({
-        orderId,
-        step: "sales_order",
-        status: "failed",
-        qbTxnId: freshTxnId,
-        qbRefNumber: freshRef,
-        medusaRefNumber: medusaRef,
-        error: err.message,
-      });
-      try {
-        await getDbPool().query(
-          `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
-          [orderId]
-        );
-      } catch {
-        /* best-effort */
-      }
+      await failPipelineRow(dispatchRowId, err.message);
+      await markMetadataError();
     }
   };
 
   const serialized = withQbSerialized(
     `sales_order:${orderId}`,
-    { orderId, steps: ["sales_order"] },
+    { orderId, steps: ["sales_order", "sales_order_mod"] },
     runCallback,
     { logger }
   );

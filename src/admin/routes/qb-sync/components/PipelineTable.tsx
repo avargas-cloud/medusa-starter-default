@@ -70,24 +70,38 @@ interface PipelineCounts {
 
 const STEP_LABELS: Record<string, string> = {
   estimate: "Estimate",
+  estimate_mod: "Estimate Edit",
   sales_order: "Sales Order",
+  sales_order_mod: "Sales Order Edit",
   sales_receipt: "Sales Receipt",
+  sales_receipt_update: "Sales Receipt Edit",
   invoice: "Invoice",
+  invoice_update: "Invoice Edit",
   payment: "Payment",
+  payment_method_change: "Payment Method Change",
+  payment_txndate_change: "Payment Date Change",
   apply_payment: "Apply Payment",
   credit_memo: "Credit Memo",
+  credit_memo_mod: "Credit Memo Edit",
   write_check: "Write Check",
   refund_payment: "Refund Payment",
 };
 
 const STEP_ICONS: Record<string, string> = {
   estimate: "📋",
+  estimate_mod: "✏️",
   sales_order: "🧾",
+  sales_order_mod: "✏️",
   sales_receipt: "🏷️",
+  sales_receipt_update: "✏️",
   invoice: "📄",
+  invoice_update: "✏️",
   payment: "💳",
+  payment_method_change: "✏️",
+  payment_txndate_change: "✏️",
   apply_payment: "🔗",
   credit_memo: "↩️",
+  credit_memo_mod: "✏️",
   write_check: "✍️",
   refund_payment: "🔄",
 };
@@ -731,12 +745,19 @@ export function PipelineTable() {
           >
             <option value="all">All Steps</option>
             <option value="estimate">Estimate</option>
+            <option value="estimate_mod">Estimate Edit</option>
             <option value="sales_order">Sales Order</option>
+            <option value="sales_order_mod">Sales Order Edit</option>
             <option value="sales_receipt">Sales Receipt</option>
+            <option value="sales_receipt_update">Sales Receipt Edit</option>
             <option value="invoice">Invoice</option>
+            <option value="invoice_update">Invoice Edit</option>
             <option value="payment">Payment</option>
+            <option value="payment_method_change">Payment Method Change</option>
+            <option value="payment_txndate_change">Payment Date Change</option>
             <option value="apply_payment">Apply Payment</option>
             <option value="credit_memo">Credit Memo</option>
+            <option value="credit_memo_mod">Credit Memo Edit</option>
             <option value="write_check">Write Check</option>
             <option value="refund_payment">Refund Payment</option>
           </select>

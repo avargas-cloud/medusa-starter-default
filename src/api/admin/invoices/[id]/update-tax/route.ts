@@ -2,7 +2,12 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
 import { updateInvoiceInQb } from "../../../../../lib/quickbooks/client/invoices";
 import { getQbConfig } from "../../../../../lib/quickbooks/qb-config";
-import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import {
+  confirmPipelineRow,
+  enqueueSalesMutation,
+  failPipelineRow,
+  submitPipelineRowById,
+} from "../../../../../lib/quickbooks/qb-pipeline";
 import { resolveTaxListid } from "../../../../../lib/quickbooks/resolve-tax-listid";
 import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
@@ -191,17 +196,24 @@ export async function POST(
     })
       .then((logId) => {
         QbSyncLogger.setOperationId(logId, "pending").catch(() => {});
-        // Write upfront pipeline row so it appears immediately in the Pipeline Monitor
-        writePipelineRow({
+        // Append-only lane: own row for this tax MOD, transitioned by row id
+        // below — never by (document, step), which with N rows could land on a
+        // sibling operation's row.
+        return enqueueSalesMutation({
           orderId: invoice.order_id ?? null,
           referenceId: id,
           referenceType: "pos_invoice",
           step: "invoice_update",
-          status: "pending",
+          qbTxnId: txnId!,
+          payload: { taxMode },
           medusaRefNumber: invoice.invoice_number
             ? `INV-${invoice.invoice_number}`
             : null,
-        }).catch(() => {});
+        })
+          .then(({ rowId }) => ({ logId, rowId }))
+          .catch(() => ({ logId, rowId: null as string | null }));
+      })
+      .then(({ logId, rowId }) => {
         return getQbConfig().then((qbConfig) => {
           const payload = {
             txnId: txnId!,
@@ -213,27 +225,22 @@ export async function POST(
           };
           return updateInvoiceInQb(payload).then((result) => ({
             logId,
+            rowId,
             result,
           }));
         });
       })
-      .then(({ logId, result }) => {
+      .then(({ logId, rowId, result }) => {
         if (!result.success) {
           console.error(
             `[update-tax] QB Invoice MOD failed for ${txnId}:`,
             result.error
           );
-          writePipelineRow({
-            orderId: invoice.order_id ?? null,
-            referenceId: id,
-            referenceType: "pos_invoice",
-            step: "invoice_update",
-            status: "failed",
-            medusaRefNumber: invoice.invoice_number
-              ? `INV-${invoice.invoice_number}`
-              : null,
-            error: result.error ?? "QB update failed",
-          }).catch(() => {});
+          if (rowId) {
+            failPipelineRow(rowId, result.error ?? "QB update failed").catch(
+              () => {}
+            );
+          }
           return QbSyncLogger.fail(logId, result.error ?? "QB update failed", {
             metadata: { txnId, taxMode },
           });
@@ -243,18 +250,11 @@ export async function POST(
           `[update-tax] ✅ QB Invoice MOD queued for ${txnId} (op: ${opId})`
         );
         if (opId) QbSyncLogger.setOperationId(logId, opId).catch(() => {});
-        writePipelineRow({
-          orderId: invoice.order_id ?? null,
-          referenceId: id,
-          referenceType: "pos_invoice",
-          step: "invoice_update",
-          status: "confirmed",
-          medusaRefNumber: invoice.invoice_number
-            ? `INV-${invoice.invoice_number}`
-            : null,
-          bridgeOpId: opId ?? null,
-          qbTxnId: txnId ?? null,
-        }).catch(() => {});
+        if (rowId) {
+          submitPipelineRowById(rowId, opId ?? null)
+            .then(() => confirmPipelineRow(rowId, txnId ?? null, null, null))
+            .catch(() => {});
+        }
         return QbSyncLogger.complete(logId, {
           qbTxnId: txnId,
           qbOperationId: opId,

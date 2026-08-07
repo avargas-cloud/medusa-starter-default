@@ -176,7 +176,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       const { rows: pipelineCheck } = await client.query(
         `SELECT status FROM qb_order_pipeline
                  WHERE order_id = $1 AND step = 'estimate'
-                 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
+                 ORDER BY COALESCE(updated_at, created_at) DESC, seq DESC LIMIT 1`,
         [row.id]
       );
       const latestPipelineStatus = pipelineCheck[0]?.status as
@@ -202,10 +202,18 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       // 1.5.4: instead of calling handler directly, transition 'waiting' →
       // 'pending'. The consolidator's pending-dispatch pass picks it up next
       // tick and processes via the same handler — single path.
+      // Scoped by row id (append-only era): a blind (order_id, step, status)
+      // UPDATE would promote EVERY waiting row at once if more than one ever
+      // exists for the order.
       await client.query(
         `UPDATE qb_order_pipeline
             SET status = 'pending', updated_at = NOW()
-          WHERE order_id = $1 AND step = 'estimate' AND status = 'waiting'`,
+          WHERE id = (
+            SELECT id FROM qb_order_pipeline
+             WHERE order_id = $1 AND step = 'estimate' AND status = 'waiting'
+             ORDER BY created_at DESC, seq DESC
+             LIMIT 1
+          )`,
         [row.id]
       );
       processedDrafts++;

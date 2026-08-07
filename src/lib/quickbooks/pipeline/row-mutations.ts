@@ -1,6 +1,11 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { WritePipelineRowInput } from "./types";
 import { decideRetry, type RetryDecision } from "../retry-config";
+import {
+  CREATE_STEP_TO_MOD_STEP,
+  enqueueSalesMutation,
+  isSalesModStep,
+} from "./enqueue-sales-mutation";
 
 /**
  * QB "ADD" steps — each creates EXACTLY ONE QuickBooks document and is NOT
@@ -145,6 +150,37 @@ export async function writePipelineRow(
     throw new Error(
       `writePipelineRow: intent:"mod" for step="${input.step}" requires qbTxnId (the QB doc to modify)`
     );
+  }
+
+  // APPEND-ONLY REDIRECT (2026-08-06): a sales MOD never recycles the ADD's row
+  // anymore — it gets its own row on the append-only lane. Any caller (present
+  // or missed by the migration) that still enqueues intent:"mod" for a sales
+  // create step, or targets a mod step directly, is routed to
+  // enqueueSalesMutation so the reactivation branches below can never destroy
+  // an ADD's confirm again. Only 'pending'/'waiting' enqueues redirect: the
+  // terminal-status branches (submitted/confirmed/failed bookkeeping) stay
+  // reachable for legacy rows until every caller threads row ids.
+  if (input.status === "pending" || input.status === "waiting") {
+    const redirectStep =
+      input.intent === "mod"
+        ? (CREATE_STEP_TO_MOD_STEP[input.step] ?? input.step)
+        : input.step;
+    if (isSalesModStep(redirectStep) && input.qbTxnId) {
+      const { rowId } = await enqueueSalesMutation({
+        step: redirectStep,
+        orderId: input.orderId ?? null,
+        referenceId: input.referenceId ?? null,
+        referenceType: input.referenceType ?? null,
+        qbTxnId: input.qbTxnId,
+        payload: (input.payload as Record<string, unknown>) ?? {},
+        mergePayload: input.mergePayload ?? false,
+        medusaRefNumber: input.medusaRefNumber ?? null,
+        qbRefNumber: input.qbRefNumber ?? null,
+        dependsOn: input.dependsOn ?? null,
+        status: input.status,
+      });
+      return rowId;
+    }
   }
 
   // How an incoming payload combines with the row's existing one. Default is

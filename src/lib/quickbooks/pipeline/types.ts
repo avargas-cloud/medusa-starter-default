@@ -1,7 +1,9 @@
 export type PipelineStep =
   | "customer"
   | "estimate"
+  | "estimate_mod"
   | "sales_order"
+  | "sales_order_mod"
   | "sales_receipt"
   | "invoice"
   | "payment"

@@ -104,16 +104,28 @@ export async function findInFlightQbRows(
  */
 export async function skipPipelineRowById(
   rowId: string,
-  reason: string
+  reason: string,
+  opts?: {
+    /**
+     * Also skip a row the dispatch pass already claimed 'processing'. Only for
+     * callers that OWN the claim (resubmitByStep settling a legacy vehicle row
+     * after the append-only lane dispatched the real operation) — never to
+     * cancel someone else's in-flight dispatch.
+     */
+    includeProcessing?: boolean;
+  }
 ): Promise<void> {
   const pool = getDbPool();
+  const statuses = opts?.includeProcessing
+    ? ["waiting", "pending", "processing"]
+    : ["waiting", "pending"];
   await pool.query(
     `UPDATE qb_order_pipeline
          SET status = 'skipped',
              error  = $2
          WHERE id = $1
-           AND status IN ('waiting', 'pending')`,
-    [rowId, reason]
+           AND status = ANY($3::text[])`,
+    [rowId, reason, statuses]
   );
 }
 

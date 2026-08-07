@@ -22,6 +22,8 @@ const IDEMPOTENT_REDISPATCH_STEPS = [
   "invoice_update",
   "sales_receipt_update",
   "credit_memo_mod",
+  "estimate_mod",
+  "sales_order_mod",
   "estimate_cancel",
   "estimate_deactivate",
   "so_close",

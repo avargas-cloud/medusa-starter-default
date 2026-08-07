@@ -6,46 +6,54 @@ import { parseSalesRepInitials } from "../parse-sales-rep";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { getEstimateTxnId, getEstimateRef } from "../qb-metadata-types";
 import {
-  coalesceIfInFlight,
-  writePipelineRow,
+  claimSalesMutationRow,
+  enqueueSalesMutation,
+  failPipelineRow,
+  findLatestInFlightRow,
   pollUntilQbConfirmed,
+  submitPipelineRowById,
 } from "../qb-pipeline";
 import { withQbSerialized } from "../qb-serializer";
 
 /**
  * Handle Estimate MOD (update existing QB Estimate).
  *
- * Gold-standard sequential-save pattern:
- *   1. coalesceIfInFlight — if a prior save is still submitted, mark next_payload
- *      on the existing row and return. The consolidator will resubmit this call
- *      after the prior op confirms (claimAndResetForResubmit → resubmitByStep).
- *   2. writePipelineRow(pending) — idempotent pre-flight row for UI feedback.
- *   3. withQbSerialized — per-order in-memory lock + DB in-flight check to
- *      guarantee strictly sequential bridge calls.
- *   4. Inside the lock: writePipelineRow(pending) again (idempotent under lock),
- *      then bridge MOD, then writePipelineRow(submitted) → pollUntilQbConfirmed
- *      or writePipelineRow(failed).
+ * Append-only lane (2026-08-06): every edit gets its OWN `estimate_mod`
+ * pipeline row via enqueueSalesMutation — the ADD's `estimate` row keeps its
+ * confirm forever. All status transitions thread the row's UUID
+ * (claim → submit → confirm/fail); nothing matches by (document, step).
+ *
+ * Sequential-save behaviour:
+ *   - Edits while a PREVIOUS edit is still queued coalesce at enqueue time
+ *     (enqueueSalesMutation folds into the un-dispatched tail).
+ *   - Edits while the CREATE is still in flight park as a 'waiting' row behind
+ *     the ADD row (depends_on); the wake pass promotes it after the confirm and
+ *     the consolidator resolves the fresh TxnID from metadata at dispatch.
+ *     This replaces the old next_payload/coalesceIfInFlight recycling.
+ *   - withQbSerialized still guarantees strictly sequential bridge calls per
+ *     order across estimate + estimate_mod.
  *
  * Callable from:
  *   - sync-pos route (user-initiated save)
- *   - consolidator resubmitByStep (coalesced save picked up after confirm)
- *   - pipeline retry endpoint (manual retry of failed MOD)
+ *   - consolidator resubmitByStep case "estimate_mod" (passes pipelineRowId of
+ *     the row it already claimed 'processing')
+ *   - legacy "estimate" rows resubmitted by the consolidator (no pipelineRowId)
  *
  * Returns:
- *   - "coalesced" — next_payload was set on an in-flight row; nothing else to do.
- *   - "scheduled" — serialized callback was scheduled in the background.
- *   - "skipped"   — draft order has no qb_estimate_txn_id (use CREATE path instead).
+ *   - "coalesced" — the edit was absorbed by a queued row or parked behind the
+ *     in-flight ADD; nothing to dispatch now.
+ *   - "scheduled" — serialized dispatch was scheduled (or ran, when awaited).
+ *   - "skipped"   — draft order has no qb_estimate_txn_id and no in-flight ADD
+ *     to wait for (use CREATE path instead).
  */
 export async function handleDraftOrderUpdated(
   draftOrderId: string,
   container: any,
   logger: any,
-  opts?: { isCron?: boolean; awaitSerialized?: boolean }
+  opts?: { isCron?: boolean; awaitSerialized?: boolean; pipelineRowId?: string }
 ): Promise<"coalesced" | "scheduled" | "skipped"> {
   const LOG_PREFIX = "[QB-DRAFT-ORDER-UPDATED]";
-  const isCron = opts?.isCron ?? false;
 
-  // Fetch draft order to confirm it has a qb_estimate_txn_id (MOD path requires it)
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
 
   let draftOrder: any;
@@ -79,48 +87,71 @@ export async function handleDraftOrderUpdated(
   }
 
   const qbTxnId = getEstimateTxnId(draftOrder.metadata);
+  const qbRef = getEstimateRef(draftOrder.metadata) ?? null;
+  const medusaRef = draftOrder.display_id ? `E${draftOrder.display_id}` : null;
+
   if (!qbTxnId) {
+    if (opts?.pipelineRowId) {
+      // The consolidator dispatched an estimate_mod row but the confirm never
+      // persisted a TxnID — nothing to modify. The caller fails the row.
+      return "skipped";
+    }
+    // No TxnID yet: if the CREATE is still in flight, park this edit behind it
+    // instead of losing it. The wake pass promotes it on confirm and the
+    // dispatcher resolves the fresh TxnID from metadata.
+    const inFlightAdd = await findLatestInFlightRow(draftOrderId, ["estimate"]);
+    if (inFlightAdd) {
+      const parked = await enqueueSalesMutation({
+        step: "estimate_mod",
+        orderId: draftOrderId,
+        qbTxnId: null,
+        payload: {},
+        medusaRefNumber: medusaRef,
+        dependsOn: inFlightAdd.id,
+        status: "waiting",
+      });
+      logger.info(
+        `${LOG_PREFIX} ⏸ Estimate CREATE in-flight for ${draftOrderId} — edit parked as waiting estimate_mod row ${parked.rowId}`
+      );
+      return "coalesced";
+    }
     logger.info(
       `${LOG_PREFIX} No qb_estimate_txn_id on ${draftOrderId} — cannot MOD (use CREATE)`
     );
     return "skipped";
   }
 
-  const qbRef = getEstimateRef(draftOrder.metadata) ?? null;
-  const medusaRef = draftOrder.display_id ? `E${draftOrder.display_id}` : null;
-
-  // 1. Coalesce if a prior save is still submitted/in-flight.
-  //    Skip for cron (consolidator resubmit): isCron means we're already RESUMING a
-  //    coalesced save, so coalescing again would make it loop forever.
-  if (!isCron) {
-    const coalesced = await coalesceIfInFlight(draftOrderId, null, "estimate");
-    if (coalesced) {
-      logger.info(
-        `${LOG_PREFIX} ⏸ Estimate MOD in-flight for ${draftOrderId} — save coalesced into next_payload`
-      );
-      return "coalesced";
-    }
-  }
-
-  // 2. Pre-flight pending row for immediate UI visibility
-  try {
-    await writePipelineRow({
+  // Own row for this edit. The consolidator path arrives with the row already
+  // claimed 'processing'; the route path enqueues (insert or coalesce into the
+  // queued tail) and claims it before dispatching inline.
+  let rowId = opts?.pipelineRowId ?? null;
+  if (!rowId) {
+    const enqueued = await enqueueSalesMutation({
+      step: "estimate_mod",
       orderId: draftOrderId,
-      step: "estimate",
-      status: "pending",
-      intent: "mod",
       qbTxnId,
-      qbRefNumber: qbRef,
+      payload: {},
       medusaRefNumber: medusaRef,
+      qbRefNumber: qbRef,
     });
-  } catch (preErr: any) {
-    logger.warn(
-      `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${preErr.message}`
-    );
+    rowId = enqueued.rowId;
   }
+  const dispatchRowId = rowId;
 
-  // 3. Schedule the serialized bridge call.
   const runCallback = async (): Promise<void> => {
+    // Inline path: claim the row so the consolidator's dispatch pass and this
+    // route never dispatch the same operation twice. The consolidator path
+    // (pipelineRowId) already holds the claim.
+    if (!opts?.pipelineRowId) {
+      const claimed = await claimSalesMutationRow(dispatchRowId);
+      if (!claimed) {
+        logger.info(
+          `${LOG_PREFIX} estimate_mod ${dispatchRowId} no longer claimable — another dispatcher owns it`
+        );
+        return;
+      }
+    }
+
     // Re-fetch the freshest order state at execution time
     const {
       data: [fullOrder],
@@ -139,34 +170,13 @@ export async function handleDraftOrderUpdated(
     });
     if (!fullOrder) {
       logger.warn(`${LOG_PREFIX} Order ${draftOrderId} vanished before MOD`);
+      await failPipelineRow(dispatchRowId, "Order vanished before MOD");
       return;
     }
 
-    // Re-read qb_txn_id from the freshly-fetched metadata. If it changed
-    // between the pre-flight fetch and the in-lock execution (e.g. the
-    // consolidator just persisted a new txnId after a prior CREATE confirmed),
-    // we use the latest value. Falls back to the pre-flight value so we never
-    // abort MOD on a transient fetch glitch.
+    // Re-read qb_txn_id from the freshly-fetched metadata — the consolidator
+    // may have persisted a newer TxnID after a prior CREATE confirmed.
     const freshTxnId = getEstimateTxnId(fullOrder.metadata) ?? qbTxnId;
-    const freshRef = getEstimateRef(fullOrder.metadata) ?? qbRef;
-
-    // Inside the lock: idempotent reset to pending (serialized guarantee
-    // that writePipelineRow(failed/submitted) below has a pending row to match).
-    try {
-      await writePipelineRow({
-        orderId: draftOrderId,
-        step: "estimate",
-        status: "pending",
-        intent: "mod",
-        qbTxnId: freshTxnId,
-        qbRefNumber: freshRef,
-        medusaRefNumber: medusaRef,
-      });
-    } catch (lockErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ In-lock pending reset failed: ${lockErr.message}`
-      );
-    }
 
     const typedOrder = fullOrder as unknown as MedusaOrderForQb;
     const productTaxableMap = await resolveProductTaxableMap(
@@ -200,35 +210,25 @@ export async function handleDraftOrderUpdated(
     });
 
     if (result.success) {
-      const rowId = await writePipelineRow({
-        orderId: draftOrderId,
-        step: "estimate",
-        status: "submitted",
-        bridgeOpId: result.data?.operationId || null,
-        qbTxnId: freshTxnId,
-        qbRefNumber: freshRef,
-        medusaRefNumber: medusaRef,
-      });
-      const outcome = await pollUntilQbConfirmed(rowId);
+      await submitPipelineRowById(
+        dispatchRowId,
+        result.data?.operationId || null
+      );
+      const outcome = await pollUntilQbConfirmed(dispatchRowId);
       if (outcome === "timeout") {
-        logger.warn(`${LOG_PREFIX} Poll timed out for rowId=${rowId}`);
+        logger.warn(`${LOG_PREFIX} Poll timed out for rowId=${dispatchRowId}`);
       }
     } else {
-      await writePipelineRow({
-        orderId: draftOrderId,
-        step: "estimate",
-        status: "failed",
-        qbTxnId: freshTxnId,
-        qbRefNumber: freshRef,
-        medusaRefNumber: medusaRef,
-        error: result.error,
-      });
+      await failPipelineRow(
+        dispatchRowId,
+        result.error ?? "QB Estimate MOD failed"
+      );
     }
   };
 
   const serialized = withQbSerialized(
     `estimate:${draftOrderId}`,
-    { orderId: draftOrderId, steps: ["estimate"] },
+    { orderId: draftOrderId, steps: ["estimate", "estimate_mod"] },
     runCallback,
     { logger }
   );

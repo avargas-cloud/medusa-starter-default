@@ -222,6 +222,11 @@ const STEP_FETCH_SPEC: Record<string, FetchSpec> = {
     cacheEntityType: "sales_order",
     extractEditSequence: extractFromSalesOrderQuery,
   },
+  sales_order_mod: {
+    endpoint: "/api/sales-orders",
+    cacheEntityType: "sales_order",
+    extractEditSequence: extractFromSalesOrderQuery,
+  },
   so_close: {
     endpoint: "/api/sales-orders",
     cacheEntityType: "sales_order",
@@ -233,6 +238,11 @@ const STEP_FETCH_SPEC: Record<string, FetchSpec> = {
     extractEditSequence: extractFromSalesOrderQuery,
   },
   estimate: {
+    endpoint: "/api/estimates",
+    cacheEntityType: "estimate",
+    extractEditSequence: extractFromEstimateQuery,
+  },
+  estimate_mod: {
     endpoint: "/api/estimates",
     cacheEntityType: "estimate",
     extractEditSequence: extractFromEstimateQuery,

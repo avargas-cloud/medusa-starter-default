@@ -2,7 +2,12 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
 import { updateInvoiceInQb } from "../../../../../lib/quickbooks/client/invoices";
 import { updateSalesReceiptInQb } from "../../../../../lib/quickbooks/client/sales-receipts";
-import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import {
+  confirmPipelineRow,
+  enqueueSalesMutation,
+  failPipelineRow,
+  submitPipelineRowById,
+} from "../../../../../lib/quickbooks/qb-pipeline";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 
 /**
@@ -62,43 +67,46 @@ export async function POST(
     ? `INV-${(invoice as any).invoice_number}`
     : null;
 
-  // Write upfront pipeline row — visible immediately in Pipeline Monitor
-  writePipelineRow({
-    orderId: (invoice as any).order_id ?? null,
-    referenceId: id,
-    referenceType: "pos_invoice",
-    step: "invoice_update",
-    status: "pending",
-    medusaRefNumber: invoiceRef,
-  }).catch(() => {});
+  // Append-only lane: own row for this rep MOD, transitioned by row id. The
+  // step matches the DOCUMENT QB actually holds — registering a
+  // SalesReceiptMod as `invoice_update` sent the EditSequence heal to the
+  // Invoice endpoint for SRs (Fase 1 finding, 2026-08-06).
+  const modStep = isSalesReceipt ? "sales_receipt_update" : "invoice_update";
+  let rowId: string | null = null;
+  try {
+    const enqueued = await enqueueSalesMutation({
+      orderId: (invoice as any).order_id ?? null,
+      referenceId: id,
+      referenceType: "pos_invoice",
+      step: modStep,
+      qbTxnId: txnId,
+      payload: { salesRep: salesRep.trim() },
+      mergePayload: true,
+      medusaRefNumber: invoiceRef,
+    });
+    rowId = enqueued.rowId;
+  } catch {
+    /* bookkeeping only — the MOD itself proceeds */
+  }
 
   const updateFn = isSalesReceipt ? updateSalesReceiptInQb : updateInvoiceInQb;
   const result = await updateFn({ txnId, salesRep: salesRep.trim() });
 
   if (!result.success) {
-    writePipelineRow({
-      orderId: (invoice as any).order_id ?? null,
-      referenceId: id,
-      referenceType: "pos_invoice",
-      step: "invoice_update",
-      status: "failed",
-      medusaRefNumber: invoiceRef,
-      error: result.error ?? "QB update failed",
-    }).catch(() => {});
+    if (rowId) {
+      failPipelineRow(rowId, result.error ?? "QB update failed").catch(
+        () => {}
+      );
+    }
     res.status(502).json({ error: result.error ?? "QB update failed" });
     return;
   }
 
-  writePipelineRow({
-    orderId: (invoice as any).order_id ?? null,
-    referenceId: id,
-    referenceType: "pos_invoice",
-    step: "invoice_update",
-    status: "confirmed",
-    medusaRefNumber: invoiceRef,
-    bridgeOpId: result.data?.operationId ?? null,
-    qbTxnId: txnId,
-  }).catch(() => {});
+  if (rowId) {
+    submitPipelineRowById(rowId, result.data?.operationId ?? null)
+      .then(() => confirmPipelineRow(rowId!, txnId, null, null))
+      .catch(() => {});
+  }
 
   res.json({
     success: true,
