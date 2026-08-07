@@ -13,6 +13,13 @@ import {
 export interface PaymentCurrentState {
   editSequence: string;
   appliedToInvoices: { invoiceId: string; amount: number }[];
+  /** Header totals — lets callers cross-check the applied list against what the
+   * header claims is applied (totalAmount − unusedPayment). */
+  totalAmount: number | null;
+  unusedPayment: number | null;
+  /** QB customer ListID from the payment's own CustomerRef — the bridge's
+   * /merge-apply route requires it, and reading it here saves callers a lookup. */
+  customerListId: string | null;
 }
 
 export interface MergeApplyResult {
@@ -248,7 +255,19 @@ export async function updatePaymentMethodInQb(
  */
 export async function fetchPaymentCurrentState(
   creditTxnId: string,
-  log: (msg: string) => void = console.log
+  log: (msg: string) => void = console.log,
+  opts?: {
+    /**
+     * When true, throw if the header reports applied money but AppliedToTxnRet
+     * came back empty — the tell of a ReceivePaymentQuery missing
+     * IncludeLineItems (stale bridge). A Mod built from that state would
+     * silently unapply every existing application (the Aug-2026 clobber bug).
+     * Callers that only need the EditSequence (TxnDate/PaymentMethod mods,
+     * which carry no AppliedToTxnMod) leave this off so a bridge regression
+     * doesn't block harmless header edits.
+     */
+    requireTrustworthyAppliedList?: boolean;
+  }
 ): Promise<PaymentCurrentState> {
   const res = await bridgeFetch("GET", `/api/payments/${creditTxnId}`);
   const operationId: string = res?.operationId || res?.operation?.id;
@@ -293,7 +312,41 @@ export async function fetchPaymentCurrentState(
     })
     .filter((a) => a.invoiceId && a.amount > 0);
 
-  return { editSequence: String(editSequence), appliedToInvoices };
+  const totalAmountRaw = parseFloat(String(ret?.TotalAmount ?? ""));
+  const unusedPaymentRaw = parseFloat(String(ret?.UnusedPayment ?? ""));
+  const totalAmount = Number.isFinite(totalAmountRaw) ? totalAmountRaw : null;
+  const unusedPayment = Number.isFinite(unusedPaymentRaw)
+    ? unusedPaymentRaw
+    : null;
+
+  if (opts?.requireTrustworthyAppliedList) {
+    const appliedPerHeader =
+      totalAmount !== null && unusedPayment !== null
+        ? totalAmount - unusedPayment
+        : null;
+    if (
+      appliedToInvoices.length === 0 &&
+      appliedPerHeader !== null &&
+      appliedPerHeader > 0.005
+    ) {
+      throw new Error(
+        `QB header for payment TxnID=${creditTxnId} reports $${appliedPerHeader.toFixed(2)} applied ` +
+          `but ReceivePaymentQuery returned no AppliedToTxnRet — the bridge query is missing ` +
+          `IncludeLineItems. REFUSING to build a Mod from this state: AppliedToTxnMod is ` +
+          `REPLACE-ALL and would silently unapply the existing applications.`
+      );
+    }
+  }
+
+  return {
+    editSequence: String(editSequence),
+    appliedToInvoices,
+    totalAmount,
+    unusedPayment,
+    customerListId: ret?.CustomerRef?.ListID
+      ? String(ret.CustomerRef.ListID)
+      : null,
+  };
 }
 
 /**
@@ -345,7 +398,9 @@ export async function mergeApplyPaymentInQb(payload: {
 
   try {
     // ── Step 1: fetch live state ───────────────────────────────────────────
-    const state = await fetchPaymentCurrentState(payload.creditTxnId, log);
+    const state = await fetchPaymentCurrentState(payload.creditTxnId, log, {
+      requireTrustworthyAppliedList: true,
+    });
     log(
       `[QB] 🔎 Payment ${payload.creditTxnId} current state: EditSeq=${state.editSequence}, applied to ${state.appliedToInvoices.length} invoice(s)`
     );
@@ -506,29 +561,75 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
 }
 
 /**
- * Unapplies a payment from a specific invoice in QuickBooks.
- * This instructs QBXML to send a ReceivePaymentMod setting the PaymentAmount for the target invoice to 0.00.
- * Requires the EditSequence to be supplied (fetch via query first).
+ * Unapplies a payment from a specific invoice in QuickBooks WITHOUT touching its
+ * other applications.
+ *
+ * AppliedToTxnMod is REPLACE-ALL: the old implementation sent a Mod carrying only
+ * the target invoice at 0.00, which unapplied the target AND — by omission —
+ * every other invoice the payment was applied to (same family as the merge-apply
+ * clobber bug, Aug 2026). This version mirrors mergeApplyPaymentInQb:
+ *   1. Queries the live payment (fresh EditSequence + full applied list, with
+ *      the trustworthiness guard so an empty list can't masquerade as "nothing
+ *      applied").
+ *   2. Rebuilds the full list with the target set to 0.00 and everything else
+ *      kept verbatim.
+ *   3. Sends ONE ReceivePaymentMod via /merge-apply.
+ *
+ * `editSequence` is accepted for caller compatibility but IGNORED — a fresh one
+ * is fetched in the same breath as the applied list, so the pair can't be stale
+ * relative to each other.
+ *
+ * If the payment is not currently applied to the target invoice, this is a
+ * successful no-op (nothing to unapply) and no Mod is sent.
  */
 export async function unapplyPaymentFromInvoiceInQb(payload: {
   creditTxnId: string;
   invoiceId: string;
-  editSequence: string;
+  editSequence?: string;
+  log?: (msg: string) => void;
 }): Promise<QbBridgeResult<QbAsyncResult>> {
+  const log = payload.log ?? console.log;
+
   if (DRY_RUN) {
     console.log(
-      `[QB DRY RUN] Would unapply payment ${payload.creditTxnId} from invoice ${payload.invoiceId} (Seq: ${payload.editSequence})`
+      `[QB DRY RUN] Would unapply payment ${payload.creditTxnId} from invoice ${payload.invoiceId}`
     );
     return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } };
   }
 
   try {
+    const state = await fetchPaymentCurrentState(payload.creditTxnId, log, {
+      requireTrustworthyAppliedList: true,
+    });
+
+    const targetIdx = state.appliedToInvoices.findIndex(
+      (a) => a.invoiceId === payload.invoiceId
+    );
+    if (targetIdx < 0) {
+      log(
+        `[QB] ⏭️ Payment ${payload.creditTxnId} is not applied to invoice ${payload.invoiceId} — nothing to unapply (no-op).`
+      );
+      return { success: true, data: { operationId: "NOOP_NOT_APPLIED" } };
+    }
+
+    const applications = state.appliedToInvoices.map((a, idx) => ({
+      invoiceId: a.invoiceId,
+      amount: idx === targetIdx ? 0 : a.amount,
+    }));
+
+    if (!state.customerListId) {
+      throw new Error(
+        `QB payment ${payload.creditTxnId} came back without CustomerRef.ListID — cannot build the unapply Mod`
+      );
+    }
+
     const data = await bridgeFetch(
       "POST",
-      `/api/payments/${payload.creditTxnId}/unapply`,
+      `/api/payments/${payload.creditTxnId}/merge-apply`,
       {
-        invoiceId: payload.invoiceId,
-        EditSequence: payload.editSequence,
+        customerId: state.customerListId,
+        editSequence: state.editSequence,
+        applications,
       }
     );
     const operationId = data?.operationId;
