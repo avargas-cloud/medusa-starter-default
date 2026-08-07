@@ -15,8 +15,14 @@ import { resolveOrderQbCustomer } from "../../lib/quickbooks/resolve-order-qb-cu
 
 const mockGetDbPool = getDbPool as jest.MockedFunction<typeof getDbPool>;
 
-function buildPool(selectRow?: { cached: string | null; live: string | null }) {
+function buildPool(
+  selectRow?: { cached: string | null; live: string | null },
+  provenanceRow?: { customer_id: string | null; prov: string | null }
+) {
   const query = jest.fn(async (sql: string) => {
+    if (/qb_list_id_customer_id/i.test(sql) && /^\s*SELECT/i.test(sql)) {
+      return { rows: provenanceRow ? [provenanceRow] : [] };
+    }
     if (/^\s*SELECT/i.test(sql)) {
       return { rows: selectRow ? [selectRow] : [] };
     }
@@ -51,10 +57,9 @@ describe("resolveOrderQbCustomer", () => {
     expect(resolved).toBe("LIST-LIVE");
     const updates = updateCalls(query);
     expect(updates).toHaveLength(1);
-    expect(updates[0][1]).toEqual([
-      JSON.stringify({ qb_list_id: "LIST-LIVE" }),
-      "order_1",
-    ]);
+    expect(updates[0][1]).toEqual(["LIST-LIVE", "order_1"]);
+    // The stamp carries provenance (qb_list_id_customer_id from the order row).
+    expect(updates[0][0]).toContain("qb_list_id_customer_id");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("LIST-STALE")
     );
@@ -117,6 +122,33 @@ describe("resolveOrderQbCustomer", () => {
     );
     expect(select?.[1]).toEqual(["order_1"]);
     expect(updateCalls(query)).toHaveLength(1);
+  });
+
+  it("REFUSES the cached fallback when it belongs to a previous customer (provenance mismatch)", async () => {
+    // Codex review CRITICAL #1: order transferred to a customer that has not
+    // synced to QB — the cache still holds the OLD owner's ListID.
+    buildPool(undefined, { customer_id: "cus_NEW", prov: "cus_OLD" });
+    const resolved = await resolveOrderQbCustomer({
+      orderId: "order_1",
+      cachedListId: "LIST-OLD-OWNER",
+      liveListId: null,
+      logger,
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("previous customer")
+    );
+  });
+
+  it("accepts the cached fallback when provenance matches the current customer", async () => {
+    buildPool(undefined, { customer_id: "cus_A", prov: "cus_A" });
+    const resolved = await resolveOrderQbCustomer({
+      orderId: "order_1",
+      cachedListId: "LIST-A",
+      liveListId: null,
+    });
+    expect(resolved).toBe("LIST-A");
   });
 
   it("still returns the live value when the re-stamp write fails (best-effort)", async () => {

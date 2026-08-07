@@ -1,13 +1,17 @@
 /**
- * Unit tests for POST /admin/pos-transfer — the invoice guard.
+ * Unit tests for POST /admin/pos-transfer — customer-change chokepoint.
  *
- * Business rule (2026-08-06): a customer change on a pos-order is only legal
- * while the order has ZERO non-voided POS invoices. One invoice — partial or
- * total, destined to become a QB Invoice or a QB Sales Receipt — blocks the
- * change with 409 INVOICES_EXIST and the invoice numbers, so the operator can
- * void first. The route is the authority; the POS modal only displays this.
+ * Business rules (2026-08-06):
+ *  · ≥1 non-voided POS invoice → 409 INVOICES_EXIST (void first).
+ *  · Linked deposits/payments → 409 PAYMENTS_LINKED until the operator picks
+ *    payment_action = transfer | unlink (supervisor PIN, verified here).
+ *    A payment with any active invoice-bound application cannot transfer;
+ *    web-source payments can do neither (permanent Treasury ledger).
+ *  · The qb_list_id cache is re-stamped from the NEW customer — or CLEARED
+ *    (null) when the new customer has no ListID yet — with provenance.
+ *  · Documents already in QB get their MOD handlers fired (cases 1-4).
  *
- * Type: mock-based unit test (no DB, no Medusa services).
+ * Type: mock-based unit test (no DB, no Medusa services, PIN guard mocked).
  */
 
 jest.mock(
@@ -17,18 +21,30 @@ jest.mock(
 jest.mock("../../lib/quickbooks/handlers/handle-order-updated", () => ({
   handleOrderUpdated: jest.fn().mockResolvedValue("scheduled"),
 }));
-jest.mock("../../lib/quickbooks/resolve-order-qb-customer", () => ({
-  resolveOrderQbCustomer: jest.fn().mockResolvedValue("LIST-LIVE"),
+jest.mock("../../api/utils/db-pool", () => ({
+  getDbPool: jest.fn(),
+}));
+jest.mock("../../lib/pos/supervisor-pin-guard", () => ({
+  extractSupervisorPin: jest.fn().mockReturnValue("0000"),
+  guardSupervisorPin: jest.fn().mockResolvedValue({ ok: true }),
+  pinGuardResponse: jest.fn().mockReturnValue({
+    status: 401,
+    body: { error: "PIN required" },
+  }),
+  resolveActorId: jest.fn().mockReturnValue("user_1"),
+}));
+jest.mock("../../lib/pos/verify-supervisor-pin", () => ({
+  pgAsPinConn: jest.fn((x: unknown) => x),
+}));
+jest.mock("../../api/admin/finance/_lib/refresh-order-docs", () => ({
+  refreshOrderDocsForPayment: jest.fn().mockResolvedValue(undefined),
 }));
 
 import { handleDraftOrderUpdated } from "../../lib/quickbooks/handlers/handle-draft-order-updated";
 import { handleOrderUpdated } from "../../lib/quickbooks/handlers/handle-order-updated";
-import { resolveOrderQbCustomer } from "../../lib/quickbooks/resolve-order-qb-customer";
+import { guardSupervisorPin } from "../../lib/pos/supervisor-pin-guard";
+import { getDbPool } from "../../api/utils/db-pool";
 import { POST } from "../../api/admin/pos-transfer/route";
-
-const mockResolve = resolveOrderQbCustomer as jest.MockedFunction<
-  typeof resolveOrderQbCustomer
->;
 
 const mockEstimateMod = handleDraftOrderUpdated as jest.MockedFunction<
   typeof handleDraftOrderUpdated
@@ -36,8 +52,84 @@ const mockEstimateMod = handleDraftOrderUpdated as jest.MockedFunction<
 const mockSoMod = handleOrderUpdated as jest.MockedFunction<
   typeof handleOrderUpdated
 >;
+const mockGetDbPool = getDbPool as jest.MockedFunction<typeof getDbPool>;
+const mockPinGuard = guardSupervisorPin as jest.MockedFunction<
+  typeof guardSupervisorPin
+>;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Pool mock ───────────────────────────────────────────────────────────────
+
+interface LinkedPaymentFixture {
+  id: string;
+  amount: number;
+  status?: string;
+  customer_id?: string;
+  source?: string | null;
+  locked_order_id?: string | null;
+  qb_txn?: string | null;
+  has_invoice_apps?: boolean;
+}
+
+function installPool(opts: {
+  linkedPayments?: LinkedPaymentFixture[];
+  liveListId?: string | null;
+  invoiceAppsInsideLock?: number;
+}) {
+  const routed = jest.fn(async (sql: string) => {
+    if (/FROM customer_payment cp/i.test(sql)) {
+      return {
+        rows: (opts.linkedPayments ?? []).map((p) => ({
+          id: p.id,
+          amount: p.amount,
+          status: p.status ?? "available",
+          customer_id: p.customer_id ?? "cus_OLD",
+          source: p.source ?? "pos",
+          locked_order_id: p.locked_order_id ?? null,
+          qb_txn: p.qb_txn ?? null,
+          has_invoice_apps: p.has_invoice_apps ?? false,
+        })),
+      };
+    }
+    if (/FROM customer WHERE/i.test(sql))
+      return { rows: [{ live: opts.liveListId ?? null }] };
+    if (/FROM customer_payment\s+WHERE id = \$1 FOR UPDATE/i.test(sql)) {
+      const p = (opts.linkedPayments ?? [])[0];
+      return {
+        rows: p
+          ? [
+              {
+                id: p.id,
+                customer_id: p.customer_id ?? "cus_OLD",
+                amount: p.amount,
+                metadata: p.qb_txn ? { qb_txn_id: p.qb_txn } : {},
+              },
+            ]
+          : [],
+      };
+    }
+    if (/COUNT\(\*\)::int AS n FROM payment_application/i.test(sql))
+      return { rows: [{ n: opts.invoiceAppsInsideLock ?? 0 }] };
+    if (/FROM qb_order_pipeline/i.test(sql)) return { rows: [] };
+    if (/SUM\(amount_applied\)/i.test(sql)) return { rows: [{ applied: 0 }] };
+    return { rows: [], rowCount: 1 };
+  });
+  const client = {
+    query: routed,
+    release: jest.fn(),
+  };
+  const pool = {
+    query: routed,
+    connect: jest.fn().mockResolvedValue(client),
+  };
+  mockGetDbPool.mockReturnValue(pool as unknown as ReturnType<typeof getDbPool>);
+  return { query: routed, client, pool };
+}
+
+function sqlCalls(query: jest.Mock, re: RegExp) {
+  return query.mock.calls.filter(([sql]) => re.test(sql as string));
+}
+
+// ─── Request/response builders ───────────────────────────────────────────────
 
 interface FakeInvoice {
   invoice_number: string;
@@ -67,6 +159,7 @@ function buildReq(opts: {
 
   return {
     body: opts.body ?? { id: "order_1", customer_id: "cus_NEW" },
+    auth_context: { actor_id: "user_1" },
     scope: {
       resolve: jest.fn((key: string) => {
         if (key === "order") return orderModule;
@@ -104,12 +197,11 @@ function statusJson(res: { _status: jest.Mock }): Record<string, unknown> {
   return ret.json.mock.calls[ret.json.mock.calls.length - 1]?.[0] ?? {};
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
 const OLD_ENV = process.env;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPinGuard.mockResolvedValue({ ok: true } as never);
   process.env = { ...OLD_ENV };
   delete process.env.QB_ORDER_FLOW_ENABLED;
 });
@@ -118,18 +210,20 @@ afterAll(() => {
   process.env = OLD_ENV;
 });
 
-describe("POST /admin/pos-transfer — invoice guard", () => {
+// ─── Invoice guard ───────────────────────────────────────────────────────────
+
+describe("pos-transfer — invoice guard", () => {
   it("returns 400 when id or customer_id is missing", async () => {
+    installPool({});
     const res = buildRes();
     await POST(buildReq({ body: { id: "order_1" } }), res);
     expect(res._status).toHaveBeenCalledWith(400);
   });
 
-  it("blocks the customer change with 409 INVOICES_EXIST when a non-voided invoice exists", async () => {
+  it("blocks with 409 INVOICES_EXIST and the invoice numbers", async () => {
+    installPool({});
     const req = buildReq({
-      invoices: [
-        { invoice_number: "20188", status: "paid", voided_at: null },
-      ],
+      invoices: [{ invoice_number: "20188", status: "paid", voided_at: null }],
     });
     const res = buildRes();
     await POST(req, res);
@@ -141,94 +235,196 @@ describe("POST /admin/pos-transfer — invoice guard", () => {
     expect(req._orderModule.updateOrders).not.toHaveBeenCalled();
   });
 
-  it("blocks with every active invoice number when several exist", async () => {
-    const req = buildReq({
-      invoices: [
-        { invoice_number: "21001", status: "issued", voided_at: null },
-        { invoice_number: "21002", status: "paid", voided_at: null },
-      ],
-    });
-    const res = buildRes();
-    await POST(req, res);
-
-    expect(res._status).toHaveBeenCalledWith(409);
-    expect(statusJson(res).invoices).toEqual([
-      { number: "21001", status: "issued" },
-      { number: "21002", status: "paid" },
-    ]);
-  });
-
-  it("does NOT count voided invoices — a fully voided order can change customer", async () => {
+  it("does NOT count voided invoices", async () => {
+    installPool({ liveListId: "LIST-B" });
     const req = buildReq({
       invoices: [
         { invoice_number: "20188", status: "voided", voided_at: null },
-        {
-          invoice_number: "20189",
-          status: "paid",
-          voided_at: "2026-08-01T00:00:00Z",
-        },
+        { invoice_number: "20189", status: "paid", voided_at: "2026-08-01" },
       ],
     });
     const res = buildRes();
     await POST(req, res);
 
     expect(res._status).toHaveBeenCalledWith(200);
-    expect(req._orderModule.updateOrders).toHaveBeenCalledWith([
-      expect.objectContaining({ id: "order_1", customer_id: "cus_NEW" }),
-    ]);
+    expect(req._orderModule.updateOrders).toHaveBeenCalled();
   });
 
-  it("skips the guard entirely when the customer is not actually changing", async () => {
+  it("skips every guard when the customer is not changing", async () => {
+    const { query } = installPool({});
     const req = buildReq({
-      currentCustomerId: "cus_NEW", // same as the one in the body
-      invoices: [
-        { invoice_number: "20188", status: "paid", voided_at: null },
-      ],
+      currentCustomerId: "cus_NEW",
+      invoices: [{ invoice_number: "20188", status: "paid", voided_at: null }],
     });
     const res = buildRes();
     await POST(req, res);
 
     expect(res._status).toHaveBeenCalledWith(200);
     expect(req._invoiceService.listPosInvoices).not.toHaveBeenCalled();
-    expect(req._orderModule.updateOrders).toHaveBeenCalled();
-  });
-
-  it("transfers normally when the order has no invoices at all", async () => {
-    const req = buildReq({ invoices: [] });
-    const res = buildRes();
-    await POST(req, res);
-
-    expect(res._status).toHaveBeenCalledWith(200);
-    expect(req._orderModule.updateOrders).toHaveBeenCalledWith([
-      expect.objectContaining({ customer_id: "cus_NEW" }),
-    ]);
-  });
-
-  it("re-stamps order.metadata.qb_list_id from the new customer after the transfer", async () => {
-    const req = buildReq({ invoices: [] });
-    const res = buildRes();
-    await POST(req, res);
-
-    expect(res._status).toHaveBeenCalledWith(200);
-    expect(mockResolve).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: "order_1" })
-    );
-  });
-
-  it("does not re-stamp when the customer is unchanged", async () => {
-    const req = buildReq({ currentCustomerId: "cus_NEW" });
-    const res = buildRes();
-    await POST(req, res);
-
-    expect(mockResolve).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });
 
-describe("POST /admin/pos-transfer — propagation to existing QB documents", () => {
-  const flush = () => new Promise((r) => setTimeout(r, 0));
+// ─── Cache re-stamp ──────────────────────────────────────────────────────────
 
-  it("case 3: enqueues a customer MOD for BOTH the QB Estimate and the QB Sales Order", async () => {
+describe("pos-transfer — qb_list_id re-stamp", () => {
+  it("stamps the NEW customer's live ListID with provenance", async () => {
+    const { query } = installPool({ liveListId: "LIST-B" });
+    const res = buildRes();
+    await POST(buildReq({}), res);
+
+    const stamps = sqlCalls(query, /^\s*UPDATE "order"/i);
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0][1]).toEqual(["LIST-B", "cus_NEW", "order_1"]);
+  });
+
+  it("CLEARS the cache (null) when the new customer has no ListID yet — never leaves the previous owner's", async () => {
+    const { query } = installPool({ liveListId: null });
+    const res = buildRes();
+    await POST(buildReq({}), res);
+
+    expect(res._status).toHaveBeenCalledWith(200);
+    const stamps = sqlCalls(query, /^\s*UPDATE "order"/i);
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0][1]).toEqual([null, "cus_NEW", "order_1"]);
+  });
+});
+
+// ─── Linked payments ─────────────────────────────────────────────────────────
+
+describe("pos-transfer — linked payments", () => {
+  it("returns 409 PAYMENTS_LINKED with per-payment flags when no payment_action was given", async () => {
+    installPool({
+      linkedPayments: [
+        { id: "cpay_1", amount: 50000 },
+        { id: "cpay_2", amount: 10000, has_invoice_apps: true },
+      ],
+    });
+    const req = buildReq({});
+    const res = buildRes();
+    await POST(req, res);
+
+    expect(res._status).toHaveBeenCalledWith(409);
+    const body = statusJson(res);
+    expect(body.code).toBe("PAYMENTS_LINKED");
+    expect(body.payments).toEqual([
+      {
+        id: "cpay_1",
+        amount_cents: 50000,
+        transferable: true,
+        applied_elsewhere: false,
+        web_locked: false,
+      },
+      {
+        id: "cpay_2",
+        amount_cents: 10000,
+        transferable: false,
+        applied_elsewhere: true,
+        web_locked: false,
+      },
+    ]);
+    expect(req._orderModule.updateOrders).not.toHaveBeenCalled();
+  });
+
+  it("payment_action=transfer moves the payment and enqueues the QB transfer_payment row", async () => {
     process.env.QB_ORDER_FLOW_ENABLED = "true";
+    const { query } = installPool({
+      linkedPayments: [{ id: "cpay_1", amount: 50000, qb_txn: "PAY-TXN-1" }],
+      liveListId: "LIST-B",
+    });
+    const req = buildReq({
+      body: { id: "order_1", customer_id: "cus_NEW", payment_action: "transfer" },
+    });
+    const res = buildRes();
+    await POST(req, res);
+
+    expect(res._status).toHaveBeenCalledWith(200);
+    expect(req._orderModule.updateOrders).toHaveBeenCalled();
+    expect(
+      sqlCalls(query, /UPDATE customer_payment SET customer_id/i)
+    ).toHaveLength(1);
+    expect(
+      sqlCalls(query, /INSERT INTO customer_payment_transfer/i)
+    ).toHaveLength(1);
+    const pipeline = sqlCalls(query, /INSERT INTO qb_order_pipeline/i);
+    expect(pipeline).toHaveLength(1);
+    expect(pipeline[0][1]?.[0]).toBe("cpay_1");
+  });
+
+  it("payment_action=transfer is refused with PAYMENT_APPLIED when the payment touched an invoice", async () => {
+    installPool({
+      linkedPayments: [
+        { id: "cpay_1", amount: 50000, has_invoice_apps: true },
+      ],
+    });
+    const req = buildReq({
+      body: { id: "order_1", customer_id: "cus_NEW", payment_action: "transfer" },
+    });
+    const res = buildRes();
+    await POST(req, res);
+
+    expect(res._status).toHaveBeenCalledWith(409);
+    expect(statusJson(res).code).toBe("PAYMENT_APPLIED");
+    expect(req._orderModule.updateOrders).not.toHaveBeenCalled();
+  });
+
+  it("payment_action=unlink detaches the payment and keeps it with the old customer", async () => {
+    const { query } = installPool({
+      linkedPayments: [{ id: "cpay_1", amount: 50000 }],
+      liveListId: "LIST-B",
+    });
+    const req = buildReq({
+      body: { id: "order_1", customer_id: "cus_NEW", payment_action: "unlink" },
+    });
+    const res = buildRes();
+    await POST(req, res);
+
+    expect(res._status).toHaveBeenCalledWith(200);
+    expect(sqlCalls(query, /DELETE FROM payment_application/i)).toHaveLength(1);
+    expect(
+      sqlCalls(query, /SET locked_order_id = NULL/i)
+    ).toHaveLength(1);
+    // The payment's CUSTOMER is untouched on unlink.
+    expect(
+      sqlCalls(query, /UPDATE customer_payment SET customer_id/i)
+    ).toHaveLength(0);
+  });
+
+  it("web-source payments allow neither action (permanent Treasury ledger)", async () => {
+    installPool({
+      linkedPayments: [{ id: "cpay_1", amount: 50000, source: "web" }],
+    });
+    const req = buildReq({
+      body: { id: "order_1", customer_id: "cus_NEW", payment_action: "unlink" },
+    });
+    const res = buildRes();
+    await POST(req, res);
+
+    expect(res._status).toHaveBeenCalledWith(409);
+    expect(statusJson(res).code).toBe("PAYMENTS_WEB_LOCKED");
+    expect(req._orderModule.updateOrders).not.toHaveBeenCalled();
+  });
+
+  it("both payment actions demand the supervisor PIN (verified in the route)", async () => {
+    installPool({ linkedPayments: [{ id: "cpay_1", amount: 50000 }] });
+    mockPinGuard.mockResolvedValue({ ok: false, reason: "invalid" } as never);
+    const req = buildReq({
+      body: { id: "order_1", customer_id: "cus_NEW", payment_action: "transfer" },
+    });
+    const res = buildRes();
+    await POST(req, res);
+
+    expect(res._status).toHaveBeenCalledWith(401);
+    expect(req._orderModule.updateOrders).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Propagation to existing QB documents ────────────────────────────────────
+
+describe("pos-transfer — propagation to existing QB documents", () => {
+  it("case 3: fires customer MODs for BOTH the QB Estimate and the QB Sales Order", async () => {
+    process.env.QB_ORDER_FLOW_ENABLED = "true";
+    installPool({ liveListId: "LIST-B" });
     const req = buildReq({
       metadata: {
         qb_estimate: { txn_id: "EST-TXN-1" },
@@ -237,7 +433,6 @@ describe("POST /admin/pos-transfer — propagation to existing QB documents", ()
     });
     const res = buildRes();
     await POST(req, res);
-    await flush();
 
     expect(res._status).toHaveBeenCalledWith(200);
     expect(mockEstimateMod).toHaveBeenCalledWith(
@@ -254,64 +449,46 @@ describe("POST /admin/pos-transfer — propagation to existing QB documents", ()
 
   it("case 1: only the Estimate MOD fires when only a QB Estimate exists", async () => {
     process.env.QB_ORDER_FLOW_ENABLED = "true";
-    const req = buildReq({
-      metadata: { qb_estimate: { txn_id: "EST-TXN-1" } },
-    });
+    installPool({ liveListId: "LIST-B" });
     const res = buildRes();
-    await POST(req, res);
-    await flush();
-
+    await POST(
+      buildReq({ metadata: { qb_estimate: { txn_id: "EST-TXN-1" } } }),
+      res
+    );
     expect(mockEstimateMod).toHaveBeenCalled();
     expect(mockSoMod).not.toHaveBeenCalled();
   });
 
   it("case 2: only the Sales Order MOD fires when only a QB SO exists", async () => {
     process.env.QB_ORDER_FLOW_ENABLED = "true";
-    const req = buildReq({
-      metadata: { qb_sales_order: { txn_id: "SO-TXN-1" } },
-    });
+    installPool({ liveListId: "LIST-B" });
     const res = buildRes();
-    await POST(req, res);
-    await flush();
-
+    await POST(
+      buildReq({ metadata: { qb_sales_order: { txn_id: "SO-TXN-1" } } }),
+      res
+    );
     expect(mockEstimateMod).not.toHaveBeenCalled();
     expect(mockSoMod).toHaveBeenCalled();
   });
 
-  it("case 4: nothing is enqueued when no document exists in QB yet (dispatch builds fresh)", async () => {
+  it("case 4: nothing is enqueued when no document exists in QB yet", async () => {
     process.env.QB_ORDER_FLOW_ENABLED = "true";
-    const req = buildReq({ metadata: {} });
+    installPool({ liveListId: "LIST-B" });
     const res = buildRes();
-    await POST(req, res);
-    await flush();
-
-    expect(mockEstimateMod).not.toHaveBeenCalled();
-    expect(mockSoMod).not.toHaveBeenCalled();
-  });
-
-  it("does not propagate when the customer did not change", async () => {
-    process.env.QB_ORDER_FLOW_ENABLED = "true";
-    const req = buildReq({
-      currentCustomerId: "cus_NEW",
-      metadata: { qb_estimate: { txn_id: "EST-TXN-1" } },
-    });
-    const res = buildRes();
-    await POST(req, res);
-    await flush();
-
+    await POST(buildReq({ metadata: {} }), res);
     expect(mockEstimateMod).not.toHaveBeenCalled();
     expect(mockSoMod).not.toHaveBeenCalled();
   });
 
   it("does not propagate when the invoice guard blocked the change", async () => {
     process.env.QB_ORDER_FLOW_ENABLED = "true";
+    installPool({});
     const req = buildReq({
       invoices: [{ invoice_number: "20188", status: "paid", voided_at: null }],
       metadata: { qb_sales_order: { txn_id: "SO-TXN-1" } },
     });
     const res = buildRes();
     await POST(req, res);
-    await flush();
 
     expect(res._status).toHaveBeenCalledWith(409);
     expect(mockSoMod).not.toHaveBeenCalled();

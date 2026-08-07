@@ -201,13 +201,43 @@ export async function POST(
         draftOrderModel?.customer_id &&
         customer_id !== draftOrderModel.customer_id
       ) {
-        await localFetch(`/admin/pos-transfer`, {
-          method: "POST",
-          body: JSON.stringify({
-            id: resolvedId,
-            customer_id,
-          }),
-        }).catch((e) => logger.warn(`Transfer failed: ${e.message}`));
+        try {
+          await localFetch(`/admin/pos-transfer`, {
+            method: "POST",
+            body: JSON.stringify({
+              id: resolvedId,
+              customer_id,
+            }),
+          });
+        } catch (e: any) {
+          const msg = String(e?.message ?? "");
+          // The transfer chokepoint REJECTED the change (order already
+          // invoiced or has linked payments — e.g. a stale estimate tab of a
+          // converted order). Abort the whole save and surface the rejection;
+          // swallowing it here is how a customer change used to half-apply.
+          if (
+            msg.includes("INVOICES_EXIST") ||
+            msg.includes("PAYMENTS_LINKED") ||
+            msg.includes("PAYMENT_APPLIED") ||
+            msg.includes("PAYMENTS_WEB_LOCKED")
+          ) {
+            const jsonStart = msg.indexOf("{");
+            let body: Record<string, unknown> = {
+              error: "Customer change rejected",
+              code: "TRANSFER_REJECTED",
+            };
+            if (jsonStart >= 0) {
+              try {
+                body = JSON.parse(msg.slice(jsonStart));
+              } catch {
+                /* keep generic body */
+              }
+            }
+            res.status(409).json(body);
+            return;
+          }
+          logger.warn(`Transfer failed: ${msg}`);
+        }
       }
 
       // 1. Update Wrapper metadata
