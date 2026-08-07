@@ -170,6 +170,11 @@ async function main() {
            FROM payment_application pa
            LEFT JOIN pos_invoice pi ON pi.id = pa.invoice_id
           WHERE pa.payment_id = $1 AND pa.voided_at IS NULL
+            -- NULL invoice_id = order-level deposit share: it has no QB invoice
+            -- to be applied to and legitimately stays as unused credit, so it is
+            -- excluded from the expected list (the unused-payment check already
+            -- accounts for it: wantUnused = payment − Σ(invoice-linked apps)).
+            AND pa.invoice_id IS NOT NULL
           GROUP BY pa.invoice_id, pa.invoice_number, pi.metadata
          HAVING SUM(pa.amount_applied) > 0`,
         [p.id]

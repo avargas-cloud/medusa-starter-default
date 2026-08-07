@@ -27,18 +27,65 @@ export async function handleInvoiceVoided(
     return;
   }
 
-  const qbInvoices = (order.metadata?.qb_invoices as any[]) || [];
+  // El TxnID a voidear se resuelve del PROPIO pos_invoice — nunca de una
+  // hermana. El fallback viejo ("último elemento de order.metadata.qb_invoices")
+  // voideó el doc QB 19659 de la factura 21281 mientras voideaba la POS 21340
+  // (2026-08-05, seq 6901): el ADD de 21340 seguía en vuelo, su doc todavía no
+  // estaba en qb_invoices, y el posicional entregó a la hermana. Una factura
+  // cuyo TxnID no se puede resolver cae en la rama de abajo, donde
+  // enqueueVoidIfAlreadyVoided la materializa al confirmar el ADD — ese ES el
+  // camino correcto para un void en vuelo, no "voidear lo último que haya".
+  let invoiceTxnId: string | null = null;
+  let invoiceRef: string | null = null;
+  let friendlyInvoiceId: string | undefined;
+  let isSalesReceipt = false;
 
-  let targetInv = null;
-  if (fulfillment_id) {
-    targetInv = qbInvoices.find((inv) => inv.fulfillment_id === fulfillment_id);
+  if (invoice_id) {
+    try {
+      const pool = getDbPool();
+      const res = await pool.query(
+        `SELECT invoice_number, metadata FROM pos_invoice WHERE id = $1`,
+        [invoice_id]
+      );
+      if (res.rows[0]) {
+        friendlyInvoiceId = res.rows[0].invoice_number;
+        isSalesReceipt = !!res.rows[0].metadata?.is_sales_receipt;
+        invoiceTxnId = res.rows[0].metadata?.qb_txn_id ?? null;
+        invoiceRef = res.rows[0].metadata?.qb_ref_number ?? null;
+      }
+      if (!invoiceTxnId) {
+        const { rows: pipe } = await pool.query(
+          `SELECT qb_txn_id, qb_ref_number FROM qb_order_pipeline
+            WHERE reference_id = $1
+              AND step IN ('invoice','sales_receipt')
+              AND status = 'confirmed'
+              AND qb_txn_id IS NOT NULL
+            ORDER BY confirmed_at DESC LIMIT 1`,
+          [invoice_id]
+        );
+        if (pipe[0]) {
+          invoiceTxnId = pipe[0].qb_txn_id;
+          invoiceRef = invoiceRef ?? pipe[0].qb_ref_number ?? null;
+        }
+      }
+    } catch (e: any) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not resolve own TxnID for ${invoice_id}: ${e.message}`
+      );
+    }
+  } else {
+    // Camino legacy (evento sin invoice_id): match ESTRICTO por fulfillment_id
+    // en el cache order-level. Sin fallback posicional.
+    const qbInvoices = (order.metadata?.qb_invoices as any[]) || [];
+    const targetInv = fulfillment_id
+      ? qbInvoices.find((inv) => inv.fulfillment_id === fulfillment_id)
+      : null;
+    invoiceTxnId = targetInv?.txn_id ?? null;
+    invoiceRef = targetInv?.ref_number ?? null;
+    isSalesReceipt = invoiceRef?.startsWith("SR-") || false;
   }
 
-  if (!targetInv && qbInvoices.length > 0) {
-    targetInv = qbInvoices[qbInvoices.length - 1];
-  }
-
-  if (!targetInv?.txn_id) {
+  if (!invoiceTxnId) {
     // Dos situaciones muy distintas comparten esta rama, y confundirlas es lo
     // que costó la POS Invoice 21246:
     //
@@ -92,26 +139,6 @@ export async function handleInvoiceVoided(
     return;
   }
 
-  const { txn_id: invoiceTxnId, ref_number: invoiceRef } = targetInv;
-
-  let isSalesReceipt = false;
-  let friendlyInvoiceId: string | undefined;
-  try {
-    const pool = getDbPool();
-    const res = await pool.query(
-      `SELECT invoice_number, metadata FROM pos_invoice WHERE id = $1`,
-      [invoice_id]
-    );
-    if (res.rows[0]) {
-      friendlyInvoiceId = res.rows[0].invoice_number;
-      if (res.rows[0].metadata?.is_sales_receipt) {
-        isSalesReceipt = true;
-      }
-    }
-  } catch (e: any) {
-    isSalesReceipt = invoiceRef?.startsWith("SR-") || false;
-  }
-
   const documentTypeName = isSalesReceipt ? "Sales Receipt" : "Invoice";
 
   let logId: string | undefined;
@@ -163,7 +190,7 @@ export async function handleInvoiceVoided(
   if (logId)
     await QbSyncLogger.complete(logId, {
       qbTxnId: invoiceTxnId,
-      qbRefNumber: invoiceRef,
+      qbRefNumber: invoiceRef ?? undefined,
       message: `${documentTypeName} ${invoiceRef ?? invoiceTxnId} void enqueued — consolidator will submit`,
     });
 
