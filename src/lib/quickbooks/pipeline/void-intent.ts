@@ -172,7 +172,7 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
     resolve: async ({ referenceId, orderId }) => {
       if (!referenceId) return null;
       const row = await queryOne(
-        `SELECT metadata->>'qb_sync_status'        AS sync_status,
+        `SELECT status,
                 metadata->>'qb_void_operation_id'  AS void_op,
                 metadata->>'qb_source'             AS source
            FROM customer_payment WHERE id = $1`,
@@ -180,10 +180,15 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
       );
       if (!row) return null;
       // El pago está voideado en Medusa PERO nunca se emitió el borrado en QB.
+      // La señal es la COLUMNA `status` — la verdad durable del documento,
+      // igual que en los otros resolvers. NUNCA `metadata.qb_sync_status`:
+      // esa clave la escriben también los caminos de confirm del ADD (el
+      // inline la estampaba 'synced' un instante antes de llamar acá, y el
+      // intent del pago 3420 se perdió exactamente así).
       // `qb_void_operation_id` es la prueba de que el TxnDel sí salió: el camino
       // directo lo estampa al confirmar. Sin esa key, el pago quedó voideado
       // acá y vivo en QuickBooks — que es exactamente la carrera.
-      if (row.sync_status !== "voided") return null;
+      if (row.status !== "voided") return null;
       if (row.void_op) return null;
       // Un pago embebido en un Sales Receipt no es un ReceivePayment propio: se
       // quita voideando el SR, nunca borrando un documento que no existe.

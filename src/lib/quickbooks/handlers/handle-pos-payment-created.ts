@@ -438,10 +438,15 @@ export async function handlePosPaymentCreated({
     // Save QB TxnId to the POS Payment record and confirm pipeline row
     if (result.txnId || result.operationId) {
       try {
+        // Solo las claves nuevas — updateCustomerPayments deep-mergea el JSONB,
+        // así que las demás se preservan solas. Spreadear `payment.metadata`
+        // acá re-escribía un snapshot leído ANTES del poll del bridge (que
+        // puede tardar >20 min): pisó el `qb_sync_status='voided'` que el
+        // handler de void estampó en vuelo, y el void-intent de abajo leyó
+        // 'synced' — así el pago 3420 quedó vivo en QB tras su void.
         await financeService.updateCustomerPayments({
           id: paymentId,
           metadata: {
-            ...(payment.metadata || {}),
             qb_sync_status: "synced",
             qb_txn_id: result.txnId || null,
             qb_operation_id: result.operationId || null,

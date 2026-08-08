@@ -13,6 +13,7 @@ import {
   type OrderDriftRow,
 } from "./_lib/_order-drift-section";
 import { collectReverseVoidSection } from "./_lib/_qb-reverse-void-section";
+import { collectVoidOrphanSection } from "./_lib/_qb-void-orphan-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -597,6 +598,13 @@ export async function buildDigestEmail(
   // collector so a table/sweep problem never suppresses the digest.
   const reverseVoidSection = await collectReverseVoidSection(knex, logger);
   if (reverseVoidSection) sections.push(reverseVoidSection);
+
+  // ── 7. Void orphans: voideado en POS, vivo en QuickBooks ─────────────────
+  // La dirección inversa a la sección 6. Mismo scan que corre qb-void-reconciler
+  // cada 15 min (lib/quickbooks/pipeline/void-orphan-scan.ts — la query vive
+  // UNA vez); acá es donde le llega a una persona por email. Fail-isolated.
+  const voidOrphanSection = await collectVoidOrphanSection(logger);
+  if (voidOrphanSection) sections.push(voidOrphanSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 

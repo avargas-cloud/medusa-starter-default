@@ -180,6 +180,53 @@ for (const step of [...new Set(voidCases)]) {
   }
 }
 
+// ── 3b · Todo void materializable es DESPACHABLE ────────────────────────────
+// La fila que escribe void-intent nace 'pending' y nadie la despacha inline:
+// si su step no está en la lista de `runPendingDispatchPass`, en
+// `IDEMPOTENT_REDISPATCH_STEPS` (recovery) y como `case` de resubmit-by-step,
+// queda pendiente para siempre. Así vivió `void_payment` desde su creación:
+// existía el case pero faltaba en las DOS listas, y el void del pago 3420
+// jamás se habría despachado ni con el intent funcionando.
+const dispatchPass = read("lib/quickbooks/consolidator/dispatch-pass.ts");
+const recoveryPass = read("lib/quickbooks/consolidator/recovery-pass.ts");
+
+/**
+ * Exenciones CON MOTIVO — una por step, para que agregar un step nuevo sin
+ * decidir su dispatch falle acá en vez de fallar en producción en silencio.
+ *
+ * `void_estimate`: hueco CONOCIDO y pendiente (2026-08-07). Sus filas
+ * históricas las despachó inline `order-flow-core` (escribe pending y llama al
+ * bridge él mismo); una fila materializada por void-intent hoy quedaría
+ * pendiente. Arreglarlo exige un case nuevo en resubmit-by-step — scope
+ * aparte, no un renglón en una lista.
+ */
+const DISPATCH_EXEMPT = new Set(["void_estimate"]);
+
+for (const step of uniqueMaterializable) {
+  if (DISPATCH_EXEMPT.has(step)) {
+    notes.push(`⚠ ${step} EXENTO de dispatch (hueco documentado)`);
+    continue;
+  }
+  const problems: string[] = [];
+  if (!dispatchPass.includes(`'${step}'`)) {
+    problems.push("falta en el step IN de runPendingDispatchPass");
+  }
+  if (!recoveryPass.includes(`"${step}"`)) {
+    problems.push("falta en IDEMPOTENT_REDISPATCH_STEPS de recovery-pass");
+  }
+  if (!resubmit.includes(`case "${step}"`)) {
+    problems.push("no tiene case en resubmit-by-step");
+  }
+  if (problems.length > 0) {
+    failures.push(
+      `el step ${step} se puede materializar pero no es despachable: ${problems.join("; ")} — ` +
+        `la fila quedaría 'pending' para siempre`
+    );
+  } else {
+    notes.push(`✓ ${step} es despachable (dispatch + recovery + case)`);
+  }
+}
+
 // ── 4 · El poller de PO re-arma su fila cuando el PO ya estaba voideado ─────
 // No usa el ternario submitted/confirmed ni `writePipelineRow` — vive en otra
 // tabla con un unique index de UNA fila por PO, así que su guard es un

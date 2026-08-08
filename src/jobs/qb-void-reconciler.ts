@@ -11,10 +11,11 @@
  * Invoice 21246 / QB 19637 — sólo que ahí la causa fue un camino sin cobertura,
  * y el resultado se descubrió mirando QuickBooks a mano seis horas después.
  *
- * Este job es la misma query con la que se midió el blast radius de aquel
- * incidente, generalizada a los seis tipos de documento y corriendo sola:
- *
- *     documento voideado + su ADD confirmado + ninguna fila de void viva
+ * La query vive en `pipeline/void-orphan-scan.ts` y la comparte la sección del
+ * digest diario (email): este job es el barrido rápido (15 min → logs), el
+ * digest es el que le llega a una persona aunque nadie mire los logs. Cuando
+ * cada capa tenía su propia lista de tipos ya divergieron: `payment` no lo
+ * miraba nadie y el pago 3420 quedó vivo en QB sin denuncia.
  *
  * ── READ-ONLY a propósito ─────────────────────────────────────────────────────
  * Reporta; NO encola. La primera corrida contra producción explicó por qué:
@@ -38,34 +39,11 @@
 
 import { MedusaContainer } from "@medusajs/framework/types";
 
-import { getDbPool } from "../api/utils/db-pool";
+import { scanVoidOrphans } from "../lib/quickbooks/pipeline/void-orphan-scan";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 
 const TAG = "[qb-void-reconciler]";
-
-/**
- * Ventana hacia atrás. Los huérfanos históricos anteriores a esto ya fueron
- * resueltos a mano y volver a barrerlos cada 15 min no aporta — pero un
- * documento que quedó huérfano hoy entra de sobra.
- */
-const LOOKBACK_DAYS = 30;
-
-/**
- * Un ADD recién confirmado todavía puede estar siendo procesado por el hook del
- * confirm. Esperar un poco evita que el job y el hook encolen el mismo void al
- * mismo tiempo — el índice único lo atajaría igual, pero con ruido de conflicto.
- */
-const SETTLE_MINUTES = 5;
-
-interface OrphanRow {
-  create_step: string;
-  reference_id: string | null;
-  order_id: string | null;
-  qb_txn_id: string;
-  qb_ref_number: string | null;
-  medusa_ref_number: string | null;
-}
 
 export default async function qbVoidReconciler(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
@@ -74,100 +52,9 @@ export default async function qbVoidReconciler(container: MedusaContainer) {
     warn: (m: string) => void;
     info: (m: string) => void;
   };
-  const pool = getDbPool();
 
   try {
-    // Un solo barrido con UNION: cada rama define cómo se sabe que ESE tipo de
-    // documento está voideado, y todas exigen lo mismo — ADD confirmado con
-    // TxnID y ninguna fila de void para la misma clave.
-    const { rows } = await pool.query<OrphanRow>(
-      `
-      -- invoice / sales receipt → pos_invoice.status
-      SELECT p.step AS create_step, p.reference_id, p.order_id,
-             p.qb_txn_id, p.qb_ref_number, p.medusa_ref_number
-        FROM qb_order_pipeline p
-        JOIN pos_invoice d ON d.id = p.reference_id
-       WHERE p.step IN ('invoice', 'sales_receipt')
-         AND p.status = 'confirmed'
-         AND p.qb_txn_id IS NOT NULL
-         AND d.status = 'voided'
-         AND p.confirmed_at > NOW() - ($1 || ' days')::interval
-         AND p.confirmed_at < NOW() - ($2 || ' minutes')::interval
-         AND NOT EXISTS (
-               SELECT 1 FROM qb_order_pipeline v
-                WHERE v.reference_id = p.reference_id
-                  AND v.step IN ('void_invoice', 'void_sales_receipt')
-                  AND v.status <> 'skipped'
-             )
-
-      UNION ALL
-
-      -- credit memo → pos_credit_memo.status
-      SELECT p.step, p.reference_id, p.order_id,
-             p.qb_txn_id, p.qb_ref_number, p.medusa_ref_number
-        FROM qb_order_pipeline p
-        JOIN pos_credit_memo d ON d.id = p.reference_id
-       WHERE p.step = 'credit_memo'
-         AND p.status = 'confirmed'
-         AND p.qb_txn_id IS NOT NULL
-         AND (d.status = 'voided' OR d.voided_at IS NOT NULL)
-         AND p.confirmed_at > NOW() - ($1 || ' days')::interval
-         AND p.confirmed_at < NOW() - ($2 || ' minutes')::interval
-         AND NOT EXISTS (
-               SELECT 1 FROM qb_order_pipeline v
-                WHERE v.reference_id = p.reference_id
-                  AND v.step = 'void_credit_memo'
-                  AND v.status <> 'skipped'
-             )
-
-      UNION ALL
-
-      -- sales order / estimate → la orden (o el draft) cancelada.
-      -- Se keyean por order_id: su reference_id es NULL.
-      SELECT p.step, p.reference_id, p.order_id,
-             p.qb_txn_id, p.qb_ref_number, p.medusa_ref_number
-        FROM qb_order_pipeline p
-        JOIN "order" o ON o.id = p.order_id
-       WHERE p.step IN ('sales_order', 'estimate')
-         AND p.status = 'confirmed'
-         AND p.qb_txn_id IS NOT NULL
-         AND p.reference_id IS NULL
-         AND o.status = 'canceled'
-         AND p.confirmed_at > NOW() - ($1 || ' days')::interval
-         AND p.confirmed_at < NOW() - ($2 || ' minutes')::interval
-         AND NOT EXISTS (
-               SELECT 1 FROM qb_order_pipeline v
-                WHERE v.order_id = p.order_id
-                  AND v.reference_id IS NULL
-                  AND v.step IN ('void_sales_order', 'void_estimate',
-                                 'estimate_deactivate', 'estimate_cancel')
-                  AND v.status <> 'skipped'
-             )
-
-      UNION ALL
-
-      -- inventory adjustment → inventory_count.voided_at.
-      -- Su create lleva el id del conteo en order_id (asimetría conocida).
-      SELECT p.step, p.reference_id, p.order_id,
-             p.qb_txn_id, p.qb_ref_number, p.medusa_ref_number
-        FROM qb_order_pipeline p
-        JOIN inventory_count d ON d.id = COALESCE(p.reference_id, p.order_id)
-       WHERE p.step = 'inventory_adjustment'
-         AND p.status = 'confirmed'
-         AND p.qb_txn_id IS NOT NULL
-         AND d.voided_at IS NOT NULL
-         AND p.confirmed_at > NOW() - ($1 || ' days')::interval
-         AND p.confirmed_at < NOW() - ($2 || ' minutes')::interval
-         AND NOT EXISTS (
-               SELECT 1 FROM qb_order_pipeline v
-                WHERE v.reference_id = COALESCE(p.reference_id, p.order_id)
-                  AND v.step = 'void_inventory_adjustment'
-                  AND v.status <> 'skipped'
-             )
-      `,
-      [String(LOOKBACK_DAYS), String(SETTLE_MINUTES)]
-    );
-
+    const rows = await scanVoidOrphans();
     if (rows.length === 0) return;
 
     // Que este job encuentre algo significa que el hook del confirm no lo

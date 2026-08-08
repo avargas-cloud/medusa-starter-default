@@ -35,6 +35,8 @@ const IDEMPOTENT_REDISPATCH_STEPS = [
   "void_sales_order",
   "void_credit_memo",
   "void_check",
+  // TxnDel de un ReceivePayment: borrar dos veces da error, nunca duplica.
+  "void_payment",
   "refund_apply_del",
   "void_inventory_adjustment",
   "purchase_order_mod",
