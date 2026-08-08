@@ -19,6 +19,15 @@ export const OrderDelivery = model.define("order_delivery", {
   fulfillment_id: model.text().nullable(),
   invoice_id: model.text().nullable(),
 
+  // ── Delivery v2: pool + explicit invoice assignment ────────────────────────
+  // A label bought from the ORDER page has invoice_id NULL = "available in the
+  // order's pool". Assigning it to an invoice (the dispatch act) stamps the
+  // three fields below and creates the fulfillment. 'entire_invoice' covers
+  // every line of the invoice; 'items' enumerates order_delivery_line rows.
+  invoice_scope: model.text().nullable(), // 'entire_invoice' | 'items'
+  assigned_at: model.dateTime().nullable(),
+  assigned_by_user_id: model.text().nullable(),
+
   // Dispatch provider that sold/arranged the shipment: shippo | ups | uber.
   // 'manual' = tracking number typed by hand (TrackingModal), no label bought
   // and no dispatch adapter — provider_object_id stays null for these rows.

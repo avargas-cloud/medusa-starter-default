@@ -161,11 +161,23 @@ async function createShipment(ctx: CreateLabelContext): Promise<ShippoShipment> 
   });
 }
 
-/** UPS rates only (plan §2 rate rule), cheapest first. */
+/** UPS rates only (plan §2 rate rule), cheapest first.
+ *
+ * TEST-mode relaxation: Shippo's shared test account barely offers UPS (its
+ * default carrier is shippo_usps_master, frequently throttled), so enforcing
+ * UPS-only in the sandbox turns every quote into `no_ups_rate` and the
+ * Delivery flow becomes untestable. When SHIPPO_MODE != 'live' we fall back
+ * to WHATEVER carriers the test account returned if no UPS rate exists.
+ * Production (SHIPPO_MODE=live on Railway) keeps the strict UPS rule. */
 function upsRates(shipment: ShippoShipment): ShippoRate[] {
-  return (shipment.rates ?? [])
-    .filter((r) => r.provider?.toUpperCase() === "UPS")
-    .sort((a, b) => centsFromAmount(a.amount) - centsFromAmount(b.amount));
+  const all = (shipment.rates ?? []).sort(
+    (a, b) => centsFromAmount(a.amount) - centsFromAmount(b.amount)
+  );
+  const ups = all.filter((r) => r.provider?.toUpperCase() === "UPS");
+  if (ups.length === 0 && process.env.SHIPPO_MODE !== "live" && all.length > 0) {
+    return all;
+  }
+  return ups;
 }
 
 function noUpsRateError(shipment: ShippoShipment, service?: string): DispatchError {
@@ -209,8 +221,29 @@ export const shippoAdapter: DispatchAdapter = {
   },
 
   async createLabel(ctx: CreateLabelContext): Promise<CreateLabelResult> {
-    const shipment = await createShipment(ctx);
-    const rate = pickRate(shipment, ctx.service);
+    // The buy re-quotes (fresh shipment) before purchasing. Carrier rate
+    // endpoints throttle ("Too Many Requests") — on Shippo's shared TEST
+    // account constantly, and occasionally live — which surfaced as
+    // "quote showed UPS Ground, Buy said no_ups_rate" seconds later. Retry
+    // the QUOTE step (nothing is purchased yet, so retrying is free) up to
+    // twice with a short backoff before giving up.
+    let shipment = await createShipment(ctx);
+    let rate: ShippoRate | null = null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        rate = pickRate(shipment, ctx.service);
+        break;
+      } catch (err) {
+        const throttled = (shipment.messages ?? []).some((m) =>
+          /too many requests/i.test(m.text ?? "")
+        );
+        if (!(err instanceof DispatchError) || !throttled || attempt >= 2) {
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        shipment = await createShipment(ctx);
+      }
+    }
 
     const txn = await shippoFetch<ShippoTransaction>("/transactions/", {
       rate: rate.object_id,

@@ -31,6 +31,11 @@ export interface OrderDeliveryRow {
   shipped_at: string | null;
   delivered_at: string | null;
   voided_at: string | null;
+  // Delivery v2 assignment (see docs/DISPATCH_ON_ORDER_HANDOFF.md):
+  // invoice_id NULL = label available in the order's pool.
+  invoice_scope: string | null;
+  assigned_at: string | null;
+  assigned_by_user_id: string | null;
   idempotency_key: string | null;
   created_by_user_id: string | null;
   /** { packages: RehostedPackage[], ...provider raw snapshot } */
@@ -40,7 +45,8 @@ export interface OrderDeliveryRow {
 const COLS = `id, order_id, fulfillment_id, invoice_id, provider,
   provider_object_id, carrier, tracking_number, tracking_url, label_url,
   service, rate_amount_cents, status, status_detail, shipped_at, delivered_at,
-  voided_at, idempotency_key, created_by_user_id, metadata`;
+  voided_at, invoice_scope, assigned_at, assigned_by_user_id,
+  idempotency_key, created_by_user_id, metadata`;
 
 export async function findDeliveryByKey(
   pool: Pool,
@@ -143,10 +149,21 @@ export async function finalizeDelivery(
   id: string,
   input: { fulfillment_id: string; invoice_id: string | null; shipped_at: Date }
 ): Promise<OrderDeliveryRow | null> {
+  // Legacy full-flow dispatch always covers the whole invoice it binds to —
+  // stamp the v2 assignment fields so both lanes read uniformly (an invoice
+  // is "dispatched" when a non-voided delivery points at it).
   await pool.query(
     `UPDATE order_delivery
         SET fulfillment_id = $2,
             invoice_id = COALESCE($3, invoice_id),
+            invoice_scope = CASE
+              WHEN COALESCE($3, invoice_id) IS NOT NULL
+                THEN COALESCE(invoice_scope, 'entire_invoice')
+              ELSE invoice_scope END,
+            assigned_at = CASE
+              WHEN COALESCE($3, invoice_id) IS NOT NULL
+                THEN COALESCE(assigned_at, now())
+              ELSE assigned_at END,
             shipped_at = $4, status_detail = NULL, updated_at = now()
       WHERE id = $1`,
     [id, input.fulfillment_id, input.invoice_id, input.shipped_at]

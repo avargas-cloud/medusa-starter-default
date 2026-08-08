@@ -15,6 +15,12 @@ const PosInvoice = model.define("pos_invoice", {
   invoice_number: model.text(), // INV-{order.display_id}-{seq}
   order_id: model.text(), // FK → Medusa Order (external)
   fulfillment_id: model.text().nullable(), // FK → Medusa Fulfillment (external)
+  // How this invoice links to shipments. 'legacy_1to1' = pre-v2 rows where
+  // fulfillment_id above is the (single) link and void may reverse it.
+  // 'derived_v2' = every merchandise line carries order_line_item_id; dispatch
+  // links live in order_delivery(invoice_id) and void NEVER reverses stock of
+  // dispatched goods.
+  shipment_link_mode: model.text().default("legacy_1to1"),
   customer_id: model.text(), // FK → Medusa Customer (external)
   status: model
     .enum([

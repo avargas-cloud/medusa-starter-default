@@ -12,6 +12,11 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   id: model.id().primaryKey(),
   invoice: model.belongsTo(() => PosInvoice, { mappedBy: "items" }),
   variant_id: model.text().nullable(),
+  // FK (external, no constraint) → order_line_item.id (`ordli_`). The line
+  // identity that makes two same-SKU order lines distinguishable — required
+  // for derived shipment↔invoice linkage (delivery v2). NULL on legacy
+  // invoices and on custom/comment lines that never existed on the order.
+  order_line_item_id: model.text().nullable(),
   sku: model.text().nullable(),
   description: model.text(),
   quantity: model.number(),

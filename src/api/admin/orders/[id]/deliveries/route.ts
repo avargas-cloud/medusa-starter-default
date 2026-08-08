@@ -16,13 +16,20 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const orderId = req.params.id as string;
   try {
     const { rows } = await getDbPool().query(
-      `SELECT id, provider, carrier, service, tracking_number, tracking_url,
-              label_url, rate_amount_cents, status, status_detail, invoice_id,
-              fulfillment_id, shipped_at, delivered_at, voided_at, created_at,
-              metadata->'packages' AS packages
-         FROM order_delivery
-        WHERE order_id = $1 AND deleted_at IS NULL
-        ORDER BY created_at DESC`,
+      `SELECT od.id, od.provider, od.carrier, od.service, od.tracking_number,
+              od.tracking_url, od.label_url, od.rate_amount_cents, od.status,
+              od.status_detail, od.invoice_id, od.invoice_scope, od.assigned_at,
+              od.fulfillment_id, od.shipped_at, od.delivered_at, od.voided_at,
+              od.created_at,
+              od.metadata->'packages' AS packages,
+              (SELECT COALESCE(json_agg(json_build_object(
+                        'order_line_item_id', odl.order_line_item_id,
+                        'quantity', odl.quantity) ORDER BY odl.id), '[]'::json)
+                 FROM order_delivery_line odl
+                WHERE odl.delivery_id = od.id AND odl.deleted_at IS NULL) AS lines
+         FROM order_delivery od
+        WHERE od.order_id = $1 AND od.deleted_at IS NULL
+        ORDER BY od.created_at DESC`,
       [orderId]
     );
     return res.json({ deliveries: rows });

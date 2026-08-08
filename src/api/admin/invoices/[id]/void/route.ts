@@ -16,10 +16,21 @@ import {
 } from "../../../../../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
+import {
+  listAssignedDeliveries,
+  reverseAssignedDelivery,
+} from "../../../orders/[id]/_lib/reverse-delivery-assignment";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
@@ -45,8 +56,69 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return res.status(409).json({ error: "Invoice is already voided" });
   }
 
+  // ── Delivery v2 gate (owner decision 2026-08-07) ─────────────────────────
+  // A label assigned to this invoice means a dispatch is on record. Voiding
+  // then requires a SUPERVISOR PIN — the PIN is the supervisor's confirmation
+  // that the goods did NOT physically leave ("the invoice was a mistake").
+  // If the goods DID leave there is no void at all: the POS modal explains
+  // and routes to the administrator/accountant; the API cannot verify
+  // physical truth (that is a staffed manual process by design).
+  //
+  // derived_v2 invoices reverse by EXACT line identity and return their
+  // labels to the order's pool; legacy invoices keep their historical
+  // variant-matching reversal below (Mina 1 stays legacy-only).
+  const v2Pool = getDbPool();
+  const assignedDeliveries = invoice.order_id
+    ? await listAssignedDeliveries(v2Pool, id)
+    : [];
+  let v2ReversalDone = false;
+  if (assignedDeliveries.length > 0) {
+    const pinResult = await guardSupervisorPin({
+      scope: req.scope,
+      db: pgAsPinConn(v2Pool),
+      pin: extractSupervisorPin(req),
+      actorId: resolveActorId(req),
+    });
+    if (!pinResult.ok) {
+      const { status, body: payload } = pinGuardResponse(pinResult);
+      return res.status(status).json({
+        ...payload,
+        // The POS shows this hint on the void modal (explanation BEFORE
+        // buttons — owner UX decision 2026-08-07).
+        delivery_assigned: true,
+      });
+    }
+  }
+  if (
+    assignedDeliveries.length > 0 &&
+    invoice.shipment_link_mode === "derived_v2"
+  ) {
+    const lockClient = await v2Pool.connect();
+    try {
+      await lockClient.query("BEGIN");
+      await lockClient.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `create-shipment:${invoice.order_id}`,
+      ]);
+      for (const d of assignedDeliveries) {
+        await reverseAssignedDelivery(
+          v2Pool,
+          req.scope,
+          d,
+          `Restored via supervisor-authorized void of invoice ${invoice.invoice_number || id}`
+        );
+      }
+      await lockClient.query("COMMIT");
+    } catch (v2Err) {
+      await lockClient.query("ROLLBACK").catch(() => undefined);
+      throw v2Err;
+    } finally {
+      lockClient.release();
+    }
+    v2ReversalDone = true;
+  }
+
   // 0. SURGICAL FULFILLMENT & INVENTORY REVERSAL (Undo POS Physical Checkout)
-  if (invoice.fulfillment_id && invoice.order_id) {
+  if (!v2ReversalDone && invoice.fulfillment_id && invoice.order_id) {
     console.log(
       `[VOID INVOICE] Surgical Fulfillment Reversal Triggered for Ful ID: ${invoice.fulfillment_id}`
     );
@@ -194,7 +266,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }
     }
-  } else {
+  } else if (!v2ReversalDone) {
     console.log(
       `[VOID INVOICE] No fulfillment_id — skipping physical stock rollback`
     );
@@ -598,7 +670,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   // 3. DYNAMICALLY REVERT PARENT MEDUSA ORDER STATUSES
   if (invoice.order_id) {
-    if (invoice.fulfillment_id) {
+    if (!v2ReversalDone && invoice.fulfillment_id) {
       try {
         // Medusa natively blocks canceling a Fulfillment once it has been "Shipped"
         // Since this is a POS hard-void, we surgically revert the item counts and nuke the physical tree.

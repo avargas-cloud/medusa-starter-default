@@ -9,9 +9,11 @@
 import { MedusaService } from "@medusajs/utils";
 
 import { OrderDelivery } from "./models/order-delivery";
+import { OrderDeliveryLine } from "./models/order-delivery-line";
 
 class OrderDeliveryModuleService extends MedusaService({
   OrderDelivery,
+  OrderDeliveryLine,
 }) {}
 
 export default OrderDeliveryModuleService;

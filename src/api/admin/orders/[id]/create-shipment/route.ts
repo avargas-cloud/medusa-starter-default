@@ -75,6 +75,14 @@ interface CreateShipmentBody {
   items?: ShipItem[];
   location_id?: string;
   address_to?: DispatchAddress;
+  /**
+   * Delivery v2: 'pool' buys the label WITHOUT creating a fulfillment or
+   * shipping anything — the row stays in the order's pool (invoice_id NULL)
+   * until it is assigned to an invoice (POST :id/assign-delivery), which is
+   * the moment inventory moves. Buying postage is monetarily and physically
+   * neutral (docs/DISPATCH_ON_ORDER_HANDOFF.md).
+   */
+  mode?: "pool";
 }
 
 interface InvoiceServiceShape {
@@ -173,17 +181,57 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(200).json({ delivery: existing, replayed: true });
     }
 
+    const isPool = body.mode === "pool";
+    if (isPool && existing?.provider_object_id) {
+      // Pool purchase already completed earlier — replay.
+      await lockClient.query("COMMIT");
+      return res
+        .status(200)
+        .json({ delivery: existing, pooled: true, replayed: true });
+    }
+
     // ── 2. Resolve the shipment plan BEFORE buying anything ─────────────
     // A label must never be bought for an order with nothing to ship.
+    // Pool mode skips this entirely: postage is neutral — no fulfillment, no
+    // inventory. The plan is resolved later, at assignment.
     let fulfillmentId = existing?.fulfillment_id ?? null;
-    let planItems: ShipItem[];
+    let planItems: ShipItem[] = [];
     let mustCreateFulfillment = false;
-    if (fulfillmentId) {
+    if (isPool) {
+      // nothing to plan
+    } else if (fulfillmentId) {
       // Resume — the fulfillment was already resolved on a prior attempt.
       planItems = await loadFulfillmentItems(pool, fulfillmentId);
     } else {
       const pending = await findPendingFulfillment(pool, orderId);
       if (pending && pending.items.length > 0) {
+        // Mina 2 fix (2026-08-07): an EXPLICIT selection is never silently
+        // discarded. If the caller named items and they don't match the
+        // pending fulfillment exactly, refuse instead of shipping something
+        // other than what was asked.
+        if (body.items?.length) {
+          const norm = (items: ShipItem[]) => {
+            const m = new Map<string, number>();
+            for (const it of items)
+              m.set(it.id, (m.get(it.id) ?? 0) + Number(it.quantity));
+            return m;
+          };
+          const asked = norm(body.items);
+          const pend = norm(pending.items);
+          const matches =
+            asked.size === pend.size &&
+            [...asked].every(([lid, q]) => pend.get(lid) === q);
+          if (!matches) {
+            await lockClient.query("COMMIT");
+            return res.status(409).json({
+              code: "pending_fulfillment_mismatch",
+              message:
+                "A pending fulfillment exists with a different item set — resolve it before dispatching a different selection",
+              pending_fulfillment_id: pending.id,
+              pending_items: pending.items,
+            });
+          }
+        }
         fulfillmentId = pending.id;
         planItems = pending.items;
       } else {
@@ -226,7 +274,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       existing ??
       (await claimDelivery(pool, {
         order_id: orderId,
-        invoice_id: body.invoice_id ?? null,
+        // Pool purchases are never invoice-bound at buy time — assignment is
+        // a separate, later act.
+        invoice_id: isPool ? null : (body.invoice_id ?? null),
         provider,
         idempotency_key: idempotencyKey,
         created_by_user_id: actorId,
@@ -280,6 +330,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         packages[0];
       if (master?.label_url) label.label_url = master.label_url;
       await saveLabelOnDelivery(pool, delivery.id, label, packages);
+    }
+
+    if (isPool) {
+      // Pool purchase ends here: label bought + persisted, no fulfillment,
+      // no inventory movement. It shows as "available" on the order until
+      // assign-delivery attaches it to an invoice.
+      await lockClient.query("COMMIT");
+      const pooled = await findDeliveryByKey(pool, idempotencyKey);
+      return res.status(201).json({ delivery: pooled, pooled: true });
     }
 
     // ── 4-6. Fulfillment / ship / invoice binding — every step idempotent

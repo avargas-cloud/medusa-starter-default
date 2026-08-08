@@ -39,6 +39,11 @@ import {
   resolveInvoiceDedupKey,
   type TxManager,
 } from "../../../lib/invoices/document-numbering";
+import {
+  LineIdentityError,
+  resolveShipmentLinkMode,
+  validateLineIdentity,
+} from "../../../lib/invoices/line-identity";
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { INVOICE_MODULE } from "../../../modules/invoices";
 
@@ -165,6 +170,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   // everything sent; the per-row badge distinguishes In Transit vs Delivered.
   // Reads live rows — no Meili plumbing.
   let deliveryByInvoice: Record<string, unknown> | undefined;
+  let poolDeliveries: unknown[] | undefined;
   if (delivery_active !== undefined) {
     // Latest live delivery per invoice.
     const { rows } = await getDbPool().query(
@@ -180,13 +186,32 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     deliveryByInvoice = Object.fromEntries(
       rows.map((r: { invoice_id: string }) => [r.invoice_id, r])
     );
+    // Delivery v2: pool labels (bought from the order, not yet assigned to
+    // any invoice) must be visible in this tab too — an invoice_id-keyed
+    // filter alone would hide them forever (handoff doc, verified gap).
+    const { rows: poolRows } = await getDbPool().query(
+      `SELECT d.id, d.order_id, o.display_id AS order_display_id, d.status,
+              d.carrier, d.service, d.tracking_number, d.tracking_url,
+              d.rate_amount_cents, d.created_at
+         FROM order_delivery d
+         JOIN "order" o ON o.id = d.order_id AND o.deleted_at IS NULL
+        WHERE d.deleted_at IS NULL AND d.voided_at IS NULL
+          AND d.invoice_id IS NULL
+          AND d.status <> 'canceled'
+        ORDER BY d.created_at DESC`
+    );
     const deliveryIds = rows.map(
       (r: { invoice_id: string }) => r.invoice_id
     );
     if (deliveryIds.length === 0) {
-      return res.json({ invoices: [], delivery_by_invoice: deliveryByInvoice });
+      return res.json({
+        invoices: [],
+        delivery_by_invoice: deliveryByInvoice,
+        pool_deliveries: poolRows,
+      });
     }
     filters.id = deliveryIds;
+    poolDeliveries = poolRows;
   }
 
   // Sales rep: lives on the ORDER, so it resolves to a set of invoice ids here
@@ -270,7 +295,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   return res.json(
     deliveryByInvoice
-      ? { invoices: enriched, delivery_by_invoice: deliveryByInvoice }
+      ? {
+          invoices: enriched,
+          delivery_by_invoice: deliveryByInvoice,
+          pool_deliveries: poolDeliveries ?? [],
+        }
       : { invoices: enriched }
   );
 }
@@ -285,6 +314,13 @@ interface CreateInvoiceBody {
   items: Array<{
     variant_id?: string;
     sku?: string;
+    /**
+     * Order line (`ordli_`) this invoice line bills — delivery v2 line
+     * identity. Optional during rollout; when every merchandise line carries
+     * it the invoice is created as shipment_link_mode='derived_v2'. Validated
+     * fail-closed (must belong to the order, must not over-invoice).
+     */
+    order_line_item_id?: string | null;
     description: string;
     quantity: number;
     unit_price: number; // cents
@@ -838,7 +874,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // counter (no gaps, no collision) and leaves no orphan. All cross-module side
   // effects (payments, finance, QB, events, reservation release) stay BELOW,
   // after commit, and remain idempotent.
-  const core: CoreResult = await invoiceService.withTransaction(async (ctx) => {
+  // Definite assignment: the catch below always returns or rethrows.
+  let core!: CoreResult;
+  try {
+  core = await invoiceService.withTransaction(async (ctx) => {
     const em = ctx.transactionManager as unknown as TxManager;
 
     const claim = await claimInvoiceCreate(em, dedupKey, requestHash);
@@ -846,6 +885,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return { kind: "existing", invoiceId: claim.invoiceId };
     if (claim.status === "conflict") return { kind: "conflict" };
     if (claim.status === "in_progress") return { kind: "in_progress" };
+
+    // Delivery v2: validate claimed line identities (belongs-to-order +
+    // remaining_to_invoice ceiling) under the order's advisory lock.
+    // Throws LineIdentityError → 400, rolling back the whole create.
+    await validateLineIdentity(em, body.order_id, body.items);
 
     // claimed → allocate exactly the two counters this document class needs.
     invoice_number = String(await allocateNextNumber(em, "medusa_invoice"));
@@ -878,6 +922,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         notes: body.notes ?? null,
         created_by: body.created_by ?? null,
         shipping_address: body.shipping_address ?? null,
+        // Delivery v2: 'derived_v2' iff every merchandise line carries its
+        // order_line_item_id (validated above); otherwise legacy behavior.
+        shipment_link_mode: resolveShipmentLinkMode(body.items),
         metadata: {
           is_sales_receipt: !!body.is_sales_receipt,
           qb_ref_number: qb_metadata_ref_number,
@@ -896,6 +943,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           return {
             invoice_id: (created as any).id,
             variant_id: it.variant_id ?? null,
+            order_line_item_id: it.order_line_item_id ?? null,
             sku: it.sku ?? null,
             description: it.description,
             quantity: it.quantity,
@@ -918,6 +966,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     await finalizeInvoiceCreate(em, dedupKey, requestHash, (created as any).id);
     return { kind: "created", invoice: created };
   });
+  } catch (err: unknown) {
+    // Fail-closed line-identity violations are client errors, not 500s.
+    if (err instanceof LineIdentityError) {
+      return res.status(400).json({ code: err.code, error: err.message });
+    }
+    throw err;
+  }
 
   // Resolve dedup outcomes OUTSIDE the transaction callback (never return res
   // from inside it).

@@ -74,9 +74,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       `INSERT INTO order_delivery
          (id, order_id, fulfillment_id, invoice_id, provider, carrier,
           tracking_number, tracking_url, status, shipped_at, delivered_at,
+          invoice_scope, assigned_at, assigned_by_user_id,
           created_by_user_id)
        VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, now(),
-               CASE WHEN $8 = 'delivered' THEN now() END, $9)`,
+               CASE WHEN $8 = 'delivered' THEN now() END,
+               'entire_invoice', now(), $9, $9)`,
       [
         generateEntityId("", "odel"),
         invoice.order_id,
