@@ -195,10 +195,13 @@ export async function POST(
     const costMap = await getVariantAvgCostBatch(req.scope, costVariantIds);
 
     const buildItems = (targetId: string) =>
-      (items ?? []).map((item: any) => {
+      (items ?? []).map((item: any, idx: number) => {
         const cost = item.variantId ? costMap.get(item.variantId) : undefined;
         return {
           credit_memo_id: targetId,
+          // Durable display position (same contract as pos_invoice_item):
+          // ULIDs are not monotonic within one ms, id ASC can't restore it.
+          sort_order: idx,
           variant_id: item.variantId || null,
           sku: item.sku || null,
           title: item.title,

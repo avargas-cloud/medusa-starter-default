@@ -39,6 +39,13 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   // derived from the live order. NULL = no discount on this line.
   discount_type: model.text().nullable(),   // 'percent' | 'fixed'
   discount_value: model.number().nullable(), // percentage (0-100) or fixed dollar amount
+  // 0-indexed display position within the invoice, snapshotted from the array
+  // order the POS sends (products + comment lines already merged by the
+  // client's sort_order). ULIDs are NOT monotonic within the same millisecond,
+  // so a batch insert can't rely on `id` ASC to restore the on-screen order —
+  // this column is the durable ordering. NULL = legacy row (pre-2026-08-10):
+  // readers fall back to `id` ASC.
+  sort_order: model.number().nullable(),
   // Frozen post-line-discount, PRE-order-discount net line total in cents,
   // computed by the POS with the round-then-multiply convention (2026-05-29).
   // The QB sync READS this verbatim instead of recomputing the discount, so the

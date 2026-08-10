@@ -214,7 +214,8 @@ export async function handleFulfillmentCreated(
       const { rows: invRows } = await fbPool.query(
         `SELECT variant_id, sku, quantity, unit_price, total
            FROM pos_invoice_item
-          WHERE invoice_id = $1 AND deleted_at IS NULL`,
+          WHERE invoice_id = $1 AND deleted_at IS NULL
+          ORDER BY sort_order ASC NULLS LAST, id ASC`,
         [data.invoice_id]
       );
       if (invRows.length > 0) {

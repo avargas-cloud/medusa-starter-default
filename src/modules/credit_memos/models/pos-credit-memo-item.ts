@@ -20,6 +20,10 @@ const PosCreditMemoItem = model.define("pos_credit_memo_item", {
   // the canonical variant.metadata.average_cost at credit-memo creation time. Frozen.
   average_unit_cost: model.bigNumber().nullable(),
   average_unit_cost_synced_at: model.dateTime().nullable(),
+  // 0-indexed display position within the credit memo (same semantics as
+  // pos_invoice_item.sort_order — ULIDs are not monotonic within one ms, so
+  // `id` ASC can't restore insertion order on batch creates). NULL = legacy.
+  sort_order: model.number().nullable(),
   // QB TxnLineID captured from CreditMemoLineRet after a successful
   // CreditMemoAdd. Required for CreditMemoMod to address individual lines
   // (modify vs add vs delete). Nullable for legacy rows / drafts.

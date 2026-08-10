@@ -604,11 +604,14 @@ export async function PATCH(
       return { item, reusedTxnLineId };
     });
     await creditMemoService.createPosCreditMemoItems(
-      newItemPlans.map(({ item, reusedTxnLineId }) => {
+      newItemPlans.map(({ item, reusedTxnLineId }, idx) => {
         const cost = item.variantId ? costMap.get(item.variantId) : undefined;
         const price = item.effectiveUnitPrice ?? item.unitPrice;
         return {
           credit_memo_id: id,
+          // Durable display position — id ASC can't restore batch order
+          // (ULIDs are not monotonic within one millisecond).
+          sort_order: idx,
           variant_id: item.variantId ?? null,
           sku: item.sku ?? null,
           title: item.title,

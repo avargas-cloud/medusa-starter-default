@@ -938,10 +938,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     if (body.items?.length) {
       await invoiceService.createPosInvoiceItems(
-        body.items.map((it) => {
+        body.items.map((it, idx) => {
           const cost = it.variant_id ? costMap.get(it.variant_id) : undefined;
           return {
             invoice_id: (created as any).id,
+            // Durable display position — the POS sends items already merged
+            // and sorted; ULIDs are not monotonic within one ms, so id ASC
+            // cannot restore this on batch inserts.
+            sort_order: idx,
             variant_id: it.variant_id ?? null,
             order_line_item_id: it.order_line_item_id ?? null,
             sku: it.sku ?? null,
