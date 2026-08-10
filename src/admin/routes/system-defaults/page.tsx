@@ -857,9 +857,11 @@ function DraggableOptionList({
     setDragOverId(null);
     dragItem.current = null;
 
-    // Find only the items whose sort_order actually changed
+    // Compare item identity per position: a permutation of contiguous 1..N
+    // sort_orders leaves the same values at the same positions, so comparing
+    // sort_order values here would report "no change" for every real move
     const changed = withNewOrder.filter(
-      (item, idx) => item.sort_order !== current[idx]?.sort_order
+      (item, idx) => item.id !== current[idx]?.id
     );
     if (changed.length === 0) return;
 
@@ -1140,7 +1142,7 @@ const SystemDefaultsPage = () => {
         return orig && orig.sort_order !== item.sort_order;
       });
       if (changed.length === 0) return;
-      await Promise.all(
+      const responses = await Promise.all(
         changed.map((item) =>
           fetch(`/admin/system-defaults/${item.id}`, {
             method: "PATCH",
@@ -1150,6 +1152,11 @@ const SystemDefaultsPage = () => {
           })
         )
       );
+      if (responses.some((r) => !r.ok)) {
+        toast.error("Failed to save order");
+        await load(true);
+        return;
+      }
       // Update local defaults state so future reorders use up-to-date sort_orders
       setDefaults((prev) =>
         prev.map((d) => {
@@ -1159,7 +1166,7 @@ const SystemDefaultsPage = () => {
       );
       toast.success("Order saved");
     },
-    [defaults]
+    [defaults, load]
   );
 
   const handleSavePm = useCallback(
