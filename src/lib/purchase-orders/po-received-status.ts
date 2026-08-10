@@ -19,6 +19,8 @@
  * (see scripts/migrations/seed-po-status-defaults.ts).
  */
 
+export const PO_STATUS_CREATED = "PO Created";
+export const PO_STATUS_SENT = "PO Sent";
 export const PO_STATUS_FULLY_RECEIVED = "Fully Received";
 export const PO_STATUS_PARTIAL_RECEIVED = "Partial Rcvd Pending Partial";
 export const PO_STATUS_TO_ARRANGE_DELIVERY = "To Arrange Delivery";

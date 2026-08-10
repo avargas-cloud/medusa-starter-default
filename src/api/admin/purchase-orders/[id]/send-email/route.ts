@@ -19,6 +19,10 @@ import {
 import { sendMail } from "../../../../../utils/mailer";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
 import { isSpecialPlaceholder } from "../../_lib/receivability";
+import {
+  PO_STATUS_CREATED,
+  PO_STATUS_SENT,
+} from "../../../../../lib/purchase-orders/po-received-status";
 
 const PURCHASING_CC_EMAIL = "purchase@ecopowertech.com";
 
@@ -383,6 +387,20 @@ ${sigHtml}
     );
   } catch (err) {
     console.error("[po-send-email] failed to record send activity:", err);
+  }
+
+  // Auto-advance the workflow status on a successful send. Guarded on the
+  // exact current value so it never clobbers a manually-curated or later
+  // status ("PO Confirmed", "Shipped …") on a re-send, and stays idempotent.
+  try {
+    await guardKnex.raw(
+      `UPDATE purchase_order
+          SET po_status = ?, updated_at = NOW()
+        WHERE id = ? AND po_status = ?`,
+      [PO_STATUS_SENT, id, PO_STATUS_CREATED]
+    );
+  } catch (err) {
+    console.error("[po-send-email] failed to advance po_status:", err);
   }
 
   res.status(200).json({
