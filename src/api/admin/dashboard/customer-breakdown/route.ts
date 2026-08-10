@@ -14,6 +14,11 @@ const ACTIVE_INVOICE_STATUSES_SQL = `
   'refunded'
 `;
 
+// Fichas anteriores al go-live del POS (2026-04-14) vienen del import masivo de
+// QB (7.346 el 2026-01-27): clientes con historia previa a pos_invoice, jamás
+// cuentan como "new customer" aunque su primera factura POS sea reciente.
+const POS_GO_LIVE_DATE = "2026-04-14";
+
 function asNumber(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -33,11 +38,27 @@ export async function GET(
   const pg = req.scope.resolve("__pg_connection__") as any;
 
   const customersByDaySql = `
+    WITH first_purchase AS (
+      SELECT
+        customer_id,
+        MIN(created_at) AS first_at
+      FROM pos_invoice
+      WHERE status IN (${ACTIVE_INVOICE_STATUSES_SQL})
+        AND deleted_at IS NULL
+        AND customer_id IS NOT NULL
+      GROUP BY customer_id
+    )
     SELECT
       DATE(pi.created_at)::text AS day,
       COUNT(pi.id)::int AS transactions,
-      COUNT(DISTINCT pi.customer_id)::int AS customers
+      COUNT(DISTINCT pi.customer_id)::int AS customers,
+      COUNT(DISTINCT pi.customer_id) FILTER (
+        WHERE DATE(fp.first_at) = DATE(pi.created_at)
+          AND c.created_at >= '${POS_GO_LIVE_DATE}'
+      )::int AS new_customers
     FROM pos_invoice pi
+    LEFT JOIN first_purchase fp ON fp.customer_id = pi.customer_id
+    LEFT JOIN customer c ON c.id = pi.customer_id
     WHERE pi.status IN (${ACTIVE_INVOICE_STATUSES_SQL})
       AND pi.created_at >= ?
       AND pi.created_at <= ?
@@ -126,6 +147,7 @@ export async function GET(
         name: row.day,
         value: asNumber(row.customers),
         transactions: asNumber(row.transactions),
+        new_customers: asNumber(row.new_customers),
       })),
       customer_type_sales: (typeSalesResult.rows ?? []).map((row: any) => ({
         name: String(row.name ?? "Standard"),
