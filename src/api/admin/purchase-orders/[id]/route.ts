@@ -992,7 +992,7 @@ export async function PATCH(
                     WHERE vb.status IN ('confirmed', 'synced')
                   ), 0
                 )::int AS posted_billed_qty,
-                -- Does a Bill that LIVES IN QUICKBOOKS carry this line? That is
+                -- Whether a Bill that LIVES IN QUICKBOOKS carries this line is
                 -- what decides whether the PO Mod is about to be refused with
                 -- error 3060 — QuickBooks validates against its own copy, not
                 -- ours, and a local draft's edits have not reached it.
