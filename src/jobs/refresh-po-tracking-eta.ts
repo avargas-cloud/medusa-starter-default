@@ -1,5 +1,5 @@
 /**
- * refresh-po-tracking-eta — runs once a day at 07:00.
+ * refresh-po-tracking-eta — runs every 4 hours.
  *
  * Re-fetches carrier ETAs for in-transit Purchase Orders so Expected Delivery
  * stays current as packages move. Only touches POs still awaiting goods at the
@@ -31,9 +31,12 @@ import {
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
   name: "refresh-po-tracking-eta",
-  // Once a day at 07:00. ETAs for inbound POs don't move minute-to-minute, so
-  // daily is enough and stays well within carrier rate limits (DHL = 250/day).
-  schedule: "0 7 * * *",
+  // Every 4 hours. A daily 07:00 UTC run (3am Miami) missed the common case:
+  // an ETA UPS PUBLISHES mid-day (first scans happen during business hours)
+  // stayed invisible in the POS until the next morning — half the life of a
+  // 2-3 day shipment showing "No ETA yet". Worst case ~10 in-transit numbers
+  // × 6 runs = 60 calls/day, well within the tightest carrier cap (DHL 250/day).
+  schedule: "0 */4 * * *",
 };
 
 // Stop polling a tracking number this many days after it was added. Bounds the
