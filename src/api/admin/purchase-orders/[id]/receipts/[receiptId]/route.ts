@@ -263,12 +263,15 @@ export async function DELETE(
       qty: l.qty_received_now,
     }));
 
-    if (linesToReverse.length === 0) {
-      return res.status(409).json({
-        error: "Receipt has no stock-applied lines to reverse",
-        code: "nothing_to_reverse",
-      });
-    }
+    // [REMOVED 2026-08-11] A receipt with nothing stock-applied to reverse
+    // (0 lines, or every line at qty 0 with no stock ever applied) used to
+    // 409 here forever — permanently un-deletable. QuickBooks cannot hold an
+    // empty ItemReceipt, so a receipt can legitimately reach this state (all
+    // lines edited down to 0 via PATCH, or created empty). The delete
+    // workflow tolerates an empty `linesToReverse`/`transferLines` (no-op
+    // stock reversal, PO counters recompute to the same totals) and still
+    // runs the rest of the flow below: bill unbinding, header purge, pipeline
+    // cleanup, and the QB void if `qb_item_receipt_list_id` is set.
   }
 
   const knex = (req.scope as unknown as {
@@ -486,6 +489,44 @@ export async function PATCH(
       });
     }
     qbModEnqueueWanted = true;
+  } else {
+    // Not yet synced to QB — the item_receipt_add pipeline row may still be
+    // in flight. Editing while the ADD is 'processing'/'submitted' races the
+    // dispatch: the Add ships whatever qty was on the row at submit time and
+    // this edit's qty never reaches QB, silently drifting the two apart.
+    // 'pending'/'waiting'/'failed'/'skipped'/'fixed' (or no row at all) are
+    // fine — the pre-dispatch refresh in the poller picks up the new values.
+    interface AddPipeRow {
+      status: string | null;
+    }
+    const addPipeKnex = (req.scope as unknown as {
+      resolve: (k: string) => {
+        raw: (
+          sql: string,
+          b?: unknown[]
+        ) => Promise<{ rows: AddPipeRow[] }>;
+      };
+    }).resolve("__pg_connection__");
+    const addPipeRes = await addPipeKnex.raw(
+      `SELECT status
+         FROM qb_order_pipeline
+        WHERE reference_id = ?
+          AND step = 'item_receipt_add'
+        ORDER BY seq DESC
+        LIMIT 1`,
+      [receiptId]
+    );
+    const addPipe = addPipeRes.rows?.[0] ?? null;
+    if (
+      addPipe &&
+      (addPipe.status === "processing" || addPipe.status === "submitted")
+    ) {
+      return res.status(409).json({
+        error:
+          "This receipt is being sent to QuickBooks right now. Wait ~1 minute for it to finish syncing, then edit.",
+        code: "add_in_flight",
+      });
+    }
   }
 
   // Resolve receipt lines + PO lines so we can compute deltas + validate.
@@ -667,6 +708,26 @@ export async function PATCH(
       // moment drafts stopped counting toward the billed floor above — leaving
       // it would have been dead code that still reads like a protection.
     }
+  }
+
+  // QuickBooks cannot hold an ItemReceipt with zero total units. Compute the
+  // TOTAL quantity the receipt would have after this edit — every live line's
+  // new_qty if changed, its current qty_received_now otherwise — and refuse
+  // if it lands at/under zero. Putting a SINGLE line at 0 stays legal as long
+  // as another line on the same receipt keeps units.
+  const lineChangeQtyById = new Map(
+    lineChanges.map((l) => [l.receipt_line_id, l.new_qty])
+  );
+  const resultingTotalQty = receiptLines.reduce((sum, rl) => {
+    const newQty = lineChangeQtyById.get(rl.id);
+    return sum + (newQty !== undefined ? newQty : rl.qty_received_now);
+  }, 0);
+  if (resultingTotalQty <= 0) {
+    return res.status(409).json({
+      error:
+        "This edit would leave the receipt with 0 units. QuickBooks cannot hold an empty item receipt — delete the receipt instead.",
+      code: "receipt_would_be_empty",
+    });
   }
 
   const vendor_bill_number_changed = body.vendor_bill_number !== undefined;

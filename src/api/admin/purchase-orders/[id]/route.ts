@@ -1150,6 +1150,57 @@ export async function PATCH(
           lineErrors.push(`"${dl.sku_snapshot ?? dl.id}" has ${qtyRecv} received unit(s) and cannot be deleted.`);
         }
       }
+
+      // A line can also carry receipt history that qty_received doesn't
+      // reflect (e.g. every receipt line on it was edited down to 0 via the
+      // receipt PATCH). `purchase_order_receipt_line.purchase_order_line_id`
+      // is now ON DELETE RESTRICT (Migration20260811230000) precisely so the
+      // DB refuses that delete regardless of receipt status — this check
+      // turns it into an actionable 409 instead of a raw FK-violation 500.
+      // Deleted receipts (deleted_at) don't count; VOIDED ones still do —
+      // the FK doesn't care about status, only whether the row exists.
+      if (toDeleteLines.length > 0) {
+        const receiptHistoryKnex = (req.scope as unknown as {
+          resolve: (k: string) => unknown;
+        }).resolve("__pg_connection__") as {
+          raw: (
+            sql: string,
+            b?: unknown[]
+          ) => Promise<{
+            rows: Array<{
+              purchase_order_line_id: string;
+              numbers: string[];
+            }>;
+          }>;
+        };
+        const receiptHistoryRes = await receiptHistoryKnex.raw(
+          `SELECT porl.purchase_order_line_id,
+                  jsonb_agg(DISTINCT por.number ORDER BY por.number) AS numbers
+             FROM purchase_order_receipt_line porl
+             JOIN purchase_order_receipt por
+               ON por.id = porl.purchase_order_receipt_id
+              AND por.deleted_at IS NULL
+            WHERE porl.purchase_order_line_id = ANY(?)
+              AND porl.deleted_at IS NULL
+            GROUP BY porl.purchase_order_line_id`,
+          [(toDeleteLines as OldLine[]).map((dl) => dl.id)]
+        );
+        const receiptNumbersByLineId = new Map(
+          receiptHistoryRes.rows.map((row) => [
+            row.purchase_order_line_id,
+            row.numbers,
+          ])
+        );
+        for (const dl of toDeleteLines as OldLine[]) {
+          const numbers = receiptNumbersByLineId.get(dl.id);
+          if (numbers && numbers.length > 0) {
+            lineErrors.push(
+              `"${dl.sku_snapshot ?? dl.id}" has receipt history (${numbers.join(", ")}) — delete or void those receipts first.`
+            );
+          }
+        }
+      }
+
       for (const u of toUpdate) {
         const old = (oldLines as OldLine[]).find((ol) => ol.id === u.id);
         if (!old) continue;
