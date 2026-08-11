@@ -1174,9 +1174,14 @@ export async function PATCH(
         toUpdate.map((u) => ({ id: u.id, ...u.data }))
       );
     }
-    if (toInsert.length > 0) {
-      await service.createPurchaseOrderLines(toInsert);
-    }
+    // Capture the created rows: the mirror below needs their generated ids to
+    // stamp inventory_transfer_line.purchase_order_line_id.
+    const insertedLines: Array<{ id: string }> =
+      toInsert.length > 0
+        ? ((await service.createPurchaseOrderLines(toInsert)) as Array<{
+            id: string;
+          }>)
+        : [];
 
     // Mirror line changes onto the linked inventory_transfer so China
     // reservations stay in sync. The IT holds the China-side reservation_items;
@@ -1186,17 +1191,27 @@ export async function PATCH(
     //                          inventory: the PO "orders" units from China that
     //                          were never reserved there). This is exactly what
     //                          convert-to-transfer exists to prevent.
-    // Lines are matched to IT lines by product_variant_id (there is no per-line
-    // FK). After reconciling lines we recompute the IT header totals (they used
-    // to drift because only PO totals were refreshed) and rebuild reservations.
-    const qtyChangedUpdates = toUpdate.filter((u) => {
-      const old = oldLines.find((ol) => ol.id === u.id);
-      return old && Number(old.qty_ordered) !== Number(u.data.qty_ordered);
+    // Lines are matched by purchase_order_line_id — product_variant_id is NOT
+    // unique within a PO (the Sample-Product placeholder repeats), and matching
+    // by variant collapsed sibling lines into one IT line (IT-1045/IT-1036).
+    // Variant matching survives only as a fallback for legacy rows the
+    // migration backfill could not disambiguate. After reconciling lines we
+    // recompute the IT header totals and rebuild reservations.
+    const mirrorUpdates = toUpdate.filter((u) => {
+      const old = oldById.get(u.id);
+      if (!old) return false;
+      return (
+        Number(old.qty_ordered) !== Number(u.data.qty_ordered) ||
+        Number(old.unit_cost_cents) !== Number(u.data.unit_cost_cents) ||
+        String(old.sku_snapshot ?? "") !== String(u.data.sku_snapshot ?? "") ||
+        String(old.description_snapshot ?? "") !==
+          String(u.data.description_snapshot ?? "")
+      );
     });
     if (
       toDelete.length > 0 ||
-      qtyChangedUpdates.length > 0 ||
-      toInsert.length > 0
+      mirrorUpdates.length > 0 ||
+      insertedLines.length > 0
     ) {
       try {
         const knex = (req.scope as any).resolve("__pg_connection__") as {
@@ -1205,8 +1220,17 @@ export async function PATCH(
             bindings?: unknown[]
           ) => Promise<{ rows: unknown[]; rowCount?: number }>;
         };
+        // Only mirror onto a transfer whose stock story is still open. A
+        // 'received' IT is a historical fact (its units already moved
+        // China→USA) and a 'voided' one is dead — editing either rewrites
+        // history. Note the status filter also keeps LIMIT 1 from picking a
+        // voided IT over the live replacement convert-to-transfer allows.
         const transferResult = await knex.raw(
-          `SELECT id FROM inventory_transfer WHERE linked_purchase_order_id = ? AND deleted_at IS NULL LIMIT 1`,
+          `SELECT id FROM inventory_transfer
+            WHERE linked_purchase_order_id = ?
+              AND status IN ('draft', 'confirmed', 'shipped')
+              AND deleted_at IS NULL
+            LIMIT 1`,
           [id]
         );
         const linkedTransfer = transferResult.rows[0] as { id: string } | undefined;
@@ -1214,76 +1238,94 @@ export async function PATCH(
         if (linkedTransfer) {
           const transferId = linkedTransfer.id;
 
-          for (const oldLine of oldLines.filter((l) => toDelete.includes(l.id))) {
-            await knex.raw(
-              `UPDATE inventory_transfer_line
-                  SET deleted_at = NOW(), updated_at = NOW()
-                WHERE transfer_id = ?
-                  AND product_variant_id = ?
-                  AND deleted_at IS NULL`,
-              [transferId, oldLine.product_variant_id]
+          // FK first; fall back to an unclaimed (NULL-FK) legacy row of the
+          // same variant. Never match a row already claimed by a sibling line.
+          const findItLine = async (
+            poLineId: string,
+            variantId: string
+          ): Promise<{ id: string } | undefined> => {
+            const byFk = await knex.raw(
+              `SELECT id FROM inventory_transfer_line
+                WHERE transfer_id = ? AND purchase_order_line_id = ?
+                  AND deleted_at IS NULL
+                LIMIT 1`,
+              [transferId, poLineId]
             );
-          }
-
-          for (const upd of qtyChangedUpdates) {
-            await knex.raw(
-              `UPDATE inventory_transfer_line
-                  SET qty = ?, updated_at = NOW()
-                WHERE transfer_id = ?
-                  AND product_variant_id = ?
-                  AND deleted_at IS NULL`,
-              [upd.data.qty_ordered, transferId, upd.data.product_variant_id]
-            );
-          }
-
-          // New PO lines → upsert a matching IT line by variant. Prefer an
-          // existing row for the variant (revive a soft-deleted one so a
-          // delete-then-readd round-trips cleanly); otherwise insert fresh.
-          for (const ins of toInsert) {
-            const variantId = ins.product_variant_id as string;
-            const qty = Number(ins.qty_ordered ?? 0);
-            const unitCost = Number(ins.unit_cost_cents ?? 0);
-            const existingItLine = await knex.raw(
+            if (byFk.rows[0]) return byFk.rows[0] as { id: string };
+            const legacy = await knex.raw(
               `SELECT id FROM inventory_transfer_line
                 WHERE transfer_id = ? AND product_variant_id = ?
-                ORDER BY deleted_at IS NULL DESC, updated_at DESC
+                  AND purchase_order_line_id IS NULL
+                  AND deleted_at IS NULL
                 LIMIT 1`,
               [transferId, variantId]
             );
-            const itLineId = (
-              existingItLine.rows[0] as { id: string } | undefined
-            )?.id;
-            if (itLineId) {
-              await knex.raw(
-                `UPDATE inventory_transfer_line
-                    SET qty = ?, unit_cost_cents = ?, sku = ?, description = ?,
-                        deleted_at = NULL, updated_at = NOW()
-                  WHERE id = ?`,
-                [
-                  qty,
-                  unitCost,
-                  ins.sku_snapshot ?? "",
-                  ins.description_snapshot ?? "",
-                  itLineId,
-                ]
-              );
-            } else {
-              await knex.raw(
-                `INSERT INTO inventory_transfer_line (
-                    id, transfer_id, product_variant_id, sku, description,
-                    qty, unit_cost_cents, created_at, updated_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-                [
-                  generateEntityId("", "itl"),
-                  transferId,
-                  variantId,
-                  ins.sku_snapshot ?? "",
-                  ins.description_snapshot ?? "",
-                  qty,
-                  unitCost,
-                ]
-              );
-            }
+            return legacy.rows[0] as { id: string } | undefined;
+          };
+
+          for (const oldLine of oldLines.filter((l) => toDelete.includes(l.id))) {
+            const itLine = await findItLine(
+              oldLine.id,
+              String(oldLine.product_variant_id)
+            );
+            if (!itLine) continue;
+            await knex.raw(
+              `UPDATE inventory_transfer_line
+                  SET deleted_at = NOW(), updated_at = NOW()
+                WHERE id = ? AND deleted_at IS NULL`,
+              [itLine.id]
+            );
+          }
+
+          for (const upd of mirrorUpdates) {
+            const itLine = await findItLine(
+              upd.id,
+              String(upd.data.product_variant_id)
+            );
+            if (!itLine) continue;
+            // Claiming the row (setting the FK) heals legacy lines in place.
+            await knex.raw(
+              `UPDATE inventory_transfer_line
+                  SET qty = ?, unit_cost_cents = ?, sku = ?, description = ?,
+                      purchase_order_line_id = ?, updated_at = NOW()
+                WHERE id = ? AND deleted_at IS NULL`,
+              [
+                Number(upd.data.qty_ordered ?? 0),
+                Number(upd.data.unit_cost_cents ?? 0),
+                String(upd.data.sku_snapshot ?? ""),
+                String(upd.data.description_snapshot ?? ""),
+                upd.id,
+                itLine.id,
+              ]
+            );
+          }
+
+          // New PO lines always insert a fresh IT line carrying the FK. No
+          // variant-based adoption here: a live NULL-FK row of the same
+          // variant belongs to some OTHER legacy PO line, and adopting it is
+          // exactly the collapse this fix removes. (The old soft-delete
+          // revive existed only to dodge duplicate variant rows, which are
+          // legal now that identity is per line.)
+          for (let i = 0; i < insertedLines.length; i++) {
+            const ins = toInsert[i];
+            const created = insertedLines[i];
+            if (!ins || !created) continue;
+            await knex.raw(
+              `INSERT INTO inventory_transfer_line (
+                  id, transfer_id, purchase_order_line_id, product_variant_id,
+                  sku, description, qty, unit_cost_cents, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+              [
+                generateEntityId("", "itl"),
+                transferId,
+                created.id,
+                ins.product_variant_id as string,
+                (ins.sku_snapshot as string) ?? "",
+                (ins.description_snapshot as string) ?? "",
+                Number(ins.qty_ordered ?? 0),
+                Number(ins.unit_cost_cents ?? 0),
+              ]
+            );
           }
 
           // Recompute IT header totals from the live (non-deleted) lines so the

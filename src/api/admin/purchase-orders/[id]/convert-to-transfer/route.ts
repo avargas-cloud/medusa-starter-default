@@ -166,6 +166,7 @@ export async function POST(
   const poLines = linesResult.rows as PoLineRow[];
 
   interface ItLineDraft {
+    purchase_order_line_id: string;
     product_variant_id: string;
     sku: string;
     description: string;
@@ -178,6 +179,7 @@ export async function POST(
     const qty = line.qty_ordered - line.qty_cancelled;
     if (qty <= 0) continue;
     itLines.push({
+      purchase_order_line_id: line.id,
       product_variant_id: line.product_variant_id,
       sku: line.sku_snapshot,
       description: line.description_snapshot,
@@ -254,13 +256,14 @@ export async function POST(
   for (const line of itLines) {
     await knex.raw(
       `INSERT INTO inventory_transfer_line (
-        id, transfer_id, product_variant_id, sku, description,
+        id, transfer_id, purchase_order_line_id, product_variant_id, sku, description,
         qty, unit_cost_cents, qty_received,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         generateEntityId("", "itl"),
         transferId,
+        line.purchase_order_line_id,
         line.product_variant_id,
         line.sku,
         line.description,
