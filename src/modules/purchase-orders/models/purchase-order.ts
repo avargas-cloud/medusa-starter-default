@@ -60,7 +60,11 @@ export const PurchaseOrder = model.define("purchase_order", {
   draft_number: model.text().nullable(),
 
   // Free-text
+  // memo = internal-only (never printed, never emailed, never sent to QB).
+  // vendor_notes = outbound: prints on the PO document via the template
+  // engine's `notes` field key and travels on the emailed PDF.
   memo: model.text().nullable(),
+  vendor_notes: model.text().nullable(),
   // Vendor's own PO reference number, if any (e.g. sales order # from vendor)
   reference_number: model.text().nullable(),
   // JSON array of Medusa order IDs linked to this PO (e.g. orders this PO fulfills)

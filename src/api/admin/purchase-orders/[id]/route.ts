@@ -784,6 +784,8 @@ export async function PATCH(
       ? new Date(body.expected_at)
       : null;
   if (body.memo !== undefined) headerUpdate.memo = body.memo ?? null;
+  if (body.vendor_notes !== undefined)
+    headerUpdate.vendor_notes = body.vendor_notes ?? null;
   if (body.reference_number !== undefined)
     headerUpdate.reference_number = body.reference_number ?? null;
   if (bodyShippingMethod !== undefined)

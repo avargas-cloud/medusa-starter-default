@@ -221,6 +221,7 @@ export async function POST(
       ordered_at: body.ordered_at ? new Date(body.ordered_at) : null,
       expected_at: body.expected_at ? new Date(body.expected_at) : null,
       memo: body.memo ?? null,
+      vendor_notes: body.vendor_notes ?? null,
       reference_number: body.reference_number ?? null,
       po_status: body.po_status ?? null,
       linked_order_ids: body.linked_order_ids?.length
