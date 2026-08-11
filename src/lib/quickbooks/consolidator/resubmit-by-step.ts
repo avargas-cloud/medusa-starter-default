@@ -196,7 +196,11 @@ export async function resubmitByStep(
             row.order_id,
             container,
             logger,
-            { isCron: true, awaitSerialized: true }
+            // excludeRowId: THIS row is claimed 'processing' by us — without the
+            // exclusion the handler detects it as its own in-flight ADD, parks a
+            // phantom mod behind it and this row gets skipped as "Superseded"
+            // while the CREATE never runs (the 2026-08-08..11 estimate deadlock).
+            { isCron: true, awaitSerialized: true, excludeRowId: row.id }
           );
           if (outcome === "skipped") {
             await handleDraftOrderCreated(
@@ -231,7 +235,12 @@ export async function resubmitByStep(
           row.order_id,
           container,
           logger,
-          { isCron: true, awaitSerialized: true, pipelineRowId: row.id }
+          {
+            isCron: true,
+            awaitSerialized: true,
+            pipelineRowId: row.id,
+            excludeRowId: row.id,
+          }
         );
         if (outcome === "skipped") {
           await failPipelineRow(
@@ -253,7 +262,8 @@ export async function resubmitByStep(
             row.order_id,
             container,
             logger,
-            { isCron: true, awaitSerialized: true }
+            // excludeRowId: same self-detection guard as the estimate case above.
+            { isCron: true, awaitSerialized: true, excludeRowId: row.id }
           );
           if (outcome === "skipped") {
             await handleOrderPlaced(
@@ -287,6 +297,7 @@ export async function resubmitByStep(
           isCron: true,
           awaitSerialized: true,
           pipelineRowId: row.id,
+          excludeRowId: row.id,
         });
         if (outcome === "skipped") {
           await failPipelineRow(

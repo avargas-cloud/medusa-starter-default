@@ -4,6 +4,12 @@ import { findLatestInFlightRow, pollUntilQbConfirmed } from "./qb-pipeline";
 interface SerializerLookup {
   orderId: string;
   steps: string[];
+  /**
+   * Row already claimed by THIS caller (consolidator resubmit / own dispatch
+   * row). Without it, the in-flight check finds the caller's own 'processing'
+   * row and the serializer waits up to maxWaitMs on itself.
+   */
+  excludeRowId?: string | null;
 }
 
 interface SerializerOptions {
@@ -39,7 +45,9 @@ export function withQbSerialized(
 
   return withQbLock(lockKey, async () => {
     // DB-level check: is there an in-flight operation for this document?
-    const inFlight = await findLatestInFlightRow(lookup.orderId, lookup.steps);
+    const inFlight = await findLatestInFlightRow(lookup.orderId, lookup.steps, {
+      excludeRowId: lookup.excludeRowId ?? null,
+    });
 
     if (inFlight) {
       log?.info(

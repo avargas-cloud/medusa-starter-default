@@ -278,10 +278,18 @@ export async function claimAndResetForResubmit(
  * bridge_op_id (already dispatched). Pre-flight 'pending' rows without a
  * bridge_op_id are excluded — they haven't been sent to the bridge yet and
  * waiting on them would deadlock (the caller IS the one that will submit them).
+ *
+ * `excludeRowId` MUST be passed by any caller that already holds a claim on a
+ * row of these steps (consolidator resubmit, serialized dispatch): the claimed
+ * row sits in 'processing' and would otherwise be detected as its own in-flight
+ * sibling — the exact self-detection that deadlocked every new POS estimate
+ * between 2026-08-08 and 2026-08-11 (ADD skipped as "Superseded", phantom mod
+ * parked behind it forever).
  */
 export async function findLatestInFlightRow(
   orderId: string,
-  steps: string[]
+  steps: string[],
+  opts?: { excludeRowId?: string | null }
 ): Promise<{
   id: string;
   status: string;
@@ -289,14 +297,48 @@ export async function findLatestInFlightRow(
   updated_at: string;
 } | null> {
   const pool = getDbPool();
+  const params: unknown[] = [orderId, steps];
+  let exclusion = "";
+  if (opts?.excludeRowId) {
+    params.push(opts.excludeRowId);
+    exclusion = "AND id <> $3";
+  }
   const { rows } = await pool.query(
     `SELECT id, status, created_at, updated_at
          FROM qb_order_pipeline
          WHERE order_id = $1 AND step = ANY($2)
+           ${exclusion}
            AND (status IN ('processing', 'submitted') OR (status = 'pending' AND bridge_op_id IS NOT NULL))
          ORDER BY created_at DESC
          LIMIT 1`,
-    [orderId, steps]
+    params
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Resolve the QB TxnID of a document from its confirmed ADD pipeline row.
+ *
+ * Fallback for the wake-vs-metadata race: the poller confirms the parent ADD
+ * row (stamping qb_txn_id on it) BEFORE the order-metadata write lands, and the
+ * wake pass runs independently — so a woken *_mod row can dispatch while the
+ * metadata still lacks the TxnID. The confirmed row is the earlier, equally
+ * authoritative source.
+ */
+export async function findConfirmedAddTxnId(
+  orderId: string,
+  steps: string[]
+): Promise<string | null> {
+  const pool = getDbPool();
+  const { rows } = await pool.query(
+    `SELECT qb_txn_id
+         FROM qb_order_pipeline
+         WHERE order_id = $1 AND step = ANY($2)
+           AND status IN ('confirmed', 'fixed')
+           AND qb_txn_id IS NOT NULL
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+    [orderId, steps]
+  );
+  return rows[0]?.qb_txn_id ?? null;
 }

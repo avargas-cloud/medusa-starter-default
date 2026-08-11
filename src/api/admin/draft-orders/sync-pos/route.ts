@@ -4,7 +4,11 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 // 1.5.4: handleDraftOrderUpdated import removed — sync-pos now enqueues
 // 'pending' rows; consolidator processes via the same handler.
 import { getEstimateTxnId } from "../../../../lib/quickbooks/qb-metadata-types";
-import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
+import {
+  enqueueSalesMutation,
+  findLatestInFlightRow,
+  writePipelineRow,
+} from "../../../../lib/quickbooks/qb-pipeline";
 import { getDbPool } from "../../../utils/db-pool";
 
 export async function POST(
@@ -473,6 +477,37 @@ export async function POST(
           } catch (qbErr: any) {
             logger.error(
               `[sync-pos] Failed to queue QB sync for modified estimate: ${qbErr.message}`
+            );
+          }
+        } else {
+          // No TxnID yet. If the CREATE is genuinely in flight to the bridge,
+          // park this edit behind it (waiting + depends_on) — the ADD's payload
+          // snapshot is already frozen, so without the parked MOD this edit
+          // would never reach QB. A 'waiting'/'pending' ADD needs nothing: the
+          // CREATE reads live DB state at dispatch and carries the edit along.
+          try {
+            const inFlightAdd = await findLatestInFlightRow(resolvedId, [
+              "estimate",
+            ]);
+            if (inFlightAdd) {
+              const parked = await enqueueSalesMutation({
+                step: "estimate_mod",
+                orderId: resolvedId,
+                qbTxnId: null,
+                payload: {},
+                medusaRefNumber: draftOrderModel?.display_id
+                  ? `E${draftOrderModel.display_id}`
+                  : null,
+                dependsOn: inFlightAdd.id,
+                status: "waiting",
+              });
+              logger.info(
+                `[sync-pos] ⏸ Estimate CREATE in-flight for ${resolvedId} — edit parked as waiting estimate_mod row ${parked.rowId}`
+              );
+            }
+          } catch (parkErr: any) {
+            logger.error(
+              `[sync-pos] Failed to park edit behind in-flight CREATE: ${parkErr.message}`
             );
           }
         }

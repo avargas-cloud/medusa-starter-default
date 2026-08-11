@@ -9,6 +9,7 @@ import {
   claimSalesMutationRow,
   enqueueSalesMutation,
   failPipelineRow,
+  findConfirmedAddTxnId,
   findLatestInFlightRow,
   pollUntilQbConfirmed,
   submitPipelineRowById,
@@ -50,7 +51,18 @@ export async function handleDraftOrderUpdated(
   draftOrderId: string,
   container: any,
   logger: any,
-  opts?: { isCron?: boolean; awaitSerialized?: boolean; pipelineRowId?: string }
+  opts?: {
+    isCron?: boolean;
+    awaitSerialized?: boolean;
+    pipelineRowId?: string;
+    /**
+     * Pipeline row the CALLER already claimed (the consolidator's legacy
+     * 'estimate' vehicle row, or the estimate_mod row itself). Excluded from
+     * every in-flight lookup — a claimed row is 'processing' and would be
+     * detected as its own in-flight ADD, parking a phantom mod behind itself.
+     */
+    excludeRowId?: string;
+  }
 ): Promise<"coalesced" | "scheduled" | "skipped"> {
   const LOG_PREFIX = "[QB-DRAFT-ORDER-UPDATED]";
 
@@ -86,20 +98,27 @@ export async function handleDraftOrderUpdated(
     return "skipped";
   }
 
-  const qbTxnId = getEstimateTxnId(draftOrder.metadata);
+  let resolvedTxnId = getEstimateTxnId(draftOrder.metadata) ?? null;
   const qbRef = getEstimateRef(draftOrder.metadata) ?? null;
   const medusaRef = draftOrder.display_id ? `E${draftOrder.display_id}` : null;
 
-  if (!qbTxnId) {
+  if (!resolvedTxnId) {
     if (opts?.pipelineRowId) {
-      // The consolidator dispatched an estimate_mod row but the confirm never
-      // persisted a TxnID — nothing to modify. The caller fails the row.
-      return "skipped";
-    }
+      // Wake-vs-metadata race: the parent ADD row confirms (with its TxnID)
+      // before the order-metadata write lands, and the wake pass runs
+      // independently — resolve from the confirmed row before giving up.
+      resolvedTxnId = await findConfirmedAddTxnId(draftOrderId, ["estimate"]);
+      if (!resolvedTxnId) {
+        // No TxnID anywhere — nothing to modify. The caller fails the row.
+        return "skipped";
+      }
+    } else {
     // No TxnID yet: if the CREATE is still in flight, park this edit behind it
     // instead of losing it. The wake pass promotes it on confirm and the
     // dispatcher resolves the fresh TxnID from metadata.
-    const inFlightAdd = await findLatestInFlightRow(draftOrderId, ["estimate"]);
+    const inFlightAdd = await findLatestInFlightRow(draftOrderId, ["estimate"], {
+      excludeRowId: opts?.excludeRowId ?? null,
+    });
     if (inFlightAdd) {
       const parked = await enqueueSalesMutation({
         step: "estimate_mod",
@@ -119,7 +138,9 @@ export async function handleDraftOrderUpdated(
       `${LOG_PREFIX} No qb_estimate_txn_id on ${draftOrderId} — cannot MOD (use CREATE)`
     );
     return "skipped";
+    }
   }
+  const qbTxnId = resolvedTxnId;
 
   // Own row for this edit. The consolidator path arrives with the row already
   // claimed 'processing'; the route path enqueues (insert or coalesce into the
@@ -228,7 +249,13 @@ export async function handleDraftOrderUpdated(
 
   const serialized = withQbSerialized(
     `estimate:${draftOrderId}`,
-    { orderId: draftOrderId, steps: ["estimate", "estimate_mod"] },
+    {
+      orderId: draftOrderId,
+      steps: ["estimate", "estimate_mod"],
+      // Never wait on a row this call chain already owns: the consolidator's
+      // claimed vehicle/mod row (excludeRowId) or our own dispatch row.
+      excludeRowId: opts?.excludeRowId ?? dispatchRowId,
+    },
     runCallback,
     { logger }
   );
