@@ -328,6 +328,11 @@ function getEffectivePaymentStatus(
     return "fully_paid";
   }
   if (settled > 0) return "deposited";
+  // A zero-total order (warranty replacement) owes nothing — "Not Paid" would
+  // demand money that was never due. Ordered AFTER the settled>0 branches so a
+  // sub-cent order holding a live deposit (#1487) still reads deposited.
+  // Mirror of getEffectivePaymentStatus in store-pos/app/(pos)/orders/utils.ts.
+  if (total < 0.01) return "fully_paid";
   return "not_paid";
 }
 
