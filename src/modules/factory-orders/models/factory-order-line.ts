@@ -29,5 +29,10 @@ export const FactoryOrderLine = model.define("factory_order_line", {
 
   line_order: model.number().default(0),
 
+  // Soft FK into purchase_order_line when this line mirrors a PO line.
+  // Mirror matching MUST key on this id — product_variant_id is NOT unique
+  // within a PO (placeholder products repeat variants across sibling lines).
+  purchase_order_line_id: model.text().nullable(),
+
   notes: model.text().nullable(),
 });

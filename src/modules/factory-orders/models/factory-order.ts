@@ -45,6 +45,10 @@ export const FactoryOrder = model.define("factory_order", {
   reference_number: model.text().nullable(),
   linked_order_ids: model.text().nullable(),
 
+  // Soft FK into purchase_order — set when this FO mirrors the manufacturer's
+  // lines of a PO (PO is the source of truth; sync is always PO → FO).
+  linked_purchase_order_id: model.text().nullable(),
+
   shipping_method: model.text().nullable(),
   payment_terms: model.text().nullable(),
   metadata: model.json().nullable(),

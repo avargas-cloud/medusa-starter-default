@@ -207,6 +207,7 @@ const MUST_GATE_ROUTES = [
   ["api/admin/quickbooks/bill-match/adopt/route.ts", "registra un bill de QuickBooks contra un PO"],
   ["api/admin/quickbooks/bill-match/undo/route.ts", "revierte un bill-match adoptado"],
   ["api/admin/quickbooks/customer-credits/import/route.ts", "importa un crédito de QB como saldo redimible"],
+  ["api/admin/purchase-orders/[id]/factory-order-mirror/route.ts", "crea o sincroniza el Factory Order espejo de un PO"],
 ];
 for (const [rel, what] of MUST_GATE_ROUTES) {
   const p = path.join(BACKEND_SRC, rel);
