@@ -308,6 +308,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 entity: "order",
                 fields: [
                   "id",
+                  "display_id",
                   "metadata",
                   "tax_total",
                   "subtotal",
@@ -338,7 +339,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   intent: "mod",
                   qbTxnId: freshTxnId,
                   medusaRefNumber:
-                    (freshOrder.metadata as any)?.document_number ?? null,
+                    (freshOrder.metadata as any)?.document_number ??
+                    ((freshOrder as any).display_id
+                      ? `E${(freshOrder as any).display_id}`
+                      : null),
                   payload: { forceMod: true },
                 });
                 logger.info(
@@ -444,6 +448,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 entity: "order",
                 fields: [
                   "id",
+                  "display_id",
                   "metadata",
                   "tax_total",
                   "subtotal",
@@ -476,7 +481,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   intent: "mod",
                   qbTxnId: freshSoTxnId,
                   medusaRefNumber:
-                    (freshOrder.metadata as any)?.document_number ?? null,
+                    (freshOrder.metadata as any)?.document_number ??
+                    ((freshOrder as any).display_id
+                      ? `S${(freshOrder as any).display_id}`
+                      : null),
                   payload: { forceMod: true },
                 });
                 logger.info(

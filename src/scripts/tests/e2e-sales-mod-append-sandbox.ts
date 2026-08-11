@@ -219,6 +219,63 @@ async function main(): Promise<void> {
   }
   check("throws loudly", threw);
 
+  // ── 9. medusa_ref_number fallback: a callerless ref derives E/S+display_id ─
+  // Rows 8224/8225 (prod, 2026-08-11): writePipelineRow(intent:'mod') callers
+  // that didn't thread medusaRefNumber birthed rows with a blank REF column.
+  // Uses a REAL sandbox order so the "order".display_id subquery resolves.
+  console.log("9. medusa_ref_number derives from the order when not passed");
+  const { rows: realOrders } = await pool.query(
+    `SELECT id, display_id FROM "order" WHERE display_id IS NOT NULL LIMIT 1`
+  );
+  if (realOrders.length === 0) {
+    check("a sandbox order exists to derive from", false, "no orders in sandbox DB");
+  } else {
+    const realOrder = realOrders[0] as { id: string; display_id: number };
+    const refCleanup = () =>
+      pool.query(
+        `DELETE FROM qb_order_pipeline WHERE order_id = $1 AND qb_txn_id = 'E2E-REF-FALLBACK'`,
+        [realOrder.id]
+      );
+    await refCleanup();
+    // The exact shape of the buggy callers: redirect path, no medusaRefNumber.
+    const noRefRowId = await writePipelineRow({
+      orderId: realOrder.id,
+      step: "sales_order",
+      status: "pending",
+      intent: "mod",
+      qbTxnId: "E2E-REF-FALLBACK",
+    });
+    const { rows: derived } = await pool.query(
+      `SELECT medusa_ref_number FROM qb_order_pipeline WHERE id = $1`,
+      [noRefRowId]
+    );
+    check(
+      `derived ref is S${realOrder.display_id}`,
+      derived[0]?.medusa_ref_number === `S${realOrder.display_id}`,
+      `got ${JSON.stringify(derived[0]?.medusa_ref_number)}`
+    );
+    await refCleanup();
+    // Caller-provided ref must still win over the derivation.
+    const withRefRowId = await writePipelineRow({
+      orderId: realOrder.id,
+      step: "estimate",
+      status: "pending",
+      intent: "mod",
+      qbTxnId: "E2E-REF-FALLBACK",
+      medusaRefNumber: "CALLER-REF",
+    });
+    const { rows: kept } = await pool.query(
+      `SELECT medusa_ref_number FROM qb_order_pipeline WHERE id = $1`,
+      [withRefRowId]
+    );
+    check(
+      "caller-provided ref wins over the fallback",
+      kept[0]?.medusa_ref_number === "CALLER-REF",
+      `got ${JSON.stringify(kept[0]?.medusa_ref_number)}`
+    );
+    await refCleanup();
+  }
+
   await cleanup();
   console.log(
     failures === 0 ? "\n✅ E2E append-only lane: ALL PASS" : `\n❌ ${failures} failure(s)`

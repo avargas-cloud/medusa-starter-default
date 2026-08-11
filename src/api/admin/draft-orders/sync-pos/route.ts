@@ -470,6 +470,11 @@ export async function POST(
               // never reaches QB (same bug as the SO post-edit-sync path).
               intent: "mod",
               qbTxnId,
+              medusaRefNumber:
+                (draftOrderModel?.metadata?.document_number as string) ||
+                (draftOrderModel?.display_id
+                  ? `E${draftOrderModel.display_id}`
+                  : null),
             });
             logger.info(
               `[sync-pos] 📥 Enqueued estimate MOD for ${resolvedId} (modified)`

@@ -235,11 +235,31 @@ export async function enqueueSalesMutation(
       return { rowId: row.id, mode: "coalesced" };
     }
 
+    // medusa_ref_number fallback: order-scoped mod steps can derive their
+    // display ref (E/S + display_id) when the caller doesn't thread one — a
+    // writePipelineRow intent:"mod" redirect without medusaRefNumber used to
+    // insert rows with a blank REF column (rows 8224/8225, 2026-08-11). The
+    // other mod steps carry document numbers (invoice/CM/SR) that are NOT
+    // derivable from the order, so they stay as-passed.
     const { rows: inserted } = await client.query(
       `INSERT INTO qb_order_pipeline
               (order_id, reference_id, reference_type, step, status, depends_on,
                qb_txn_id, qb_ref_number, medusa_ref_number, payload, retry_count)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+               COALESCE(
+                 $9,
+                 CASE
+                   WHEN $4::text IN ('estimate_mod', 'sales_order_mod')
+                        AND $1::text IS NOT NULL
+                   THEN (
+                     SELECT CASE WHEN $4::text = 'estimate_mod' THEN 'E' ELSE 'S' END
+                              || o.display_id::text
+                       FROM "order" o
+                      WHERE o.id = $1::text
+                   )
+                 END
+               ),
+               $10, 0)
        RETURNING id`,
       [
         input.orderId ?? null,

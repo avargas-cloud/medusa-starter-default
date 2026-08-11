@@ -936,6 +936,11 @@ export async function POST(
             // (order 2450 SKU swap). MOD is idempotent, so reactivating the row is safe.
             intent: "mod",
             qbTxnId: txnId,
+            medusaRefNumber:
+              (qbOrder?.metadata?.document_number as string) ||
+              (qbOrder?.display_id
+                ? `${isEstimateOnly ? "E" : "S"}${qbOrder.display_id}`
+                : null),
           });
           logger.info(
             `[post-edit-sync] 📥 Enqueued ${isEstimateOnly ? "estimate" : "sales_order"} MOD for ${id} (txnId=${txnId})`
