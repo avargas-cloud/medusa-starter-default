@@ -85,6 +85,13 @@ const STEP_LABELS: Record<string, string> = {
   credit_memo_mod: "Credit Memo Edit",
   write_check: "Write Check",
   refund_payment: "Refund Payment",
+  // Ajuste de inventario por unidades defectuosas de un credit memo. Vive en el
+  // tab Sales a propósito, junto al credit memo que lo genera: la pregunta que
+  // alguien se hace frente a un problema es "¿este credit memo llegó entero a
+  // QuickBooks?", y las dos mitades comparten reference_id y CM-####.
+  cm_damage_adjustment: "Defective Adjustment",
+  cm_damage_adjustment_mod: "Defective Adjustment Edit",
+  void_cm_damage_adjustment: "Defective Adjustment Void",
 };
 
 const STEP_ICONS: Record<string, string> = {
@@ -104,6 +111,9 @@ const STEP_ICONS: Record<string, string> = {
   credit_memo_mod: "✏️",
   write_check: "✍️",
   refund_payment: "🔄",
+  cm_damage_adjustment: "📉",
+  cm_damage_adjustment_mod: "✏️",
+  void_cm_damage_adjustment: "🚫",
 };
 
 const REF_TYPE_LABELS: Record<string, string> = {
@@ -744,22 +754,15 @@ export function PipelineTable() {
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             <option value="all">All Steps</option>
-            <option value="estimate">Estimate</option>
-            <option value="estimate_mod">Estimate Edit</option>
-            <option value="sales_order">Sales Order</option>
-            <option value="sales_order_mod">Sales Order Edit</option>
-            <option value="sales_receipt">Sales Receipt</option>
-            <option value="sales_receipt_update">Sales Receipt Edit</option>
-            <option value="invoice">Invoice</option>
-            <option value="invoice_update">Invoice Edit</option>
-            <option value="payment">Payment</option>
-            <option value="payment_method_change">Payment Method Change</option>
-            <option value="payment_txndate_change">Payment Date Change</option>
-            <option value="apply_payment">Apply Payment</option>
-            <option value="credit_memo">Credit Memo</option>
-            <option value="credit_memo_mod">Credit Memo Edit</option>
-            <option value="write_check">Write Check</option>
-            <option value="refund_payment">Refund Payment</option>
+            {/* Derivado de STEP_LABELS a propósito: esta lista era una SEGUNDA
+                copia hard-codeada de los mismos steps, y una lista duplicada de
+                steps ya hizo que un badge contara filas que su propia pestaña no
+                mostraba. Un step nuevo se agrega en UN lugar. */}
+            {Object.entries(STEP_LABELS).map(([step, label]) => (
+              <option key={step} value={step}>
+                {label}
+              </option>
+            ))}
           </select>
           <select
             value={sortBy}

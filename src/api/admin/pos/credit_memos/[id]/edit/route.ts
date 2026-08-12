@@ -24,6 +24,7 @@ import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { USA_LOC } from "../../../../../../lib/locations";
+import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
 
 const NON_INVENTORY_QB_TYPES = new Set([
   "Service",
@@ -618,7 +619,14 @@ export async function PATCH(
           description: item.salesDescription ?? item.title,
           thumbnail: item.thumbnail ?? null,
           quantity: item.quantity,
-          damaged_qty: item.damagedQty ?? 0,
+          // Clamp acá, en el punto de persistencia. Un defectuoso mayor que lo
+          // devuelto no lo frena el cálculo de restock (que hace GREATEST(0,…)
+          // y por eso lo absorbe en silencio) y sí se convertiría en unidades
+          // sacadas de más del inventario de QuickBooks.
+          damaged_qty: Math.max(
+            0,
+            Math.min(item.damagedQty ?? 0, item.quantity)
+          ),
           unit_price: Math.round(price * 100),
           line_total: Math.round(price * 100 * item.quantity),
           average_unit_cost: cost?.cost ?? null,
@@ -796,6 +804,16 @@ export async function PATCH(
         );
       }
     }
+
+    // El ajuste de defectuosos se reconcilia DESPUÉS de persistir las líneas
+    // nuevas: su estado deseado se lee de la DB, no del body. Cubre los tres
+    // casos del edit por igual — cambió la cantidad devuelta (el ajuste no se
+    // toca), cambiaron los defectuosos, o cambiaron las dos.
+    await syncCreditMemoDamageAdjustment({
+      creditMemoId: id,
+      reason: "edit",
+      logger,
+    });
 
     res.status(200).json({ success: true, credit_memo_id: id });
   } catch (e: any) {

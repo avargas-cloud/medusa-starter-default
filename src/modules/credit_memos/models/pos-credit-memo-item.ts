@@ -28,6 +28,11 @@ const PosCreditMemoItem = model.define("pos_credit_memo_item", {
   // CreditMemoAdd. Required for CreditMemoMod to address individual lines
   // (modify vs add vs delete). Nullable for legacy rows / drafts.
   qb_txn_line_id: model.text().nullable(),
+  // Identidad de esta línea DENTRO del InventoryAdjustment de defectuosos —
+  // otro documento de QuickBooks, con su propia serie de TxnLineID. No tiene
+  // ninguna relación con qb_txn_line_id de arriba. NULL mientras damaged_qty
+  // sea 0, que es el caso normal.
+  qb_adjustment_txn_line_id: model.text().nullable(),
 });
 
 export default PosCreditMemoItem;

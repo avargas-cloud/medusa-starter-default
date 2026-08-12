@@ -39,6 +39,13 @@ const IDEMPOTENT_REDISPATCH_STEPS = [
   "void_payment",
   "refund_apply_del",
   "void_inventory_adjustment",
+  // Defectuosos de un credit memo. El MOD re-lee EditSequence y TxnLineIDs de
+  // QuickBooks en cada intento, y el VOID sobre un ajuste ya voideado devuelve
+  // error en vez de duplicar. El ADD (`cm_damage_adjustment`) queda FUERA a
+  // propósito, igual que el resto de los ADD: un re-submit a ciegas mintearía
+  // un segundo ajuste, que es justo lo que este diseño existe para evitar.
+  "cm_damage_adjustment_mod",
+  "void_cm_damage_adjustment",
   "purchase_order_mod",
   "item_receipt_mod",
   "vendor_bill_mod",

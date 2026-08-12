@@ -199,7 +199,20 @@ export async function findApplyPaymentBlockers(
 const VOID_BLOCKING_STEPS: Record<string, readonly string[]> = {
   void_invoice: ["invoice", "invoice_update"],
   void_sales_receipt: ["sales_receipt", "sales_receipt_update"],
-  void_credit_memo: ["credit_memo", "credit_memo_mod"],
+  // El void de un credit memo espera además a que su ajuste de defectuosos
+  // termine de retirarse. El orden importa por el on-hand: el credit memo
+  // devuelve al inventario la cantidad COMPLETA, y el ajuste le resta las
+  // unidades defectuosas. Si el void del credit memo se despacha primero, QB
+  // saca la cantidad completa mientras el write-off sigue vigente y el stock
+  // puede pasar por negativo. El neto final es el mismo en cualquier orden; lo
+  // que no da igual es el camino.
+  void_credit_memo: [
+    "credit_memo",
+    "credit_memo_mod",
+    "cm_damage_adjustment",
+    "cm_damage_adjustment_mod",
+    "void_cm_damage_adjustment",
+  ],
   void_sales_order: ["sales_order", "sales_order_mod", "so_close", "so_reopen"],
   void_estimate: [
     "estimate",
@@ -208,6 +221,12 @@ const VOID_BLOCKING_STEPS: Record<string, readonly string[]> = {
     "estimate_deactivate",
   ],
   void_inventory_adjustment: ["inventory_adjustment"],
+  // Retirar el ajuste de defectuosos espera a que el propio ajuste esté quieto:
+  // voidear un documento cuyo Mod sigue viajando lo corre en carrera.
+  void_cm_damage_adjustment: [
+    "cm_damage_adjustment",
+    "cm_damage_adjustment_mod",
+  ],
   // El borrado de un ReceivePayment espera a que el pago quede quieto: borrarlo
   // mientras un cambio de método o de fecha viaja hacia el mismo documento
   // deja la mutación apuntando a un TxnID que ya no existe.

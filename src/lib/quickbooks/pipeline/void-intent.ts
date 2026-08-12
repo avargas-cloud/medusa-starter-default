@@ -51,6 +51,7 @@ export const MATERIALIZABLE_VOID_STEPS = [
   "void_sales_order",
   "void_estimate",
   "void_inventory_adjustment",
+  "void_cm_damage_adjustment",
   "void_payment",
 ] as const;
 
@@ -126,6 +127,52 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
       if (row?.status !== "voided" && !row?.voided_at) return null;
       return {
         voidStep: "void_credit_memo" as const,
+        referenceId,
+        referenceType: "credit_memo",
+        orderId,
+      };
+    },
+  },
+
+  // Ajuste de inventario por defectuosos de un credit memo.
+  //
+  // Mientras su ADD viaja, el credit memo NO tiene todavía
+  // `qb_inventory_adjustment_txn_id`, así que el chokepoint de defectuosos lee
+  // "no hay ajuste" y no encola nada. Sin este spec, voidear el credit memo —o
+  // simplemente bajar los defectuosos a cero— en esa ventana deja en
+  // QuickBooks un write-off vivo que ya no le pertenece a nada.
+  //
+  // Dos condiciones, no una: el credit memo voideado, y también el credit memo
+  // vivo que se quedó sin unidades defectuosas. Las dos dejan al ajuste sin
+  // dueño, y la segunda no es hipotética — es el mismo botón que ya edita
+  // defectuosos sobre un credit memo completado.
+  cm_damage_adjustment: {
+    resolve: async ({ referenceId, orderId }) => {
+      if (!referenceId) return null;
+      const cm = await queryOne(
+        `SELECT status, voided_at FROM pos_credit_memo WHERE id = $1`,
+        [referenceId]
+      );
+      if (!cm) return null;
+
+      const isVoided = cm.status === "voided" || !!cm.voided_at;
+      let hasDamage = false;
+      if (!isVoided) {
+        const live = await queryOne(
+          `SELECT 1 AS one
+             FROM pos_credit_memo_item
+            WHERE credit_memo_id = $1
+              AND deleted_at IS NULL
+              AND COALESCE(damaged_qty, 0) > 0
+            LIMIT 1`,
+          [referenceId]
+        );
+        hasDamage = !!live;
+      }
+      if (!isVoided && hasDamage) return null;
+
+      return {
+        voidStep: "void_cm_damage_adjustment" as const,
         referenceId,
         referenceType: "credit_memo",
         orderId,

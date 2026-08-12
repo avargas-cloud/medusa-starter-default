@@ -25,6 +25,14 @@ const PosCreditMemo = model.define("pos_credit_memo", {
   qb_txn_id: model.text().nullable(), // QB TxnID after sync — needed for void
   qb_edit_sequence: model.text().nullable(), // QB EditSequence — needed for void/mod
 
+  // InventoryAdjustment de defectuosos. UN ajuste por credit memo para toda su
+  // vida: nace cuando alguna línea tiene damaged_qty > 0 y después se EDITA.
+  // Las tres se llenan juntas al confirmar el Add y vuelven a NULL juntas al
+  // voidearlo. NULL en la enorme mayoría de los credit memos, a propósito.
+  qb_inventory_adjustment_txn_id: model.text().nullable(),
+  qb_inventory_adjustment_ref: model.text().nullable(), // DMG#### — derivado del credit_memo_number
+  qb_inventory_adjustment_edit_sequence: model.text().nullable(),
+
   completed_at: model.dateTime().nullable(),
   voided_at: model.dateTime().nullable(),
   void_reason: model.text().nullable(),

@@ -243,6 +243,8 @@ export async function pollSubmittedRows(
           msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.TxnID ||
           msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.TxnID ||
           msgs?.CreditMemoAddRs?.CreditMemoRet?.TxnID ||
+          msgs?.InventoryAdjustmentAddRs?.InventoryAdjustmentRet?.TxnID ||
+          msgs?.InventoryAdjustmentModRs?.InventoryAdjustmentRet?.TxnID ||
           modifiedBill?.TxnID ||
           null;
         const refNumber =
@@ -253,6 +255,8 @@ export async function pollSubmittedRows(
           msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.RefNumber ||
           msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.RefNumber ||
           msgs?.CreditMemoAddRs?.CreditMemoRet?.RefNumber ||
+          msgs?.InventoryAdjustmentAddRs?.InventoryAdjustmentRet?.RefNumber ||
+          msgs?.InventoryAdjustmentModRs?.InventoryAdjustmentRet?.RefNumber ||
           modifiedBill?.RefNumber ||
           null;
 
@@ -501,6 +505,114 @@ export async function pollSubmittedRows(
           medusaRefNumber: refNumber ?? row.reference_id,
           logger,
         });
+
+        // ── Ajuste de defectuosos de un credit memo ────────────────────────
+        // Acá es donde el credit memo se entera de que su ajuste existe. Sin
+        // este stamp el TxnID nunca se persiste y el siguiente cambio de
+        // defectuosos crearía un SEGUNDO ajuste en QuickBooks en vez de editar
+        // el primero — que es exactamente lo contrario del modelo.
+        if (
+          (row.step === "cm_damage_adjustment" ||
+            row.step === "cm_damage_adjustment_mod") &&
+          row.reference_id &&
+          txnId
+        ) {
+          try {
+            const adjRet =
+              msgs?.InventoryAdjustmentAddRs?.InventoryAdjustmentRet ??
+              msgs?.InventoryAdjustmentModRs?.InventoryAdjustmentRet;
+            const editSequence = adjRet?.EditSequence ?? null;
+
+            // Las tres van JUNTAS: un TxnID sin EditSequence no sirve para
+            // ningún Mod posterior, y el ref es lo que hace rastreable el
+            // documento desde QuickBooks sin consultarnos.
+            await pool.query(
+              `UPDATE pos_credit_memo
+                  SET qb_inventory_adjustment_txn_id = $2,
+                      qb_inventory_adjustment_ref = COALESCE($3, qb_inventory_adjustment_ref),
+                      qb_inventory_adjustment_edit_sequence = $4
+                WHERE id = $1`,
+              [row.reference_id, txnId, refNumber, editSequence]
+            );
+
+            // Identidad de cada línea DENTRO del ajuste, para que el próximo
+            // Mod pueda direccionarlas. Se mapea por ListID del ítem, que es
+            // como QuickBooks las devuelve; el SKU no viaja en el Ret.
+            const lineRets = adjRet?.InventoryAdjustmentLineRet;
+            const lines = Array.isArray(lineRets)
+              ? lineRets
+              : lineRets
+                ? [lineRets]
+                : [];
+            for (const line of lines) {
+              const listId = line?.ItemRef?.ListID;
+              const lineId = line?.TxnLineID;
+              if (!listId || !lineId) continue;
+              await pool.query(
+                `UPDATE pos_credit_memo_item cmi
+                    SET qb_adjustment_txn_line_id = $3
+                  FROM product_variant pv
+                 WHERE cmi.credit_memo_id = $1
+                   AND cmi.variant_id = pv.id
+                   AND pv.metadata->>'quickbooks_id' = $2
+                   AND cmi.deleted_at IS NULL`,
+                [row.reference_id, listId, lineId]
+              );
+            }
+
+            logger.info(
+              `${LOG_PREFIX} ✅ credit memo ${row.reference_id}: ajuste de defectuosos ${refNumber ?? ""} (TxnID=${txnId}, ${lines.length} línea/s) persistido`
+            );
+          } catch (dmgErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ No se pudo persistir el ajuste de defectuosos del credit memo ${row.reference_id}: ${dmgErr.message}`
+            );
+          }
+        }
+
+        // El void del ajuste confirmado suelta el puntero. Si no se limpia, el
+        // próximo defectuoso intentaría un Mod sobre un documento voideado.
+        if (row.step === "void_cm_damage_adjustment" && row.reference_id) {
+          try {
+            // Sólo se limpia si el puntero SIGUE apuntando al documento que se
+            // acaba de voidear. Sin esa condición, un credit memo que ya creó su
+            // ajuste de reemplazo —los defectuosos volvieron mientras el void
+            // viajaba— perdía el puntero del ajuste NUEVO cuando confirmaba el
+            // void del viejo, y quedaba con un documento vivo en QuickBooks que
+            // nadie volvía a encontrar.
+            const { rowCount: cleared } = await pool.query(
+              `UPDATE pos_credit_memo
+                  SET qb_inventory_adjustment_txn_id = NULL,
+                      qb_inventory_adjustment_edit_sequence = NULL
+                WHERE id = $1
+                  AND qb_inventory_adjustment_txn_id = $2`,
+              [row.reference_id, row.qb_txn_id]
+            );
+            if (!cleared) {
+              // El puntero ya migró a un ajuste nuevo. Los TxnLineID de las
+              // líneas pertenecen a ESE documento, así que tampoco se tocan:
+              // borrarlos obligaría al próximo Mod a tratarlas como nuevas y
+              // duplicaría las líneas del ajuste vivo.
+              logger.info(
+                `${LOG_PREFIX} credit memo ${row.reference_id}: el void de ${row.qb_txn_id} confirmó, pero el puntero ya apunta a otro ajuste — no se toca`
+              );
+            } else {
+              await pool.query(
+                `UPDATE pos_credit_memo_item
+                    SET qb_adjustment_txn_line_id = NULL
+                  WHERE credit_memo_id = $1 AND deleted_at IS NULL`,
+                [row.reference_id]
+              );
+              logger.info(
+                `${LOG_PREFIX} ✅ credit memo ${row.reference_id}: ajuste de defectuosos voideado, puntero liberado`
+              );
+            }
+          } catch (dmgErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ No se pudo liberar el puntero del ajuste del credit memo ${row.reference_id}: ${dmgErr.message}`
+            );
+          }
+        }
 
         // inventory_adjustment confirmed → stamp qb_synced_at on the inventory_count
         if (row.step === "inventory_adjustment" && row.order_id) {

@@ -7,6 +7,7 @@ import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { USA_LOC } from "../../../../../../lib/locations";
+import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
 
 /**
  * PATCH /admin/pos/credit_memos/:id/damaged
@@ -185,6 +186,15 @@ export async function PATCH(
     logger.info(
       `[damaged update] CM ${id}: ${items.length} item(s) updated, ${damagedRows.length} damaged record(s) logged`
     );
+
+    // Este es el camino que EDITA el ajuste: el credit memo ya está completado
+    // y su documento existe en QuickBooks, así que un cambio de defectuosos es
+    // un InventoryAdjustmentMod sobre el mismo documento, nunca uno nuevo.
+    await syncCreditMemoDamageAdjustment({
+      creditMemoId: id,
+      reason: "damaged_edit",
+      logger,
+    });
     res.status(200).json({
       success: true,
       message: "Damaged quantities updated and inventory adjusted",

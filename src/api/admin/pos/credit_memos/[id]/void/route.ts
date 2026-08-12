@@ -11,6 +11,7 @@ import CreditMemoModuleService from "../../../../../../modules/credit_memos/serv
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { USA_LOC } from "../../../../../../lib/locations";
+import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
 
 export async function POST(
   req: MedusaRequest,
@@ -153,6 +154,28 @@ export async function POST(
         );
       }
     }
+
+    // 2.5 Retirar el ajuste de inventario de defectuosos, si existía.
+    //
+    // Va ANTES del void del credit memo, y el orden acá NO es cosmético: es lo
+    // único que hace que el gate de quiescencia retenga al `void_credit_memo`.
+    // Ese gate sólo bloquea con filas creadas ANTES que la propia — la cláusula
+    // que impide que dos voids del mismo documento se bloqueen mutuamente para
+    // siempre — así que una fila encolada después sería invisible para él.
+    //
+    // Y el orden en QuickBooks importa de verdad: el credit memo devuelve al
+    // inventario la cantidad COMPLETA y el ajuste le resta las defectuosas. Si
+    // el void del credit memo cae primero, QB saca la cantidad completa con el
+    // write-off todavía vigente y el on-hand puede pasar por negativo.
+    //
+    // `forceEmpty` porque el credit memo recién se marca voideado en el paso 5:
+    // sin él, el helper lo leería vivo y encolaría un Mod en vez del void.
+    await syncCreditMemoDamageAdjustment({
+      creditMemoId: id,
+      reason: "void",
+      logger,
+      forceEmpty: true,
+    });
 
     // 3. Void in QuickBooks (if CM was synced)
     //

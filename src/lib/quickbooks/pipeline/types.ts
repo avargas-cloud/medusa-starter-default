@@ -40,7 +40,16 @@ export type PipelineStep =
   | "mod_purchase_order"
   | "void_purchase_order"
   | "inventory_adjustment"
-  | "void_inventory_adjustment";
+  | "void_inventory_adjustment"
+  // Ajuste de inventario por unidades DEFECTUOSAS de un credit memo. Un credit
+  // memo posee UN ajuste durante toda su vida: el add lo crea, el mod lo edita
+  // cuando cambian las cantidades defectuosas, el void lo retira cuando dejan
+  // de existir o cuando se voidea el credit memo. Deliberadamente separados de
+  // `inventory_adjustment` (conteo físico), que manda cantidades ABSOLUTAS y
+  // pertenece a otro dueño. Ver lib/quickbooks/damage/sync-damage-adjustment.ts.
+  | "cm_damage_adjustment"
+  | "cm_damage_adjustment_mod"
+  | "void_cm_damage_adjustment";
 
 export type PipelineStatus =
   | "pending"

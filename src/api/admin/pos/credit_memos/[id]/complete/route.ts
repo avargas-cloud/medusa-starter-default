@@ -21,6 +21,7 @@ import CreditMemoModuleService from "../../../../../../modules/credit_memos/serv
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { USA_LOC } from "../../../../../../lib/locations";
+import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
 
 export async function POST(
   req: MedusaRequest,
@@ -197,6 +198,17 @@ export async function POST(
       );
     }
     // -- DAMAGED ITEMS TRACKING END --
+
+    // -- QB INVENTORY ADJUSTMENT (defectuosos) --
+    // Las unidades defectuosas no volvieron a stock en Medusa, pero el credit
+    // memo que va a QuickBooks las acredita igual — QB no tiene el concepto.
+    // Sin este ajuste, QuickBooks sobreestima el inventario una unidad por cada
+    // defectuoso. No tira: la plata ya se movió.
+    await syncCreditMemoDamageAdjustment({
+      creditMemoId: id,
+      reason: "complete",
+      logger,
+    });
 
     // -- QUICKBOOKS SYNC BEGIN --
     // 1.5.8: qbOperationId no longer tracked here — consolidator owns the

@@ -2,6 +2,8 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../api/utils/db-pool";
+import { fetchDamageAdjustmentSnapshot } from "../damage/refresh-damage-snapshot";
+import type { DamageAdjustmentAddPayload } from "../client/inventory-adjustments";
 import {
   cancelEstimateInQb,
   deactivateEstimateInQb,
@@ -35,6 +37,8 @@ import {
 import {
   postInventoryAdjustmentToQb,
   voidInventoryAdjustmentInQb,
+  postDamageAdjustmentAddToQb,
+  postDamageAdjustmentModToQb,
   type AdjustmentGroupPayload,
 } from "../client/inventory-adjustments";
 import { handleDraftOrderUpdated } from "../handlers/handle-draft-order-updated";
@@ -1798,6 +1802,172 @@ export async function resubmitByStep(
           await failVoidFamilyRow(
             row,
             vpResult.error ?? "voidPaymentInQb failed"
+          );
+        }
+        break;
+      }
+
+      // ── Defectuosos de un credit memo ───────────────────────────────────
+      // Un credit memo posee UN InventoryAdjustment durante toda su vida. El
+      // add lo crea; el mod lo edita; el void lo retira. Nunca hay un segundo
+      // documento. Ver lib/quickbooks/damage/sync-damage-adjustment.ts.
+
+      case "cm_damage_adjustment": {
+        const pool = getDbPool();
+        const payload = row.payload as DamageAdjustmentAddPayload | null;
+        if (!payload?.lines?.length) {
+          await failPipelineRow(
+            row.id,
+            "cm_damage_adjustment: payload vacío o sin líneas"
+          );
+          break;
+        }
+        const addResult = await postDamageAdjustmentAddToQb(
+          row.id,
+          payload,
+          container,
+          logger
+        );
+        if (addResult.success) {
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, addResult.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ cm_damage_adjustment ${row.id} submitted op=${addResult.operationId}`
+          );
+        } else {
+          await failPipelineRow(row.id, addResult.error);
+          logger.warn(
+            `${LOG_PREFIX} ❌ cm_damage_adjustment ${row.id} failed: ${addResult.error}`
+          );
+        }
+        break;
+      }
+
+      case "cm_damage_adjustment_mod": {
+        const pool = getDbPool();
+        const payload = row.payload as DamageAdjustmentAddPayload | null;
+        const adjTxnId = row.qb_txn_id;
+        if (!payload?.lines?.length || !adjTxnId) {
+          await failPipelineRow(
+            row.id,
+            "cm_damage_adjustment_mod: falta payload o qb_txn_id del ajuste"
+          );
+          break;
+        }
+
+        // EditSequence y TxnLineIDs se leen de QuickBooks en CADA intento. Un
+        // EditSequence cacheado da 3200, y una lista de líneas armada de memoria
+        // borra por omisión las que no nombra.
+        const snapshot = await fetchDamageAdjustmentSnapshot(adjTxnId, logger);
+        if (!snapshot) {
+          // QuickBooks no conoce ese TxnID: alguien borró el ajuste a mano. Es
+          // estado TERMINAL, no un fallo reintentable — reintentarlo generaría
+          // una fila muerta por tick, para siempre. Se suelta el puntero para
+          // que el próximo cambio de defectuosos cree un ajuste nuevo.
+          await pool.query(
+            `UPDATE pos_credit_memo
+                SET qb_inventory_adjustment_txn_id = NULL,
+                    qb_inventory_adjustment_edit_sequence = NULL
+              WHERE id = $1`,
+            [payload.credit_memo_id]
+          );
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'skipped',
+                    error = $2,
+                    next_retry_at = NULL,
+                    updated_at = NOW()
+              WHERE id = $1`,
+            [
+              row.id,
+              `el ajuste ${adjTxnId} ya no existe en QuickBooks (borrado a mano) — puntero liberado`,
+            ]
+          );
+          logger.warn(
+            `${LOG_PREFIX} ⚠️ cm_damage_adjustment_mod ${row.id}: ajuste ${adjTxnId} ausente en QB → skipped`
+          );
+          break;
+        }
+
+        const modResult = await postDamageAdjustmentModToQb(
+          row.id,
+          {
+            ...payload,
+            txn_id: adjTxnId,
+            edit_sequence: snapshot.edit_sequence,
+            qb_line_ids: snapshot.qb_line_ids,
+            qb_line_order: snapshot.qb_line_order,
+            current_quantities: snapshot.current_quantities,
+          },
+          container,
+          logger
+        );
+
+        if (modResult.success && "noop" in modResult && modResult.noop) {
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'skipped',
+                    error = 'sin cambios contra QuickBooks',
+                    next_retry_at = NULL,
+                    updated_at = NOW()
+              WHERE id = $1`,
+            [row.id]
+          );
+          break;
+        }
+        if (modResult.success && "operationId" in modResult) {
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    qb_edit_sequence = $3,
+                    submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, modResult.operationId, snapshot.edit_sequence]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ cm_damage_adjustment_mod ${row.id} submitted op=${modResult.operationId}`
+          );
+        } else if (!modResult.success) {
+          await failPipelineRow(row.id, modResult.error);
+          logger.warn(
+            `${LOG_PREFIX} ❌ cm_damage_adjustment_mod ${row.id} failed: ${modResult.error}`
+          );
+        }
+        break;
+      }
+
+      case "void_cm_damage_adjustment": {
+        if (await voidBlockedByLiveMutation(row, logger)) break;
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "void_cm_damage_adjustment: missing qb_txn_id"
+          );
+          break;
+        }
+        const vdResult = await voidInventoryAdjustmentInQb(
+          row.id,
+          row.qb_txn_id
+        );
+        if (vdResult.success) {
+          const pool = getDbPool();
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, vdResult.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ void_cm_damage_adjustment ${row.id} submitted op=${vdResult.operationId}`
+          );
+        } else {
+          await failVoidFamilyRow(row, vdResult.error);
+          logger.warn(
+            `${LOG_PREFIX} ❌ void_cm_damage_adjustment ${row.id} failed: ${vdResult.error}`
           );
         }
         break;
