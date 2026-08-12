@@ -18,6 +18,7 @@ import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
 import { listProductVariantIdsStep } from "./steps/list-product-variant-ids-step";
 import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
+import { vendorMetadataPatch } from "../../lib/vendor-metadata/keys";
 
 /**
  * Canonical field layout (post mass-sync):
@@ -25,8 +26,8 @@ import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
  *     qb_item_type                  (read-only — QB doesn't support change)
  *     qb_income_account_full_name
  *     qb_cogs_account_full_name
- *     qb_vendor_full_name
- *     qb_vendor_list_id
+ *     vendor_full_name              (legacy alias still written: qb_vendor_full_name)
+ *     vendor_list_id                (legacy alias still written: qb_vendor_list_id)
  *   variant.metadata
  *     purchase_cost
  *     mpn
@@ -247,9 +248,10 @@ export const updatePosProductWorkflow = createWorkflow(
       return pruneUndefined({
         qb_income_account_full_name: i.income_account_full_name,
         qb_cogs_account_full_name: i.cogs_account_full_name,
-        qb_vendor_full_name: i.vendor_full_name,
-        qb_vendor_list_id:
-          i.vendor_qb_id !== undefined ? resolvedListId : undefined,
+        ...vendorMetadataPatch(
+          i.vendor_full_name,
+          i.vendor_qb_id !== undefined ? resolvedListId : undefined
+        ),
       });
     });
 

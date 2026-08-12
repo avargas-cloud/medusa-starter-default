@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 import { avgCostDollars, purchaseCostDollars } from "../../../../../../lib/cost/cost-sql"
 import { TIER1_CTE } from "../../../_lib/category-tier1"
+import { vendorFullNameSql } from "../../../../../../lib/vendor-metadata/keys"
 
 const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
 
@@ -110,7 +111,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       pg.raw(
         `WITH RECURSIVE ${TIER1_CTE}
          SELECT
-           COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'),''), 'Unknown') AS label,
+           COALESCE(${vendorFullNameSql("p")}, 'Unknown') AS label,
            COUNT(DISTINCT pv.id)::int                                                AS variants,
            SUM(${CHINA_AVAILABLE_QTY})::int                                          AS qty,
            ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${FACTORY_COST})::numeric, 2)           AS value,

@@ -65,10 +65,9 @@ export function buildInventoryDocsForVariants(
   // separately via `chinaStock`.
   miamiStockMap: Map<string, number> = new Map(),
   miamiReservedMap: Map<string, number> = new Map(),
-  // variant.id → vendor display name, from the canonical qb_vendor ↔ variant
-  // remote link (see loadVendorNamesByVariantId). The legacy
-  // variant.metadata.qb_vendor_name is being phased out, so the link is the
-  // source of truth; we only fall back to the legacy field when unmapped.
+  // variant.id → vendor display name from the qb_vendor ↔ variant remote link
+  // (see loadVendorNamesByVariantId). FALLBACK ONLY: the authoritative vendor
+  // is product.metadata.vendor_full_name. See the resolution below.
   vendorNameByVariantId: Map<string, string> = new Map(),
   // Open on-order balances keyed by inventory_item_id. USA = open Purchase
   // Orders, China = open Factory Orders. Default 0 when absent.
@@ -121,8 +120,18 @@ export function buildInventoryDocsForVariants(
     const isDiscontinued =
       vmeta.discontinued === true || vmeta.discontinued === "true";
 
-    // Prefer the canonical vendor link; fall back to the legacy metadata field.
+    // The vendor of a product is PRODUCT-level metadata — the same field the
+    // /inventory Edit Item modal shows and writes as "Preferred Vendor", and
+    // the one both vendor pickers filter by. The variant↔qb_vendor link table
+    // is a SEPARATE, older association that diverges from it on 105 variants
+    // in production (e.g. SUP-AP-IP-SM1-8S: product says "Luxury LED LLC",
+    // the link says "HK HELIAN OPTOELECTRONICS CO., LIMITED"), which is why
+    // the PO's Linked Orders picker attributed orders to the wrong vendor.
+    // The link stays as a fallback ONLY for variants whose product carries no
+    // vendor metadata at all; it must never win over the product-level value.
     const vendorName =
+      (pmeta.vendor_full_name as string) ||
+      (pmeta.qb_vendor_full_name as string) ||
       vendorNameByVariantId.get(variant.id) ||
       (vmeta.qb_vendor_name as string) ||
       null;

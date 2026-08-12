@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 import { avgCostDollars, purchaseCostDollars } from "../../../../../../../lib/cost/cost-sql"
 import { TIER1_CTE } from "../../../../_lib/category-tier1"
+import { vendorFullNameSql } from "../../../../../../../lib/vendor-metadata/keys"
 
 const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
 const CHINA_AVAILABLE_QTY = `GREATEST(
@@ -47,7 +48,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          pv.id                                                                    AS variant_id,
          COALESCE(NULLIF(pv.sku,''), ii.sku)                                     AS sku,
          p.title                                                                  AS description,
-         COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'),''), 'Unknown') AS factory,
+         COALESCE(${vendorFullNameSql("p")}, 'Unknown') AS factory,
          COALESCE(t1.category, 'Uncategorized')                                  AS category,
          ${CHINA_AVAILABLE_QTY}::int                                              AS qty,
          COALESCE(${purchaseCostDollars("pv")}, 0)                                                                        AS unit_cost,

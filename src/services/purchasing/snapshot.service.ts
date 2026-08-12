@@ -30,6 +30,7 @@ import { loadPurchasingConfig } from "./purchasing-config.service";
 dotenv.config();
 
 import { USA_LOC, CHINA_LOC } from "../../lib/locations";
+import { vendorListIdSql } from "../../lib/vendor-metadata/keys";
 
 export interface SnapshotRunResult {
   processed: number;
@@ -144,10 +145,10 @@ export async function runPurchasingSnapshot(
                 COALESCE((qv.metadata->>'production_days')::int, 10) AS production_days
          FROM product_variant pv
          JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
-         JOIN qb_vendor qv ON qv.qb_list_id = (p.metadata->>'qb_vendor_list_id')
+         JOIN qb_vendor qv ON qv.qb_list_id = ${vendorListIdSql("p")}
            AND qv.deleted_at IS NULL
          WHERE pv.deleted_at IS NULL
-           AND p.metadata->>'qb_vendor_list_id' IS NOT NULL`
+           AND ${vendorListIdSql("p")} IS NOT NULL`
       ),
       // Variants whose product is sourced from China (via Veetech agent).
       // Non-sourced variants skip ALL China-supply calc (inv, alt inv, PO, alt PO,
@@ -677,10 +678,10 @@ export async function recalculateForVariants(
                 COALESCE((qv.metadata->>'production_days')::int, 10) AS production_days
          FROM product_variant pv
          JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
-         JOIN qb_vendor qv ON qv.qb_list_id = (p.metadata->>'qb_vendor_list_id')
+         JOIN qb_vendor qv ON qv.qb_list_id = ${vendorListIdSql("p")}
            AND qv.deleted_at IS NULL
          WHERE pv.deleted_at IS NULL
-           AND p.metadata->>'qb_vendor_list_id' IS NOT NULL
+           AND ${vendorListIdSql("p")} IS NOT NULL
            AND pv.id = ANY($1::text[])`,
           [allIds]
         ),

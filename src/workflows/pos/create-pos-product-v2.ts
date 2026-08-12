@@ -16,6 +16,7 @@ import { enqueueQbItemsStep, QbItemType } from "./steps/enqueue-qb-items-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
 import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { setProductTaxableStep } from "./steps/set-product-taxable-step";
+import { vendorMetadataPatch } from "../../lib/vendor-metadata/keys";
 
 export type CreatePosProductV2VariantInput = {
   sku: string;
@@ -119,8 +120,7 @@ export const createPosProductV2Workflow = createWorkflow(
         qb_item_type: i.item_type,
         qb_income_account_full_name: i.income_account_full_name ?? null,
         qb_cogs_account_full_name: i.cogs_account_full_name ?? null,
-        qb_vendor_full_name: i.vendor_full_name ?? null,
-        qb_vendor_list_id: globalListId,
+        ...vendorMetadataPatch(i.vendor_full_name ?? null, globalListId),
       };
 
       // Prefer explicit option_title; otherwise infer from the first variant's

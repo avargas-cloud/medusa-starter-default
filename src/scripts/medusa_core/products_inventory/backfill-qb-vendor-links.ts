@@ -12,7 +12,8 @@ type Args = {
  *
  * Reads variant.metadata.qb_vendor_name (legacy field) and matches it against
  * qb_vendor.full_name. For every match, creates a remote link and also patches
- * variant.metadata.qb_vendor_list_id for denormalized lookups.
+ * variant.metadata.vendor_list_id for denormalized lookups (the legacy
+ * qb_vendor_list_id alias is written alongside it until it is dropped).
  *
  * Idempotent: skips links that already exist (Medusa's link.create throws on
  * duplicates; we detect and ignore). Run with `--dry-run` to preview counts.
@@ -103,9 +104,10 @@ export default async function backfillQbVendorLinks({ container }: Args) {
       await knex.raw(
         `UPDATE product_variant
            SET metadata = COALESCE(metadata, '{}'::jsonb)
-             || jsonb_build_object('qb_vendor_list_id', ?::text)
+             || jsonb_build_object('vendor_list_id', ?::text,
+                                   'qb_vendor_list_id', ?::text)
          WHERE id = ?`,
-        [listId, v.id]
+        [listId, listId, v.id]
       );
       metadataPatched++;
     }

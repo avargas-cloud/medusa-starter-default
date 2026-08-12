@@ -19,6 +19,7 @@ import { ensureOptionValuesStep } from "./steps/ensure-option-values-step";
 import { listProductVariantIdsStep } from "./steps/list-product-variant-ids-step";
 import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
+import { vendorMetadataPatch } from "../../lib/vendor-metadata/keys";
 
 /**
  * Product-mode update workflow — applies a full snapshot of a POS product
@@ -125,9 +126,10 @@ export const updatePosProductFullWorkflow = createWorkflow(
       return pruneUndefined({
         qb_income_account_full_name: i.income_account_full_name,
         qb_cogs_account_full_name: i.cogs_account_full_name,
-        qb_vendor_full_name: i.vendor_full_name,
-        qb_vendor_list_id:
-          i.vendor_qb_id !== undefined ? resolvedListId : undefined,
+        ...vendorMetadataPatch(
+          i.vendor_full_name,
+          i.vendor_qb_id !== undefined ? resolvedListId : undefined
+        ),
       });
     });
 

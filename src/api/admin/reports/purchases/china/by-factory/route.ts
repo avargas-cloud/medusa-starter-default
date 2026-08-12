@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../../_lib/date-range"
+import { vendorFullNameSql } from "../../../../../../lib/vendor-metadata/keys"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -39,7 +40,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          GROUP BY vbl.purchase_order_line_id
        )
        SELECT
-         COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'), ''), 'Unknown') AS factory,
+         COALESCE(${vendorFullNameSql("p")}, 'Unknown') AS factory,
          COUNT(DISTINCT pol.product_variant_id)::int                               AS product_count,
          SUM(pol.qty_ordered)::int                                                 AS qty_ordered,
          SUM(pol.qty_received)::int                                                AS qty_received,

@@ -1,6 +1,10 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import type { Logger } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+import {
+  readVendorFullName,
+  readVendorListId,
+} from "../../../../../lib/vendor-metadata/keys";
 
 import {
   updatePosProductWorkflow,
@@ -198,9 +202,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         inputPayload.cogs_account_full_name ??
         asString(meta.qb_cogs_account_full_name);
       inputPayload.vendor_full_name =
-        inputPayload.vendor_full_name ?? asString(meta.qb_vendor_full_name);
+        inputPayload.vendor_full_name ?? readVendorFullName(meta) ?? undefined;
+      // NOTE: this hydrates a QB ListID into a field named `vendor_qb_id`, which
+      // elsewhere carries an internal `qbvnd_` id. The workflows resolve only
+      // `qbvnd_`-prefixed ids for exactly that reason — see update-pos-product.
       inputPayload.vendor_qb_id =
-        inputPayload.vendor_qb_id ?? asString(meta.qb_vendor_list_id);
+        inputPayload.vendor_qb_id ?? readVendorListId(meta) ?? undefined;
     }
 
     const { result, errors } = await updatePosProductWorkflow(req.scope).run({

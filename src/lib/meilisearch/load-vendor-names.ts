@@ -1,13 +1,20 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
 /**
- * Map product_variant_id → vendor display name, read from the canonical
- * qb_vendor ↔ product_variant remote link.
+ * Map product_variant_id → vendor display name, read from the qb_vendor ↔
+ * product_variant remote link.
  *
- * The Meili `inventory` index used to read vendorName from the legacy
- * variant.metadata.qb_vendor_name, but that field is being cleaned up across the
- * DB (see scripts/qb_sync/lib/cleanup-legacy-vendor-keys.ts), which left every
- * inventory doc with a null vendor. The link table is the source of truth.
+ * NOT the source of truth. The vendor of a product is PRODUCT-level metadata
+ * (`product.metadata.vendor_full_name`) — what the /inventory Edit Item modal
+ * shows and writes, and what both vendor pickers filter by. This link is an
+ * older, variant-level association that DIVERGES from it (105 variants in
+ * production as of 2026-08-12) and `build-inventory-docs.ts` only consults it
+ * when the product carries no vendor metadata at all.
+ *
+ * It is still loaded because the previous fallback — the legacy
+ * variant.metadata.qb_vendor_name — was cleaned up across the DB (see
+ * scripts/qb_sync/lib/cleanup-legacy-vendor-keys.ts), so without this the
+ * metadata-less variants would index with a null vendor.
  *
  * Pass `variantIds` to scope the lookup (incremental syncs); omit to load every
  * link (full rebuild). The link is isList, but a variant maps to one preferred

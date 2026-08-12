@@ -12,6 +12,7 @@
  */
 
 import { Client } from "pg";
+import { vendorListIdSql } from "../../lib/vendor-metadata/keys";
 
 const API = "http://localhost:9099";
 const DB_URL = "postgresql://postgres:sandbox@localhost:5499/medusa";
@@ -137,7 +138,7 @@ async function main() {
          FROM product p
          JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
          JOIN product_variant_inventory_item pvi ON pvi.variant_id = pv.id AND pvi.deleted_at IS NULL
-        WHERE p.metadata->>'qb_vendor_list_id' = $1 AND p.deleted_at IS NULL AND pv.sku IS NOT NULL
+        WHERE ${vendorListIdSql("p")} = $1 AND p.deleted_at IS NULL AND pv.sku IS NOT NULL
         ORDER BY p.id, pv.id
         LIMIT 3`,
       [SKY_LIST_ID]
@@ -149,8 +150,8 @@ async function main() {
          FROM product p
          JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
          JOIN product_variant_inventory_item pvi ON pvi.variant_id = pv.id AND pvi.deleted_at IS NULL
-        WHERE p.metadata->>'qb_vendor_list_id' IS NOT NULL
-          AND p.metadata->>'qb_vendor_list_id' <> $1
+        WHERE ${vendorListIdSql("p")} IS NOT NULL
+          AND ${vendorListIdSql("p")} <> $1
           AND p.deleted_at IS NULL AND pv.sku IS NOT NULL
         ORDER BY p.id, pv.id
         LIMIT 1`,

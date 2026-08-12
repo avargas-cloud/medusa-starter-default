@@ -297,7 +297,8 @@ export default async function massMetadataSync({ container }: ExecArgs) {
     const variantMeta = variantFinal.get(entry.variantId) ?? {};
     const productMeta = productFinal.get(entry.productId) ?? {};
     const override = variantMeta.qb_override_vendor_qb_id;
-    const pDefault = productMeta.qb_vendor_list_id;
+    const pDefault =
+      productMeta.vendor_list_id ?? productMeta.qb_vendor_list_id;
     const target =
       typeof override === "string" && override.length > 0
         ? override

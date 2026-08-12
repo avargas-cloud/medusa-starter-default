@@ -2,7 +2,7 @@
  * GET /admin/qb-catalog/vendors/:id/product-variants
  *
  * Returns the product_variant IDs whose PRODUCT-level "preferred vendor"
- * (product.metadata.qb_vendor_list_id / qb_vendor_full_name) is this qb_vendor.
+ * (product.metadata.vendor_list_id / vendor_full_name) is this qb_vendor.
  *
  * This is the authoritative "products of this vendor" source used by the
  * Factory Order "By Manufacturer" modal. It intentionally matches on the
@@ -19,6 +19,10 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import {
+  vendorFullNameSql,
+  vendorListIdSql,
+} from "../../../../../../lib/vendor-metadata/keys";
 
 type KnexRaw = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -71,9 +75,9 @@ export async function GET(
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
        WHERE pv.deleted_at IS NULL
          AND (
-           (? <> '' AND p.metadata->>'qb_vendor_list_id' = ?)
-           OR (? <> '' AND p.metadata->>'qb_vendor_full_name' = ?)
-           OR (? <> '' AND p.metadata->>'qb_vendor_full_name' = ?)
+           (? <> '' AND ${vendorListIdSql("p")} = ?)
+           OR (? <> '' AND ${vendorFullNameSql("p")} = ?)
+           OR (? <> '' AND ${vendorFullNameSql("p")} = ?)
          )`,
       [listId, listId, fullName, fullName, shortName, shortName]
     )

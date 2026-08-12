@@ -7,6 +7,7 @@ import {
   fetchCmRefundsCentsForPeriod,
 } from "../../_lib/sales-revenue"
 import { TIER1_CTE } from "../../_lib/category-tier1"
+import { vendorFullNameSql } from "../../../../../lib/vendor-metadata/keys"
 
 // pos_invoice.discount already includes ALL discounts (inline item % + promo codes).
 // NET_ITEM_REVENUE distributes that total proportionally — do NOT subtract adjustments again.
@@ -37,7 +38,7 @@ const BASE_FROM = `
 const VENDOR_EXPR = `
   CASE WHEN (p.metadata->>'is_sourced_via_agent')::boolean = true
        THEN 'Veetech'
-       ELSE COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'), ''), 'Unknown')
+       ELSE COALESCE(${vendorFullNameSql("p")}, 'Unknown')
   END
 `
 

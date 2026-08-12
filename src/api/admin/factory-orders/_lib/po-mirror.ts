@@ -2,7 +2,7 @@
  * PO → FO mirror core.
  *
  * A factory order can mirror the lines of a purchase order that belong to one
- * manufacturer (preferred vendor on the product: product.metadata.qb_vendor_list_id).
+ * manufacturer (preferred vendor on the product: product.metadata.vendor_list_id).
  * The PO is ALWAYS the source of truth — sync only flows PO → FO.
  *
  * Line matching keys on purchase_order_line.id (factory_order_line.purchase_order_line_id):
@@ -10,6 +10,7 @@
  * so a variant-keyed mirror silently collapses sibling lines.
  */
 
+import { vendorListIdSql } from "../../../../lib/vendor-metadata/keys";
 import type FactoryOrdersModuleService from "../../../../modules/factory-orders/service";
 
 export interface KnexLike {
@@ -165,7 +166,7 @@ export async function loadManufacturerPoLines(
         WHERE pol.purchase_order_id = ?
           AND pol.deleted_at IS NULL
           AND COALESCE(pol.status, 'open') <> 'cancelled'
-          AND p.metadata->>'qb_vendor_list_id' = ?
+          AND ${vendorListIdSql("p")} = ?
         ORDER BY COALESCE(pol.line_order, 0) ASC, pol.id ASC`,
       [poId, manufacturerListId]
     )

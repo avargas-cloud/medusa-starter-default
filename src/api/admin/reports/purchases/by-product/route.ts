@@ -1,5 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
+import { vendorFullNameSql } from "../../../../../lib/vendor-metadata/keys"
+
+const FACTORY = vendorFullNameSql("p")
 
 const CHINA_FILTER = `AND (p.metadata->>'is_sourced_via_agent')::boolean = true`
 const USA_FILTER   = `AND ((p.metadata->>'is_sourced_via_agent')::boolean IS NOT TRUE OR p.id IS NULL)`
@@ -40,7 +43,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          pol.sku_snapshot                                                          AS sku,
          pol.description_snapshot                                                  AS description,
          po.vendor_name_snapshot                                                   AS vendor,
-         COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'), ''), po.vendor_name_snapshot, 'Unknown') AS factory,
+         COALESCE(${FACTORY}, po.vendor_name_snapshot, 'Unknown') AS factory,
          COALESCE(pcat.cat_name, 'Uncategorized')                                  AS category,
          SUM(pol.qty_ordered)::int                                                 AS qty_ordered,
          SUM(pol.qty_received)::int                                                AS qty_received,
@@ -62,7 +65,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          AND COALESCE(po.ordered_at, po.created_at) >= ? AND COALESCE(po.ordered_at, po.created_at) < ?
          ${regionFilter}
        GROUP BY pol.sku_snapshot, pol.description_snapshot, po.vendor_name_snapshot,
-                p.metadata->>'qb_vendor_full_name', pcat.cat_name
+                ${FACTORY}, pcat.cat_name
        ORDER BY product_cost_cents DESC`,
       [range.from, range.to]
     )

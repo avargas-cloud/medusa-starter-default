@@ -16,6 +16,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 import { avgCostDollars, purchaseCostDollars } from "../../../../../lib/cost/cost-sql"
+import { vendorFullNameSql } from "../../../../../lib/vendor-metadata/keys"
 import { USA_LOC, CHINA_LOC } from "../../../../../lib/locations"
 import { TIER1_CTE } from "../../_lib/category-tier1"
 
@@ -113,7 +114,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            COALESCE(NULLIF(TRIM(b.vendor), ''), 'Unknown') AS label,
            ${AGGREGATES}
-         FROM (SELECT inv.*, p.metadata->>'qb_vendor_full_name' AS vendor ${BASE_FROM}) b
+         FROM (SELECT inv.*, ${vendorFullNameSql("p")} AS vendor ${BASE_FROM}) b
          GROUP BY 1
          ORDER BY (SUM(b.qty_usa * b.landed_cost) + SUM(b.qty_china * b.factory_cost)) DESC`,
         [USA_LOC, CHINA_LOC, USA_LOC, CHINA_LOC]

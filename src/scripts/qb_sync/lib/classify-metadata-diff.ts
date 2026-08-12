@@ -15,6 +15,10 @@ import type {
   QbItemSnapshot,
   VariantMetaKey,
 } from "../../../lib/quickbooks/bulk-item-types";
+import {
+  readVendorFullName,
+  readVendorListId,
+} from "../../../lib/vendor-metadata/keys";
 
 export type Classification =
   | "NO_CHANGE"
@@ -159,10 +163,10 @@ export function computeProposedDefaults(
       : readString(cur, "qb_cogs_account_full_name"),
     vendorName: driverQb.vendorFullName !== undefined
       ? driverQb.vendorFullName
-      : readString(cur, "qb_vendor_full_name"),
+      : readVendorFullName(cur),
     vendorListId: driverQb.vendorListId !== undefined
       ? driverQb.vendorListId
-      : readString(cur, "qb_vendor_list_id"),
+      : readVendorListId(cur),
     itemType: driverQb.itemType,
   };
 }
@@ -178,8 +182,8 @@ export function classifyMetadataDiff(input: ClassifyInput): ClassifyResult {
   // ── PRODUCT-LEVEL (driver only) ─────────────────────────────────────────
   const currentIncome = readString(product.metadata, "qb_income_account_full_name");
   const currentCogs = readString(product.metadata, "qb_cogs_account_full_name");
-  const currentVendorName = readString(product.metadata, "qb_vendor_full_name");
-  const currentVendorId = readString(product.metadata, "qb_vendor_list_id");
+  const currentVendorName = readVendorFullName(product.metadata);
+  const currentVendorId = readVendorListId(product.metadata);
   const currentItemType = readString(product.metadata, "qb_item_type");
 
   // Proposed defaults:
@@ -216,11 +220,17 @@ export function classifyMetadataDiff(input: ClassifyInput): ClassifyResult {
     if (qb.cogsAccountFullName !== undefined) {
       pushProductDiff(productDiffs, "qb_cogs_account_full_name", currentCogs, proposedCogs);
     }
+    // Both names are diffed from the SAME current/proposed pair, so the sync
+    // keeps the renamed key and its legacy alias in lockstep. `currentVendor*`
+    // already resolves new-then-legacy, which means a product that only has the
+    // legacy key gets the new one proposed and written on the next sync.
     if (qb.vendorFullName !== undefined) {
-      pushProductDiff(productDiffs, "qb_vendor_full_name", currentVendorName, proposedVendorName);
+      pushProductDiff(productDiffs, "vendor_full_name", readString(product.metadata, "vendor_full_name"), proposedVendorName);
+      pushProductDiff(productDiffs, "qb_vendor_full_name", readString(product.metadata, "qb_vendor_full_name"), proposedVendorName);
     }
     if (qb.vendorListId !== undefined) {
-      pushProductDiff(productDiffs, "qb_vendor_list_id", currentVendorId, proposedVendorId);
+      pushProductDiff(productDiffs, "vendor_list_id", readString(product.metadata, "vendor_list_id"), proposedVendorId);
+      pushProductDiff(productDiffs, "qb_vendor_list_id", readString(product.metadata, "qb_vendor_list_id"), proposedVendorId);
     }
     pushProductDiff(productDiffs, "qb_item_type", currentItemType, proposedItemType);
   }
