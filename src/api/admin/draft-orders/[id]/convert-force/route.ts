@@ -400,6 +400,26 @@ export async function POST(
         .json({ message: cvErr?.message ?? "Conversion failed natively" });
     }
 
+    // The conversion above is unconditional and definitive (the catch above
+    // already returned on failure) — unlike the tax-injection block further
+    // down, this always runs. `order_status` has precedence over the legacy
+    // `estimate_status` in every reader, so only that key needs setting.
+    try {
+      const statusPool = getDbPool();
+      await statusPool.query(
+        `UPDATE "order"
+            SET metadata = COALESCE(metadata, '{}') || jsonb_build_object('order_status', 'Approved')
+          WHERE id = $1
+            AND COALESCE(metadata->>'order_status', metadata->>'estimate_status', '') <> 'Voided'`,
+        [id]
+      );
+      console.log(`[convert-force] order_status → Approved`);
+    } catch (statusErr: any) {
+      console.warn(
+        `[convert-force] ⚠️ Could not set order_status to Approved: ${statusErr?.message}`
+      );
+    }
+
     // ── Step 4b: Link deposits captured against this (now-real) order ─────
     // Deposits taken while this was an Estimate (draft) could NOT create a
     // PaymentApplication at capture time — handle-order-apply rejects draft

@@ -209,7 +209,9 @@ export const usePageDerived = ({
         `Estimate emailed to ${sentTo}`,
         currentUser || undefined
       );
-      if (estimateStatus === "Created") handleStatusChange("Sent");
+      // Same "last event wins" policy as the backend send-email route: a
+      // re-send only refuses to move a status the doc considers terminal.
+      if (estimateStatus !== "Voided") handleStatusChange("Sent by Email");
     },
     [addTimelineEvent, currentUser, estimateStatus, handleStatusChange]
   );

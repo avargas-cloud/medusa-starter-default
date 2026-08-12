@@ -1,11 +1,17 @@
 import { existsSync, readdirSync } from "fs";
 import { join } from "path";
 
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework";
 import { Client as PgClient } from "pg";
 import { chromium as playwrightChromium } from "playwright-core";
 
 import { sendMail } from "../../../../../utils/mailer";
+import { recordPosActivity } from "../../../../../lib/pos/order-activity";
+import type { KnexRawConnection } from "../../../../../lib/pos/order-activity";
 
 // ── Template prefetch (avoids headless browser needing an authenticated API call) ──
 async function dbConnect() {
@@ -1134,7 +1140,18 @@ export async function POST(
       ? ((await curRes.json()).order?.metadata ?? {})
       : {};
     const curStatus = curMeta.order_status ?? curMeta.estimate_status;
-    const newStatus = curStatus === "Created" ? "Sent" : (curStatus ?? "Sent");
+    // "Last event wins", with a small protected set that a re-send must not
+    // clobber. Estimates only protect Voided (re-sending re-opens the
+    // conversation, even on a Not Approved estimate); orders additionally
+    // protect terminal fulfillment states.
+    const PROTECTED_STATUSES =
+      docType === "Estimate"
+        ? ["Voided"]
+        : ["Voided", "Fulfilled", "Ready to Ship"];
+    const newStatus =
+      typeof curStatus === "string" && PROTECTED_STATUSES.includes(curStatus)
+        ? curStatus
+        : "Sent by Email";
     // Route the metadata write by document type: the draft-orders endpoint
     // rejects real (converted) orders with "is not a draft order", which left
     // estimate_sent_at/estimate_sent_to permanently NULL for invoice sends —
@@ -1162,6 +1179,18 @@ export async function POST(
           order_status: newStatus,
         },
       }),
+    });
+
+    const actorId =
+      (req as AuthenticatedMedusaRequest).auth_context?.actor_id ?? null;
+    const knexConn = req.scope.resolve(
+      "__pg_connection__"
+    ) as KnexRawConnection;
+    await recordPosActivity(knexConn, {
+      orderId: id,
+      event: "email_sent",
+      details: { to: customerEmail, by: senderName, docType },
+      userId: actorId,
     });
   } catch {
     /* non-critical */

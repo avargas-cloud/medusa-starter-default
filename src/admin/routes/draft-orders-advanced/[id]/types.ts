@@ -11,6 +11,7 @@ export interface TimelineEvent {
 export const ESTIMATE_STATUSES = [
   "Created",
   "Sent",
+  "Sent by Email",
   "Confirmed Reception",
   "Followed Up",
   "Approved",
@@ -36,6 +37,7 @@ export const STATUS_COLOR: Record<
 > = {
   Created: "grey",
   Sent: "blue",
+  "Sent by Email": "blue",
   "Confirmed Reception": "purple",
   "Followed Up": "orange",
   Approved: "green",

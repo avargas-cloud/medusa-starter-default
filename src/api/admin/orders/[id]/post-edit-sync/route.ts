@@ -470,7 +470,10 @@ export async function POST(
         `DELETE FROM order_change_action
                  WHERE order_change_id IN (
                      SELECT id FROM order_change WHERE order_id = $1
-                     AND id != (SELECT id FROM order_change WHERE order_id = $2 ORDER BY created_at DESC LIMIT 1)
+                     AND change_type IS DISTINCT FROM 'pos_activity'
+                     AND id != (SELECT id FROM order_change WHERE order_id = $2
+                                AND change_type IS DISTINCT FROM 'pos_activity'
+                                ORDER BY created_at DESC LIMIT 1)
                  )`,
         [id, id]
       );
@@ -481,7 +484,10 @@ export async function POST(
       // 3. Delete old order_change rows (keep only latest)
       const ocDel = await pool.query(
         `DELETE FROM order_change WHERE order_id = $1
-                 AND id != (SELECT id FROM order_change WHERE order_id = $2 ORDER BY created_at DESC LIMIT 1)`,
+                 AND change_type IS DISTINCT FROM 'pos_activity'
+                 AND id != (SELECT id FROM order_change WHERE order_id = $2
+                            AND change_type IS DISTINCT FROM 'pos_activity'
+                            ORDER BY created_at DESC LIMIT 1)`,
         [id, id]
       );
       logger.info(
