@@ -1,6 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { buildOrderDoc, type OrderForMeili, type OrderMeiliDoc } from "./build-order-doc";
+import { enrichOrderFulfillmentsAndItems } from "./enrich-order-fulfillment-items";
 import { enrichOrderTotals } from "./enrich-order-totals";
 import {
   ORDERS_FILTERABLE_ATTRIBUTES,
@@ -109,24 +110,11 @@ export async function buildAllOrderDocs(
     // Scoped when the caller named its orders: the reconciler runs on a cron
     // over a handful of ids, and an unscoped pass would re-scan all 15,883
     // order_item rows every minute to serve them.
-    const idScope = onlyIds ? [onlyIds] : [];
-    const [fulRes, itemRes] = await Promise.all([
-      db.query(
-        `SELECT ofu.order_id, f.packed_at, f.shipped_at, f.delivered_at, f.canceled_at
-           FROM order_fulfillment ofu
-           JOIN fulfillment f ON f.id = ofu.fulfillment_id
-          WHERE ofu.deleted_at IS NULL AND f.deleted_at IS NULL
-            ${onlyIds ? "AND ofu.order_id = ANY($1::text[])" : ""}`,
-        idScope
-      ),
-      db.query(
-        `SELECT oi.order_id, oi.quantity, oi.fulfilled_quantity
-           FROM order_item oi
-           JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version
-          ${onlyIds ? "WHERE oi.order_id = ANY($1::text[])" : ""}`,
-        idScope
-      ),
-    ]);
+    await enrichOrderFulfillmentsAndItems(
+      db,
+      orders as OrderForMeili[],
+      onlyIds ?? undefined
+    );
 
     // The order total is missing from query.graph too — same gap, same fix.
     // Must happen before db.end(), and before buildOrderDoc: every payment
@@ -147,26 +135,6 @@ export async function buildAllOrderDocs(
       );
     }
 
-    const fulByOrder = new Map<string, unknown[]>();
-    for (const r of fulRes.rows) {
-      const list = fulByOrder.get(r.order_id) ?? [];
-      list.push(r);
-      fulByOrder.set(r.order_id, list);
-    }
-    const itemsByOrder = new Map<string, unknown[]>();
-    for (const r of itemRes.rows) {
-      const list = itemsByOrder.get(r.order_id) ?? [];
-      list.push({
-        quantity: r.quantity,
-        detail: { fulfilled_quantity: r.fulfilled_quantity },
-      });
-      itemsByOrder.set(r.order_id, list);
-    }
-    for (const o of orders as any[]) {
-      o.fulfillments = fulByOrder.get(o.id) ?? [];
-      const items = itemsByOrder.get(o.id);
-      if (items) o.items = items;
-    }
     log.info(
       `[sync-meili-orders] SQL-enriched fulfillments/items for ${orders.length} orders`
     );

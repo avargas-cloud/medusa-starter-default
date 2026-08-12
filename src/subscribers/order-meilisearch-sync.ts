@@ -7,6 +7,7 @@ import {
   type OrderForMeili,
 } from "../lib/meilisearch/build-order-doc";
 import { loadFullyInvoicedForOrder } from "../lib/invoices/load-fully-invoiced";
+import { enrichOrderFulfillmentsAndItems } from "../lib/meilisearch/enrich-order-fulfillment-items";
 import { enrichOrderTotals } from "../lib/meilisearch/enrich-order-totals";
 
 /**
@@ -74,6 +75,15 @@ const ORDER_FIELDS = [
   "fulfillments.shipped_at",
   "fulfillments.delivered_at",
   "fulfillments.canceled_at",
+  // Line quantities, without which computeFulfillmentStatus cannot demote a
+  // fully-delivered fulfillment set to partially_delivered. Missing here until
+  // 2026-08-12 while the reindex runner asked for them, so whichever writer
+  // touched an order last decided whether it was open: S11417 (10 of 42
+  // delivered) indexed as "delivered", dropped out of Open Orders, and was
+  // re-typed as a second order that reserved and shipped the same 32 units.
+  // SQL below overrides these — they are the fallback if enrichment fails.
+  "items.quantity",
+  "items.detail.fulfilled_quantity",
 ];
 
 async function getMeili() {
@@ -101,9 +111,10 @@ async function getMeili() {
  * payment flow risks enqueueing a non-reversible external operation as a side
  * effect of a freshness fix.
  *
- * It is exported rather than moved to src/lib because of the SQL fallback below:
- * query.graph intermittently returns fulfillments=[], and a second copy of that
- * workaround would rot out of sync with this one.
+ * The SQL workarounds it depends on now live in src/lib and are shared with the
+ * reindex runner (enrichOrderFulfillmentsAndItems / enrichOrderTotals). They used
+ * to be a private copy here that asked for less than the runner's, which is how
+ * the two writers of this index came to disagree about whether an order was open.
  */
 export async function syncOrders(
   orderIds: string[],
@@ -127,83 +138,57 @@ export async function syncOrders(
       return;
     }
 
-    // The order total is missing from query.graph as well, and every payment
-    // branch in buildOrderDoc is gated on a positive total — without this the doc
-    // indexes with total 0, `fully_paid` becomes unreachable and everything with
-    // money lands in `deposited`. Own connection because the fulfillment fallback
-    // below only opens one when fulfillments are missing, which is a different
-    // and rarer condition.
+    // Everything query.graph cannot be trusted for, patched from SQL on one
+    // connection before the doc is built:
+    //
+    //   • fulfillments + line quantities — decide fulfillment_status, and
+    //     therefore which tab the order lands in. The enrichment is shared with
+    //     the reindex runner ON PURPOSE: this subscriber used to ask for less
+    //     than the runner did, so an order's tab depended on which of the two
+    //     wrote its document last (S11417, 2026-08-12).
+    //   • the total — every payment branch in buildOrderDoc is gated on a
+    //     positive total, so without it `fully_paid` is unreachable and
+    //     everything with money lands in `deposited`.
+    //
+    // Each enrichment fails independently and non-fatally: indexing a doc with
+    // one stale field beats not indexing at all.
     try {
       const db = new Client({ connectionString: process.env.DATABASE_URL });
       await db.connect();
       try {
-        const totals = await enrichOrderTotals(db, data as OrderForMeili[]);
-        if (totals.unresolved.length > 0) {
+        try {
+          await enrichOrderFulfillmentsAndItems(
+            db,
+            data as OrderForMeili[],
+            orderIds
+          );
+        } catch (fulErr: any) {
           logger.warn(
-            `[MEILI-ORDER-SYNC] no resolvable total for ${totals.unresolved.length} ` +
-              `order(s); they index with 0 and land in no payment bucket: ` +
-              `${totals.unresolved.slice(0, 10).join(", ")}`
+            `[MEILI-ORDER-SYNC] fulfillment/item enrichment failed: ${fulErr?.message}`
+          );
+        }
+
+        try {
+          const totals = await enrichOrderTotals(db, data as OrderForMeili[]);
+          if (totals.unresolved.length > 0) {
+            logger.warn(
+              `[MEILI-ORDER-SYNC] no resolvable total for ${totals.unresolved.length} ` +
+                `order(s); they index with 0 and land in no payment bucket: ` +
+                `${totals.unresolved.slice(0, 10).join(", ")}`
+            );
+          }
+        } catch (totalErr: any) {
+          logger.warn(
+            `[MEILI-ORDER-SYNC] total enrichment failed: ${totalErr?.message}`
           );
         }
       } finally {
         await db.end();
       }
-    } catch (totalErr: any) {
+    } catch (dbErr: any) {
       logger.warn(
-        `[MEILI-ORDER-SYNC] total enrichment failed: ${totalErr?.message}`
+        `[MEILI-ORDER-SYNC] SQL enrichment skipped (using query.graph data): ${dbErr?.message}`
       );
-      // Non-fatal — indexing a doc with a stale total beats not indexing at all.
-    }
-
-    // SQL fallback: query.graph intermittently returns fulfillments=[] due to a
-    // race condition on the order_fulfillment link. For any order that came back
-    // without fulfillments, fetch them directly from the DB before building the doc.
-    const missingFulfillments = (data as OrderForMeili[]).filter(
-      (o) => !o.fulfillments || o.fulfillments.length === 0
-    );
-    if (missingFulfillments.length > 0) {
-      try {
-        const db = new Client({ connectionString: process.env.DATABASE_URL });
-        await db.connect();
-        const ids = missingFulfillments.map((o) => o.id);
-        const res = await db.query<{
-          order_id: string;
-          packed_at: Date | null;
-          shipped_at: Date | null;
-          delivered_at: Date | null;
-          canceled_at: Date | null;
-        }>(
-          `SELECT ofu.order_id, f.packed_at, f.shipped_at, f.delivered_at, f.canceled_at
-           FROM order_fulfillment ofu
-           JOIN fulfillment f ON f.id = ofu.fulfillment_id
-           WHERE ofu.order_id = ANY($1::text[])
-             AND ofu.deleted_at IS NULL
-             AND f.deleted_at IS NULL`,
-          [ids]
-        );
-        await db.end();
-
-        // Group rows by order_id and patch the order objects
-        const byOrder = new Map<string, typeof res.rows>();
-        for (const row of res.rows) {
-          if (!byOrder.has(row.order_id)) byOrder.set(row.order_id, []);
-          byOrder.get(row.order_id)!.push(row);
-        }
-        for (const order of missingFulfillments) {
-          const rows = byOrder.get(order.id);
-          if (rows && rows.length > 0) {
-            (order as any).fulfillments = rows;
-            logger.info(
-              `[MEILI-ORDER-SYNC] SQL fallback: ${rows.length} fulfillment(s) patched for order ${order.id}`
-            );
-          }
-        }
-      } catch (sqlErr: any) {
-        logger.warn(
-          `[MEILI-ORDER-SYNC] SQL fulfillment fallback failed: ${sqlErr?.message}`
-        );
-        // Non-fatal — continue with whatever query.graph returned
-      }
     }
 
     const docs = (data as OrderForMeili[]).map((o) => buildOrderDoc(o));
