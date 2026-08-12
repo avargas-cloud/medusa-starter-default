@@ -37,6 +37,11 @@ export interface DailySalesResult {
   daily_sales_est: number;
   monthly_sales_est: number;
   cv: number;
+  /**
+   * Months actually in the CV series (excludes the current month and, in
+   * fallback mode, the tier0 month). Below MIN_CV_POINTS the XYZ class is N.
+   */
+  cv_points: number;
   unmet_net_30d: number; // requested − purchased (net unsatisfied demand in tier0 window)
   /**
    * Tier-weighted monthly revenue (NET of returns). Used as the Pareto
@@ -601,6 +606,7 @@ export function calculateDailySales(
     daily_sales_est: Math.round(daily_sales_est * 10000) / 10000,
     monthly_sales_est: Math.round(monthly_sales_est * 100) / 100,
     cv: Math.round(cv * 10000) / 10000,
+    cv_points: qtys.length,
     unmet_net_30d: Math.round((unmetRequested - unmetPurchased) * 100) / 100,
     weighted_revenue: Math.round(weighted_revenue * 100) / 100,
     first_sale_date: firstSaleISO,

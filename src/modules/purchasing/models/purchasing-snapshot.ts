@@ -7,7 +7,8 @@ import { model } from "@medusajs/utils";
  *
  * abc_class: 'A' | 'B' | 'C'
  * xyz_class: 'X' (stable CV<0.5) | 'Y' (variable 0.5-1) | 'Z' (erratic >1)
- * abcxyz_class: combined e.g. 'AX', 'AZ', 'BX' ...
+ *            | 'N' (new — fewer than MIN_CV_POINTS months of CV history)
+ * abcxyz_class: combined e.g. 'AX', 'AZ', 'BX', 'AN' ...
  */
 export const PurchasingSnapshot = model.define("purchasing_snapshot", {
   id: model.id({ prefix: "psnap" }).primaryKey(),
@@ -28,10 +29,11 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
 
   // ── ABC-XYZ Engine output ──────────────────────────────────────────────
   cv: model.bigNumber().default(0), // coefficient of variation
+  cv_points: model.number().nullable(), // months in the CV series; <3 → class N
   weighted_revenue: model.bigNumber().default(0),
   pareto_rank: model.number().nullable(),
   abc_class: model.text().nullable(), // 'A' | 'B' | 'C'
-  xyz_class: model.text().nullable(), // 'X' | 'Y' | 'Z'
+  xyz_class: model.text().nullable(), // 'X' | 'Y' | 'Z' | 'N'
   abcxyz_class: model.text().nullable(), // 'AX' | 'AZ' | 'BX' etc.
 
   // ── Inventory snapshot (at time of calculation) ───────────────────────

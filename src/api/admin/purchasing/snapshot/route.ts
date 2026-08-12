@@ -137,6 +137,7 @@ export async function GET(
          SUM(snap.daily_sales_est) OVER (PARTITION BY p.id) AS product_group_daily_sales,
          SUM(snap.weighted_revenue) OVER (PARTITION BY p.id) AS product_group_weighted_revenue,
          snap.cv,
+         snap.cv_points,
          snap.abc_class, snap.xyz_class, snap.abcxyz_class,
          COALESCE(live_inv.inv_usa, snap.inv_usa)::int AS inv_usa,
          COALESCE(live_inv.inv_china, snap.inv_china)::int AS inv_china,
@@ -153,6 +154,7 @@ export async function GET(
          COALESCE(max_day_alt.max_daily_sales_alt, 0)::int AS max_daily_sales_alt,
          COALESCE(alt_sku_list.alt_skus, ARRAY[]::text[]) AS alt_skus,
          COALESCE(res_usa.inv_usa_reserved, 0)::int AS inv_usa_reserved,
+         COALESCE(res_orders.reserved_orders, '[]'::json) AS reserved_orders,
          COALESCE(alt_inv_usa.inv_usa_alt, 0)::int AS inv_usa_alt,
          COALESCE(alt_inv_usa.inv_usa_alt_reserved, 0)::int AS inv_usa_alt_reserved,
          COALESCE(alt_po_usa.qty_on_po_alt, 0)::int AS qty_on_po_alt,
@@ -278,6 +280,26 @@ export async function GET(
            AND il.location_id = $${usaLocIdx} AND il.deleted_at IS NULL
          GROUP BY pvii.variant_id
        ) res_usa ON res_usa.variant_id = snap.variant_id
+       LEFT JOIN (
+         -- The live orders behind inv_usa_reserved. Reservations only exist for
+         -- real, non-draft orders, so the Open Order Products tab can name (and
+         -- link to) the order that put each SKU on that list. A reservation with
+         -- no line_item_id (manual/no-order) simply drops out of the join.
+         SELECT ro.variant_id,
+                json_agg(json_build_object('order_id', ro.order_id, 'number', ro.order_number) ORDER BY ro.order_number) AS reserved_orders
+         FROM (
+           SELECT DISTINCT pvii.variant_id,
+                  o.id AS order_id,
+                  COALESCE(o.metadata->>'document_number', '#' || o.display_id::text) AS order_number
+           FROM reservation_item ri
+           JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ri.inventory_item_id
+           JOIN order_item oi ON oi.item_id = ri.line_item_id
+           JOIN "order" o ON o.id = oi.order_id AND o.deleted_at IS NULL
+           WHERE ri.deleted_at IS NULL
+             AND ri.location_id = $${usaLocIdx}
+         ) ro
+         GROUP BY ro.variant_id
+       ) res_orders ON res_orders.variant_id = snap.variant_id
        LEFT JOIN (
          SELECT pa.primary_variant_id,
                 COALESCE(SUM(il.stocked_quantity), 0)::int  AS inv_usa_alt,

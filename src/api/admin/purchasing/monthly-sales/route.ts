@@ -48,7 +48,9 @@ export interface MonthlySalesRow {
   combined_weighted_revenue: number;
   pareto_rank: number | null;
   abc_class: "A" | "B" | "C" | null;
-  xyz_class: "X" | "Y" | "Z" | null;
+  xyz_class: "X" | "Y" | "Z" | "N" | null;
+  /** Months in the CV series; < MIN_CV_POINTS → xyz_class 'N'. 3-5 = provisional. */
+  cv_points: number | null;
   /** Earliest sale date across primary + alts (YYYY-MM-DD); null = never sold. */
   first_sale_date: string | null;
   /** Months of history (primary's own first sale → today). */
@@ -111,6 +113,7 @@ function makeEmptyRow(variantId: string, monthCount: number): MonthlySalesRow {
     pareto_rank: null,
     abc_class: null,
     xyz_class: null,
+    cv_points: null,
     first_sale_date: null,
     history_months: 0,
     data_source: "none",
@@ -246,6 +249,7 @@ export async function GET(
       pareto_rank: number | null;
       abc_class: string | null;
       xyz_class: string | null;
+      cv_points: number | null;
       tier0_30d: string;
       sales_q4: string;
       sales_q3: string;
@@ -255,7 +259,7 @@ export async function GET(
     }>(`
       SELECT variant_id,
              weighted_revenue::text AS weighted_revenue,
-             pareto_rank, abc_class, xyz_class,
+             pareto_rank, abc_class, xyz_class, cv_points,
              tier0_30d::text AS tier0_30d,
              sales_q4::text AS sales_q4,
              sales_q3::text AS sales_q3,
@@ -272,7 +276,8 @@ export async function GET(
           weighted_revenue: parseFloat(r.weighted_revenue) || 0,
           pareto_rank: r.pareto_rank,
           abc_class: (r.abc_class as "A" | "B" | "C" | null) ?? null,
-          xyz_class: (r.xyz_class as "X" | "Y" | "Z" | null) ?? null,
+          xyz_class: (r.xyz_class as "X" | "Y" | "Z" | "N" | null) ?? null,
+          cv_points: r.cv_points,
           tier0_30d: parseFloat(r.tier0_30d) || 0,
           sales_q4: parseFloat(r.sales_q4) || 0,
           sales_q3: parseFloat(r.sales_q3) || 0,
@@ -391,6 +396,7 @@ export async function GET(
         row.pareto_rank = snap.pareto_rank;
         row.abc_class = snap.abc_class;
         row.xyz_class = snap.xyz_class;
+        row.cv_points = snap.cv_points;
         row.tier0_30d = snap.tier0_30d;
         row.sales_q4 = snap.sales_q4;
         row.sales_q3 = snap.sales_q3;

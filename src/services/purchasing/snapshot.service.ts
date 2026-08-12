@@ -24,7 +24,11 @@ import {
   buildSalesEngineContext,
   calculateDailySales,
 } from "./daily-sales-engine";
-import { runParetoEngine, VariantForPareto } from "./pareto-engine";
+import {
+  runParetoEngine,
+  xyzClassFor,
+  VariantForPareto,
+} from "./pareto-engine";
 import { loadPurchasingConfig } from "./purchasing-config.service";
 
 dotenv.config();
@@ -350,6 +354,7 @@ export async function runPurchasingSnapshot(
       daily_sales_est: number;
       monthly_sales_est: number;
       cv: number;
+      cv_points: number;
       weighted_revenue: number;
       revenue_12m: number;
       inv_usa: number;
@@ -463,14 +468,14 @@ export async function runPurchasingSnapshot(
         variant_id: r.variant_id,
         revenue: r.weighted_revenue,
         cv: r.cv,
+        cv_points: r.cv_points,
       }));
     const paretoResults = runParetoEngine(paretoInput, cfg);
     const paretoMap = new Map(paretoResults.map((p) => [p.variant_id, p]));
 
-    function classFor(variantId: string, cv: number) {
+    function classFor(variantId: string, cv: number, cvPoints: number) {
       if (altSet.has(variantId)) {
-        const xyz: "X" | "Y" | "Z" =
-          cv < cfg.xyz_x_threshold ? "X" : cv < cfg.xyz_y_threshold ? "Y" : "Z";
+        const xyz = xyzClassFor(cv, cvPoints, cfg);
         return {
           abc_class: "B" as const,
           xyz_class: xyz,
@@ -491,7 +496,7 @@ export async function runPurchasingSnapshot(
       let p = 1;
 
       for (const r of batch) {
-        const pareto = classFor(r.variant_id, r.cv);
+        const pareto = classFor(r.variant_id, r.cv, r.cv_points);
         const alts = altsByPrimary.get(r.variant_id) ?? [];
         const altInvUsa = alts.reduce(
           (s, id) => s + (invByVariant.get(id)?.usa ?? 0),
@@ -542,6 +547,7 @@ export async function runPurchasingSnapshot(
           r.daily_sales_est,
           r.monthly_sales_est,
           r.cv,
+          r.cv_points,
           r.weighted_revenue,
           pareto?.pareto_rank ?? null,
           pareto?.abc_class ?? null,
@@ -557,7 +563,7 @@ export async function runPurchasingSnapshot(
           prodDays,
           r.first_sale_date
         );
-        const cols = 26;
+        const cols = 27;
         const ph = Array.from({ length: cols }, (_, k) => `$${p + k}`).join(",");
         placeholders.push(`(${ph},now(),now(),now())`);
         p += cols;
@@ -568,7 +574,7 @@ export async function runPurchasingSnapshot(
           `INSERT INTO purchasing_snapshot
              (id,variant_id,tier0_30d,sales_q1,sales_q2,sales_q3,sales_q4,
               sales_last_24d,unmet_net_30d,
-              daily_sales_est,monthly_sales_est,cv,
+              daily_sales_est,monthly_sales_est,cv,cv_points,
               weighted_revenue,pareto_rank,
               abc_class,xyz_class,abcxyz_class,
               inv_usa,inv_china,inv_china_alt,
@@ -586,6 +592,7 @@ export async function runPurchasingSnapshot(
              daily_sales_est=EXCLUDED.daily_sales_est,
              monthly_sales_est=EXCLUDED.monthly_sales_est,
              cv=EXCLUDED.cv,
+             cv_points=EXCLUDED.cv_points,
              weighted_revenue=EXCLUDED.weighted_revenue,
              pareto_rank=EXCLUDED.pareto_rank,
              abc_class=EXCLUDED.abc_class, xyz_class=EXCLUDED.xyz_class,
@@ -819,7 +826,7 @@ export async function recalculateForVariants(
                qty_on_po_china=$13, qty_on_po_china_alt=$14,
                qty_to_transfer=$15, qty_to_factory=$16, production_days=$17,
                unmet_net_30d=$18, weighted_revenue=$19,
-               first_sale_date=$20,
+               first_sale_date=$20, cv_points=$21,
                last_calculated_at=now(), updated_at=now()
            WHERE variant_id=$1`,
           [
@@ -843,6 +850,7 @@ export async function recalculateForVariants(
             sales.unmet_net_30d ?? 0,
             sales.weighted_revenue,
             sales.first_sale_date,
+            sales.cv_points,
           ]
         );
       } catch (e) {
