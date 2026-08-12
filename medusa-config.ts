@@ -323,6 +323,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/purchase-orders",
     },
     {
+      resolve: "./src/modules/price-change",
+    },
+    {
       resolve: "./src/modules/inventory-transfers",
     },
     {

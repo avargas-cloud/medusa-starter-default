@@ -8,29 +8,15 @@ import {
   resolveActorId,
 } from "../../../../../lib/pos/supervisor-pin-guard";
 import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
-
-const WHOLESALE_PRICE_LIST_ID = "plist_01KFTSDZZNTQRSYNMB4YST1HYA";
+import {
+  WHOLESALE_PRICE_LIST_ID,
+  writeVariantPrices,
+} from "../../../../../lib/pos/price-write";
 
 interface PriceUpdateBody {
   retail_price: number;
   wholesale_price: number;
   variant_id?: string;
-}
-
-/** Update amount + raw_amount (Medusa v2 stores both) via Knex */
-async function updatePriceById(
-  knex: any,
-  id: string,
-  amount: number
-): Promise<void> {
-  await knex.raw(
-    `UPDATE price
-         SET amount = ?,
-             raw_amount = jsonb_build_object('value', ?::text, 'precision', 20),
-             updated_at = NOW()
-         WHERE id = ? AND deleted_at IS NULL`,
-    [amount, String(amount), id]
-  );
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
@@ -113,58 +99,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         .json({ error: "No price set linked to this variant" });
     }
 
-    // 2. Fetch existing price rows for this price_set (raw SQL — reliable, no ORM surprises)
-    const existing = await knex.raw(
-      `SELECT id, price_list_id
-             FROM price
-             WHERE price_set_id = ? AND currency_code = 'usd' AND deleted_at IS NULL`,
-      [price_set_id]
+    // 2-4. Write retail + wholesale price rows (shared with the bulk editor).
+    const { price_row_count: priceCountAfterWrite } = await writeVariantPrices(
+      knex,
+      logger,
+      price_set_id,
+      retail_price,
+      wholesale_price
     );
-    const rows: { id: string; price_list_id: string | null }[] = existing.rows;
-
-    const retailRow = rows.find((r) => !r.price_list_id);
-    const wholesaleRow = rows.find(
-      (r) => r.price_list_id === WHOLESALE_PRICE_LIST_ID
-    );
-
-    // 3. Update retail (base) price
-    if (retailRow) {
-      await updatePriceById(knex, retailRow.id, retail_price);
-    } else {
-      logger.warn(
-        `[pos-prices] No base USD price for price_set ${price_set_id} — inserting`
-      );
-      await knex.raw(
-        `INSERT INTO price (id, price_set_id, currency_code, amount, raw_amount, rules_count, created_at, updated_at)
-                 VALUES (?, ?, 'usd', ?, jsonb_build_object('value', ?::text, 'precision', 20), 0, NOW(), NOW())`,
-        [
-          `price_${Date.now()}_r`,
-          price_set_id,
-          retail_price,
-          String(retail_price),
-        ]
-      );
-    }
-
-    // 4. Update wholesale price
-    if (wholesaleRow) {
-      await updatePriceById(knex, wholesaleRow.id, wholesale_price);
-    } else {
-      logger.warn(
-        `[pos-prices] No wholesale price for price_set ${price_set_id} — inserting`
-      );
-      await knex.raw(
-        `INSERT INTO price (id, price_set_id, price_list_id, currency_code, amount, raw_amount, rules_count, created_at, updated_at)
-                 VALUES (?, ?, ?, 'usd', ?, jsonb_build_object('value', ?::text, 'precision', 20), 0, NOW(), NOW())`,
-        [
-          `price_${Date.now()}_w`,
-          price_set_id,
-          WHOLESALE_PRICE_LIST_ID,
-          wholesale_price,
-          String(wholesale_price),
-        ]
-      );
-    }
 
     // 5. Targeted Meilisearch update (wait for indexing before returning)
     try {
@@ -204,21 +146,17 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       );
     }
 
-    // 6. Verify: count price rows to detect zombies
-    const countResult = await knex.raw(
-      `SELECT COUNT(*) as cnt FROM price WHERE price_set_id = ? AND deleted_at IS NULL`,
-      [price_set_id]
-    );
-    const priceCount = parseInt(countResult.rows[0].cnt, 10);
+    // 6. Verify: count price rows to detect zombies (writeVariantPrices already
+    // recounts after the write, so this is just surfacing that count).
     logger.info(
-      `[pos-prices] price_set ${price_set_id} now has ${priceCount} active price rows`
+      `[pos-prices] price_set ${price_set_id} now has ${priceCountAfterWrite} active price rows`
     );
 
     return res.status(200).json({
       success: true,
       variant_id,
       price_set_id,
-      price_rows: priceCount,
+      price_rows: priceCountAfterWrite,
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

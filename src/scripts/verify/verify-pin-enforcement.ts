@@ -204,6 +204,8 @@ if (!failures.some((f) => f.includes("orders/[id]"))) {
  */
 const MUST_GATE_ROUTES = [
   ["api/admin/pos/prices/[productId]/route.ts", "escribe el precio retail y el wholesale de un ítem"],
+  ["api/admin/pos/prices/bulk/route.ts", "bulk price/cost editor"],
+  ["api/admin/pos/price-batches/[id]/approve/route.ts", "applies an approved price-change batch's cost/retail/wholesale changes"],
   ["api/admin/quickbooks/bill-match/adopt/route.ts", "registra un bill de QuickBooks contra un PO"],
   ["api/admin/quickbooks/bill-match/undo/route.ts", "revierte un bill-match adoptado"],
   ["api/admin/quickbooks/customer-credits/import/route.ts", "importa un crédito de QB como saldo redimible"],
