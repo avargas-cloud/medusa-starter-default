@@ -92,13 +92,19 @@ const CASES: Case[] = [
         qb_sku: "SKU-001",
         qb_edit_sequence: "1",
         qb_is_active: true,
-        qb_purchase_cost: 120,
+        purchase_cost: 120,
         mpn: "MPN-001",
         sales_description: "desc",
       }),
+      // "Todo coincide" incluye el par de vendor con SUS DOS nombres: desde el
+      // rename del 2026-08-12 un producto que sólo tenga los legacy tiene algo
+      // que escribir (el sync se auto-cura), así que un fixture legacy-only
+      // clasifica PRODUCT_UPDATE — correcto, pero no es este caso.
       product: product("p1", {
         qb_income_account_full_name: "Sales",
         qb_cogs_account_full_name: "COGS",
+        vendor_full_name: "Acme",
+        vendor_list_id: "V-1",
         qb_vendor_full_name: "Acme",
         qb_vendor_list_id: "V-1",
         qb_item_type: "Inventory",
@@ -114,31 +120,31 @@ const CASES: Case[] = [
     group: "variant-only",
     input: {
       qb: snap({ purchaseCost: 125 }),
-      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: 120 }),
+      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 120 }),
       product: product("p1", { qb_item_type: "Inventory" }),
       isDriver: true,
     },
     expectClassification: "VARIANT_UPDATE",
-    expectVariantDiffKeys: ["qb_purchase_cost"],
+    expectVariantDiffKeys: ["purchase_cost"],
   },
   {
     label: "PurchaseCost 0 — writes 0 (QB is source of truth)",
     group: "variant-only",
     input: {
       qb: snap({ purchaseCost: 0 }),
-      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: 120 }),
+      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 120 }),
       product: product("p1", { qb_item_type: "Inventory" }),
       isDriver: true,
     },
     expectClassification: "VARIANT_UPDATE",
-    expectVariantDiffKeys: ["qb_purchase_cost"],
+    expectVariantDiffKeys: ["purchase_cost"],
   },
   {
     label: "PurchaseCost undefined (Service item) — no diff even if Medusa has value",
     group: "variant-only",
     input: {
       qb: snap({ itemType: "Service", purchaseCost: undefined }),
-      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: 120 }),
+      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 120 }),
       product: product("p1", { qb_item_type: "Service" }),
       isDriver: true,
     },
@@ -209,7 +215,7 @@ const CASES: Case[] = [
     group: "variant-only",
     input: {
       qb: snap({ purchaseCost: 120 }),
-      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: "120.0000" }),
+      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: "120.0000" }),
       product: product("p1", { qb_item_type: "Inventory" }),
       isDriver: true,
     },
@@ -328,25 +334,25 @@ const CASES: Case[] = [
     group: "combo",
     input: {
       qb: snap({ incomeAccountFullName: "Sales-New", purchaseCost: 200 }),
-      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: 100 }),
+      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 100 }),
       product: product("p1", { qb_income_account_full_name: "Sales-Old", qb_item_type: "Inventory" }),
       isDriver: true,
     },
     expectClassification: "BOTH_UPDATE",
     expectProductDiffKeys: ["qb_income_account_full_name"],
-    expectVariantDiffKeys: ["qb_purchase_cost"],
+    expectVariantDiffKeys: ["purchase_cost"],
   },
   {
     label: "Mixed: variant field change + override clearing — VARIANT_UPDATE (not OVERRIDE_CLEARED)",
     group: "combo",
     input: {
       qb: snap({ vendorFullName: "Acme", vendorListId: "V-1", purchaseCost: 175 }),
-      variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: 150, qb_override_vendor_full_name: "Beta Co" }),
+      variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 150, qb_override_vendor_full_name: "Beta Co" }),
       product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: false,
     },
     expectClassification: "VARIANT_UPDATE",
-    expectVariantDiffKeys: ["qb_purchase_cost", "qb_override_vendor_full_name"],
+    expectVariantDiffKeys: ["purchase_cost", "qb_override_vendor_full_name"],
   },
 
   // ── FIELD ABSENCE (conservative) ────────────────────────────────────────
@@ -355,7 +361,7 @@ const CASES: Case[] = [
     group: "absence",
     input: {
       qb: snap({}),
-      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_purchase_cost: 999, mpn: "old" }),
+      variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 999, mpn: "old" }),
       product: product("p1", { qb_item_type: "Inventory", qb_vendor_full_name: "Acme" }),
       isDriver: true,
     },
@@ -537,13 +543,13 @@ function runPayloadBuilder(): { pass: number; fail: number } {
   const v = variant("v1", "p1", {
     qb_price_level: "wholesale_2024",
     shipping_attrs_weight_lbs: 5,
-    qb_purchase_cost: 100,
+    purchase_cost: 100,
   });
   mergeVariantDiff(map, v, [
-    { key: "qb_purchase_cost", oldValue: 100, newValue: 125, clearing: false },
+    { key: "purchase_cost", oldValue: 100, newValue: 125, clearing: false },
   ]);
   const patched = map.variants.get("v1")?.metadata ?? {};
-  if (patched.qb_price_level === "wholesale_2024" && patched.shipping_attrs_weight_lbs === 5 && patched.qb_purchase_cost === 125) {
+  if (patched.qb_price_level === "wholesale_2024" && patched.shipping_attrs_weight_lbs === 5 && patched.purchase_cost === 125) {
     pass++;
     console.log(`  OK   foreign metadata preserved; target key overwritten`);
   } else {
