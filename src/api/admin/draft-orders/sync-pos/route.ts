@@ -1,4 +1,8 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 // 1.5.4: handleDraftOrderUpdated import removed — sync-pos now enqueues
@@ -10,6 +14,8 @@ import {
   writePipelineRow,
 } from "../../../../lib/quickbooks/qb-pipeline";
 import { getDbPool } from "../../../utils/db-pool";
+import { recordPosActivity } from "../../../../lib/pos/order-activity";
+import type { KnexRawConnection } from "../../../../lib/pos/order-activity";
 
 export async function POST(
   req: MedusaRequest,
@@ -603,12 +609,19 @@ export async function POST(
         [resolvedId, resolvedId]
       );
 
-      // e. Delete old order_change_action rows (keep only the latest order_change)
+      // e. Delete old order_change_action rows (keep only the latest order_change).
+      //    Same guard as post-edit-sync: `pos_activity` rows are our native
+      //    Activity Log footprint, not edit history — they're excluded from
+      //    the survivor subquery too, or a recent activity row would be
+      //    picked as "survivor" and this prune would delete the last real edit.
       const ocaDel = await pool.query(
         `DELETE FROM order_change_action
                  WHERE order_change_id IN (
                      SELECT id FROM order_change WHERE order_id = $1
-                     AND id != (SELECT id FROM order_change WHERE order_id = $2 ORDER BY created_at DESC LIMIT 1)
+                     AND change_type IS DISTINCT FROM 'pos_activity'
+                     AND id != (SELECT id FROM order_change WHERE order_id = $2
+                                AND change_type IS DISTINCT FROM 'pos_activity'
+                                ORDER BY created_at DESC LIMIT 1)
                  )`,
         [resolvedId, resolvedId]
       );
@@ -616,7 +629,10 @@ export async function POST(
       // f. Delete old order_change rows (keep only latest)
       const ocDel = await pool.query(
         `DELETE FROM order_change WHERE order_id = $1
-                 AND id != (SELECT id FROM order_change WHERE order_id = $2 ORDER BY created_at DESC LIMIT 1)`,
+                 AND change_type IS DISTINCT FROM 'pos_activity'
+                 AND id != (SELECT id FROM order_change WHERE order_id = $2
+                            AND change_type IS DISTINCT FROM 'pos_activity'
+                            ORDER BY created_at DESC LIMIT 1)`,
         [resolvedId, resolvedId]
       );
 
@@ -633,6 +649,18 @@ export async function POST(
     } catch (cleanupErr: any) {
       logger.warn(`[sync-pos] 🧹 Cleanup non-fatal: ${cleanupErr.message}`);
     }
+
+    // Native Activity Log footprint — one save = one entry. useEstimateSave
+    // is the only caller of this route, so this fires once per estimate save.
+    const actorId =
+      (req as AuthenticatedMedusaRequest).auth_context?.actor_id ?? null;
+    const knexConn = req.scope.resolve("__pg_connection__") as KnexRawConnection;
+    await recordPosActivity(knexConn, {
+      orderId: resolvedId,
+      event: "order_edited",
+      details: { docType: "Estimate" },
+      userId: actorId,
+    });
 
     // 7. Compute Tax Always (Fire & Forget / Sequential is fine locally)
     await localFetch(`/admin/draft-orders/${resolvedId}/compute-tax`, {

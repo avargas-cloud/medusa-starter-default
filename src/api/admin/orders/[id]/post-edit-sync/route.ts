@@ -1,4 +1,8 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework";
 import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
@@ -8,6 +12,8 @@ import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales
 import { withQbSerialized } from "../../../../../lib/quickbooks/qb-serializer";
 import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile-order-reservations";
 import { getDbPool } from "../../../../utils/db-pool";
+import { recordPosActivity } from "../../../../../lib/pos/order-activity";
+import type { KnexRawConnection } from "../../../../../lib/pos/order-activity";
 import {
   replaceOrderTaxLines,
   representedDiscountDollars,
@@ -1213,6 +1219,18 @@ export async function POST(
     });
     return;
   }
+
+  // Native Activity Log footprint — one save = one entry. This route runs on
+  // every order save AND on Force re-sync — both count as an edit.
+  const actorId =
+    (req as AuthenticatedMedusaRequest).auth_context?.actor_id ?? null;
+  const knexConn = req.scope.resolve("__pg_connection__") as KnexRawConnection;
+  await recordPosActivity(knexConn, {
+    orderId: id,
+    event: "order_edited",
+    details: { docType: "Order" },
+    userId: actorId,
+  });
 
   res.status(200).json({ success: true, ...results });
 }
