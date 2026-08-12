@@ -1,0 +1,196 @@
+/**
+ * Loads the per-line facts both separation surfaces need:
+ * GET product-status (display) and POST separations (server-side validation).
+ *
+ * Every quantity is coerced before math — Postgres numerics arrive as strings.
+ * order_item is versioned: only rows of the order's CURRENT version count
+ * (stale versions block/inflate every derived number).
+ *
+ * Stock scope is Miami (USA_LOC) only — house rule; China stock never backs a
+ * separation.
+ */
+
+import type { Pool } from "pg";
+
+import { USA_LOC } from "../../../../../lib/locations";
+import type {
+  InventorySnapshot,
+  SeparationLineInput,
+} from "../../_lib/separation-caps";
+
+export interface SeparationOrderLine extends SeparationLineInput {
+  sku: string;
+  description: string;
+  separated: number;
+  /** Real fulfilled quantity (the inherited `fulfilled` field carries COVERED —
+   *  max(fulfilled, invoiced) — because both modals show only pending work). */
+  fulfilledActual: number;
+  /** Quantity on active (non-voided) POS invoices, linked per line by
+   *  order_line_item_id (Delivery v2). Legacy invoices without the link are
+   *  covered by the order-level fully_invoiced fallback. */
+  invoiced: number;
+}
+
+export interface SeparationData {
+  orderId: string;
+  displayId: number | null;
+  /** Legacy boolean from metadata — honored when no rows exist. */
+  legacySeparatedFlag: boolean;
+  metadata: Record<string, unknown>;
+  lines: SeparationOrderLine[];
+  inventory: Map<string, InventorySnapshot>;
+}
+
+function num(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+interface LineRow {
+  line_id: string;
+  sku: string | null;
+  description: string | null;
+  quantity: unknown;
+  fulfilled_quantity: unknown;
+  invoiced: unknown;
+  inventory_item_id: string | null;
+  reserved: unknown;
+  separated: unknown;
+}
+
+export async function loadSeparationData(
+  pool: Pool,
+  orderId: string
+): Promise<SeparationData | null> {
+  const orderRes = await pool.query<{
+    id: string;
+    display_id: number | null;
+    metadata: Record<string, unknown> | null;
+  }>(
+    `SELECT id, display_id, metadata
+       FROM "order"
+      WHERE id = $1 AND deleted_at IS NULL`,
+    [orderId]
+  );
+  const order = orderRes.rows[0];
+  if (!order) return null;
+
+  const lineRes = await pool.query<LineRow>(
+    `SELECT oli.id                    AS line_id,
+            oli.variant_sku           AS sku,
+            COALESCE(
+              NULLIF(oli.metadata->>'sales_description', ''),
+              NULLIF(pv.metadata->>'sales_description', ''),
+              NULLIF(oli.product_title, ''),
+              oli.title
+            )                         AS description,
+            oi.quantity               AS quantity,
+            oi.fulfilled_quantity     AS fulfilled_quantity,
+            inv.qty                   AS invoiced,
+            pvii.inventory_item_id    AS inventory_item_id,
+            resv.qty                  AS reserved,
+            sep.qty                   AS separated
+       FROM order_item oi
+       JOIN "order" o
+         ON o.id = oi.order_id
+        AND oi.version = o.version
+       JOIN order_line_item oli
+         ON oli.id = oi.item_id
+        AND oli.deleted_at IS NULL
+       LEFT JOIN product_variant pv
+         ON pv.id = oli.variant_id
+        AND pv.deleted_at IS NULL
+       LEFT JOIN product_variant_inventory_item pvii
+         ON pvii.variant_id = oli.variant_id
+        AND pvii.deleted_at IS NULL
+       LEFT JOIN LATERAL (
+            SELECT SUM(r.quantity) AS qty
+              FROM reservation_item r
+             WHERE r.line_item_id = oli.id
+               AND r.deleted_at IS NULL
+       ) resv ON true
+       LEFT JOIN LATERAL (
+            SELECT SUM(pii.quantity) AS qty
+              FROM pos_invoice_item pii
+              JOIN pos_invoice pi
+                ON pi.id = pii.invoice_id
+               AND pi.deleted_at IS NULL
+               AND pi.status <> 'voided'
+             WHERE pii.order_line_item_id = oli.id
+               AND pii.deleted_at IS NULL
+       ) inv ON true
+       LEFT JOIN order_line_separation sep
+         ON sep.order_id = oi.order_id
+        AND sep.order_line_item_id = oli.id
+      WHERE oi.order_id = $1
+        AND oi.deleted_at IS NULL
+      ORDER BY oli.created_at ASC, oli.id ASC`,
+    [orderId]
+  );
+
+  const metadata = (order.metadata ?? {}) as Record<string, unknown>;
+  // Both modals show PENDING work only (owner decision 2026-08-11): invoiced
+  // units are done as far as separation/purchasing go. Per-line attribution
+  // needs order_line_item_id on the invoice items (Delivery v2 era); legacy
+  // invoices lack it, so a fully_invoiced order covers everything wholesale.
+  const orderFullyInvoiced = metadata.fully_invoiced === true;
+
+  const lines: SeparationOrderLine[] = lineRes.rows.map((r) => {
+    const quantity = num(r.quantity);
+    const fulfilledActual = num(r.fulfilled_quantity);
+    const invoiced = num(r.invoiced);
+    const covered = orderFullyInvoiced
+      ? quantity
+      : Math.min(quantity, Math.max(fulfilledActual, invoiced));
+    return {
+      lineId: r.line_id,
+      sku: (r.sku ?? "").trim(),
+      description: r.description ?? "",
+      quantity,
+      // COVERED, not raw fulfilled — the caps/status math only ever needs
+      // "how much of this line no longer requires warehouse work".
+      fulfilled: covered,
+      fulfilledActual,
+      invoiced,
+      reserved: num(r.reserved),
+      inventoryItemId: r.inventory_item_id,
+      separated: num(r.separated),
+    };
+  });
+
+  const itemIds = [
+    ...new Set(
+      lines.map((l) => l.inventoryItemId).filter((v): v is string => !!v)
+    ),
+  ];
+  const inventory = new Map<string, InventorySnapshot>();
+  if (itemIds.length) {
+    const invRes = await pool.query<{
+      inventory_item_id: string;
+      stocked_quantity: unknown;
+      reserved_quantity: unknown;
+    }>(
+      `SELECT inventory_item_id, stocked_quantity, reserved_quantity
+         FROM inventory_level
+        WHERE deleted_at IS NULL
+          AND location_id = $1
+          AND inventory_item_id = ANY($2::text[])`,
+      [USA_LOC, itemIds]
+    );
+    for (const row of invRes.rows) {
+      inventory.set(row.inventory_item_id, {
+        stocked: num(row.stocked_quantity),
+        reservedAllOrders: num(row.reserved_quantity),
+      });
+    }
+  }
+
+  return {
+    orderId: order.id,
+    displayId: order.display_id,
+    legacySeparatedFlag: metadata.is_separated === true,
+    metadata,
+    lines,
+    inventory,
+  };
+}

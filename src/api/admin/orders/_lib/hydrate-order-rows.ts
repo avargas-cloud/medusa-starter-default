@@ -107,6 +107,11 @@ export const PROJECTED_METADATA_KEYS = [
   "computed_total",
   "pos_total",
   "is_separated",
+  // Tri-state written by POST /admin/orders/:id/separations (none | partial |
+  // full). is_separated stays its boolean mirror (true only on full) so the
+  // Separated tab predicate is untouched; this key powers the Partial/Fully
+  // badge on the row.
+  "separation_status",
   "fully_invoiced",
   "order_status",
   "estimate_status",
