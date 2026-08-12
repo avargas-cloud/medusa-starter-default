@@ -120,8 +120,23 @@ export default async function repairReservationIntegrity({
   // We MUST match only the CURRENT version (o.version = oi.version), otherwise
   // a stale version whose fulfilled_quantity >= quantity falsely flags a still
   // open/partial line as orphan. (Naive join over-counted 25→9 in prod.)
+  //
+  // TWO-SIGNAL RULE (added 2026-08-12, after S11179): `fulfilled_quantity` is a
+  // counter and counters get poisoned — S11179 had numeric 6 / raw 3 / real 3,
+  // and trusting the counter alone deleted a REAL backorder reservation for 3
+  // units still owed to the customer. "Fully fulfilled" now requires the counter
+  // AND the live fulfillment rows (canceled excluded) to independently agree.
+  // A line where they disagree is reported as poisoned by the daily digest
+  // (_reservation-drift-section) and never auto-deleted.
   const orphanResult = await knex.raw(
     `
+    WITH active_ful AS (
+      SELECT fi.line_item_id, SUM(fi.quantity) AS ful_real
+      FROM fulfillment_item fi
+      JOIN fulfillment f ON f.id = fi.fulfillment_id
+        AND f.canceled_at IS NULL AND f.deleted_at IS NULL
+      GROUP BY fi.line_item_id
+    )
     SELECT ri.id              AS reservation_id,
            ri.inventory_item_id,
            ri.location_id,
@@ -129,8 +144,7 @@ export default async function repairReservationIntegrity({
            ri.line_item_id,
            CASE
              WHEN o.status = 'canceled' THEN 'order_canceled'
-             WHEN oi.fulfilled_quantity >= oi.quantity THEN 'line_fully_fulfilled'
-             ELSE 'unknown'
+             ELSE 'line_fully_fulfilled'
            END AS reason
     FROM reservation_item ri
     JOIN order_item oi
@@ -139,10 +153,14 @@ export default async function repairReservationIntegrity({
     JOIN "order" o
            ON o.id = oi.order_id
           AND o.version = oi.version
+    LEFT JOIN active_ful af ON af.line_item_id = ri.line_item_id
     WHERE ri.deleted_at IS NULL
       AND (
         o.status = 'canceled'
-        OR oi.fulfilled_quantity >= oi.quantity
+        OR (
+          oi.fulfilled_quantity >= oi.quantity
+          AND COALESCE(af.ful_real, 0) >= oi.quantity
+        )
       )
   `
   );

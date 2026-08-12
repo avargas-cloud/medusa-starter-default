@@ -14,6 +14,7 @@ import {
 } from "./_lib/_order-drift-section";
 import { collectReverseVoidSection } from "./_lib/_qb-reverse-void-section";
 import { collectVoidOrphanSection } from "./_lib/_qb-void-orphan-section";
+import { collectReservationDriftSection } from "./_lib/_reservation-drift-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -643,6 +644,13 @@ export async function buildDigestEmail(
   // UNA vez); acá es donde le llega a una persona por email. Fail-isolated.
   const voidOrphanSection = await collectVoidOrphanSection(logger);
   if (voidOrphanSection) sections.push(voidOrphanSection);
+
+  // ── 8. Reservation drift: cache vs live rows + poisoned counters ─────────
+  // The class behind the S11179 incident (2026-08-12). READ-ONLY report — the
+  // repair deletes business data, so it stays a human decision
+  // (repair-reservation-integrity.ts, dry-run first). Fail-isolated.
+  const reservationDriftSection = await collectReservationDriftSection(knex, logger);
+  if (reservationDriftSection) sections.push(reservationDriftSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 
