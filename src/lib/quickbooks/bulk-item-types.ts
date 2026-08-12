@@ -146,19 +146,11 @@ export function toSnapshot(raw: QbItemRaw): QbItemSnapshot {
  * Metadata key lists — single source of truth. Anything not in these lists is
  * considered foreign to this sync and MUST be preserved untouched in payloads.
  */
-// The vendor pair appears under BOTH its current and its legacy name on
-// purpose. Anything absent from this list is "foreign to this sync" and gets
-// preserved untouched — so dropping the legacy names here while they still
-// exist in the DB would make the diff engine compare QB's PrefVendorRef against
-// an empty `vendor_full_name` and REWRITE the old key onto 2.208 products.
-// Both stay listed until the legacy keys are dropped from the database.
 export const PRODUCT_METADATA_KEYS = [
   "qb_income_account_full_name",
   "qb_cogs_account_full_name",
   "vendor_full_name",
   "vendor_list_id",
-  "qb_vendor_full_name",
-  "qb_vendor_list_id",
   "qb_item_type",
 ] as const;
 

@@ -7,29 +7,32 @@ import {
 } from "../../lib/vendor-metadata/keys";
 
 /**
- * The vendor metadata pair during the expand half of the rename.
+ * The vendor metadata pair, post-contract.
  *
- * These are the semantics the POS edit workflows depend on: `undefined` must
- * survive so `pruneUndefined` still drops untouched fields, `null` must be
- * emitted so a cleared vendor actually clears, and every write must carry both
- * spellings so the pre-rename build reads the right value during the cutover.
+ * `vendor_full_name` / `vendor_list_id` are the only spelling — the old
+ * `qb_vendor_*` names were dropped from the database on 2026-08-12 and there is
+ * deliberately no fallback left. These specs pin that: a reader must NOT
+ * resurrect the old name, because doing so would hide a writer that never got
+ * migrated behind a value that happens to still be correct.
+ *
+ * They also pin what the POS edit workflows depend on: `undefined` survives so
+ * `pruneUndefined` still drops untouched fields, and `null` is emitted so a
+ * cleared vendor actually clears.
  */
 describe("vendor metadata keys — reads", () => {
-  it("prefers the renamed key over the legacy one", () => {
-    const meta = {
-      vendor_full_name: "Luxury LED LLC",
-      qb_vendor_full_name: "HK HELIAN OPTOELECTRONICS CO., LIMITED",
-      vendor_list_id: "NEW-ID",
-      qb_vendor_list_id: "OLD-ID",
-    };
+  it("reads the pair", () => {
+    const meta = { vendor_full_name: "Luxury LED LLC", vendor_list_id: "LID-1" };
     expect(readVendorFullName(meta)).toBe("Luxury LED LLC");
-    expect(readVendorListId(meta)).toBe("NEW-ID");
+    expect(readVendorListId(meta)).toBe("LID-1");
   });
 
-  it("falls back to the legacy key while the migration has not reached a row", () => {
-    const meta = { qb_vendor_full_name: "Luxury LED LLC", qb_vendor_list_id: "OLD-ID" };
-    expect(readVendorFullName(meta)).toBe("Luxury LED LLC");
-    expect(readVendorListId(meta)).toBe("OLD-ID");
+  it("does NOT fall back to the dropped qb_ spelling", () => {
+    const meta = {
+      qb_vendor_full_name: "HK HELIAN OPTOELECTRONICS CO., LIMITED",
+      qb_vendor_list_id: "OLD-ID",
+    };
+    expect(readVendorFullName(meta)).toBeNull();
+    expect(readVendorListId(meta)).toBeNull();
   });
 
   it("treats blank and non-string values as absent, never as a vendor named ''", () => {
@@ -39,38 +42,32 @@ describe("vendor metadata keys — reads", () => {
     expect(readVendorFullName({})).toBeNull();
     expect(readVendorFullName(null)).toBeNull();
   });
-
-  it("skips a blank renamed key in favour of a real legacy value", () => {
-    expect(
-      readVendorFullName({ vendor_full_name: "", qb_vendor_full_name: "Luxury LED LLC" })
-    ).toBe("Luxury LED LLC");
-  });
 });
 
 describe("vendor metadata keys — writes", () => {
-  it("emits BOTH spellings from the same value", () => {
+  it("emits the pair and nothing else", () => {
     expect(vendorMetadataPatch("Luxury LED LLC", "LID-1")).toEqual({
       vendor_full_name: "Luxury LED LLC",
-      qb_vendor_full_name: "Luxury LED LLC",
       vendor_list_id: "LID-1",
-      qb_vendor_list_id: "LID-1",
     });
+  });
+
+  it("never writes the dropped qb_ spelling back", () => {
+    const patch = vendorMetadataPatch("Luxury LED LLC", "LID-1");
+    expect(Object.keys(patch)).not.toContain("qb_vendor_full_name");
+    expect(Object.keys(patch)).not.toContain("qb_vendor_list_id");
   });
 
   it("preserves undefined so pruneUndefined still drops untouched fields", () => {
     const patch = vendorMetadataPatch(undefined, "LID-1");
     expect(patch.vendor_full_name).toBeUndefined();
-    expect(patch.qb_vendor_full_name).toBeUndefined();
     expect(patch.vendor_list_id).toBe("LID-1");
-    expect(patch.qb_vendor_list_id).toBe("LID-1");
   });
 
-  it("emits null on BOTH names when clearing — omitting a key would keep the old value", () => {
+  it("emits null when clearing — omitting a key would keep the old value", () => {
     expect(vendorMetadataPatch(null, null)).toEqual({
       vendor_full_name: null,
-      qb_vendor_full_name: null,
       vendor_list_id: null,
-      qb_vendor_list_id: null,
     });
   });
 });
@@ -81,15 +78,13 @@ describe("vendor metadata keys — SQL", () => {
     expect(vendorListIdSql("p")).not.toContain("?");
   });
 
-  it("reads the renamed key first and the legacy one second", () => {
-    const sql = vendorFullNameSql("p");
-    expect(sql.indexOf("'vendor_full_name'")).toBeLessThan(
-      sql.indexOf("'qb_vendor_full_name'")
-    );
-    expect(sql).toContain("p.metadata->>");
+  it("does not reference the dropped qb_ spelling", () => {
+    expect(vendorFullNameSql("p")).not.toContain("qb_vendor_full_name");
+    expect(vendorListIdSql("p")).not.toContain("qb_vendor_list_id");
   });
 
   it("honours the alias it is given", () => {
     expect(vendorListIdSql("prod")).toContain("prod.metadata->>'vendor_list_id'");
+    expect(vendorFullNameSql("p")).toContain("p.metadata->>'vendor_full_name'");
   });
 });

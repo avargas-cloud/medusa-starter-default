@@ -131,7 +131,6 @@ export function buildInventoryDocsForVariants(
     // vendor metadata at all; it must never win over the product-level value.
     const vendorName =
       (pmeta.vendor_full_name as string) ||
-      (pmeta.qb_vendor_full_name as string) ||
       vendorNameByVariantId.get(variant.id) ||
       (vmeta.qb_vendor_name as string) ||
       null;

@@ -104,10 +104,9 @@ export default async function backfillQbVendorLinks({ container }: Args) {
       await knex.raw(
         `UPDATE product_variant
            SET metadata = COALESCE(metadata, '{}'::jsonb)
-             || jsonb_build_object('vendor_list_id', ?::text,
-                                   'qb_vendor_list_id', ?::text)
+             || jsonb_build_object('vendor_list_id', ?::text)
          WHERE id = ?`,
-        [listId, listId, v.id]
+        [listId, v.id]
       );
       metadataPatched++;
     }

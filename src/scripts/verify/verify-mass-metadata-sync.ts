@@ -96,17 +96,11 @@ const CASES: Case[] = [
         mpn: "MPN-001",
         sales_description: "desc",
       }),
-      // "Todo coincide" incluye el par de vendor con SUS DOS nombres: desde el
-      // rename del 2026-08-12 un producto que sólo tenga los legacy tiene algo
-      // que escribir (el sync se auto-cura), así que un fixture legacy-only
-      // clasifica PRODUCT_UPDATE — correcto, pero no es este caso.
       product: product("p1", {
         qb_income_account_full_name: "Sales",
         qb_cogs_account_full_name: "COGS",
         vendor_full_name: "Acme",
         vendor_list_id: "V-1",
-        qb_vendor_full_name: "Acme",
-        qb_vendor_list_id: "V-1",
         qb_item_type: "Inventory",
       }),
       isDriver: true,
@@ -241,19 +235,11 @@ const CASES: Case[] = [
     input: {
       qb: snap({ vendorFullName: "Beta Co", vendorListId: "V-2" }),
       variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
-      product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: true,
     },
     expectClassification: "PRODUCT_UPDATE",
-    // Four keys: the renamed pair and its legacy alias move together. These
-    // fixtures carry only the legacy names, so the renamed ones are written
-    // from null — the sync self-heals a product the migration hasn't reached.
-    expectProductDiffKeys: [
-      "vendor_full_name",
-      "qb_vendor_full_name",
-      "vendor_list_id",
-      "qb_vendor_list_id",
-    ],
+    expectProductDiffKeys: ["vendor_full_name", "vendor_list_id"],
   },
   {
     label: "Driver: Vendor undefined (not reported by QB) — no product change",
@@ -261,7 +247,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({ vendorFullName: undefined, vendorListId: undefined }),
       variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
-      product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: true,
     },
     expectClassification: "NO_CHANGE",
@@ -286,7 +272,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({ vendorFullName: "Beta Co", vendorListId: "V-2" }),
       variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
-      product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: false,
     },
     expectClassification: "VARIANT_UPDATE",
@@ -298,7 +284,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({ vendorFullName: "Acme", vendorListId: "V-1" }),
       variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
-      product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: false,
     },
     expectClassification: "NO_CHANGE",
@@ -309,7 +295,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({ vendorFullName: "Acme", vendorListId: "V-1" }),
       variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, qb_override_vendor_full_name: "Beta Co", qb_override_vendor_qb_id: "V-2" }),
-      product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: false,
     },
     expectClassification: "OVERRIDE_CLEARED",
@@ -321,7 +307,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({ incomeAccountFullName: "Sales-Alt", vendorFullName: "Acme", vendorListId: "V-1" }),
       variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
-      product: product("p1", { qb_income_account_full_name: "Sales", qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { qb_income_account_full_name: "Sales", vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: false,
     },
     expectClassification: "VARIANT_UPDATE",
@@ -348,7 +334,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({ vendorFullName: "Acme", vendorListId: "V-1", purchaseCost: 175 }),
       variant: variant("v2", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 150, qb_override_vendor_full_name: "Beta Co" }),
-      product: product("p1", { qb_vendor_full_name: "Acme", qb_vendor_list_id: "V-1", qb_item_type: "Inventory" }),
+      product: product("p1", { vendor_full_name: "Acme", vendor_list_id: "V-1", qb_item_type: "Inventory" }),
       isDriver: false,
     },
     expectClassification: "VARIANT_UPDATE",
@@ -362,7 +348,7 @@ const CASES: Case[] = [
     input: {
       qb: snap({}),
       variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true, purchase_cost: 999, mpn: "old" }),
-      product: product("p1", { qb_item_type: "Inventory", qb_vendor_full_name: "Acme" }),
+      product: product("p1", { qb_item_type: "Inventory", vendor_full_name: "Acme" }),
       isDriver: true,
     },
     expectClassification: "NO_CHANGE",
@@ -424,27 +410,18 @@ const CASES: Case[] = [
     input: {
       qb: snap({ incomeAccountFullName: undefined, vendorFullName: "NewVendor", vendorListId: "V-9" }),
       variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
-      product: product("p1", { qb_income_account_full_name: "ExistingIncome", qb_vendor_full_name: "OldVendor", qb_vendor_list_id: "V-8", qb_item_type: "Inventory" }),
+      product: product("p1", { qb_income_account_full_name: "ExistingIncome", vendor_full_name: "OldVendor", vendor_list_id: "V-8", qb_item_type: "Inventory" }),
       isDriver: true,
     },
     // Driver reports new vendor but not income → income stays, vendor changes.
     expectClassification: "PRODUCT_UPDATE",
-    // Four keys: the renamed pair and its legacy alias move together. These
-    // fixtures carry only the legacy names, so the renamed ones are written
-    // from null — the sync self-heals a product the migration hasn't reached.
-    expectProductDiffKeys: [
-      "vendor_full_name",
-      "qb_vendor_full_name",
-      "vendor_list_id",
-      "qb_vendor_list_id",
-    ],
+    expectProductDiffKeys: ["vendor_full_name", "vendor_list_id"],
   },
   {
-    // A product already carrying BOTH names, agreeing with QB, must stay
-    // untouched. Without this the expand would look "safe" only because every
-    // other fixture is mid-rename — this is the steady state after the
-    // migration, and the one that must not churn 2.208 products.
-    label: "Rename: both names present and matching QB — NO_CHANGE",
+    // Steady state after the rename: the pair matches QB, nothing to do. Every
+    // other product-driver fixture is mid-change, so without this one the
+    // engine could churn all 2.208 products and still look green.
+    label: "Rename: pair matches QB — NO_CHANGE",
     group: "product-driver",
     input: {
       qb: snap({ vendorFullName: "Acme", vendorListId: "V-1" }),
@@ -452,8 +429,6 @@ const CASES: Case[] = [
       product: product("p1", {
         vendor_full_name: "Acme",
         vendor_list_id: "V-1",
-        qb_vendor_full_name: "Acme",
-        qb_vendor_list_id: "V-1",
         qb_item_type: "Inventory",
       }),
       isDriver: true,
@@ -461,17 +436,17 @@ const CASES: Case[] = [
     expectClassification: "NO_CHANGE",
   },
   {
-    // The renamed key WINS over a stale legacy one — reading the legacy name
-    // first is the class of bug this rename exists to prevent. Only the legacy
-    // aliases move here, re-aligned to the renamed value.
-    label: "Rename: renamed key wins over a stale legacy key",
+    // Resurrection guard. `qb_vendor_*` was dropped from the database on
+    // 2026-08-12; if a row somehow still carries it, the engine must NOT read
+    // it as the vendor and must NOT write it back. Here the product has only
+    // the dead key, so the current vendor reads as EMPTY and QB's value is
+    // written to the live key — and the dead one is never emitted.
+    label: "Rename: a leftover qb_vendor_* key is ignored, never rewritten",
     group: "product-driver",
     input: {
       qb: snap({ vendorFullName: "Acme", vendorListId: "V-1" }),
       variant: variant("v1", "p1", { quickbooks_id: "QB-001", qb_sku: "SKU-001", qb_edit_sequence: "1", qb_is_active: true }),
       product: product("p1", {
-        vendor_full_name: "Acme",
-        vendor_list_id: "V-1",
         qb_vendor_full_name: "Stale Legacy Vendor",
         qb_vendor_list_id: "V-STALE",
         qb_item_type: "Inventory",
@@ -479,7 +454,7 @@ const CASES: Case[] = [
       isDriver: true,
     },
     expectClassification: "PRODUCT_UPDATE",
-    expectProductDiffKeys: ["qb_vendor_full_name", "qb_vendor_list_id"],
+    expectProductDiffKeys: ["vendor_full_name", "vendor_list_id"],
   },
 ];
 

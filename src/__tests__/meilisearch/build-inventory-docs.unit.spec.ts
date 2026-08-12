@@ -66,14 +66,9 @@ describe("buildInventoryDocsForVariants — vendorName", () => {
     product: { ...baseVariant.product, metadata },
   });
 
-  it("prefers the renamed product-level key over everything else", () => {
+  it("prefers the product-level vendor over the link table", () => {
     const [doc] = buildInventoryDocsForVariants(
-      [
-        withProductMeta({
-          vendor_full_name: "Luxury LED LLC",
-          qb_vendor_full_name: "Stale Legacy Vendor",
-        }),
-      ],
+      [withProductMeta({ vendor_full_name: "Luxury LED LLC" })],
       new Map(),
       new Map(),
       new Map(),
@@ -84,9 +79,9 @@ describe("buildInventoryDocsForVariants — vendorName", () => {
     expect(doc.vendorName).toBe("Luxury LED LLC");
   });
 
-  it("falls back to the legacy product-level key before the link table", () => {
+  it("ignores the dropped qb_ spelling — a leftover key must not resurrect", () => {
     const [doc] = buildInventoryDocsForVariants(
-      [withProductMeta({ qb_vendor_full_name: "Luxury LED LLC" })],
+      [withProductMeta({ qb_vendor_full_name: "Stale Legacy Vendor" })],
       new Map(),
       new Map(),
       new Map(),
@@ -94,7 +89,8 @@ describe("buildInventoryDocsForVariants — vendorName", () => {
       LINK
     );
 
-    expect(doc.vendorName).toBe("Luxury LED LLC");
+    // Falls through to the link, NOT to the old key.
+    expect(doc.vendorName).toBe("HK HELIAN OPTOELECTRONICS CO., LIMITED");
   });
 
   it("uses the link table only when the product carries no vendor metadata", () => {

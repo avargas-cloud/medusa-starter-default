@@ -101,11 +101,9 @@ export default async function createEspSfa50w08({ container }: ExecArgs) {
         qb_item_type: "Inventory",
         long_description: LONG_DESCRIPTION,
         vendor_list_id: "80000B28-1495576857",
-        qb_vendor_list_id: "80000B28-1495576857",
         variant_attributes: ["01KFK5SM3EDB6V3NQXGKQEZ8QM"],
         primary_category_id: "pcat_01KGAD1KQXVZ4BKE3YEGSEVVMS",
         vendor_full_name: "SHENZHEN LEDMY CO.,LTD",
-        qb_vendor_full_name: "SHENZHEN LEDMY CO.,LTD",
         is_sourced_via_agent: true,
         main_category_breadcrumbs: [
           {
@@ -173,7 +171,6 @@ export default async function createEspSfa50w08({ container }: ExecArgs) {
           qb_purchase_cost: 16.2,
           qb_purchase_desc: v.qb_purchase_desc,
           vendor_list_id: "80000B28-1495576857",
-          qb_vendor_list_id: "80000B28-1495576857",
           sales_description: v.sales_description,
         },
       })),

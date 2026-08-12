@@ -12,23 +12,18 @@
  * production variants (measured 2026-08-12) and is only a last-resort fallback
  * inside `build-inventory-docs.ts`.
  *
- * ## Legacy keys and the expand/contract cutover
+ * ## The old names are gone
  *
- * These keys were named `qb_vendor_full_name` / `qb_vendor_list_id` until the
- * 2026-08-12 rename. The migration COPIES the values to the new names and
- * leaves the old ones in place, so during the Railway cutover the previous
- * build keeps reading valid data. Every reader here therefore falls back to the
- * legacy name, and every writer emits BOTH names.
- *
- * Dropping the legacy keys (and these fallbacks) is a separate, later step —
- * do not remove them while any `qb_vendor_*` key still exists in the DB.
+ * These keys were `qb_vendor_full_name` / `qb_vendor_list_id` until 2026-08-12.
+ * The rename shipped in two halves: an expand that wrote both spellings, and a
+ * contract that removed the old ones from the code and then from the database.
+ * There is no fallback left on purpose — a reader that still consulted the old
+ * name would silently keep a dead key alive and hide the fact that some writer
+ * never got migrated.
  */
 
 export const VENDOR_FULL_NAME_KEY = "vendor_full_name" as const;
 export const VENDOR_LIST_ID_KEY = "vendor_list_id" as const;
-
-export const LEGACY_VENDOR_FULL_NAME_KEY = "qb_vendor_full_name" as const;
-export const LEGACY_VENDOR_LIST_ID_KEY = "qb_vendor_list_id" as const;
 
 type AnyMeta = Record<string, unknown> | null | undefined;
 
@@ -39,30 +34,23 @@ function readKey(meta: AnyMeta, key: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-/** Vendor display name from product metadata; legacy key as fallback. */
+/** Vendor display name from product metadata. */
 export function readVendorFullName(meta: AnyMeta): string | null {
-  return (
-    readKey(meta, VENDOR_FULL_NAME_KEY) ??
-    readKey(meta, LEGACY_VENDOR_FULL_NAME_KEY)
-  );
+  return readKey(meta, VENDOR_FULL_NAME_KEY);
 }
 
-/** QuickBooks ListID of the vendor from product metadata; legacy as fallback. */
+/** QuickBooks ListID of the vendor, from product metadata. */
 export function readVendorListId(meta: AnyMeta): string | null {
-  return (
-    readKey(meta, VENDOR_LIST_ID_KEY) ?? readKey(meta, LEGACY_VENDOR_LIST_ID_KEY)
-  );
+  return readKey(meta, VENDOR_LIST_ID_KEY);
 }
 
 /**
- * The metadata patch for a vendor write. Emits BOTH the new and the legacy key
- * from the same value, so a build running the pre-rename code still reads the
- * right vendor and the two names can never drift apart.
+ * The metadata patch for a vendor write.
  *
  * `undefined` is preserved verbatim so callers that run the result through a
  * `pruneUndefined` (the POS edit workflows, which only persist the fields the
- * edit actually provided) keep that behaviour on all four keys. `null` is a
- * real value and CLEARS the field — Medusa's `update*` deep-merges JSONB, so
+ * edit actually provided) keep that behaviour on both keys. `null` is a real
+ * value and CLEARS the field — Medusa's `update*` deep-merges JSONB, so
  * omitting a key keeps the old value rather than removing it.
  */
 export function vendorMetadataPatch(
@@ -72,25 +60,23 @@ export function vendorMetadataPatch(
   return {
     [VENDOR_FULL_NAME_KEY]: fullName,
     [VENDOR_LIST_ID_KEY]: listId,
-    [LEGACY_VENDOR_FULL_NAME_KEY]: fullName,
-    [LEGACY_VENDOR_LIST_ID_KEY]: listId,
   };
 }
 
 /**
  * SQL expression for the vendor name of a product, for the given table alias.
  *
- * Emits literal key names and NO bind placeholders on purpose: knex.raw treats
+ * Emits a literal key name and NO bind placeholder on purpose: knex.raw treats
  * every `?` as a binding, so returning a parameterised fragment here would
  * change the binding count of every caller's query.
  *
  * @example `SELECT ${vendorFullNameSql("p")} AS vendor FROM product p`
  */
 export function vendorFullNameSql(alias: string): string {
-  return `COALESCE(NULLIF(TRIM(${alias}.metadata->>'${VENDOR_FULL_NAME_KEY}'), ''), NULLIF(TRIM(${alias}.metadata->>'${LEGACY_VENDOR_FULL_NAME_KEY}'), ''))`;
+  return `NULLIF(TRIM(${alias}.metadata->>'${VENDOR_FULL_NAME_KEY}'), '')`;
 }
 
 /** SQL expression for the vendor QuickBooks ListID. See `vendorFullNameSql`. */
 export function vendorListIdSql(alias: string): string {
-  return `COALESCE(NULLIF(TRIM(${alias}.metadata->>'${VENDOR_LIST_ID_KEY}'), ''), NULLIF(TRIM(${alias}.metadata->>'${LEGACY_VENDOR_LIST_ID_KEY}'), ''))`;
+  return `NULLIF(TRIM(${alias}.metadata->>'${VENDOR_LIST_ID_KEY}'), '')`;
 }
