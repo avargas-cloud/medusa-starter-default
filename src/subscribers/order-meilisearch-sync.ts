@@ -4,6 +4,7 @@ import { Client } from "pg";
 
 import {
   buildOrderDoc,
+  isIndexableOrder,
   type OrderForMeili,
 } from "../lib/meilisearch/build-order-doc";
 import { loadFullyInvoicedForOrder } from "../lib/invoices/load-fully-invoiced";
@@ -191,16 +192,33 @@ export async function syncOrders(
       );
     }
 
-    const docs = (data as OrderForMeili[]).map((o) => buildOrderDoc(o));
+    // An estimate has no document in this index (see isIndexableOrder), and
+    // "skip it" is not the same as "remove it": revert-to-draft turns a real
+    // order back into an estimate, and its old document would otherwise stay in
+    // the Open tab describing an order that no longer exists as one.
+    const indexable = (data as OrderForMeili[]).filter(isIndexableOrder);
+    const toDrop = (data as OrderForMeili[])
+      .filter((o) => !isIndexableOrder(o))
+      .map((o) => o.id);
 
+    const docs = indexable.map((o) => buildOrderDoc(o));
     const meili = await getMeili();
-    await meili.index(ORDERS_INDEX).updateDocuments(docs, { primaryKey: "id" });
 
-    logger.info(
-      `[MEILI-ORDER-SYNC] ✅ upserted ${docs.length} order doc${
-        docs.length === 1 ? "" : "s"
-      } (${docs.map((d) => `#${d.display_id}`).join(", ")})`
-    );
+    if (docs.length > 0) {
+      await meili.index(ORDERS_INDEX).updateDocuments(docs, { primaryKey: "id" });
+      logger.info(
+        `[MEILI-ORDER-SYNC] ✅ upserted ${docs.length} order doc${
+          docs.length === 1 ? "" : "s"
+        } (${docs.map((d) => `#${d.display_id}`).join(", ")})`
+      );
+    }
+
+    if (toDrop.length > 0) {
+      await meili.index(ORDERS_INDEX).deleteDocuments(toDrop);
+      logger.info(
+        `[MEILI-ORDER-SYNC] 🗑️  dropped ${toDrop.length} draft doc(s) from the orders index`
+      );
+    }
   } catch (err: any) {
     logger.error(
       `[MEILI-ORDER-SYNC] ❌ sync failed for [${orderIds.join(",")}]: ${

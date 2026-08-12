@@ -158,10 +158,18 @@ const renderSection = (section: PipelineSection): string => {
  * Costs ~13s over ~1,500 orders because every expected document is rebuilt, which
  * is why it lives in this daily job and NOT in the 5-minute reconciliation sweep.
  *
- * Read-only in both directions: it never writes to MeiliSearch and never writes to
- * `meilisearch_drift_log` — it only reads what the reconciler already recorded, to
- * separate "the sweep never saw this" from "the sweep tried and failed", which is
- * the difference between stale and genuinely stuck.
+ * REPAIRS what it finds, then reports only the remainder (changed 2026-08-12; it
+ * was read-only until then). The 5-minute sweep enumerates rows touched in the
+ * last 6 minutes, so a document that goes wrong and then goes quiet is beyond its
+ * reach forever — this nightly pass is the only thing left that can touch it, and
+ * while it merely reported, S11417 spent a day out of the Open tab being named in
+ * an email every night. Nothing writes to Postgres here beyond the drift_log rows
+ * `orderReconciler.syncOne` already writes; every repair is re-read and re-diffed
+ * before it counts as one.
+ *
+ * It still reads `meilisearch_drift_log` to separate "the sweep never saw this"
+ * from "the sweep tried and failed" — the difference between stale and genuinely
+ * stuck — which is what makes an unrepairable row legible when it reaches the mail.
  *
  * Isolated failure by design: if the audit or MeiliSearch is unavailable, the QB
  * pipeline sections still go out. Losing the whole digest over a search-index
@@ -181,7 +189,7 @@ async function collectOrderIndexDrift(
 
   try {
     const t0 = Date.now();
-    const audit = await auditOrdersIndex(container);
+    const audit = await auditOrdersIndex(container, { heal: true });
 
     const ids = [
       ...new Set([
@@ -219,13 +227,43 @@ async function collectOrderIndexDrift(
       }
     }
 
-    const rows = buildOrderDriftRows(audit, history);
+    // Report only what the repair could NOT fix. The audit runs with heal on
+    // (see healOrders): the 5-minute sweep can no longer reach a document that
+    // stopped changing, so this nightly pass is the last thing that can, and
+    // mailing a list of damage it just chose not to touch is how S11417 stayed
+    // out of the Open tab for a day while being named in the digest.
+    const allRows = buildOrderDriftRows(audit, history);
+    const stillBroken = new Set(
+      (audit.heal?.unrepaired ?? []).map((u) => u.order_id)
+    );
+    const rows = audit.heal
+      ? allRows.filter((r) => stillBroken.has(r.order_id))
+      : allRows;
+
     logger.info(
       `[qb-pipeline-error-digest] orders index audit: ${audit.ordersInDb} orders vs ${audit.docsInIndex} docs — ` +
         `drifted=${audit.driftedDocs} missing=${audit.missing.length} orphaned=${audit.orphans.length} ` +
-        `(${Date.now() - t0}ms)`
+        `repaired=${audit.heal?.repaired.length ?? 0} unrepaired=${
+          audit.heal?.unrepaired.length ?? 0
+        } (${Date.now() - t0}ms)`
     );
-    return { rows, audit };
+
+    // The section heading counts what the email is about, which after a repair
+    // pass is the remainder — not what the audit walked in on.
+    const reported: OrderIndexAuditResult = audit.heal
+      ? {
+          ...audit,
+          driftedDocs: new Set(
+            audit.drifts
+              .filter((d) => stillBroken.has(d.order_id))
+              .map((d) => d.order_id)
+          ).size,
+          missing: audit.missing.filter((m) => stillBroken.has(m.order_id)),
+          orphans: audit.orphans.filter((id) => stillBroken.has(id)),
+        }
+      : audit;
+
+    return { rows, audit: reported };
   } catch (e: any) {
     logger.warn(
       `[qb-pipeline-error-digest] orders index audit failed, digest continues without it: ${e.message}`

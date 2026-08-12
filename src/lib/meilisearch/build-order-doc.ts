@@ -170,6 +170,37 @@ const OPEN_FULFILLMENT = new Set([
 ]);
 const CLOSED_FULFILLMENT = new Set(["fulfilled", "shipped", "delivered"]);
 
+/** An estimate (POS `E####`), not a confirmed order. */
+export function isDraftOrder(order: OrderForMeili): boolean {
+  return order.is_draft_order === true || asString(order.status) === "draft";
+}
+
+/**
+ * Whether this order belongs in the `orders` index at all.
+ *
+ * The index means CONFIRMED ORDERS. Its only three readers — orders/filter,
+ * orders/counts, orders/search — every one of them hard-filters `is_draft =
+ * false`, and the Estimates page never touches MeiliSearch: it queries Postgres
+ * directly (`admin/draft-orders/filter`), exactly and without a row cap, because
+ * an estimate's tabs come from `metadata->>'order_status'` — a column, not a
+ * computed getter. Orders need the index precisely because THEIR tabs
+ * (effective_payment, is_open) are derived values Postgres cannot filter on.
+ *
+ * So 258 estimate documents were being written, reconciled every 5 minutes and
+ * audited nightly for no reader at all. Indexing them buys no reach and costs a
+ * second copy that can disagree with the database — which is the failure this
+ * index keeps producing.
+ *
+ * This also closes a real hole: `POST /admin/orders/:id/revert-to-draft` flips an
+ * order back to an estimate. Without this predicate its document stayed behind,
+ * still `is_draft = false`, still in the Open tab, describing an order that no
+ * longer exists as one. Every writer must DELETE the document when this returns
+ * false, not merely skip it.
+ */
+export function isIndexableOrder(order: OrderForMeili): boolean {
+  return !isDraftOrder(order);
+}
+
 /**
  * Mirrors Medusa's order-module derivation of `fulfillment_status`. Needed
  * because query.graph silently drops the field — it isn't a real column,
@@ -423,8 +454,7 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     // stores. See the sub-cent note there.
     totalForBalance >= 0.01 &&
     paidForBalance + 0.01 < totalForBalance;
-  const isDraft =
-    order.is_draft_order === true || asString(order.status) === "draft";
+  const isDraft = isDraftOrder(order);
   // A natively-completed order is DONE regardless of its (sometimes stale /
   // race-prone) fulfillment_status. Without this, a completed order whose
   // fulfillment_status computed to "partially_delivered" stuck in the Open tab

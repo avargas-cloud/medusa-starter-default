@@ -1,6 +1,6 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
-import { ORDER_AUDITED_FIELDS } from "../audit-orders-index";
+import { ORDER_AUDITED_FIELDS } from "../orders-audited-fields";
 import type { EntityReconciler } from "../drift-reconciler";
 import { ORDERS_INDEX, buildAllOrderDocs } from "../sync-orders-runner";
 

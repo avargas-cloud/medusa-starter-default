@@ -33,45 +33,22 @@
  */
 import type { MedusaContainer } from "@medusajs/framework/types";
 
-import { isIndexNotFound } from "./meili-errors";
+import { isDocumentNotFound, isIndexNotFound } from "./meili-errors";
+import {
+  ORDER_AUDITED_FIELDS,
+  type OrderAuditedField,
+} from "./orders-audited-fields";
+import { orderReconciler } from "./reconcilers/order-reconciler";
 import { sameIndexedValue } from "./same-indexed-value";
 import { ORDERS_INDEX, buildAllOrderDocs } from "./sync-orders-runner";
 
-/**
- * Fields whose drift changes what the operator sees or which tab an order is in.
- *
- * Single source of truth: the reconciler's `comparableFields` reads this same
- * constant. Two lists is how the audit and the 5-minute sweep would start
- * disagreeing about what "drifted" means.
- *
- * `updated_at_ts` is deliberately absent: it moves on every touch and would
- * report drift on rows that are otherwise identical.
- */
-export const ORDER_AUDITED_FIELDS = [
-  "display_id",
-  "document_number",
-  "status",
-  "effective_payment",
-  "fulfillment_status",
-  "is_unpaid",
-  "is_open",
-  "is_closed",
-  "is_separated",
-  "is_canceled",
-  "is_voided",
-  "is_web",
-  "is_draft",
-  "total_cents",
-  "sales_rep_initials",
-  "effective_date_ts",
-  "customer_name",
-  "company_name",
-  "customer_email",
-] as const;
-
-export type OrderAuditedField = (typeof ORDER_AUDITED_FIELDS)[number];
 
 type Doc = Record<string, unknown>;
+
+/** One field of one order that the index gets wrong. */
+// Re-exported: the constant moved to its own leaf module to break the import
+// cycle with order-reconciler. Existing importers keep working.
+export { ORDER_AUDITED_FIELDS, type OrderAuditedField };
 
 /** One field of one order that the index gets wrong. */
 export interface OrderFieldDrift {
@@ -96,6 +73,18 @@ export interface OrderIndexAuditResult {
   /** One entry per (order, field). Ordered by display_id, then field. */
   drifts: OrderFieldDrift[];
   clean: boolean;
+  /**
+   * Present only when the caller asked to heal. Absent means "nobody tried",
+   * which must never read the same as "tried and there was nothing to do".
+   */
+  heal?: OrderIndexHealResult;
+}
+
+export interface OrderIndexHealResult {
+  /** Ids re-synced AND confirmed correct by re-reading the index afterwards. */
+  repaired: string[];
+  /** Ids the repair ran on but that still disagree, or that threw. */
+  unrepaired: Array<{ order_id: string; reason: string }>;
 }
 
 /** Every document currently in the index, keyed by id, audited fields only. */
@@ -146,7 +135,14 @@ const toDisplayId = (v: unknown): number | null => {
  * this belongs in a daily job, never in the 5-minute reconciliation sweep.
  */
 export async function auditOrdersIndex(
-  container: MedusaContainer
+  container: MedusaContainer,
+  opts?: {
+    /**
+     * Repair what the audit finds, then verify the repair. Off by default so the
+     * verifier script stays read-only. See healOrders.
+     */
+    heal?: boolean;
+  }
 ): Promise<OrderIndexAuditResult> {
   // Silent by default: the audit's own progress lines are noise inside a digest
   // job, and the script prints its own report anyway.
@@ -196,7 +192,7 @@ export async function auditOrdersIndex(
       (a.display_id ?? 0) - (b.display_id ?? 0) || a.field.localeCompare(b.field)
   );
 
-  return {
+  const result: OrderIndexAuditResult = {
     ordersInDb: expectedDocs.length,
     docsInIndex: indexed.size,
     missing,
@@ -205,6 +201,114 @@ export async function auditOrdersIndex(
     drifts,
     clean: driftedDocs === 0 && missing.length === 0 && orphans.length === 0,
   };
+
+  if (opts?.heal) {
+    const ids = [
+      ...new Set([
+        ...drifts.map((d) => d.order_id),
+        ...missing.map((m) => m.order_id),
+        ...orphans,
+      ]),
+    ];
+    result.heal = await healOrders(ids, container);
+  }
+
+  return result;
+}
+
+/**
+ * Re-syncs the named orders and CONFIRMS the repair by reading the index back.
+ *
+ * Why this exists at all: the 5-minute reconciliation sweep only looks at rows
+ * touched in the last 6 minutes. A document that goes wrong and then goes quiet
+ * is never revisited by anything — and that is not hypothetical. S11417 was
+ * detected and repaired by the sweep on 2026-08-11 at 14:50, broke again, and
+ * then sat wrong for a full day while this audit named it in the digest every
+ * night and repaired nothing. An audit that can see the damage and not touch it
+ * turns a self-healing system into a mailing list.
+ *
+ * Three things it deliberately does NOT do:
+ *
+ *   • It does not implement its own repair. `orderReconciler.syncOne` is the one
+ *     the sweep uses, drift_log stamping included; a second repair path would rot
+ *     away from that one, which is the failure mode this whole net exists for.
+ *   • It does not trust itself. syncOne resolving without throwing is not proof
+ *     the document is right — the index write is asynchronous and the rebuild
+ *     could reproduce the same wrong value. Every id is re-read and re-diffed,
+ *     and only then counted as repaired.
+ *   • It does not run unless asked. `verify-meili-orders-integrity.ts` stays
+ *     read-only: a verifier that silently fixes what it finds can no longer tell
+ *     you whether anything was broken.
+ *
+ * An orphan is repaired too, and by the same call: syncOne deletes the document
+ * when the order is gone or is no longer indexable (an estimate, or an order
+ * reverted to draft).
+ */
+async function healOrders(
+  ids: string[],
+  container: MedusaContainer
+): Promise<OrderIndexHealResult> {
+  const repaired: string[] = [];
+  const unrepaired: OrderIndexHealResult["unrepaired"] = [];
+  if (ids.length === 0) return { repaired, unrepaired };
+
+  const silent = { info: () => {}, warn: () => {}, error: () => {} };
+
+
+  const { MeiliSearch } = await import("meilisearch");
+  const index = new MeiliSearch({
+    host: process.env.MEILISEARCH_HOST!,
+    apiKey: process.env.MEILISEARCH_API_KEY!,
+  }).index(ORDERS_INDEX);
+
+  for (const id of ids) {
+    try {
+      await orderReconciler.syncOne(id, container);
+
+      // Re-read and re-diff. Meili applies document writes asynchronously, so
+      // poll briefly rather than declaring victory on the first read.
+      const [expected] = (await buildAllOrderDocs(container, silent, [id])) as
+        unknown as Doc[];
+
+      let confirmed = false;
+      let lastReason = "";
+      for (let attempt = 0; attempt < 12 && !confirmed; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
+
+        let actual: Doc | null = null;
+        try {
+          actual = (await index.getDocument(id)) as Doc;
+        } catch (err: unknown) {
+          if (!isDocumentNotFound(err)) throw err;
+          actual = null;
+        }
+
+        if (!expected) {
+          // Not indexable (estimate / reverted to draft) or gone: absence IS
+          // the correct end state.
+          confirmed = actual === null;
+          lastReason = confirmed ? "" : "document should have been deleted and is still present";
+          continue;
+        }
+        if (!actual) {
+          lastReason = "document still missing from the index";
+          continue;
+        }
+        const stillOff = ORDER_AUDITED_FIELDS.filter(
+          (f) => !sameIndexedValue(expected[f], actual![f])
+        );
+        confirmed = stillOff.length === 0;
+        lastReason = confirmed ? "" : `still drifted on: ${stillOff.join(", ")}`;
+      }
+
+      if (confirmed) repaired.push(id);
+      else unrepaired.push({ order_id: id, reason: lastReason });
+    } catch (err: unknown) {
+      unrepaired.push({ order_id: id, reason: (err as Error).message });
+    }
+  }
+
+  return { repaired, unrepaired };
 }
 
 /** Worst-offending field first — the shape both the script and the email want. */

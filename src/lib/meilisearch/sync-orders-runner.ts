@@ -1,6 +1,11 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
-import { buildOrderDoc, type OrderForMeili, type OrderMeiliDoc } from "./build-order-doc";
+import {
+  buildOrderDoc,
+  isIndexableOrder,
+  type OrderForMeili,
+  type OrderMeiliDoc,
+} from "./build-order-doc";
 import { enrichOrderFulfillmentsAndItems } from "./enrich-order-fulfillment-items";
 import { enrichOrderTotals } from "./enrich-order-totals";
 import {
@@ -144,7 +149,13 @@ export async function buildAllOrderDocs(
     );
   }
 
-  return (orders as OrderForMeili[]).map((o) => buildOrderDoc(o));
+  // Estimates are not confirmed orders and no reader of this index asks for
+  // them; see isIndexableOrder. Filtering here means buildAllOrderDocs([draftId])
+  // comes back EMPTY, which is what makes orderReconciler.syncOne delete a
+  // document that should no longer exist — including an order reverted to draft.
+  return (orders as OrderForMeili[])
+    .filter((o) => isIndexableOrder(o))
+    .map((o) => buildOrderDoc(o));
 }
 
 /**
