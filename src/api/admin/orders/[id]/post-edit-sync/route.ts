@@ -5,6 +5,10 @@ import type {
 } from "@medusajs/framework";
 import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
+import {
+  extractWebEditAudit,
+  recordWebOrderEditFootprint,
+} from "../_lib/web-edit-attestation";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
@@ -1316,6 +1320,16 @@ export async function POST(
     details: { docType: "Order" },
     userId: actorId,
   });
+
+  // Huella de edición de orden web (no-op para órdenes POS): sellada
+  // DESPUÉS del efecto, deduplicada por operation_id entre las rutas de un
+  // mismo Save. post-edit-sync es la última ruta del flujo de guardado.
+  await recordWebOrderEditFootprint(
+    req.scope,
+    id,
+    "post-edit-sync",
+    extractWebEditAudit(req)
+  );
 
   res.status(200).json({ success: true, ...results });
 }

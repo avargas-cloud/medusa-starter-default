@@ -10,6 +10,10 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { assertWebOrdersAuthorized } from "../../../orders/[id]/_lib/assert-web-order-authorized";
+import {
+  extractWebEditAudit,
+  recordWebOrderEditFootprint,
+} from "../../../orders/[id]/_lib/web-edit-attestation";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -162,6 +166,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const updated = await financeService.retrieveCustomerPayment(id, {
       relations: ["applications"],
     });
+    // Huella post-efecto en cada orden web tocada por este refund.
+    for (const oid of new Set(
+      [
+        (payment as any).locked_order_id,
+        (payment as any).metadata?.order_id,
+        ...activeApps.map((a: any) => a.order_id),
+      ].filter(Boolean) as string[]
+    )) {
+      await recordWebOrderEditFootprint(
+        req.scope,
+        oid,
+        "customer-payments/refund",
+        extractWebEditAudit(req)
+      );
+    }
     return res.json({
       payment: updated,
       refunded: refundAmount,

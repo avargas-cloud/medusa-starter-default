@@ -11,6 +11,10 @@ import CreditMemoModuleService from "../../../../../../modules/credit_memos/serv
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { assertWebOrdersAuthorized } from "../../../../orders/[id]/_lib/assert-web-order-authorized";
+import {
+  extractWebEditAudit,
+  recordWebOrderEditFootprint,
+} from "../../../../orders/[id]/_lib/web-edit-attestation";
 import { USA_LOC } from "../../../../../../lib/locations";
 import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
 
@@ -327,6 +331,15 @@ export async function POST(
       voided_at: new Date(),
     });
 
+    // Huella post-efecto si la orden padre es web (no-op para POS).
+    if (creditMemo.order_id) {
+      await recordWebOrderEditFootprint(
+        req.scope,
+        creditMemo.order_id as string,
+        "credit_memos/void",
+        extractWebEditAudit(req)
+      );
+    }
     res.status(200).json({ success: true, message: "Credit Memo voided" });
   } catch (e: any) {
     logger.error(`[void CM] failed: ${e.message}`);
