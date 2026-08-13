@@ -22,6 +22,10 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../../../utils/db-pool";
+import {
+  recordPosActivity,
+  type KnexRawConnection,
+} from "../../../../../lib/pos/order-activity";
 import { validateSeparationRequest } from "../../_lib/separation-caps";
 import { deriveSeparationStatus } from "../../_lib/separation-status";
 import { loadSeparationData } from "../_lib/separation-data";
@@ -143,6 +147,28 @@ export async function POST(
     throw err;
   } finally {
     client.release();
+  }
+
+  // Native Activity Log footprint: WHO set aside WHAT (per-SKU from→to), so
+  // the owner can track warehouse work per user. Only real changes are
+  // recorded — re-saving identical values leaves no entry. Best-effort by
+  // contract (recordPosActivity swallows failures): the save already
+  // committed and activity must never undo it.
+  const changes = [...requested]
+    .map(([lineId, qty]) => {
+      const l = data.lines.find((x) => x.lineId === lineId);
+      if (!l || qty === l.separated) return null;
+      return { sku: l.sku || "—", from: l.separated, to: qty };
+    })
+    .filter((c): c is { sku: string; from: number; to: number } => c !== null);
+  if (changes.length) {
+    const knexConn = req.scope.resolve("__pg_connection__") as KnexRawConnection;
+    await recordPosActivity(knexConn, {
+      orderId,
+      event: "separation_saved",
+      details: { changes, status: separation_status },
+      userId: actorId,
+    });
   }
 
   res.json({

@@ -185,6 +185,33 @@ async function main() {
   check("metadata.separation_status=partial", metaP?.separation_status === "partial");
   check("metadata.is_separated=false", metaP?.is_separated === false);
 
+  // Activity Log: el save deja una huella nativa con actor y deltas por SKU
+  // (delta v3 2026-08-12 — el owner rastrea quién separa qué).
+  const actRows = await db.query(
+    `SELECT internal_note, created_by FROM order_change
+      WHERE order_id = $1 AND change_type = 'pos_activity'
+        AND internal_note LIKE '__pos_activity__%separation_saved%'
+      ORDER BY created_at DESC`,
+    [f.order_id]
+  );
+  check("pos_activity separation_saved escrita", actRows.rows.length === 1);
+  check("actividad con actor", !!actRows.rows[0]?.created_by);
+  let actPayload: any = null;
+  try {
+    actPayload = JSON.parse(
+      String(actRows.rows[0]?.internal_note ?? "").slice("__pos_activity__".length)
+    );
+  } catch {
+    /* check de abajo lo reporta */
+  }
+  check(
+    "actividad: delta 0→1 del SKU",
+    Array.isArray(actPayload?.changes) &&
+      actPayload.changes.some((c: any) => c.from === 0 && c.to === 1),
+    JSON.stringify(actPayload?.changes)
+  );
+  check("actividad: status partial", actPayload?.status === "partial");
+
   // ── 3. Sobre-cap → 409 ─────────────────────────────────────────────────────
   console.log("\n3. POST sobre el tope físico");
   const over = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
@@ -320,6 +347,13 @@ async function main() {
       separations: [{ line_id: f.line_id, qty: 2 }],
     });
     check("subir la propia → 409", raise.status === 409, `status ${raise.status}`);
+    const actBefore = (
+      await db.query(
+        `SELECT COUNT(*)::int AS n FROM order_change
+          WHERE order_id = $1 AND internal_note LIKE '__pos_activity__%separation_saved%'`,
+        [f.order_id]
+      )
+    ).rows[0].n;
     const keep = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
       separations: [{ line_id: f.line_id, qty: 1 }],
     });
@@ -327,6 +361,18 @@ async function main() {
       "mantener el valor guardado NUNCA se rechaza",
       keep.status === 200,
       `status ${keep.status}`
+    );
+    const actAfter = (
+      await db.query(
+        `SELECT COUNT(*)::int AS n FROM order_change
+          WHERE order_id = $1 AND internal_note LIKE '__pos_activity__%separation_saved%'`,
+        [f.order_id]
+      )
+    ).rows[0].n;
+    check(
+      "guardar sin cambios NO deja huella de actividad",
+      actAfter === actBefore,
+      `antes ${actBefore}, después ${actAfter}`
     );
 
     // Cancelada = liberada: el status de la otra orden la saca del pool.
@@ -445,6 +491,12 @@ async function main() {
     f.order_id,
     JSON.stringify(metaBefore ?? {}),
   ]);
+  await db.query(
+    `DELETE FROM order_change
+      WHERE order_id = $1 AND change_type = 'pos_activity'
+        AND internal_note LIKE '__pos_activity__%separation_saved%'`,
+    [f.order_id]
+  );
   console.log("\nCleanup: filas borradas y metadata restaurado");
 
   await db.end();
