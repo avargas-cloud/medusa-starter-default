@@ -1,9 +1,15 @@
 /**
  * Pure math of per-line separation: physical caps and the derived tri-state.
  *
- * The cases that matter and cannot be trusted to a green sandbox run:
- *  - an air-backed reservation (allow_backorder at zero stock) grants NO cap;
- *  - two lines of the same inventory item competing for one free pool;
+ * Since 2026-08-12 the cross-order arbiter is the SEPARATION, not the
+ * reservation (owner decision): reservations can be air (allow_backorder at
+ * zero stock) and unseparated stock covers nobody. The cases that matter and
+ * cannot be trusted to a green sandbox run:
+ *  - live separations of OTHER orders shrink the pool; reservations do not;
+ *  - a stored sibling separation (same order, same item) is real demand even
+ *    when the request does not mention that line;
+ *  - a stored value the stock no longer backs is never forced down — any
+ *    request at or below it passes;
  *  - the legacy boolean (is_separated with no rows) still reads as full.
  */
 
@@ -15,9 +21,14 @@ import {
 } from "../../api/admin/orders/_lib/separation-caps";
 import { deriveSeparationStatus } from "../../api/admin/orders/_lib/separation-status";
 
-const inv = (stocked: number, reservedAllOrders: number): InventorySnapshot => ({
+const inv = (
+  stocked: number,
+  reservedAllOrders = 0,
+  separatedElsewhere = 0
+): InventorySnapshot => ({
   stocked,
   reservedAllOrders,
+  separatedElsewhere,
 });
 
 const line = (
@@ -26,6 +37,7 @@ const line = (
   quantity: 0,
   fulfilled: 0,
   reserved: 0,
+  separated: 0,
   inventoryItemId: "iitem_a",
   ...overrides,
 });
@@ -33,39 +45,58 @@ const line = (
 describe("computeSeparationCaps", () => {
   it("caps at open qty when stock is plentiful", () => {
     const caps = computeSeparationCaps(
-      [line({ lineId: "l1", quantity: 7, fulfilled: 2, reserved: 5 })],
-      new Map([["iitem_a", inv(100, 5)]])
+      [line({ lineId: "l1", quantity: 7, fulfilled: 2 })],
+      new Map([["iitem_a", inv(100)]])
     );
-    expect(caps[0]).toMatchObject({ openQty: 5, stockBackedReserved: 5, cap: 5 });
+    expect(caps[0]).toMatchObject({ openQty: 5, cap: 5 });
   });
 
-  it("an air-backed reservation grants no cap", () => {
-    // Reserved 7 but zero stock — allow_backorder reservation is air.
+  it("live separations of other orders shrink the pool", () => {
     const caps = computeSeparationCaps(
-      [line({ lineId: "l1", quantity: 7, reserved: 7 })],
-      new Map([["iitem_a", inv(0, 7)]])
+      [line({ lineId: "l1", quantity: 10 })],
+      new Map([["iitem_a", inv(10, 0, 4)]])
     );
-    expect(caps[0]).toMatchObject({ stockBackedReserved: 0, cap: 0 });
+    expect(caps[0].cap).toBe(6);
   });
 
-  it("stock claimed by OTHER orders does not back this line", () => {
-    // 4 in stock, 10 reserved in total of which 6 belong to others: others'
-    // claim eats all 4 → this line's reservation is fully at risk.
+  it("other orders' RESERVATIONS no longer shrink the cap", () => {
+    // 4 stocked, 10 reserved across orders, nothing separated elsewhere:
+    // under the pre-2026-08-12 model this capped at 0 — now stock unclaimed
+    // by a separation is fair game.
     const caps = computeSeparationCaps(
       [line({ lineId: "l1", quantity: 4, reserved: 4 })],
       new Map([["iitem_a", inv(4, 10)]])
     );
-    expect(caps[0].stockBackedReserved).toBe(0);
+    expect(caps[0].cap).toBe(4);
+  });
+
+  it("zero stock grants no cap even with a reservation (air)", () => {
+    const caps = computeSeparationCaps(
+      [line({ lineId: "l1", quantity: 7, reserved: 7 })],
+      new Map([["iitem_a", inv(0, 7)]])
+    );
     expect(caps[0].cap).toBe(0);
   });
 
-  it("free unreserved stock extends the cap beyond the reservation", () => {
+  it("separations elsewhere at or above stock zero the cap", () => {
     const caps = computeSeparationCaps(
-      [line({ lineId: "l1", quantity: 10, reserved: 2 })],
-      new Map([["iitem_a", inv(9, 2)]])
+      [line({ lineId: "l1", quantity: 5 })],
+      new Map([["iitem_a", inv(6, 0, 9)]])
     );
-    // backed 2 + free pool 7 = 9, capped by openQty 10 → 9
-    expect(caps[0].cap).toBe(9);
+    expect(caps[0].cap).toBe(0);
+  });
+
+  it("a sibling line's stored separation is demand on the same pool", () => {
+    const caps = computeSeparationCaps(
+      [
+        line({ lineId: "l1", quantity: 8, separated: 6 }),
+        line({ lineId: "l2", quantity: 8 }),
+      ],
+      new Map([["iitem_a", inv(10)]])
+    );
+    // l2 sees 10 − 6 = 4; l1's own stored value is not demand against itself.
+    expect(caps.find((c) => c.lineId === "l2")?.cap).toBe(4);
+    expect(caps.find((c) => c.lineId === "l1")?.cap).toBe(8);
   });
 
   it("a line with no inventory item cannot separate", () => {
@@ -80,8 +111,8 @@ describe("computeSeparationCaps", () => {
 describe("validateSeparationRequest", () => {
   it("accepts a request within the cap", () => {
     const rejections = validateSeparationRequest(
-      [line({ lineId: "l1", quantity: 7, reserved: 3 })],
-      new Map([["iitem_a", inv(10, 3)]]),
+      [line({ lineId: "l1", quantity: 7 })],
+      new Map([["iitem_a", inv(10)]]),
       new Map([["l1", 5]])
     );
     expect(rejections).toEqual([]);
@@ -89,8 +120,8 @@ describe("validateSeparationRequest", () => {
 
   it("rejects beyond open qty", () => {
     const rejections = validateSeparationRequest(
-      [line({ lineId: "l1", quantity: 7, fulfilled: 3, reserved: 7 })],
-      new Map([["iitem_a", inv(100, 7)]]),
+      [line({ lineId: "l1", quantity: 7, fulfilled: 3 })],
+      new Map([["iitem_a", inv(100)]]),
       new Map([["l1", 5]])
     );
     expect(rejections).toEqual([
@@ -98,17 +129,36 @@ describe("validateSeparationRequest", () => {
     ]);
   });
 
-  it("two lines of the same item compete for one free pool", () => {
-    // Pool: 5 stocked, 0 reserved → 5 free. Each line alone could take 5,
-    // together they ask 8 → both rejected with the shared honest cap.
+  it("rejects a raise past what other orders left on the shelf", () => {
+    const rejections = validateSeparationRequest(
+      [line({ lineId: "l1", quantity: 10 })],
+      new Map([["iitem_a", inv(10, 0, 7)]]),
+      new Map([["l1", 5]])
+    );
+    expect(rejections).toEqual([
+      { lineId: "l1", requested: 5, cap: 3, reason: "exceeds_physical_stock" },
+    ]);
+  });
+
+  it("never forces lowering: keeping or reducing an over-cap stored value passes", () => {
+    const lines = [line({ lineId: "l1", quantity: 10, separated: 6 })];
+    const inventory = new Map([["iitem_a", inv(3)]]); // stock moved; cap is 3 now
+    expect(
+      validateSeparationRequest(lines, inventory, new Map([["l1", 6]]))
+    ).toEqual([]);
+    expect(
+      validateSeparationRequest(lines, inventory, new Map([["l1", 4]]))
+    ).toEqual([]);
+  });
+
+  it("two lines of the same item compete for one pool", () => {
     const lines = [
       line({ lineId: "l1", quantity: 6 }),
       line({ lineId: "l2", quantity: 6 }),
     ];
-    const inventory = new Map([["iitem_a", inv(5, 0)]]);
     const rejections = validateSeparationRequest(
       lines,
-      inventory,
+      new Map([["iitem_a", inv(5)]]),
       new Map([
         ["l1", 4],
         ["l2", 4],
@@ -118,15 +168,30 @@ describe("validateSeparationRequest", () => {
     expect(rejections.every((r) => r.reason === "exceeds_physical_stock")).toBe(true);
   });
 
-  it("stock-backed reservations do not draw from the pool", () => {
-    // 5 stocked, 5 reserved (all this line's) → backed 5, pool 0. Asking the
-    // backed amount is fine even with an empty pool.
+  it("an unmentioned sibling's stored separation still counts as demand", () => {
+    const lines = [
+      line({ lineId: "l1", quantity: 8, separated: 6 }), // not in the request
+      line({ lineId: "l2", quantity: 8 }),
+    ];
     const rejections = validateSeparationRequest(
-      [line({ lineId: "l1", quantity: 5, reserved: 5 })],
-      new Map([["iitem_a", inv(5, 5)]]),
-      new Map([["l1", 5]])
+      lines,
+      new Map([["iitem_a", inv(10)]]),
+      new Map([["l2", 5]])
     );
-    expect(rejections).toEqual([]);
+    expect(rejections).toEqual([
+      { lineId: "l2", requested: 5, cap: 4, reason: "exceeds_physical_stock" },
+    ]);
+  });
+
+  it("no inventory item means no physical stock can back a raise", () => {
+    const rejections = validateSeparationRequest(
+      [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
+      new Map(),
+      new Map([["l1", 2]])
+    );
+    expect(rejections).toEqual([
+      { lineId: "l1", requested: 2, cap: 0, reason: "exceeds_physical_stock" },
+    ]);
   });
 });
 

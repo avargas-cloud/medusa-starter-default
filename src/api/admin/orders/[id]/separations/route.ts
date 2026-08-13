@@ -3,8 +3,8 @@
  *
  * Writes per-line separated quantities. The MODAL only collects numbers — this
  * route is the authorization: every requested quantity is re-validated here
- * against fresh physical Miami inventory (stock-backed reservation + free
- * pool), never against what the screen believed.
+ * against fresh physical Miami inventory net of other orders' live
+ * separations, never against what the screen believed.
  *
  * Body: { separations: [{ line_id, qty }] } — qty is the line's new TOTAL
  * separated amount (not a delta); 0 clears the mark. Lines not included keep

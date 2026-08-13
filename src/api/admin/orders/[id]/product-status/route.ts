@@ -2,9 +2,9 @@
  * GET /admin/orders/:id/product-status
  *
  * One fetch feeding both the Product Status modal and the Separation modal:
- * per-line facts (qty, fulfilled, separated, stock-backed reservation, caps)
- * plus the POs linked to the order (same DTO as /purchase-orders/for-order —
- * shared query, do not fork it).
+ * per-line facts (qty, fulfilled, separated, caps, live cross-order
+ * separations) plus the POs linked to the order (same DTO as
+ * /purchase-orders/for-order — shared query, do not fork it).
  *
  * Read-only. All waterfall/attribution math lives client-side in
  * store-pos/components/pos/product-status/rows.ts (pure, unit-tested) — this
@@ -66,6 +66,9 @@ export async function GET(
       const inv = l.inventoryItemId
         ? data.inventory.get(l.inventoryItemId)
         : undefined;
+      const elsewhereRows = l.inventoryItemId
+        ? data.elsewhere.get(l.inventoryItemId) ?? []
+        : [];
       return {
         line_id: l.lineId,
         sku: l.sku,
@@ -75,11 +78,21 @@ export async function GET(
         invoiced: l.invoiced,
         separated: l.separated,
         reserved: l.reserved,
-        stock_backed_reserved: cap?.stockBackedReserved ?? 0,
         separable_cap: cap?.cap ?? 0,
         open_qty: cap?.openQty ?? 0,
         miami_stocked: inv?.stocked ?? 0,
         miami_reserved_all_orders: inv?.reservedAllOrders ?? 0,
+        // Live separations of OTHER orders on this item (item-level facts —
+        // they repeat across lines of the same SKU, like miami_stocked).
+        separated_elsewhere: inv?.separatedElsewhere ?? 0,
+        separations_elsewhere: elsewhereRows.map((r) => ({
+          order_id: r.orderId,
+          display_id: r.displayId,
+          customer_name: r.customerName,
+          sku: r.sku,
+          ordered: r.ordered,
+          separated: r.separated,
+        })),
       };
     }),
     purchase_orders,

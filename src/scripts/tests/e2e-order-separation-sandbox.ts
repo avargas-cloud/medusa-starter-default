@@ -7,6 +7,11 @@
  *     metadata.separation_status=partial, is_separated=false (espejo del tab).
  *  3. POST por encima del tope físico → 409 `separation_exceeds_inventory` con
  *     rejections nombrando la línea (control de que la validación EXISTE).
+ *  3b. CROSS-ORDEN (owner 2026-08-12): una separación VIVA en otra orden del
+ *     mismo inventory item achica `separated_elsewhere`/`separable_cap` y sale
+ *     en `separations_elsewhere` (tooltip); llevarla a live 0 (equivalente a
+ *     entregada) o cancelar la otra orden la LIBERA; con la otra orden
+ *     acaparando todo el stock, subir la separación propia da 409.
  *  4. POST completo → status `full`, is_separated=true.
  *  5. Legacy: orden con metadata.is_separated=true y CERO filas → GET la lee
  *     como `full` sin migrar nada.
@@ -87,7 +92,8 @@ async function main() {
   // ── Fixture: orden con una línea físicamente separable (cap ≥ 2) ───────────
   const fx = await db.query(`
     SELECT o.id AS order_id, oli.id AS line_id, oi.quantity::numeric AS qty,
-           il.stocked_quantity::numeric AS stocked
+           il.stocked_quantity::numeric AS stocked,
+           pvii.inventory_item_id AS item_id
       FROM "order" o
       JOIN order_item oi ON oi.order_id = o.id AND oi.version = o.version AND oi.deleted_at IS NULL
       JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
@@ -200,6 +206,155 @@ async function main() {
     [f.order_id, f.line_id]
   );
   check("el 409 no escribió nada (sigue 1)", Number(rowAfter409.rows[0]?.qty) === 1);
+
+  // ── 3b. Cross-orden: separación viva en OTRA orden achica el cap ───────────
+  console.log("\n3b. Separación viva en otra orden");
+  const other = (
+    await db.query(
+      `SELECT o.id AS order_id, o.display_id, oli.id AS line_id,
+              COALESCE(oi.fulfilled_quantity::numeric, 0) AS fulfilled,
+              o.status AS status
+         FROM "order" o
+         JOIN order_item oi
+           ON oi.order_id = o.id AND oi.version = o.version AND oi.deleted_at IS NULL
+         JOIN order_line_item oli
+           ON oli.id = oi.item_id AND oli.deleted_at IS NULL
+         JOIN product_variant_inventory_item pvii
+           ON pvii.variant_id = oli.variant_id AND pvii.deleted_at IS NULL
+         LEFT JOIN order_line_separation sep
+           ON sep.order_id = o.id AND sep.order_line_item_id = oli.id
+        WHERE pvii.inventory_item_id = $1
+          AND o.id <> $2
+          AND o.deleted_at IS NULL
+          AND o.status NOT IN ('canceled', 'archived')
+          AND sep.id IS NULL
+        ORDER BY o.created_at DESC
+        LIMIT 1`,
+      [f.item_id, f.order_id]
+    )
+  ).rows[0];
+  if (!other) {
+    console.log("  (ninguna otra orden comparte el inventory item — sección salteada)");
+  } else {
+    const otherFulfilled = Number(other.fulfilled);
+    const readLine = async () => {
+      const r = await api(token, "GET", `/admin/orders/${f.order_id}/product-status`);
+      return r.json?.lines?.find((l: any) => l.line_id === f.line_id);
+    };
+    const base3b = await readLine();
+    const elseBase = Number(base3b?.separated_elsewhere ?? 0);
+    const capBase = Number(base3b?.separable_cap ?? 0);
+
+    // La otra orden aparta 2 unidades VIVAS (qty total = fulfilled + 2, así el
+    // remanente es exactamente 2 tenga o no entregas previas esa línea).
+    await db.query(
+      `INSERT INTO order_line_separation (order_id, order_line_item_id, qty, updated_by)
+       VALUES ($1, $2, $3, 'e2e-cross-order')
+       ON CONFLICT (order_id, order_line_item_id)
+       DO UPDATE SET qty = EXCLUDED.qty, updated_at = now()`,
+      [other.order_id, other.line_id, otherFulfilled + 2]
+    );
+    const withElse = await readLine();
+    check(
+      "separated_elsewhere sube exactamente 2",
+      Number(withElse?.separated_elsewhere) === elseBase + 2,
+      `antes ${elseBase}, ahora ${withElse?.separated_elsewhere}`
+    );
+    const expectedCap = Math.min(
+      Number(withElse?.open_qty ?? 0),
+      Math.max(0, Number(withElse?.miami_stocked ?? 0) - Number(withElse?.separated_elsewhere ?? 0))
+    );
+    check(
+      "separable_cap = min(open, stocked − elsewhere)",
+      Number(withElse?.separable_cap) === expectedCap,
+      `cap ${withElse?.separable_cap}, esperado ${expectedCap}`
+    );
+    const tip = (withElse?.separations_elsewhere ?? []).find(
+      (r: any) => r.order_id === other.order_id
+    );
+    check("tooltip trae la otra orden", !!tip);
+    check(
+      "tooltip: separated vivo = 2",
+      Number(tip?.separated) === 2,
+      `separated ${tip?.separated}`
+    );
+    check(
+      "tooltip: display_id de la otra orden",
+      tip?.display_id === other.display_id,
+      `display ${tip?.display_id} vs ${other.display_id}`
+    );
+    check("tooltip: customer_name presente", typeof tip?.customer_name === "string" && tip.customer_name.length > 0);
+
+    // Entregada = liberada: live 0 (qty == fulfilled) saca la fila del pool y
+    // del tooltip sin borrar nada.
+    await db.query(
+      `UPDATE order_line_separation SET qty = $3
+        WHERE order_id = $1 AND order_line_item_id = $2`,
+      [other.order_id, other.line_id, otherFulfilled]
+    );
+    const released = await readLine();
+    check(
+      "live 0 libera el pool",
+      Number(released?.separated_elsewhere) === elseBase,
+      `elsewhere ${released?.separated_elsewhere}, esperado ${elseBase}`
+    );
+    check(
+      "live 0 restaura el cap",
+      Number(released?.separable_cap) === capBase,
+      `cap ${released?.separable_cap}, esperado ${capBase}`
+    );
+
+    // Overdraw: la otra orden acapara todo el stock → subir la propia da 409.
+    await db.query(
+      `UPDATE order_line_separation SET qty = $3
+        WHERE order_id = $1 AND order_line_item_id = $2`,
+      [other.order_id, other.line_id, otherFulfilled + Number(f.stocked) + 999]
+    );
+    const starved = await readLine();
+    check(
+      "acaparado: cap propio 0",
+      Number(starved?.separable_cap) === 0,
+      `cap ${starved?.separable_cap}`
+    );
+    const raise = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+      separations: [{ line_id: f.line_id, qty: 2 }],
+    });
+    check("subir la propia → 409", raise.status === 409, `status ${raise.status}`);
+    const keep = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+      separations: [{ line_id: f.line_id, qty: 1 }],
+    });
+    check(
+      "mantener el valor guardado NUNCA se rechaza",
+      keep.status === 200,
+      `status ${keep.status}`
+    );
+
+    // Cancelada = liberada: el status de la otra orden la saca del pool.
+    await db.query(`UPDATE "order" SET status = 'canceled' WHERE id = $1`, [
+      other.order_id,
+    ]);
+    const freed = await readLine();
+    check(
+      "orden cancelada libera el pool",
+      Number(freed?.separated_elsewhere) === elseBase,
+      `elsewhere ${freed?.separated_elsewhere}, esperado ${elseBase}`
+    );
+    await db.query(`UPDATE "order" SET status = $2 WHERE id = $1`, [
+      other.order_id,
+      other.status,
+    ]);
+    await db.query(
+      `DELETE FROM order_line_separation
+        WHERE order_id = $1 AND order_line_item_id = $2`,
+      [other.order_id, other.line_id]
+    );
+    const clean = await readLine();
+    check(
+      "cleanup 3b: cap de vuelta al baseline",
+      Number(clean?.separable_cap) === capBase,
+      `cap ${clean?.separable_cap}, esperado ${capBase}`
+    );
+  }
 
   // ── 4. Separación completa ─────────────────────────────────────────────────
   console.log("\n4. POST completo");

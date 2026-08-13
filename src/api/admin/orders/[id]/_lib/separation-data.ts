@@ -21,7 +21,6 @@ import type {
 export interface SeparationOrderLine extends SeparationLineInput {
   sku: string;
   description: string;
-  separated: number;
   /** Real fulfilled quantity (the inherited `fulfilled` field carries COVERED —
    *  max(fulfilled, invoiced) — because both modals show only pending work). */
   fulfilledActual: number;
@@ -29,6 +28,21 @@ export interface SeparationOrderLine extends SeparationLineInput {
    *  order_line_item_id (Delivery v2). Legacy invoices without the link are
    *  covered by the order-level fully_invoiced fallback. */
   invoiced: number;
+}
+
+/** One LIVE separation of another order holding units of an inventory item:
+ *  its unfulfilled remainder (qty − delivered, floored at 0). Feeds the
+ *  "where is this SKU separated" tooltip and sums into
+ *  InventorySnapshot.separatedElsewhere. */
+export interface ElsewhereSeparationRow {
+  inventoryItemId: string;
+  orderId: string;
+  displayId: number | null;
+  customerName: string;
+  sku: string;
+  ordered: number;
+  /** Live remainder still on the shelf for that order. */
+  separated: number;
 }
 
 export interface SeparationData {
@@ -39,6 +53,8 @@ export interface SeparationData {
   metadata: Record<string, unknown>;
   lines: SeparationOrderLine[];
   inventory: Map<string, InventorySnapshot>;
+  /** Live cross-order separations per inventory item of this order's lines. */
+  elsewhere: Map<string, ElsewhereSeparationRow[]>;
 }
 
 function num(v: unknown): number {
@@ -164,6 +180,7 @@ export async function loadSeparationData(
     ),
   ];
   const inventory = new Map<string, InventorySnapshot>();
+  const elsewhere = new Map<string, ElsewhereSeparationRow[]>();
   if (itemIds.length) {
     const invRes = await pool.query<{
       inventory_item_id: string;
@@ -181,7 +198,82 @@ export async function loadSeparationData(
       inventory.set(row.inventory_item_id, {
         stocked: num(row.stocked_quantity),
         reservedAllOrders: num(row.reserved_quantity),
+        separatedElsewhere: 0,
       });
+    }
+
+    // Live separations of OTHER orders holding units of these items: their
+    // unfulfilled remainder. Delivered units left the building (released);
+    // invoiced-but-undelivered ones still hold their claim. Canceled and
+    // archived orders never hold stock.
+    const elseRes = await pool.query<{
+      inventory_item_id: string;
+      order_id: string;
+      display_id: number | null;
+      customer_name: string | null;
+      sku: string | null;
+      ordered: unknown;
+      separated_live: unknown;
+    }>(
+      `SELECT pvii.inventory_item_id,
+              o.id                      AS order_id,
+              o.display_id              AS display_id,
+              COALESCE(
+                NULLIF(TRIM(CONCAT(c.first_name, ' ', c.last_name)), ''),
+                NULLIF(c.company_name, ''),
+                c.email
+              )                         AS customer_name,
+              oli.variant_sku           AS sku,
+              oi.quantity               AS ordered,
+              GREATEST(0, sep.qty - COALESCE(oi.fulfilled_quantity, 0))
+                                        AS separated_live
+         FROM order_line_separation sep
+         JOIN "order" o
+           ON o.id = sep.order_id
+          AND o.deleted_at IS NULL
+          AND o.status NOT IN ('canceled', 'archived')
+         JOIN order_line_item oli
+           ON oli.id = sep.order_line_item_id
+          AND oli.deleted_at IS NULL
+         JOIN order_item oi
+           ON oi.order_id = sep.order_id
+          AND oi.item_id = oli.id
+          AND oi.version = o.version
+          AND oi.deleted_at IS NULL
+         JOIN product_variant_inventory_item pvii
+           ON pvii.variant_id = oli.variant_id
+          AND pvii.deleted_at IS NULL
+         LEFT JOIN customer c
+           ON c.id = o.customer_id
+          AND c.deleted_at IS NULL
+        WHERE pvii.inventory_item_id = ANY($2::text[])
+          AND sep.order_id <> $1
+          AND sep.qty > COALESCE(oi.fulfilled_quantity, 0)
+        ORDER BY o.display_id ASC, oli.id ASC`,
+      [orderId, itemIds]
+    );
+    for (const row of elseRes.rows) {
+      const live = num(row.separated_live);
+      if (live <= 0) continue;
+      const entry: ElsewhereSeparationRow = {
+        inventoryItemId: row.inventory_item_id,
+        orderId: row.order_id,
+        displayId: row.display_id,
+        customerName: row.customer_name ?? "—",
+        sku: (row.sku ?? "").trim(),
+        ordered: num(row.ordered),
+        separated: live,
+      };
+      const list = elsewhere.get(row.inventory_item_id) ?? [];
+      list.push(entry);
+      elsewhere.set(row.inventory_item_id, list);
+      const inv = inventory.get(row.inventory_item_id);
+      if (inv) {
+        inventory.set(row.inventory_item_id, {
+          ...inv,
+          separatedElsewhere: inv.separatedElsewhere + live,
+        });
+      }
     }
   }
 
@@ -192,5 +284,6 @@ export async function loadSeparationData(
     metadata,
     lines,
     inventory,
+    elsewhere,
   };
 }
