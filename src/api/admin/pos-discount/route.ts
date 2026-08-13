@@ -261,7 +261,26 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
       await removeDraftOrderPromotionsWorkflow(req.scope).run({
         input: { order_id, promo_codes: [promotion_code] },
       });
-      logger.info(`[POS Discount DELETE] Removed ${promotion_code}`);
+      // El workflow devuelve OK y DEJA VIVAS las filas de adjustment (las
+      // escribe posOverrideAdjustmentsWorkflow por fuera, gotcha 2026-07-30) y
+      // el link order_promotion. Sin este barrido el descuento "quitado" sigue
+      // restando en loadOrderMoneyBase y el total guardado sale envenenado.
+      const pool = getDbPool();
+      const adjDel = await pool.query(
+        `DELETE FROM order_line_item_adjustment
+          WHERE code = $1
+            AND item_id IN (SELECT item_id FROM order_item WHERE order_id = $2)`,
+        [promotion_code, order_id]
+      );
+      await pool.query(
+        `DELETE FROM order_promotion
+          WHERE order_id = $1
+            AND promotion_id IN (SELECT id FROM promotion WHERE code = $2)`,
+        [order_id, promotion_code]
+      );
+      logger.info(
+        `[POS Discount DELETE] Removed ${promotion_code} (+${adjDel.rowCount ?? 0} adjustment(s) barridas)`
+      );
     }
 
     // Step 4: Confirm the edit

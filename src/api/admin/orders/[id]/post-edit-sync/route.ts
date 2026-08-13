@@ -89,6 +89,24 @@ export async function POST(
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
   const results: Record<string, any> = {};
 
+  // ── El descuento del POS se resuelve UNA vez, con semántica de PRESENCIA ──
+  //
+  // `pos_discount_amount` viene en TODO save del POS, 0 incluido — y 0 significa
+  // "sin descuento", no "no sé". El bloque de totales lo trataba como falsy y
+  // caía a los adjustments de la DB, que en el save que QUITA un descuento
+  // siguen vivos hasta que la reconciliación (más abajo) los borra: la ruta
+  // derivaba el total con el descuento fantasma y recién después lo eliminaba
+  // (S11432: quedó guardado 26,116.47 sobre una orden de 31,049.51). La
+  // reconciliación ya resolvía la presencia bien; ahora AMBOS bloques leen este
+  // mismo valor — dos resoluciones distintas de "el descuento" en la misma ruta
+  // son la misma clase de bug que los tres campos de total.
+  const explicitPosDiscount: number | undefined =
+    pos_discount_amount !== undefined && pos_discount_amount !== null
+      ? Number(pos_discount_amount)
+      : discount_value && discount_value > 0 && discount_type === "fixed"
+        ? discount_value
+        : undefined;
+
   // ── Update Order Addresses Natively via DB (Workaround for Medusa v2 native POST bug)
   if (shipping_address || billing_address) {
     const pool = getDbPool();
@@ -215,6 +233,13 @@ export async function POST(
   }
 
   // ── Apply Tax to Order Summary & Tax Lines ──────────────────────────────
+  //
+  // Definido acá, EJECUTADO después del hard-wipe y de la reconciliación de
+  // descuento (buscar `await applyTaxAndCanonicalTotals()`): la derivación lee
+  // los adjustments de la DB como fallback, así que tiene que correr sobre el
+  // estado ya sincronizado con lo que el POS mandó — derivar primero y
+  // reconciliar después es exactamente lo que envenenó a S11432.
+  const applyTaxAndCanonicalTotals = async (): Promise<void> => {
   if (pos_tax_amount != null) {
     const dbUrl = process.env.DATABASE_URL;
     if (dbUrl) {
@@ -300,14 +325,14 @@ export async function POST(
           // sólo su convención de redondeo, que es la que separaba el total
           // guardado del que QuickBooks factura. La base dice lo mismo, en la
           // convención correcta.
+          // Presencia, no truthiness: un 0 explícito ES "sin descuento". El
+          // fallback a los adjustments queda sólo para callers legacy que no
+          // mandan el campo — y para entonces la reconciliación ya corrió, así
+          // que la base refleja el estado que el POS declaró.
           const forcedDiscount =
-            pos_discount_amount && pos_discount_amount > 0
-              ? pos_discount_amount
-              : discount_value &&
-                  discount_value > 0 &&
-                  discount_type !== "percent"
-                ? discount_value
-                : representedDiscountDollars(moneyBase);
+            explicitPosDiscount !== undefined
+              ? explicitPosDiscount
+              : representedDiscountDollars(moneyBase);
           const resolved = resolvePatchedOrderTotal({
             base: moneyBase,
             posTaxAmount: pos_tax_amount,
@@ -441,6 +466,7 @@ export async function POST(
       }
     }
   }
+  };
 
   // ── Apply Hard Wipe of Stale Data ───────────────────────────────────────
   const dbUrl = process.env.DATABASE_URL;
@@ -530,14 +556,9 @@ export async function POST(
   }
 
   // ── Discount Reconciliation (Safety Net) ─────────────────────────────────
-  // pos_discount_amount = POS-computed dollar amount (e.g. $2.65 or 0), ALWAYS provided when discount exists or is removed.
-  // If not available, fall back to discount_value only when it is a fixed dollar amount (not a percent rate).
-  const reconDiscountAmt =
-    pos_discount_amount !== undefined && pos_discount_amount !== null
-      ? pos_discount_amount
-      : discount_value && discount_value > 0 && discount_type === "fixed"
-        ? discount_value
-        : undefined;
+  // El mismo valor resuelto arriba con semántica de presencia: 0 explícito es
+  // "sin descuento". Corre ANTES de derivar totales — ver applyTaxAndCanonicalTotals.
+  const reconDiscountAmt = explicitPosDiscount;
 
   if (reconDiscountAmt !== undefined && reconDiscountAmt >= 0) {
     try {
@@ -596,6 +617,14 @@ export async function POST(
                 await discPool.query(
                   `DELETE FROM order_line_item_adjustment
                                      WHERE item_id IN (SELECT oi.item_id FROM order_item oi WHERE oi.order_id = $1)`,
+                  [id]
+                );
+                // El link order_promotion es el residuo que queda cuando el
+                // descuento muere por esta rama (S11432 conservó el suyo):
+                // sin adjustments no descuenta nada, pero es deriva que la
+                // próxima lectura de promos muestra como aplicada.
+                await discPool.query(
+                  `DELETE FROM order_promotion WHERE order_id = $1`,
                   [id]
                 );
                 logger.info(
@@ -739,6 +768,12 @@ export async function POST(
       );
     }
   }
+  // ── Derivar y escribir los totales canónicos ─────────────────────────────
+  // Recién ahora: el hard-wipe sacó las versiones stale y la reconciliación
+  // dejó los adjustments igual a lo que el POS declaró, así que la base que
+  // lee la derivación es el estado final del save.
+  await applyTaxAndCanonicalTotals();
+
   // ── Update Allocations (Sync Inventory Reservations) ─────────────────────
   try {
     const allocRes = await fetch(`${base}/admin/orders/${id}/allocate-items`, {
