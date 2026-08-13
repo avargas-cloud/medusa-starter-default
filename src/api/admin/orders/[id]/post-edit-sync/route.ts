@@ -18,14 +18,8 @@ import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile
 import { getDbPool } from "../../../../utils/db-pool";
 import { recordPosActivity } from "../../../../../lib/pos/order-activity";
 import type { KnexRawConnection } from "../../../../../lib/pos/order-activity";
-import {
-  replaceOrderTaxLines,
-  representedDiscountDollars,
-  resolvePatchedOrderTotal,
-  resolveQbParityTax,
-  loadOrderMoneyBase,
-  isZeroTaxSafe,
-} from "../../../../../lib/order-money/order-tax-lines";
+import { applyOrderDiscount } from "../../../../../lib/order-discount/apply-order-discount";
+import { resolveCposPromotion } from "../../../../../lib/order-discount/resolve-cpos-promotion";
 
 /**
  * POST /admin/orders/:id/post-edit-sync
@@ -121,46 +115,6 @@ export async function POST(
         ? discount_value
         : undefined;
 
-  // ── Las claves de descuento del metadata las escribe ESTA ruta (gateada) ──
-  //
-  // El POS las mandaba por el POST /admin/orders/:id NATIVO, que no pasa por
-  // ningún guard de origen web — cualquier token podía reescribir el descuento
-  // de una orden web por ahí. El POS dejó de mandarlas por la nativa (que ahora
-  // además las rechaza sin PIN en órdenes web); la declaración llega acá y el
-  // server la persiste él mismo, con la MISMA forma que escribía el POS:
-  // null explícito cuando no hay descuento (JSONB deep-merge nunca borra
-  // claves — el null ES el estado "sin descuento").
-  if (explicitPosDiscount !== undefined) {
-    const hasDiscount =
-      explicitPosDiscount > 0 && discount_type && discount_value;
-    try {
-      await getDbPool().query(
-        `UPDATE "order"
-            SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-              'discount_type', $2::text,
-              'discount_value', $3::numeric,
-              'promotion_code', $4::text
-            ),
-                updated_at = NOW()
-          WHERE id = $1 AND deleted_at IS NULL`,
-        [
-          id,
-          hasDiscount ? String(discount_type) : null,
-          hasDiscount ? Number(discount_value) : null,
-          hasDiscount ? (promotion_code ?? null) : null,
-        ]
-      );
-    } catch (e: any) {
-      logger.error(
-        `[post-edit-sync] ❌ Failed to persist discount metadata keys: ${e.message}`
-      );
-      res.status(500).json({
-        message: `Failed to persist discount metadata: ${e.message}`,
-      });
-      return;
-    }
-  }
-
   // ── Update Order Addresses Natively via DB (Workaround for Medusa v2 native POST bug)
   if (shipping_address || billing_address) {
     const pool = getDbPool();
@@ -217,340 +171,11 @@ export async function POST(
     }
   }
 
-  // ── Apply discount + fix payment collection ───────────────────────────────
-  if (discount_type && discount_value && discount_value > 0) {
-    try {
-      const dr = await fetch(
-        `${base}/admin/orders/${id}/apply-discount-force`,
-        {
-          method: "POST",
-          headers: authHeaders,
-          body: JSON.stringify({
-            discount_type,
-            discount_value,
-            pos_total,
-            pos_tax_rate,
-          }),
-        }
-      );
-      const dj = await dr.json().catch(() => ({}));
-      if (dr.ok) {
-        logger.info(
-          `[post-edit-sync] ✅ apply-discount-force: ${JSON.stringify(dj)}`
-        );
-        results.discount = dj;
-      } else {
-        logger.error(
-          `[post-edit-sync] apply-discount-force failed: ${JSON.stringify(dj)}`
-        );
-        results.discount_error = dj?.message;
-      }
-    } catch (e: any) {
-      logger.error(`[post-edit-sync] apply-discount-force threw: ${e.message}`);
-    }
-  } else {
-    // No discount — still fix payment collection to current order total
-    try {
-      const { data } = await query.graph({
-        entity: "order",
-        fields: ["total", "payment_collections.*"],
-        filters: { id },
-      });
-      const order = data?.[0];
-
-      if (order) {
-        // Use POS total if provided (includes tax), otherwise use Medusa's order total
-        const correctTotal: number =
-          pos_total != null && pos_total > 0 ? pos_total : (order?.total ?? 0);
-        const cols: any[] = order?.payment_collections ?? [];
-        logger.info(
-          `[post-edit-sync] No discount — fixing payment: total=${correctTotal}, cols=${cols.length}`
-        );
-        const paymentModule = req.scope.resolve("payment" as any) as any;
-
-        // Parallelize payment collection updates
-        await Promise.all(
-          cols.map((col) =>
-            paymentModule.updatePaymentCollections(col.id, {
-              amount: correctTotal,
-            })
-          )
-        );
-        logger.info(
-          `[post-edit-sync] ✅ Payment(s) updated to $${correctTotal}`
-        );
-        results.payment_fixed = correctTotal;
-      }
-    } catch (e: any) {
-      logger.warn(`[post-edit-sync] Payment fix failed: ${e.message}`);
-    }
-  }
-
-  // ── Apply Tax to Order Summary & Tax Lines ──────────────────────────────
-  //
-  // Definido acá, EJECUTADO después del hard-wipe y de la reconciliación de
-  // descuento (buscar `await applyTaxAndCanonicalTotals()`): la derivación lee
-  // los adjustments de la DB como fallback, así que tiene que correr sobre el
-  // estado ya sincronizado con lo que el POS mandó — derivar primero y
-  // reconciliar después es exactamente lo que envenenó a S11432.
-  const applyTaxAndCanonicalTotals = async (): Promise<void> => {
-  if (pos_tax_amount != null) {
-    const dbUrl = process.env.DATABASE_URL;
-    if (dbUrl) {
-      const pool = getDbPool();
-      try {
-        // 1. Fetch current Medusa-stored tax_total (BEFORE our injection) natively.
-        //    NULL means "could not read", which is NOT the same as zero: this
-        //    value is the tax already baked into original_order_total, and the
-        //    total below is derived by subtracting it. Defaulting a failed read
-        //    to 0 is what let the tax get counted twice on 43 orders.
-        let calculatedTax: number | null = null;
-        try {
-          const { data } = await query.graph({
-            entity: "order",
-            fields: ["tax_total"],
-            filters: { id },
-          });
-          const raw = data?.[0]?.tax_total;
-          calculatedTax = raw == null ? 0 : Number(raw);
-          if (!Number.isFinite(calculatedTax)) calculatedTax = null;
-        } catch {
-          /* leave null — the summary write below refuses rather than guesses */
-        }
-
-        // Use the statutory tax rate (7% FL). Do NOT back-calculate from gross subtotal.
-        const effectiveRate = pos_tax_rate ?? 7;
-
-        logger.info(
-          `[post-edit-sync] CALCULATED TAX = ${calculatedTax === null ? "UNREADABLE" : `$${calculatedTax.toFixed(2)}`} | POS TAX = $${pos_tax_amount.toFixed(2)}`
-        );
-        if (
-          calculatedTax !== null &&
-          Math.abs(calculatedTax - pos_tax_amount) > 0.005
-        ) {
-          logger.warn(
-            `[post-edit-sync] ⚠️  TAX OVERWRITE: Medusa=$${calculatedTax.toFixed(2)} → POS=$${pos_tax_amount.toFixed(2)} (rate=${effectiveRate}%)`
-          );
-        }
-
-        // 2. Rewrite the tax lines PER LINE. This block used to insert one line
-        //    at `effectiveRate` for every item of the order with no `taxable`
-        //    check, which taxed exempt lines: S10732 landed at $156.62 against
-        //    QuickBooks' $154.24, the $2.38 being 7% charged on an exempt $34
-        //    service. QB itself had it right — it received `Services → Non`.
-        const taxRewrite = await replaceOrderTaxLines(pool, id, effectiveRate);
-        const itemIds = taxRewrite.itemIds;
-        if (itemIds.length > 0) {
-          logger.info(
-            `[post-edit-sync] ✅ Tax lines rewritten: ${taxRewrite.taxedItemIds.length} taxed @ ${effectiveRate}%, ` +
-              `${taxRewrite.exemptItemIds.length} exempt (POS tax $${pos_tax_amount})`
-          );
-        }
-
-        // 3. Update order_summary JSONB with correct totals
-        const summaryRes = await pool.query<{
-          id: string;
-          totals: any;
-          version: number;
-        }>(
-          `SELECT id, totals, version FROM order_summary
-                     WHERE order_id = $1 AND deleted_at IS NULL
-                     ORDER BY version DESC LIMIT 1`,
-          [id]
-        );
-        if (summaryRes.rows[0]) {
-          const { id: summaryId, totals } = summaryRes.rows[0];
-
-          // The old formula was `original_order_total + pos_tax − discount`, and
-          // `original_order_total` carries the native tax on SOME orders — 43 of
-          // them came out overstated by a flat 6.535–6.563%, i.e. 7/107, the
-          // signature of a tax added on a base that already had one. It is NOT a
-          // reliable input either way (a converted draft stores it with the tax
-          // held separately), so the total is derived from the order's own lines
-          // and shipping instead of by arithmetic on another derived figure.
-          const moneyBase = await loadOrderMoneyBase(pool, id);
-
-          // Prefer pos_discount_amount (POS dollar truth); fall back to fixed discount_value.
-          //
-          // El último recurso ya NO es `totals.discount_total`. Ese campo es el
-          // agregado de Medusa sobre los MISMOS adjustments que la base ya leyó:
-          // medido sobre 1616 órdenes está NULL en 1615, y en la única poblada
-          // vale lo mismo que las líneas — o sea que jamás aporta información,
-          // sólo su convención de redondeo, que es la que separaba el total
-          // guardado del que QuickBooks factura. La base dice lo mismo, en la
-          // convención correcta.
-          // Presencia, no truthiness: un 0 explícito ES "sin descuento". El
-          // fallback a los adjustments queda sólo para callers legacy que no
-          // mandan el campo — y para entonces la reconciliación ya corrió, así
-          // que la base refleja el estado que el POS declaró.
-          const forcedDiscount =
-            explicitPosDiscount !== undefined
-              ? explicitPosDiscount
-              : representedDiscountDollars(moneyBase);
-          const resolved = resolvePatchedOrderTotal({
-            base: moneyBase,
-            posTaxAmount: pos_tax_amount,
-            discount: forcedDiscount,
-          });
-
-          if (!resolved.ok) {
-            logger.error(
-              `[post-edit-sync] ❌ Refusing to patch order_summary ${summaryId}: ${resolved.reason}. ` +
-                `Leaving the previous total in place — this figure is the clamp ceiling for ` +
-                `order_money_projection, so a wrong one silently zeroes a real deposit.`
-            );
-            results.tax_error = resolved.reason;
-            throw new Error(`order total not derivable: ${resolved.reason}`);
-          }
-          for (const w of resolved.warnings) {
-            logger.warn(`[post-edit-sync] ⚠️  ${w}`);
-          }
-          // `tax_total` is not display-only: the QB handlers choose the header
-          // tax code with `hasTax = tax_total > 0`, and a zero sends the whole
-          // document as Exempt so QuickBooks charges nothing on any line.
-          //
-          // The first version of this guard kept the PREVIOUS tax_total when the
-          // POS sent 0 on an order that still had taxable lines. That protected
-          // the header and produced an incoherent row: a total derived with zero
-          // tax stored next to a positive tax_total left over from an earlier
-          // state. Recompute instead — from the same base the total came from,
-          // so the two agree by construction.
-          let taxTotalToWrite = pos_tax_amount;
-          if (pos_tax_amount === 0 && !isZeroTaxSafe(taxRewrite)) {
-            const recomputed = resolveQbParityTax(
-              moneyBase,
-              forcedDiscount,
-              effectiveRate
-            );
-            taxTotalToWrite = recomputed.tax;
-            logger.warn(
-              `[post-edit-sync] ⚠️  POS sent tax 0 with ${taxRewrite.taxedItemIds.length} taxable ` +
-                `line(s); recomputed $${taxTotalToWrite} on a base of $${recomputed.taxableBase} @ ${effectiveRate}%.`
-            );
-          }
-
-          // Whatever the tax ends up being, the total has to include THAT number.
-          // Deriving the total with one tax and storing another is the shape this
-          // whole change exists to remove.
-          const newAccountingTotal =
-            taxTotalToWrite === pos_tax_amount
-              ? resolved.total
-              : (() => {
-                  const redo = resolvePatchedOrderTotal({
-                    base: moneyBase,
-                    posTaxAmount: taxTotalToWrite,
-                    discount: forcedDiscount,
-                  });
-                  return redo.ok ? redo.total : resolved.total;
-                })();
-
-          await pool.query(
-            `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
-            [
-              JSON.stringify({
-                ...totals,
-                tax_total: taxTotalToWrite,
-                raw_tax_total: {
-                  value: String(taxTotalToWrite),
-                  precision: 20,
-                },
-                // Force the bottom-line variables so Admin UI doesn't look crazy
-                accounting_total: newAccountingTotal,
-                raw_accounting_total: {
-                  value: String(newAccountingTotal),
-                  precision: 20,
-                },
-                current_order_total: newAccountingTotal,
-                raw_current_order_total: {
-                  value: String(newAccountingTotal),
-                  precision: 20,
-                },
-                pending_difference: newAccountingTotal,
-                raw_pending_difference: {
-                  value: String(newAccountingTotal),
-                  precision: 20,
-                },
-              }),
-              summaryId,
-            ]
-          );
-          logger.info(
-            `[post-edit-sync] ✅ Injected $${pos_tax_amount} tax to order_summary ${summaryId} and fixed accounting_total`
-          );
-          results.tax_injected = pos_tax_amount;
-
-          // ── Los TRES campos, o ninguno ───────────────────────────────────
-          //
-          // `metadata.computed_total` era escrito ÚNICAMENTE por `compute-tax`,
-          // o sea por la ruta de ESTIMADOS. Ni la conversión ni esta ruta lo
-          // tocaban, así que quedaba congelado en la foto del estimado para
-          // siempre — y desde el 2026-07-30 es el PRIMER campo que lee la
-          // columna TOTAL de `/orders`.
-          //
-          // Medido en el sandbox sobre la réplica de S11242: agregarle una
-          // línea de $101.62 dejó `current_order_total` en 1799.68 y
-          // `computed_total` en 1699.07. La lista mostraba el total de once
-          // líneas sobre una orden de doce.
-          //
-          // No se vio antes porque el backfill del 2026-07-30 escribió los tres
-          // campos juntos en 1528 órdenes y borró la deriva acumulada el mismo
-          // día en que se midió: 715 de 718 coincidían porque acababan de ser
-          // niveladas, no porque algo las mantuviera niveladas.
-          //
-          // `pos_total` se escribe con el total DERIVADO, no con el que mandó
-          // el navegador. Guardar el del navegador acá es volver a tener dos
-          // fuentes para el mismo número, que es el defecto original.
-          await pool.query(
-            `UPDATE "order"
-                SET metadata = COALESCE(metadata, '{}') || jsonb_build_object(
-                      'computed_total', $1::numeric,
-                      'pos_total',      $1::numeric
-                    )
-              WHERE id = $2`,
-            [newAccountingTotal, id]
-          );
-          results.computed_total = newAccountingTotal;
-          logger.info(
-            `[post-edit-sync] ✅ computed_total y pos_total alineados en $${newAccountingTotal}`
-          );
-        }
-      } catch (e: any) {
-        logger.error(`[post-edit-sync] Tax injection failed: ${e.message}`);
-        results.tax_error = e.message;
-      }
-    }
-  }
-  };
-
   // ── Apply Hard Wipe of Stale Data ───────────────────────────────────────
   const dbUrl = process.env.DATABASE_URL;
   if (dbUrl) {
     const pool = getDbPool();
     try {
-      // 1a. Delete soft-deleted adjustments
-      const adjDel = await pool.query(
-        `DELETE FROM order_line_item_adjustment
-                 WHERE deleted_at IS NOT NULL
-                   AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)`,
-        [id]
-      );
-      logger.info(
-        `[post-edit-sync] 🧹 Hard-deleted ${adjDel.rowCount ?? 0} stale adjustment row(s)`
-      );
-
-      // 1b. Delete adjustments stuck at old order_item versions. Medusa joins
-      //     adjustments → order_item by version, so a mismatch makes them
-      //     invisible (and inflates `discount_total = 0` on the live order).
-      const adjVerDel = await pool.query(
-        `DELETE FROM order_line_item_adjustment
-                 WHERE item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)
-                   AND version != (SELECT MAX(version) FROM order_item WHERE order_id = $2)`,
-        [id, id]
-      );
-      logger.info(
-        `[post-edit-sync] 🧹 Hard-deleted ${adjVerDel.rowCount ?? 0} adjustment(s) at stale versions`
-      );
-
       // 2. Delete old order_change_action rows (keep only latest order_change)
       const ocaDel = await pool.query(
         `DELETE FROM order_change_action
@@ -609,224 +234,65 @@ export async function POST(
     }
   }
 
-  // ── Discount Reconciliation (Safety Net) ─────────────────────────────────
-  // El mismo valor resuelto arriba con semántica de presencia: 0 explícito es
-  // "sin descuento". Corre ANTES de derivar totales — ver applyTaxAndCanonicalTotals.
-  const reconDiscountAmt = explicitPosDiscount;
-
-  if (reconDiscountAmt !== undefined && reconDiscountAmt >= 0) {
+  // ── Descuento + tax + totales canónicos: EL chokepoint, en UNA transacción ──
+  //
+  // `applyOrderDiscount` (lib/order-discount) es el ÚNICO escritor del
+  // descuento de una orden confirmada: adjustments + link + metadata + tax
+  // lines + summary + los tres totales + payment_collection, todo o nada,
+  // con advisory lock por orden. Reemplaza a las tres ramas de reconciliación
+  // que vivían acá, al self-call a apply-discount-force y a
+  // applyTaxAndCanonicalTotals — derivar y reconciliar por separado es lo que
+  // envenenó a S11432; acá ya no existe el "entre".
+  if (explicitPosDiscount !== undefined || pos_tax_amount != null) {
+    if (explicitPosDiscount === undefined || pos_tax_amount == null) {
+      // Presencia EXPLÍCITA o nada: un caller que declara la mitad del dinero
+      // es la clase de ambigüedad que este dominio ya pagó dos veces.
+      res.status(400).json({
+        message:
+          "post-edit-sync requiere pos_discount_amount Y pos_tax_amount juntos (0 explícito es válido)",
+      });
+      return;
+    }
+    // Intent: type/value del POS cuando vienen; un declarado > 0 sin type/value
+    // (caller legacy) se canoniza como fixed por el monto declarado.
+    const intent =
+      explicitPosDiscount > 0
+        ? discount_type && discount_value && discount_value > 0
+          ? ({
+              type: discount_type === "percent" ? "percent" : "fixed",
+              value: Number(discount_value),
+            } as const)
+          : ({ type: "fixed", value: explicitPosDiscount } as const)
+        : null;
     try {
-      // Fetch adjustments alongside discount_total — Medusa v2's decorateCartTotals
-      // returns 0 when adjustments aren't eagerly loaded into the response, which
-      // would mask a real discount and skip the delete-on-zero branch below.
-      const recheckRes = await fetch(
-        `${base}/admin/orders/${id}?fields=discount_total,metadata,+items.adjustments.*`,
-        { headers: authHeaders }
-      );
-      if (recheckRes.ok) {
-        const { order: recheckOrder } = await recheckRes.json();
-        // Authoritative discount = sum of live adjustments. Falls back to
-        // Medusa's `discount_total` if items aren't returned for any reason.
-        //
-        // Redondeado POR LÍNEA, igual que `loadOrderMoneyBase` y que el POS.
-        // Acumularlo crudo era una TERCERA convención en el mismo archivo, y se
-        // compara más abajo contra la figura del POS con un umbral de medio
-        // centavo: en la orden 2811 daba 138.0792 contra 138.07, o sea 0.0092 de
-        // diferencia, suficiente para disparar la "recuperación de descuento" y
-        // reescribir adjustments que estaban perfectos. La discrepancia que ese
-        // guard busca es un descuento PERDIDO, no un decimal colgando.
-        const liveAdjSum: number = Array.isArray(recheckOrder?.items)
-          ? recheckOrder.items.reduce((s: number, it: any) => {
-              const lineRaw = ((it?.adjustments ?? []) as any[])
-                .filter((a: any) => !a?.tax_line_id)
-                .reduce((a: number, b: any) => a + Number(b?.amount ?? 0), 0);
-              return s + Math.round(lineRaw * 100);
-            }, 0) / 100
-          : 0;
-        const medusaDiscount =
-          liveAdjSum > 0
-            ? liveAdjSum
-            : Number(recheckOrder?.discount_total ?? 0);
-        const posDiscount = Number(reconDiscountAmt);
-        logger.info(
-          `[post-edit-sync] CALCULATED DISCOUNT = $${medusaDiscount.toFixed(2)} | POS ORDER DISCOUNT = $${posDiscount.toFixed(2)}`
-        );
-        if (Math.abs(medusaDiscount - posDiscount) > 0.005) {
-          logger.warn(
-            `[post-edit-sync] ⚠️ DISCOUNT OVERWRITE: Medusa=$${medusaDiscount.toFixed(2)} → POS=$${posDiscount.toFixed(2)}`
-          );
-          const discPool = getDbPool();
-          try {
-            const adjRes = await discPool.query<{ id: string; amount: string }>(
-              `SELECT olia.id, olia.amount::text
-                             FROM order_line_item_adjustment olia
-                             WHERE olia.item_id IN (SELECT oi.item_id FROM order_item oi WHERE oi.order_id = $1)
-                             AND olia.deleted_at IS NULL`,
-              [id]
-            );
-            const adjs = adjRes.rows;
-            if (adjs.length > 0) {
-              if (posDiscount === 0) {
-                // FULL DELETE OF ADJUSTMENTS TO REMOVE DISCOUNT
-                await discPool.query(
-                  `DELETE FROM order_line_item_adjustment
-                                     WHERE item_id IN (SELECT oi.item_id FROM order_item oi WHERE oi.order_id = $1)`,
-                  [id]
-                );
-                // El link order_promotion es el residuo que queda cuando el
-                // descuento muere por esta rama (S11432 conservó el suyo):
-                // sin adjustments no descuenta nada, pero es deriva que la
-                // próxima lectura de promos muestra como aplicada.
-                await discPool.query(
-                  `DELETE FROM order_promotion WHERE order_id = $1`,
-                  [id]
-                );
-                logger.info(
-                  `[post-edit-sync] ✅ Forced discount to ZERO: Deleted ${adjs.length} adjustments`
-                );
-                results.discount_forced = 0;
-              } else {
-                const totalAdj = adjs.reduce((s, r) => s + Number(r.amount), 0);
-                for (const adj of adjs) {
-                  const proportion =
-                    totalAdj > 0
-                      ? Number(adj.amount) / totalAdj
-                      : 1 / adjs.length;
-                  const newAmt = Number((proportion * posDiscount).toFixed(6));
-                  const rawAmt = JSON.stringify({
-                    value: String(newAmt),
-                    precision: 20,
-                  });
-                  await discPool.query(
-                    `UPDATE order_line_item_adjustment SET amount = $1, raw_amount = $2, updated_at = NOW() WHERE id = $3`,
-                    [newAmt, rawAmt, adj.id]
-                  );
-                }
-                logger.info(
-                  `[post-edit-sync] ✅ Forced discount: ${adjs.length} adjustments corrected to sum $${posDiscount}`
-                );
-                results.discount_forced = posDiscount;
-              }
-            } else if (posDiscount > 0) {
-              // SAFETY NET: zero adjustments but POS reports a non-zero discount.
-              // This means apply-discount-force failed silently (orphaned-discount bug).
-              // Recreate adjustments here so Medusa's `total` = computed_total again.
-              logger.warn(
-                `[post-edit-sync] ⚠️ ORPHANED-DISCOUNT RECOVERY: 0 adjustments but posDiscount=$${posDiscount}. Creating fallback prorrated adjustments.`
-              );
-              const linesRes = await discPool.query<{
-                item_id: string;
-                line_subtotal: string;
-              }>(
-                `SELECT oi.item_id, (oi.quantity * oli.unit_price)::text AS line_subtotal
-                                 FROM order_item oi
-                                 JOIN order_line_item oli ON oli.id = oi.item_id
-                                 WHERE oi.order_id = $1 AND oi.deleted_at IS NULL`,
-                [id]
-              );
-              const lines = linesRes.rows;
-              const totalSub = lines.reduce(
-                (s, r) => s + Number(r.line_subtotal),
-                0
-              );
-              if (lines.length > 0 && totalSub > 0) {
-                const promoCode =
-                  (recheckOrder?.metadata?.promotion_code as
-                    | string
-                    | undefined) ??
-                  `CPOS-FALLBACK-${Math.round(posDiscount * 100)}`;
-                const promoLookup = await discPool.query<{ id: string }>(
-                  `SELECT id FROM promotion WHERE code = $1 LIMIT 1`,
-                  [promoCode]
-                );
-                const promoId: string | null =
-                  promoLookup.rows[0]?.id ?? null;
-
-                for (const ln of lines) {
-                  const proportion = Number(ln.line_subtotal) / totalSub;
-                  const adjAmt = Number(
-                    (proportion * posDiscount).toFixed(6)
-                  );
-                  const rawAmt = JSON.stringify({
-                    value: String(adjAmt),
-                    precision: 20,
-                  });
-                  const adjId = `adj_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-                  await discPool.query(
-                    `INSERT INTO order_line_item_adjustment
-                                         (id, item_id, code, amount, raw_amount, promotion_id, description, is_tax_inclusive, version, created_at, updated_at)
-                                     VALUES ($1, $2, $3, $4, $5, $6, $7, false, 1, NOW(), NOW())`,
-                    [
-                      adjId,
-                      ln.item_id,
-                      promoCode,
-                      adjAmt,
-                      rawAmt,
-                      promoId,
-                      "POS Discount (recovered)",
-                    ]
-                  );
-                }
-                if (promoId) {
-                  const linkId = `ordpr_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-                  await discPool.query(
-                    `INSERT INTO order_promotion (id, order_id, promotion_id, created_at, updated_at)
-                                     VALUES ($1, $2, $3, NOW(), NOW())
-                                     ON CONFLICT (order_id, promotion_id) DO NOTHING`,
-                    [linkId, id, promoId]
-                  );
-                }
-                logger.info(
-                  `[post-edit-sync] ✅ Recovery created ${lines.length} prorrated adjustments summing $${posDiscount} (promo=${promoCode})`
-                );
-                results.discount_recovered = posDiscount;
-              }
-            }
-
-            // CRITICAL: Also update order_summary so the admin DISPLAY shows the correct discount_total.
-            const sumRes2 = await discPool.query<{ id: string; totals: any }>(
-              `SELECT id, totals FROM order_summary WHERE order_id = $1 AND deleted_at IS NULL ORDER BY version DESC LIMIT 1`,
-              [id]
-            );
-            if (sumRes2.rows[0]) {
-              const { id: sumId2, totals: sumTotals2 } = sumRes2.rows[0];
-              await discPool.query(
-                `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
-                [
-                  JSON.stringify({
-                    ...sumTotals2,
-                    discount_total: posDiscount,
-                    raw_discount_total: {
-                      value: String(posDiscount),
-                      precision: 20,
-                    },
-                  }),
-                  sumId2,
-                ]
-              );
-              logger.info(
-                `[post-edit-sync] ✅ Order summary discount_total corrected to $${posDiscount}`
-              );
-            }
-          } finally {
-            // shared pool — do NOT call pool.end()
-          }
-        } else {
-          logger.info(`[post-edit-sync] ✅ DISCOUNT OK — no overwrite needed`);
-          results.discount_ok = medusaDiscount;
-        }
-      }
+      const promo = intent
+        ? await resolveCposPromotion(req.scope, intent, {
+            preferredCode: promotion_code || null,
+          })
+        : null;
+      const applied = await applyOrderDiscount(getDbPool(), id, {
+        intent,
+        declaredDiscountDollars: explicitPosDiscount,
+        tax: { ratePercent: pos_tax_rate ?? 7, posTaxAmount: pos_tax_amount },
+        promo,
+        logger,
+      });
+      results.discount = applied.discountDollars;
+      results.tax_injected = applied.taxDollars;
+      results.computed_total = applied.totalDollars;
+      results.payment_fixed = applied.totalDollars;
     } catch (e: any) {
-      logger.warn(
-        `[post-edit-sync] Discount reconciliation non-fatal: ${e.message}`
+      // Fallo monetario ABORTA la ruta: seguir hacia la sección QB con un
+      // total no derivado es publicar el estado que el chokepoint impide.
+      logger.error(
+        `[post-edit-sync] ❌ chokepoint de descuento falló: ${e.message}`
       );
+      res
+        .status(500)
+        .json({ message: `order money not derivable: ${e.message}` });
+      return;
     }
   }
-  // ── Derivar y escribir los totales canónicos ─────────────────────────────
-  // Recién ahora: el hard-wipe sacó las versiones stale y la reconciliación
-  // dejó los adjustments igual a lo que el POS declaró, así que la base que
-  // lee la derivación es el estado final del save.
-  await applyTaxAndCanonicalTotals();
 
   // ── Update Allocations (Sync Inventory Reservations) ─────────────────────
   try {

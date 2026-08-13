@@ -57,8 +57,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   try {
     // 0. Fetch the order to get the currency code (required for fixed discounts)
     const order = await orderModule.retrieveOrder(order_id, {
-      select: ["currency_code"],
+      select: ["currency_code", "is_draft_order"],
     });
+
+    // Type-guard (descuentos-canonicos-v1): este camino usa los workflows de
+    // draft-order-edit — sobre una orden CONFIRMADA su escritor es el
+    // chokepoint (post-edit-sync / apply-discount-force), nunca este.
+    if (!(order as any).is_draft_order) {
+      return res.status(409).json({
+        error:
+          "pos-discount es el camino de DRAFTS; una orden confirmada aplica descuento por post-edit-sync o apply-discount-force",
+        code: "NOT_A_DRAFT",
+      });
+    }
 
     // 1. Find-or-create: use a deterministic code derived from type+value so the
     //    same discount reuses one promotion record instead of creating a new one each time.

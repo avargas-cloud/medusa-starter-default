@@ -89,6 +89,21 @@ export async function POST(
   const knex = req.scope.resolve("__pg_connection__");
 
   try {
+    // Type-guard (descuentos-canonicos-v1): camino de DRAFTS únicamente —
+    // una orden confirmada aplica su promo por el chokepoint.
+    const { rows: draftRows } = (await knex.raw(
+      `SELECT is_draft_order FROM "order" WHERE id = ? AND deleted_at IS NULL`,
+      [order_id]
+    )) as { rows: Array<{ is_draft_order: boolean }> };
+    if (draftRows[0] && !draftRows[0].is_draft_order) {
+      res.status(409).json({
+        error:
+          "pos-discount/apply-existing es el camino de DRAFTS; una orden confirmada aplica descuento por post-edit-sync",
+        code: "NOT_A_DRAFT",
+      });
+      return;
+    }
+
     // ── Step 0: Resolve promotion ID + extract pct value ──────────────────
     const promotionModule = req.scope.resolve(
       "promotion"

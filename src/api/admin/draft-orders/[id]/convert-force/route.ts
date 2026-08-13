@@ -81,16 +81,17 @@ export async function POST(
         return Number(computedMeta);
       }
 
-      // Fall back to explicit math (Subtotal - Discount + Tax) because Medusa computes Tax on Gross
-      const subtotal = Number(order.subtotal || 0);
-      const discount = Number(order.discount_total || 0);
-      const tax = Number(order.tax_total || 0);
-      const trueTotal = subtotal - discount + tax;
-
+      // El fallback manual `subtotal − discount + tax` se RETIRÓ
+      // (descuentos-canonicos-v1): era la misma familia de derivación paralela
+      // que envenenó S11432 y sólo corría cuando faltaba computed_total. Sin
+      // computed_total este helper devuelve null, los fixes intermedios se
+      // saltean, y la derivación canónica del final —que ahora es FAIL-CLOSED—
+      // escribe summary + los tres campos + payment collection desde las
+      // líneas reales.
       console.log(
-        `[convert-force] Using Explicit Math (Subtotal ${subtotal} - Discount ${discount} + Tax ${tax}): ${trueTotal} (Medusa order.total: ${order.total})`
+        `[convert-force] metadata.computed_total ausente — la derivación canónica del cierre resolverá (Medusa order.total: ${order.total})`
       );
-      return trueTotal > 0 ? trueTotal : null;
+      return null;
     } catch (e: any) {
       console.warn(
         "[convert-force] Could not calculate true total:",
@@ -738,9 +739,19 @@ export async function POST(
         client.release();
       }
     } catch (taxInjErr: any) {
-      console.warn(
-        `[convert-force] ⚠️ Tax injection soft-failed: ${taxInjErr?.message}`
+      // FAIL-CLOSED (descuentos-canonicos-v1): el total derivado acá es el
+      // techo del clamp de depósitos y lo que lee la lista — devolver 200 con
+      // la derivación fallida es publicar una orden con dinero a medias, la
+      // familia exacta de S11432. La orden YA quedó convertida; se responde
+      // 500 con el id para que el operador la abra y un save la re-derive.
+      console.error(
+        `[convert-force] ❌ Derivación canónica falló tras convertir: ${taxInjErr?.message}`
       );
+      return void res.status(500).json({
+        message: `Order converted but money derivation failed: ${taxInjErr?.message}. Open the order and save it to re-derive.`,
+        order_id: id,
+        code: "MONEY_DERIVATION_FAILED",
+      });
     }
 
     // Stamp order_placed_at so POS activity log shows correct creation time
