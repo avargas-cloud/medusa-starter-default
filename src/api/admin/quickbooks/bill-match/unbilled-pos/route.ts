@@ -22,6 +22,7 @@ interface PoQueueRow {
   is_agency: boolean;
   total_cents: number;
   received_units: number;
+  billable_ordered_units: number;
   billed_qty: number;
   has_adopted_zero_line: boolean;
 }
@@ -62,7 +63,14 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
        line_agg AS (
          SELECT pol.purchase_order_id AS po_id,
                 COALESCE(SUM(GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled,0),0) * pol.unit_cost_cents),0) AS total_cents,
-                COALESCE(SUM(COALESCE(pol.qty_received,0)),0) AS received_units
+                COALESCE(SUM(COALESCE(pol.qty_received,0)),0) AS received_units,
+                -- Same subtraction resolveRemainingPoQuantities uses, so a PO
+                -- cannot read fully billed here and still be offered as billable.
+                COALESCE(SUM(
+                  CASE WHEN COALESCE(pol.status,'open') <> 'cancelled'
+                       THEN GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled,0),0)
+                       ELSE 0 END
+                ),0) AS billable_ordered_units
            FROM purchase_order_line pol
           WHERE pol.deleted_at IS NULL
           GROUP BY pol.purchase_order_id
@@ -85,6 +93,7 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
               po.vendor_qb_list_id_snapshot, po.qb_purchase_order_list_id, po.is_agency,
               COALESCE(la.total_cents,0)::float AS total_cents,
               COALESCE(la.received_units,0)::int AS received_units,
+              COALESCE(la.billable_ordered_units,0)::int AS billable_ordered_units,
               COALESCE(ba.billed_qty,0)::int AS billed_qty,
               COALESCE(ba.has_adopted_zero_line,false) AS has_adopted_zero_line
          FROM po
@@ -98,7 +107,7 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
       const billed = deriveBilledStatus({
         billedQty: Number(r.billed_qty),
         hasAdoptedZeroLineBill: Boolean(r.has_adopted_zero_line),
-        totalUnitsReceived: Number(r.received_units),
+        billableOrderedQty: Number(r.billable_ordered_units),
       });
       if (billed.billed_status === "yes") continue; // fully billed — not actionable
 
