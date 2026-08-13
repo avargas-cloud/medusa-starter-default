@@ -55,6 +55,7 @@ interface OrderListRow {
   shipping_methods: Array<Record<string, unknown>>;
   fulfillments: NonNullable<OrderForMeili["fulfillments"]>;
   items: NonNullable<OrderForMeili["items"]>;
+  invoiced_cents: string | number | null;
 }
 
 type SqlClient = {
@@ -66,11 +67,19 @@ type SqlClient = {
 
 export type HydratedOrderListRow = Omit<
   OrderListRow,
-  "fulfillments" | "items"
+  "fulfillments" | "items" | "invoiced_cents"
 > & {
   payment_status: string;
   fulfillment_status: string;
   total: number | null;
+  // Dollars already billed against the order: SUM(pos_invoice.total)/100 over
+  // its live invoices (draft and voided excluded). null means no live invoice
+  // exists — distinct from 0 only in provenance; both read as "nothing billed".
+  // The POS Open-tab footer subtracts this from the order total to show how
+  // much remains to be invoiced. Partial invoicing is the norm here (one
+  // invoice per dispatch), which is why the boolean fully_invoiced flag is not
+  // enough to answer that question.
+  invoiced_total: number | null;
 };
 
 /**
@@ -192,9 +201,9 @@ export async function hydrateOrderRows(
   const scoped = (column: string): string =>
     scopeAggregates ? `AND ${column} = ANY(?::text[])` : "";
   // knex's pg.raw uses positional `?`, so `ids` is bound once per occurrence:
-  // four CTEs plus the outer SELECT when scoped, otherwise the outer one alone.
+  // five CTEs plus the outer SELECT when scoped, otherwise the outer one alone.
   const bindings = scopeAggregates
-    ? [ids, ids, ids, ids, ids]
+    ? [ids, ids, ids, ids, ids, ids]
     : [ids];
 
   const result = await pg.raw(
@@ -273,6 +282,16 @@ export async function hydrateOrderRows(
         WHERE order_item.deleted_at IS NULL
           ${scoped("order_item.order_id")}
         GROUP BY order_item.order_id
+      ),
+      invoice_agg AS (
+        SELECT
+          pos_invoice.order_id,
+          SUM(pos_invoice.total) AS invoiced_cents
+        FROM pos_invoice
+        WHERE pos_invoice.deleted_at IS NULL
+          AND pos_invoice.status NOT IN ('draft', 'voided')
+          ${scoped("pos_invoice.order_id")}
+        GROUP BY pos_invoice.order_id
       )
       SELECT
         o.id,
@@ -306,7 +325,8 @@ export async function hydrateOrderRows(
         COALESCE(pa.payment_collections, '[]'::jsonb) AS payment_collections,
         COALESCE(sa.shipping_methods, '[]'::jsonb) AS shipping_methods,
         COALESCE(fa.fulfillments, '[]'::jsonb) AS fulfillments,
-        COALESCE(ia.items, '[]'::jsonb) AS items
+        COALESCE(ia.items, '[]'::jsonb) AS items,
+        inva.invoiced_cents AS invoiced_cents
       FROM "order" o
       LEFT JOIN customer c
         ON c.id = o.customer_id
@@ -325,6 +345,7 @@ export async function hydrateOrderRows(
       LEFT JOIN shipping_agg sa ON sa.order_id = o.id
       LEFT JOIN fulfillment_agg fa ON fa.order_id = o.id
       LEFT JOIN item_agg ia ON ia.order_id = o.id
+      LEFT JOIN invoice_agg inva ON inva.order_id = o.id
       WHERE o.deleted_at IS NULL
         AND o.id = ANY(?::text[])
     `,
@@ -337,7 +358,7 @@ export async function hydrateOrderRows(
   return docs.flatMap((doc) => {
     const row = rowsById.get(doc.id);
     if (!row) return [];
-    const { fulfillments, items, ...listRow } = row;
+    const { fulfillments, items, invoiced_cents, ...listRow } = row;
 
     const summaryTotal = row.summary?.current_order_total;
     const numericSummaryTotal =
@@ -346,6 +367,10 @@ export async function hydrateOrderRows(
         : typeof summaryTotal === "string"
           ? Number(summaryTotal)
           : null;
+
+    // pg hands SUM(numeric) back as a string; pos_invoice money is in cents.
+    const numericInvoicedCents =
+      invoiced_cents != null ? Number(invoiced_cents) : null;
 
     return [{
       ...listRow,
@@ -357,6 +382,10 @@ export async function hydrateOrderRows(
       total:
         numericSummaryTotal !== null && Number.isFinite(numericSummaryTotal)
           ? numericSummaryTotal
+          : null,
+      invoiced_total:
+        numericInvoicedCents !== null && Number.isFinite(numericInvoicedCents)
+          ? numericInvoicedCents / 100
           : null,
     }];
   });
