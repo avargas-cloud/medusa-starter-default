@@ -62,6 +62,7 @@ export async function POST(
   const {
     discount_type,
     discount_value,
+    promotion_code,
     pos_discount_amount,
     pos_total,
     pos_tax_amount,
@@ -71,6 +72,7 @@ export async function POST(
   } = req.body as {
     discount_type?: string;
     discount_value?: number; // Raw discount value: percent rate (e.g. 5) OR fixed dollar amount
+    promotion_code?: string;
     pos_discount_amount?: number; // POS-computed dollar discount amount for reconciliation (e.g. 2.65)
     pos_total?: number; // POS-computed final total in dollars (includes tax, shipping, discounts)
     pos_tax_amount?: number; // POS-computed tax in dollars
@@ -85,6 +87,14 @@ export async function POST(
     Authorization: String(req.headers["authorization"] ?? ""),
     "Content-Type": "application/json",
   };
+  // El PIN de supervisor viaja a los self-calls: `apply-discount-force` está
+  // gateado por origen web (assertWebOrderAuthorized), y sin reenviarlo la
+  // ruta hija rechazaba el descuento de una orden web mientras este padre
+  // seguía de largo hacia la rama de recovery.
+  const supervisorPinHeader = String(req.headers["x-supervisor-pin"] ?? "");
+  if (supervisorPinHeader) {
+    authHeaders["x-supervisor-pin"] = supervisorPinHeader;
+  }
   const logger = req.scope.resolve("logger");
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
   const results: Record<string, any> = {};
@@ -106,6 +116,46 @@ export async function POST(
       : discount_value && discount_value > 0 && discount_type === "fixed"
         ? discount_value
         : undefined;
+
+  // ── Las claves de descuento del metadata las escribe ESTA ruta (gateada) ──
+  //
+  // El POS las mandaba por el POST /admin/orders/:id NATIVO, que no pasa por
+  // ningún guard de origen web — cualquier token podía reescribir el descuento
+  // de una orden web por ahí. El POS dejó de mandarlas por la nativa (que ahora
+  // además las rechaza sin PIN en órdenes web); la declaración llega acá y el
+  // server la persiste él mismo, con la MISMA forma que escribía el POS:
+  // null explícito cuando no hay descuento (JSONB deep-merge nunca borra
+  // claves — el null ES el estado "sin descuento").
+  if (explicitPosDiscount !== undefined) {
+    const hasDiscount =
+      explicitPosDiscount > 0 && discount_type && discount_value;
+    try {
+      await getDbPool().query(
+        `UPDATE "order"
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+              'discount_type', $2::text,
+              'discount_value', $3::numeric,
+              'promotion_code', $4::text
+            ),
+                updated_at = NOW()
+          WHERE id = $1 AND deleted_at IS NULL`,
+        [
+          id,
+          hasDiscount ? String(discount_type) : null,
+          hasDiscount ? Number(discount_value) : null,
+          hasDiscount ? (promotion_code ?? null) : null,
+        ]
+      );
+    } catch (e: any) {
+      logger.error(
+        `[post-edit-sync] ❌ Failed to persist discount metadata keys: ${e.message}`
+      );
+      res.status(500).json({
+        message: `Failed to persist discount metadata: ${e.message}`,
+      });
+      return;
+    }
+  }
 
   // ── Update Order Addresses Natively via DB (Workaround for Medusa v2 native POST bug)
   if (shipping_address || billing_address) {

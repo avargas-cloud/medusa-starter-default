@@ -112,7 +112,12 @@ if (!posExists) {
 }
 
 // ── 3 · el backend usa el helper compartido, no comparaciones a mano ─────────
-const SHARED = /verifySupervisorPin|guardSupervisorPin/;
+// `assertWebOrderAuthorized` cuenta como helper: envuelve guardSupervisorPin
+// con la resolución de origen web. Un archivo que sólo REENVÍA la credencial
+// (post-edit-sync la pasa a sus self-calls) es legítimo únicamente si él mismo
+// está gateado por uno de estos — si sólo la nombra sin gate, sigue fallando.
+const SHARED =
+  /verifySupervisorPin|guardSupervisorPin|assertWebOrderAuthorized/;
 /** Una comparación cruda contra la metadata es exactamente lo que no debe pasar. */
 const HAND_ROLLED =
   /metadata(\?)?\.\[?["']?pos_supervisor_pin["']?\]?\s*(===|!==|==)/;
@@ -248,6 +253,70 @@ if (!mwSrc.includes("protectSupervisorPin")) {
   );
 } else {
   notes.push("✓ la ruta nativa de stores rechaza escrituras del PIN");
+}
+
+// ── 6 · la ruta nativa de ORDERS gatea campos de contrato en órdenes web ─────
+//
+// Misma clase de agujero que el PIN por /admin/stores/:id: POST /admin/orders/:id
+// acepta cualquier metadata, y por ahí viajaban las claves de descuento SIN
+// pasar por assertWebOrderAuthorized. El POS dejó de mandarlas por la nativa
+// (las persiste post-edit-sync, ruta gateada) y el middleware exige PIN si un
+// request toca campos de contrato de una orden web.
+{
+  const mwFile = path.join(
+    BACKEND_SRC,
+    "api/middlewares/protect-web-order-fields.ts"
+  );
+  if (!fs.existsSync(mwFile)) {
+    failures.push(
+      `api/middlewares/protect-web-order-fields.ts no existe — la ruta nativa ` +
+        `POST /admin/orders/:id vuelve a aceptar el descuento de una orden web ` +
+        `sin PIN.`
+    );
+  } else {
+    const mwFileSrc = stripComments(fs.readFileSync(mwFile, "utf8"));
+    for (const key of ["discount_type", "discount_value", "promotion_code"]) {
+      if (!mwFileSrc.includes(`"${key}"`)) {
+        failures.push(
+          `protect-web-order-fields.ts no lista "${key}" entre los campos ` +
+            `protegidos — esa clave vuelve a escribirse por la nativa sin PIN.`
+        );
+      }
+    }
+    if (!mwFileSrc.includes("assertWebOrderAuthorized")) {
+      failures.push(
+        `protect-web-order-fields.ts no llama a assertWebOrderAuthorized() — ` +
+          `un middleware que no resuelve el origen no gatea nada.`
+      );
+    }
+  }
+  if (
+    !mwSrc.includes("protectWebOrderFields") ||
+    !/matcher:\s*["']\/admin\/orders\/:id["']/.test(mwSrc)
+  ) {
+    failures.push(
+      `middlewares.ts no registra protectWebOrderFields sobre /admin/orders/:id.`
+    );
+  }
+  const pes = path.join(
+    BACKEND_SRC,
+    "api/admin/orders/[id]/post-edit-sync/route.ts"
+  );
+  const pesSrc = fs.existsSync(pes)
+    ? stripComments(fs.readFileSync(pes, "utf8"))
+    : "";
+  if (!pesSrc.includes("x-supervisor-pin")) {
+    failures.push(
+      `post-edit-sync no reenvía x-supervisor-pin a sus self-calls — en una ` +
+        `orden web, apply-discount-force rechaza el descuento y el padre sigue ` +
+        `de largo hacia la rama de recovery.`
+    );
+  }
+  if (!failures.some((f) => f.includes("protect-web-order-fields") || f.includes("protectWebOrderFields") || f.includes("post-edit-sync no reenvía"))) {
+    notes.push(
+      "✓ la ruta nativa de orders gatea campos de contrato en órdenes web"
+    );
+  }
 }
 
 // ── Reporte ─────────────────────────────────────────────────────────────────

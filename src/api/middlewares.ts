@@ -12,6 +12,7 @@ import {
 } from "./middlewares/closed-accounting-period";
 import { idempotency } from "./middlewares/idempotency";
 import { protectSupervisorPin } from "./middlewares/protect-supervisor-pin";
+import { protectWebOrderFields } from "./middlewares/protect-web-order-fields";
 import { syncCustomerMeili } from "./middlewares/sync-customer-meili";
 import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-customer";
 
@@ -128,6 +129,13 @@ export default defineMiddlewares({
       matcher: "/admin/orders/:id",
       method: ["POST", "PATCH", "PUT", "DELETE"],
       middlewares: [protectClosedDocument("order")],
+    },
+    // Campos de contrato de una orden WEB por la ruta nativa → PIN de
+    // supervisor. La metadata operativa pasa libre; órdenes POS no se tocan.
+    {
+      matcher: "/admin/orders/:id",
+      method: ["POST", "PATCH", "PUT"],
+      middlewares: [protectWebOrderFields],
     },
     {
       matcher: "/admin/invoices/:id/*",
