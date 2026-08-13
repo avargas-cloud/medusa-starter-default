@@ -75,7 +75,9 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
 
     const { sql, bindings } = lastCall();
     expect(sql.match(/\?::text\[\]/g)).toHaveLength(bindings.length);
-    expect(bindings).toHaveLength(5);
+    // 6 = opc + os + order_fulfillment + order_item + invoice_agg (scoped
+    // CTEs) + el filtro externo o.id. invoice_agg entró con invoiced_total.
+    expect(bindings).toHaveLength(6);
   });
 
   it("binds one array per placeholder in the unscoped branch", async () => {
@@ -99,6 +101,7 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
       "os.order_id",
       "order_fulfillment.order_id",
       "order_item.order_id",
+      "pos_invoice.order_id",
     ]) {
       expect(sql).toContain(`AND ${column} = ANY(?::text[])`);
     }
