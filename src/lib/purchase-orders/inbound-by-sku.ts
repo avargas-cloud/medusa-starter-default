@@ -67,6 +67,16 @@ export interface InboundDelivery {
   master: InboundNumber | null;
   /** Carrier numbers on this delivery; a truck with two waybills reports 2. */
   number_count: number;
+  /**
+   * The carrier says this delivery already arrived, while these units are still
+   * outstanding in the system — nobody has posted the receipt yet.
+   *
+   * This is a real and common operating state, not an error: goods land at the
+   * dock hours or days before someone records them. The screen says so instead
+   * of hiding the shipment, because "arrived but not received" is exactly the
+   * backlog a buyer needs to see.
+   */
+  delivered: boolean;
   /** YYYY-MM-DD, or null when nothing is known. */
   eta: string | null;
   eta_source: "carrier" | "expected" | "none";
@@ -136,20 +146,39 @@ function claimedBy(
 /**
  * Which delivery brought the units that already arrived.
  *
- * THE DATA DOES NOT KNOW. `purchase_order_receipt` records how many units
- * landed, not which waybill carried them — the tracking model says so in its own
- * comment, deliberately. So received units are consumed off the OLDEST
- * deliveries first: boxes generally land in the order they shipped, and a
- * delivery the carrier already marked `delivered` is consumed regardless of
- * position because that one is not a guess.
+ * THE ITEM RECEIPT IS THE ONLY AUTHORITY ON HOW MANY UNITS ARRIVED.
+ * `purchase_order_receipt` is what says goods entered the building. The
+ * carrier's `delivered` flag says where the box is, which is a different fact
+ * and a weaker one: receiving lags the truck by hours or days whenever the crew
+ * is busy, and that lag is a staffing reality, not a data error.
  *
- * This is a heuristic and it is confined to this function on purpose. It only
- * decides HOW a known quantity is distributed across rows; it can never change
- * `on_order`, and the invariant holds whatever it picks.
+ * So `delivered` never CONSUMES a unit. It only breaks the tie about WHICH
+ * delivery the receipt should be charged to — and a tie-break can never invent
+ * a unit the receipt did not record.
  *
- * EXPORTED FOR ITS TEST, NOT FOR REUSE. No production data exercises the case it
- * exists for — a PO with several deliveries AND a partial receipt does not occur
- * in the sandbox — so the only place this logic is proven is
+ * THE DATA DOES NOT KNOW which waybill carried what. `purchase_order_receipt`
+ * records how many units landed, not which box they rode in — the tracking model
+ * says so in its own comment, deliberately. So received units are consumed off
+ * the deliveries the carrier already marked `delivered` first (those are the
+ * ones that demonstrably arrived), and off the OLDEST remaining ones after that,
+ * because boxes generally land in the order they shipped.
+ *
+ * THIS USED TO BE BACKWARDS, and the bug is worth remembering: the `delivered`
+ * branch consumed its whole claim regardless of `unconsumed`, so a PO whose
+ * waybill UPS had marked delivered lost its tracking row the moment the carrier
+ * updated — while the receipt was still unposted. The units did not vanish (the
+ * invariant held), they fell into the `unassigned` bucket, which by construction
+ * carries no tracking number. The screen then said "No tracking yet" about a
+ * shipment that had a tracking number, had shipped, and had already landed.
+ * Measured on production the day it was found: 3 POs, 24 lines, 544 units.
+ *
+ * This is still a heuristic and it is still confined to this function on
+ * purpose. It only decides HOW a known quantity is distributed across rows; it
+ * can never change `on_order`, and the invariant holds whatever it picks.
+ *
+ * EXPORTED FOR ITS TEST, NOT FOR REUSE. No production data exercises the tie
+ * this exists for — a PO with several deliveries AND a partial receipt does not
+ * occur in the sandbox — so the only place that branch is proven is
  * `src/__tests__/inbound-by-sku/fifo.unit.spec.ts`.
  */
 export function inTransitPerDelivery(
@@ -161,18 +190,29 @@ export function inTransitPerDelivery(
   const out = new Map<string, number>();
   let unconsumed = received;
 
-  for (const shipment of shipments) {
+  // Two passes over ONE array so the relative order inside each group stays the
+  // reader's order (oldest first). Delivered shipments get charged first; every
+  // pass is capped by what the receipt actually recorded.
+  const isDelivered = (s: PoShipmentView): boolean =>
+    s.master?.carrier_status === "delivered";
+  const consumptionOrder = [
+    ...shipments.filter(isDelivered),
+    ...shipments.filter((s) => !isDelivered(s)),
+  ];
+
+  for (const shipment of consumptionOrder) {
     const claimed = claimedBy(shipment, lineId, shippable);
     if (claimed <= 0) continue;
 
-    const delivered = shipment.master?.carrier_status === "delivered";
-    const consumed = delivered ? claimed : Math.min(claimed, unconsumed);
-    unconsumed = Math.max(0, unconsumed - consumed);
+    const consumed = Math.min(claimed, unconsumed);
+    unconsumed -= consumed;
 
     const stillFlying = claimed - consumed;
     if (stillFlying > 0) out.set(shipment.id, stillFlying);
   }
 
+  // Display order belongs to the caller, which iterates `shipments` itself and
+  // looks each id up here — consuming out of order never reorders the screen.
   return out;
 }
 
@@ -258,6 +298,7 @@ export async function resolveInboundBySku(
       if (qty <= 0) continue;
       lineInTransit += qty;
 
+      const delivered = shipment.master?.carrier_status === "delivered";
       const carrierEta = shipment.carrier_eta;
       const eta = carrierEta ?? isoDate(line.expected_at);
       const etaSource = carrierEta
@@ -290,10 +331,11 @@ export async function resolveInboundBySku(
         number_count: shipment.numbers.length,
         eta,
         eta_source: etaSource,
-        overdue:
-          !!eta &&
-          eta < today &&
-          shipment.master?.carrier_status !== "delivered",
+        // A delivered row is never overdue and an overdue row is never
+        // delivered: the two states are exclusive by construction, so a screen
+        // can style them the same colour without ambiguity.
+        overdue: !!eta && eta < today && !delivered,
+        delivered,
       });
     }
 
@@ -321,6 +363,8 @@ export async function resolveInboundBySku(
       eta: expected,
       eta_source: expected ? "expected" : "none",
       overdue: false,
+      // Units on no shipment at all. Nothing can have delivered them.
+      delivered: false,
     });
   }
 

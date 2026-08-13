@@ -163,6 +163,78 @@ async function main(): Promise<void> {
       `${withDeliveries} SKUs`
     );
 
+    // 4. A carrier-delivered shipment whose receipt is unposted still shows its
+    //    tracking number.
+    //
+    //    The item receipt is the only authority on how many units arrived; the
+    //    carrier's `delivered` flag only decides WHICH delivery a receipt is
+    //    charged to. When the flag consumed the whole claim instead, every unit
+    //    of such a line fell into the untracked bucket and the stock modal
+    //    reported "No tracking yet" about a waybill that had already landed —
+    //    3 POs, 24 lines, 544 units on production the day it was found.
+    //
+    //    Unlike the FIFO tie-break, this case DOES occur in live data, so it is
+    //    checked here against real rows rather than only on synthetic input.
+    const { rows: deliveredPending } = await client.query<{ sku: string }>(
+      `SELECT DISTINCT l.sku_snapshot AS sku
+         FROM purchase_order_line l
+         JOIN purchase_order po ON po.id = l.purchase_order_id
+         JOIN purchase_order_tracking trk
+           ON trk.purchase_order_id = po.id AND trk.deleted_at IS NULL
+         JOIN purchase_order_tracking_number n
+           ON n.purchase_order_tracking_id = trk.id
+          AND n.deleted_at IS NULL
+          AND n.is_master
+          AND n.carrier_status = 'delivered'
+        WHERE l.deleted_at IS NULL
+          AND po.deleted_at IS NULL
+          AND l.sku_snapshot IS NOT NULL AND l.sku_snapshot <> ''
+          AND l.status  = ANY ($1::text[])
+          AND po.status = ANY ($2::text[])
+          AND l.qty_received = 0
+          AND (l.qty_ordered - l.qty_received - l.qty_cancelled) > 0
+          AND (trk.scope = 'all_order'
+               OR EXISTS (SELECT 1
+                            FROM purchase_order_tracking_line trkl
+                           WHERE trkl.purchase_order_tracking_id = trk.id
+                             AND trkl.purchase_order_line_id = l.id))
+        ORDER BY l.sku_snapshot`,
+      [[...ACTIVE_PO_LINE_STATUSES], [...ACTIVE_PO_STATUSES]]
+    );
+
+    let lostTracking = 0;
+    for (const row of deliveredPending) {
+      const got = await resolveInboundBySku(knex, row.sku);
+      const shown = got.deliveries.some(
+        (d) => d.delivered && d.tracking_id !== null && d.qty > 0
+      );
+      if (!shown) {
+        lostTracking += 1;
+        if (lostTracking <= 5) {
+          console.log(
+            `   ✗ ${row.sku}: a delivered shipment is pending receipt but no` +
+              ` tracked row carries it (unassigned ${got.unassigned})`
+          );
+        }
+      }
+    }
+
+    if (deliveredPending.length === 0) {
+      // Not a pass. The check is only as good as the data it ran against, and
+      // saying so is the difference between coverage and the appearance of it.
+      console.log(
+        "\n   ⚠️  no delivered-but-unreceived shipment in this database — the" +
+          " receipt-authority check proved nothing here (it is also pinned in" +
+          " fifo.unit.spec.ts)"
+      );
+    } else {
+      assert(
+        lostTracking === 0,
+        "a delivered shipment pending receipt keeps its tracking number",
+        `${deliveredPending.length - lostTracking}/${deliveredPending.length} SKUs`
+      );
+    }
+
     console.log(
       "\n   NOT covered here: the FIFO tie-break across several deliveries of a PO\n" +
         "   with a partial receipt — no such PO exists. See fifo.unit.spec.ts."
