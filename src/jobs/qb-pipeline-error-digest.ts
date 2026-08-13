@@ -15,6 +15,7 @@ import {
 import { collectReverseVoidSection } from "./_lib/_qb-reverse-void-section";
 import { collectVoidOrphanSection } from "./_lib/_qb-void-orphan-section";
 import { collectReservationDriftSection } from "./_lib/_reservation-drift-section";
+import { collectDiscountInvariantSection } from "./_lib/_discount-invariant-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -651,6 +652,13 @@ export async function buildDigestEmail(
   // (repair-reservation-integrity.ts, dry-run first). Fail-isolated.
   const reservationDriftSection = await collectReservationDriftSection(knex, logger);
   if (reservationDriftSection) sections.push(reservationDriftSection);
+
+  // ── 9. Invariante de descuento: metadata ↔ adjustments (canónicas) ────────
+  // Sólo la cohorte discount_schema=1, EXACTA y sin tolerancia — una fila acá
+  // es otro escritor violando el chokepoint (descuentos-canonicos-v1). El
+  // inventario legacy va en la descripción, nunca como alarma. Fail-isolated.
+  const discountInvariantSection = await collectDiscountInvariantSection(knex, logger);
+  if (discountInvariantSection) sections.push(discountInvariantSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 
