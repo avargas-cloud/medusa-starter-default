@@ -244,26 +244,29 @@ export async function POST(
   // applyTaxAndCanonicalTotals — derivar y reconciliar por separado es lo que
   // envenenó a S11432; acá ya no existe el "entre".
   if (explicitPosDiscount !== undefined || pos_tax_amount != null) {
-    if (explicitPosDiscount === undefined || pos_tax_amount == null) {
-      // Presencia EXPLÍCITA o nada: un caller que declara la mitad del dinero
-      // es la clase de ambigüedad que este dominio ya pagó dos veces.
+    if (pos_tax_amount == null) {
+      // Declarar el descuento SIN el tax es la mitad del dinero — la clase de
+      // ambigüedad que este dominio ya pagó dos veces (S11432, E2146).
       res.status(400).json({
         message:
-          "post-edit-sync requiere pos_discount_amount Y pos_tax_amount juntos (0 explícito es válido)",
+          "post-edit-sync: declarar descuento requiere también pos_tax_amount (0 explícito es válido)",
       });
       return;
     }
-    // Intent: type/value del POS cuando vienen; un declarado > 0 sin type/value
-    // (caller legacy) se canoniza como fixed por el monto declarado.
+    // Tres modos: intent (aplicar) · null (quitar, 0 explícito) · undefined
+    // (caller legacy sin declaración → derive-only, los adjustments quedan).
+    // Un declarado > 0 sin type/value se canoniza como fixed por el monto.
     const intent =
-      explicitPosDiscount > 0
-        ? discount_type && discount_value && discount_value > 0
-          ? ({
-              type: discount_type === "percent" ? "percent" : "fixed",
-              value: Number(discount_value),
-            } as const)
-          : ({ type: "fixed", value: explicitPosDiscount } as const)
-        : null;
+      explicitPosDiscount === undefined
+        ? undefined
+        : explicitPosDiscount > 0
+          ? discount_type && discount_value && discount_value > 0
+            ? ({
+                type: discount_type === "percent" ? "percent" : "fixed",
+                value: Number(discount_value),
+              } as const)
+            : ({ type: "fixed", value: explicitPosDiscount } as const)
+          : null;
     try {
       const promo = intent
         ? await resolveCposPromotion(req.scope, intent, {

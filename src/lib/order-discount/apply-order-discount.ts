@@ -38,6 +38,7 @@ import {
   isZeroTaxSafe,
   loadOrderMoneyBase,
   replaceOrderTaxLines,
+  representedDiscountDollars,
   resolvePatchedOrderTotal,
   resolveQbParityTax,
 } from "../order-money/order-tax-lines";
@@ -66,8 +67,13 @@ export interface MiniLogger {
 }
 
 export interface ApplyOrderDiscountInput {
-  /** null = quitar el descuento (wipe). */
-  intent: DiscountIntent | null;
+  /**
+   * El descuento DECLARADO: un intent lo aplica, `null` lo quita (wipe), y
+   * `undefined` = caller legacy que no declara nada — modo DERIVE-ONLY: los
+   * adjustments no se tocan y el descuento de la derivación es el que la base
+   * ya representa (`representedDiscountDollars`), como el paso 6 del gate.
+   */
+  intent: DiscountIntent | null | undefined;
   /**
    * Lo que el POS declaró en dólares (`pos_discount_amount`) — se contrasta
    * contra la asignación propia y una divergencia real se loguea; la cifra
@@ -148,6 +154,8 @@ export async function applyOrderDiscount(
     }
     const curVersion = lines[0]!.cur_version;
 
+    const reconcile = input.intent !== undefined;
+
     // ── Higiene de adjustments (antes vivía en el hard-wipe de la ruta) ─────
     await client.query(
       `DELETE FROM order_line_item_adjustment
@@ -164,14 +172,17 @@ export async function applyOrderDiscount(
 
     // ── Reconciliación: los adjustments SON lo que el intent declara ────────
     // Modelo escalar: el descuento de la orden es UNO; se reemplaza todo.
-    await client.query(
-      `DELETE FROM order_line_item_adjustment
-        WHERE item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)`,
-      [orderId]
-    );
-    await client.query(`DELETE FROM order_promotion WHERE order_id = $1`, [
-      orderId,
-    ]);
+    // En modo derive-only (intent undefined) los adjustments quedan como están.
+    if (reconcile) {
+      await client.query(
+        `DELETE FROM order_line_item_adjustment
+          WHERE item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)`,
+        [orderId]
+      );
+      await client.query(`DELETE FROM order_promotion WHERE order_id = $1`, [
+        orderId,
+      ]);
+    }
 
     let discountDollars = 0;
     let adjustmentLines = 0;
@@ -230,25 +241,27 @@ export async function applyOrderDiscount(
     }
 
     // ── Metadata del descuento (una sola forma, null explícito) ─────────────
-    await client.query(
-      `UPDATE "order"
-          SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-                'discount_type',       $2::text,
-                'discount_value',      $3::numeric,
-                'promotion_code',      $4::text,
-                'pos_discount_amount', $5::numeric,
-                'discount_schema',     1
-              ),
-              updated_at = NOW()
-        WHERE id = $1 AND deleted_at IS NULL`,
-      [
-        orderId,
-        input.intent ? input.intent.type : null,
-        input.intent ? input.intent.value : null,
-        input.intent ? input.promo!.code : null,
-        discountDollars,
-      ]
-    );
+    if (reconcile) {
+      await client.query(
+        `UPDATE "order"
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                  'discount_type',       $2::text,
+                  'discount_value',      $3::numeric,
+                  'promotion_code',      $4::text,
+                  'pos_discount_amount', $5::numeric,
+                  'discount_schema',     1
+                ),
+                updated_at = NOW()
+          WHERE id = $1 AND deleted_at IS NULL`,
+        [
+          orderId,
+          input.intent ? input.intent.type : null,
+          input.intent ? input.intent.value : null,
+          input.intent ? input.promo!.code : null,
+          discountDollars,
+        ]
+      );
+    }
 
     // ── Tax lines por línea (misma función que siempre, en ESTA tx) ─────────
     const taxRewrite = await replaceOrderTaxLines(
@@ -259,6 +272,10 @@ export async function applyOrderDiscount(
 
     // ── Totales canónicos: los TRES campos + summary, desde la base ─────────
     const moneyBase = await loadOrderMoneyBase(client, orderId);
+    if (!reconcile) {
+      // Derive-only: el descuento es el que la base ya representa.
+      discountDollars = representedDiscountDollars(moneyBase);
+    }
     const resolved = resolvePatchedOrderTotal({
       base: moneyBase,
       posTaxAmount: input.tax.posTaxAmount,

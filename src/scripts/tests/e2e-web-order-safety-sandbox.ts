@@ -287,7 +287,7 @@ async function main(): Promise<void> {
     console.log("\nB · post-edit-sync (save del POS)");
     r = await call(`/admin/orders/${webOrder.id}/post-edit-sync`, {
       token,
-      body: { pos_discount_amount: 0 },
+      body: { pos_discount_amount: 0, pos_tax_amount: 0, pos_tax_rate: 7 },
     });
     check("B1 web sin PIN → 403", r.status === 403, `HTTP ${r.status}: ${r.raw.slice(0, 120)}`);
 
@@ -297,6 +297,8 @@ async function main(): Promise<void> {
       pin: realPin,
       body: {
         pos_discount_amount: 0,
+        pos_tax_amount: 0,
+        pos_tax_rate: 7,
         web_edit_operation_id: opId,
         web_edit_attestation: {
           channel: "email",
@@ -335,7 +337,7 @@ async function main(): Promise<void> {
     r = await call(`/admin/orders/${webOrder.id}/post-edit-sync`, {
       token,
       pin: realPin,
-      body: { pos_discount_amount: 0, web_edit_operation_id: opId },
+      body: { pos_discount_amount: 0, pos_tax_amount: 0, pos_tax_rate: 7, web_edit_operation_id: opId },
     });
     check(
       "B6 repetir el mismo operation_id NO duplica la huella",
@@ -344,7 +346,7 @@ async function main(): Promise<void> {
     );
     r = await call(`/admin/orders/${posOrder.id}/post-edit-sync`, {
       token,
-      body: { pos_discount_amount: 0 },
+      body: { pos_discount_amount: 0, pos_tax_amount: 0, pos_tax_rate: 7 },
     });
     check("B7 orden POS: post-edit-sync sin PIN → 200 (control)", r.status === 200, `HTTP ${r.status}: ${r.raw.slice(0, 120)}`);
 
