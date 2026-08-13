@@ -3,6 +3,7 @@ import {
   computeFulfillmentStatus,
   type OrderForMeili,
 } from "../../../../lib/meilisearch/build-order-doc";
+import { loadSeparationPending } from "./separation-availability";
 
 /**
  * The one projection behind every server-side orders list.
@@ -80,6 +81,12 @@ export type HydratedOrderListRow = Omit<
   // invoice per dispatch), which is why the boolean fully_invoiced flag is not
   // enough to answer that question.
   invoiced_total: number | null;
+  // How many open units are still to be set aside, and how many of those the
+  // Miami shelf can back right now. Drives the second slot of the POS Separated
+  // column (To Separate / Awaiting Products). Never indexed — see the module
+  // note in separation-availability.ts: it derives from live inventory, which
+  // no reindex tracks. null when the order contributed no open line.
+  separation_pending: { pending: number; available: number } | null;
 };
 
 /**
@@ -206,7 +213,15 @@ export async function hydrateOrderRows(
     ? [ids, ids, ids, ids, ids, ids]
     : [ids];
 
-  const result = await pg.raw(
+  // Availability is its OWN query rather than a sixth CTE, on purpose: the
+  // verdict is produced by computeSeparationCaps — the same function the
+  // separation modal and the write path use — so the rows have to come back to
+  // TypeScript instead of being folded down in SQL. Reimplementing that
+  // arithmetic here would let the list and the screen the operator opens next
+  // disagree about what is separable. Issued alongside the projection, so it
+  // costs the slower of the two rather than the sum.
+  const [result, separationPending] = await Promise.all([
+    pg.raw(
     `
       WITH payment_agg AS (
         SELECT
@@ -349,8 +364,10 @@ export async function hydrateOrderRows(
       WHERE o.deleted_at IS NULL
         AND o.id = ANY(?::text[])
     `,
-    bindings
-  );
+      bindings
+    ),
+    loadSeparationPending(pg, ids),
+  ]);
 
   const rows = result.rows as OrderListRow[];
   const rowsById = new Map(rows.map((row) => [row.id, row]));
@@ -387,6 +404,7 @@ export async function hydrateOrderRows(
         numericInvoicedCents !== null && Number.isFinite(numericInvoicedCents)
           ? numericInvoicedCents / 100
           : null,
+      separation_pending: separationPending.get(doc.id) ?? null,
     }];
   });
 }

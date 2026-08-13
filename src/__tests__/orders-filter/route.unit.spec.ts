@@ -53,8 +53,33 @@ function withDocs(count: number): void {
   raw.mockResolvedValue({ rows: [] });
 }
 
-function lastCall(): { sql: string; bindings: unknown[] } {
-  const [sql, bindings] = raw.mock.calls[raw.mock.calls.length - 1];
+/**
+ * The projection query, selected by CONTENT rather than by position.
+ *
+ * It used to be `calls[calls.length - 1]`, which was unambiguous only while the
+ * route issued exactly one query. Since separation availability got its own
+ * (it computes its verdict in TypeScript through computeSeparationCaps, so its
+ * rows have to come back rather than be folded in SQL), "the last call" started
+ * naming the wrong one and all five assertions here reported on a query they
+ * were never written about. Identity by position is the same trap that shuffled
+ * invoice lines when their order was read off ULIDs.
+ */
+function projectionCall(): { sql: string; bindings: unknown[] } {
+  const call = raw.mock.calls.find(([sql]) =>
+    typeof sql === "string" && sql.includes("WITH payment_agg AS")
+  );
+  if (!call) throw new Error("the projection query was never issued");
+  const [sql, bindings] = call;
+  return { sql: sql as string, bindings: (bindings as unknown[]) ?? [] };
+}
+
+/** The separation-availability query, likewise selected by content. */
+function availabilityCall(): { sql: string; bindings: unknown[] } {
+  const call = raw.mock.calls.find(([sql]) =>
+    typeof sql === "string" && sql.includes("claim AS (")
+  );
+  if (!call) throw new Error("the availability query was never issued");
+  const [sql, bindings] = call;
   return { sql: sql as string, bindings: (bindings as unknown[]) ?? [] };
 }
 
@@ -73,7 +98,7 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
 
     await GET(buildReq({ tab: "open" }), buildRes());
 
-    const { sql, bindings } = lastCall();
+    const { sql, bindings } = projectionCall();
     expect(sql.match(/\?::text\[\]/g)).toHaveLength(bindings.length);
     // 6 = opc + os + order_fulfillment + order_item + invoice_agg (scoped
     // CTEs) + el filtro externo o.id. invoice_agg entró con invoiced_total.
@@ -85,7 +110,7 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
 
     await GET(buildReq({ tab: "closed" }), buildRes());
 
-    const { sql, bindings } = lastCall();
+    const { sql, bindings } = projectionCall();
     expect(sql.match(/\?::text\[\]/g)).toHaveLength(bindings.length);
     expect(bindings).toHaveLength(1);
   });
@@ -95,7 +120,7 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
 
     await GET(buildReq({ tab: "open" }), buildRes());
 
-    const { sql } = lastCall();
+    const { sql } = projectionCall();
     for (const column of [
       "opc.order_id",
       "os.order_id",
@@ -112,7 +137,7 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
 
     await GET(buildReq({ tab: "closed" }), buildRes());
 
-    const { sql } = lastCall();
+    const { sql } = projectionCall();
     expect(sql).not.toContain("AND order_item.order_id = ANY");
     // The outer filter is always present — that is what selects the rows.
     expect(sql).toContain("AND o.id = ANY(?::text[])");
@@ -125,9 +150,38 @@ describe("GET /admin/orders/filter — conditional CTE scoping", () => {
 
     // Without ORDER BY, element order follows the execution plan, so scoping
     // silently reshuffles these arrays and no hash-based test can be trusted.
-    const { sql } = lastCall();
+    const { sql } = projectionCall();
     expect(sql).toContain("ORDER BY order_fulfillment.id");
     expect(sql).toContain("ORDER BY order_item.id");
+  });
+});
+
+describe("GET /admin/orders/filter — separation availability query", () => {
+  it("binds every placeholder it carries", async () => {
+    withDocs(50);
+
+    await GET(buildReq({ tab: "open" }), buildRes());
+
+    const { sql, bindings } = availabilityCall();
+    // knex counts EVERY `?` positionally, including one that wanders into a
+    // comment — that exact mistake killed PO line deletes in production for six
+    // days. The id array and the Miami location are the only two here.
+    expect(sql.match(/\?/g)).toHaveLength(bindings.length);
+    expect(bindings).toHaveLength(2);
+  });
+
+  it("never restricts the cross-order claim to the requested orders", async () => {
+    withDocs(50);
+
+    await GET(buildReq({ tab: "open" }), buildRes());
+
+    const { sql } = availabilityCall();
+    // The inverse of the rule the projection CTEs follow. This aggregate exists
+    // to count what OTHER orders hold, so scoping it would stop subtracting a
+    // Closed order's claim and the list would offer units already spoken for.
+    const claim = sql.slice(sql.indexOf("claim AS ("), sql.indexOf("SELECT l.order_id"));
+    expect(claim).not.toContain("ANY(?::text[])");
+    expect(claim).toContain("o2.status NOT IN ('canceled', 'archived')");
   });
 });
 
