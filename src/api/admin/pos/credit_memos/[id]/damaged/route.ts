@@ -6,6 +6,7 @@ import { Modules } from "@medusajs/utils";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
+import { assertWebOrdersAuthorized } from "../../../../orders/[id]/_lib/assert-web-order-authorized";
 import { USA_LOC } from "../../../../../../lib/locations";
 import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
 
@@ -51,6 +52,18 @@ export async function PATCH(
       res
         .status(404)
         .json({ success: false, message: "Credit Memo not found" });
+      return;
+    }
+
+    // Credit memo de una orden WEB → PIN de supervisor: marcar damaged mueve
+    // inventario del contrato que el cliente armó solo. Antes de toda mutación.
+    const webGate = await assertWebOrdersAuthorized(
+      req.scope,
+      [creditMemo.order_id as string | undefined],
+      req
+    );
+    if (webGate.denial) {
+      res.status(webGate.denial.status).json(webGate.denial.body);
       return;
     }
 

@@ -9,6 +9,7 @@
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { assertWebOrdersAuthorized } from "../../../orders/[id]/_lib/assert-web-order-authorized";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -35,6 +36,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const activeApps = ((payment as any).applications ?? []).filter(
       (a: any) => !a.voided_at
     );
+
+    // Refund de plata atada a una orden WEB → PIN de supervisor. El pago se
+    // atribuye por locked_order_id / metadata.order_id / applications — si
+    // CUALQUIERA de esas órdenes vino de la web, devolver su dinero es una
+    // edición del contrato del cliente. Corre ANTES de toda mutación.
+    const webGate = await assertWebOrdersAuthorized(
+      req.scope,
+      [
+        (payment as any).locked_order_id as string | undefined,
+        (payment as any).metadata?.order_id as string | undefined,
+        ...activeApps.map((a: any) => a.order_id as string | undefined),
+      ],
+      req
+    );
+    if (webGate.denial) {
+      return res.status(webGate.denial.status).json(webGate.denial.body);
+    }
+
     // Invoice-bound applications are consumed money (immutable here).
     // Order-only rows (invoice_id NULL) are reversible RESERVATIONS from
     // "Link to Order" — refundable: the refund releases them (same hard-delete

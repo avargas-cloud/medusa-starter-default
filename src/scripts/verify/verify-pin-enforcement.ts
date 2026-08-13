@@ -181,7 +181,14 @@ for (const r of ORDER_EDIT_ROUTES) {
     );
     continue;
   }
-  if (!fs.readFileSync(p, "utf8").includes("assertWebOrderAuthorized")) {
+  // La LLAMADA, no la mención: un import huérfano dejaba pasar el check
+  // (mutation test 2026-08-14). Se descartan las líneas import primero.
+  const bodyNoImports = fs
+    .readFileSync(p, "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
+    .join("\n");
+  if (!/assertWebOrderAuthorized\s*\(/.test(bodyNoImports)) {
     failures.push(
       `orders/[id]/${r} no llama a assertWebOrderAuthorized(). Una orden que ` +
         `vino de la web se editaría sin PIN por esa ruta.`
@@ -190,6 +197,47 @@ for (const r of ORDER_EDIT_ROUTES) {
 }
 if (!failures.some((f) => f.includes("orders/[id]"))) {
   notes.push(`✓ las ${ORDER_EDIT_ROUTES.length} rutas de edición de orden gatean el origen web`);
+}
+
+// ── 4a · efectos financieros FUERA de orders/[id] también gatean origen web ──
+//
+// Devolver plata o mover inventario de una orden web es editar el contrato del
+// cliente aunque la ruta viva bajo customer-payments o credit_memos. Se
+// afirman por NOMBRE (misma razón que 4b) y resuelven la(s) orden(es) del
+// documento vía assertWebOrdersAuthorized.
+const WEB_MONEY_ROUTES = [
+  ["api/admin/customer-payments/[id]/refund/route.ts", "refund de un pago"],
+  ["api/admin/pos/credit_memos/[id]/complete/route.ts", "completa un credit memo (dinero+inventario+QB)"],
+  ["api/admin/pos/credit_memos/[id]/edit/route.ts", "edita un credit memo completado"],
+  ["api/admin/pos/credit_memos/[id]/void/route.ts", "voidea un credit memo"],
+  ["api/admin/pos/credit_memos/[id]/damaged/route.ts", "marca items damaged (inventario)"],
+];
+for (const [rel, what] of WEB_MONEY_ROUTES) {
+  const p = path.join(BACKEND_SRC, rel);
+  if (!fs.existsSync(p)) {
+    failures.push(
+      `${rel} no existe donde se esperaba — si se movió, actualizar esta ` +
+        `lista: el gate web se afirma por nombre.`
+    );
+    continue;
+  }
+  // La LLAMADA, no la mención — un import huérfano no gatea nada.
+  const finBodyNoImports = fs
+    .readFileSync(p, "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
+    .join("\n");
+  if (!/assertWebOrdersAuthorized\s*\(/.test(finBodyNoImports)) {
+    failures.push(
+      `${rel} ${what} y no llama a assertWebOrdersAuthorized() — sobre una ` +
+        `orden web ese dinero se movería sin PIN.`
+    );
+  }
+}
+if (!failures.some((f) => WEB_MONEY_ROUTES.some(([rel]) => f.includes(rel)))) {
+  notes.push(
+    `✓ las ${WEB_MONEY_ROUTES.length} rutas financieras gatean el origen web`
+  );
 }
 
 // ── 4b · rutas que DEBEN gatear, se nombren o no al PIN ──────────────────────

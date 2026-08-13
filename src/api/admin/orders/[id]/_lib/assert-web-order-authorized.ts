@@ -46,32 +46,48 @@ export async function assertWebOrderAuthorized(
   orderId: string,
   req: unknown
 ): Promise<WebOrderAuthResult> {
+  return assertWebOrdersAuthorized(scope, [orderId], req);
+}
+
+/**
+ * Variante multi-orden: refunds y credit memos tocan dinero de una o varias
+ * órdenes (locked_order_id, metadata.order_id, applications) — si CUALQUIERA
+ * es web, la operación exige PIN. Un solo query y UN solo intento contra el
+ * guard (llamarlo por orden inflaría el contador de throttle por cada fallo).
+ */
+export async function assertWebOrdersAuthorized(
+  scope: MedusaContainer,
+  orderIds: Array<string | null | undefined>,
+  req: unknown
+): Promise<WebOrderAuthResult> {
+  const ids = [...new Set(orderIds.filter((v): v is string => !!v))];
+  if (ids.length === 0) return { denial: null };
+
   const pg = scope.resolve("__pg_connection__") as PinConn;
 
-  let isWebOrder: boolean;
+  let webOrderPresent: boolean;
   try {
+    const placeholders = ids.map(() => "?").join(", ");
     const { rows } = (await pg.raw(
       `SELECT o.metadata->>'pos_created' AS pos_created,
               sc.name                    AS channel_name
          FROM "order" o
          LEFT JOIN sales_channel sc ON sc.id = o.sales_channel_id
-        WHERE o.id = ? AND o.deleted_at IS NULL`,
-      [orderId]
+        WHERE o.id IN (${placeholders}) AND o.deleted_at IS NULL`,
+      ids
     )) as { rows: Array<{ pos_created: string | null; channel_name: string | null }> };
-    const row = rows?.[0];
-    if (!row) {
-      // La orden no existe: que la ruta conteste su propio 404, no un 403 de PIN.
-      return { denial: null };
-    }
-    const posCreated = String(row.pos_created ?? "") === "true";
-    const channelIsPos = /pos/i.test(String(row.channel_name ?? ""));
-    isWebOrder = !posCreated && !channelIsPos;
+    // Ids inexistentes no cuentan: que cada ruta conteste su propio 404.
+    webOrderPresent = (rows ?? []).some((row) => {
+      const posCreated = String(row.pos_created ?? "") === "true";
+      const channelIsPos = /pos/i.test(String(row.channel_name ?? ""));
+      return !posCreated && !channelIsPos;
+    });
   } catch {
     // Fail-CLOSED: no se pudo establecer el origen → se exige PIN.
-    isWebOrder = true;
+    webOrderPresent = true;
   }
 
-  if (!isWebOrder) return { denial: null };
+  if (!webOrderPresent) return { denial: null };
 
   const guard = await guardSupervisorPin({
     scope: scope as unknown as { resolve: (k: string) => unknown },
