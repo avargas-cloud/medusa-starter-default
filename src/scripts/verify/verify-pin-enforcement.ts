@@ -305,7 +305,9 @@ if (!mwSrc.includes("protectSupervisorPin")) {
   const pesSrc = fs.existsSync(pes)
     ? stripComments(fs.readFileSync(pes, "utf8"))
     : "";
-  if (!pesSrc.includes("x-supervisor-pin")) {
+  // La ASIGNACIÓN al header de los self-calls, no la mera mención: el mutation
+  // test demostró que extraer el header sin reenviarlo pasaba el check viejo.
+  if (!/authHeaders\[["']x-supervisor-pin["']\]\s*=/.test(pesSrc)) {
     failures.push(
       `post-edit-sync no reenvía x-supervisor-pin a sus self-calls — en una ` +
         `orden web, apply-discount-force rechaza el descuento y el padre sigue ` +
