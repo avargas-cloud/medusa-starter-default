@@ -48,6 +48,10 @@ export const ORDERS_FILTERABLE_ATTRIBUTES = [
   "is_open",
   "is_closed",
   "is_separated",
+  // The tri-state the Separated tab filters on. is_separated stays filterable
+  // as the boolean mirror of metadata.is_separated (full only); the tab reads
+  // this one so partial separations are not invisible to it.
+  "separation_state",
   "is_canceled",
   "is_voided",
   "is_web",

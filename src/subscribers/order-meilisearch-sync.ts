@@ -295,12 +295,19 @@ async function stampFullyInvoiced(
     });
     const meta = (order?.metadata ?? {}) as Record<string, unknown>;
 
-    // The flag is ONLY consumed by the Separated derivation (is_separated &&
-    // !closed && !fully_invoiced). For non-separated orders it's irrelevant, so
-    // skip the invoice load entirely — keeps order.updated cheap (it fires on
-    // every edit step). Marking an order separated emits order.updated, so a
+    // The flag is ONLY consumed by the Separated derivation (separation_state
+    // && !closed && !fully_invoiced). For non-separated orders it's irrelevant,
+    // so skip the invoice load entirely — keeps order.updated cheap (it fires
+    // on every edit step). Marking an order separated emits order.updated, so a
     // newly-separated order is still picked up on its next event.
-    if (!meta.is_separated) return;
+    //
+    // separation_status is checked ALONGSIDE the boolean, not instead of it:
+    // is_separated is written only for `full`, so gating on it alone left a
+    // partially separated order without this flag forever — and once the tab
+    // started admitting partials (2026-08-13) that meant an order that entered
+    // the Separated tab could never leave it, however completely it was billed.
+    const sep = meta.separation_status;
+    if (!meta.is_separated && sep !== "partial" && sep !== "full") return;
 
     const fullyInvoiced = await loadFullyInvoicedForOrder(orderId, container);
     if (meta.fully_invoiced === fullyInvoiced) return;

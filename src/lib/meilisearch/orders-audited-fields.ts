@@ -24,6 +24,7 @@ export const ORDER_AUDITED_FIELDS = [
   "is_open",
   "is_closed",
   "is_separated",
+  "separation_state",
   "is_canceled",
   "is_voided",
   "is_web",

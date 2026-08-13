@@ -15,6 +15,21 @@
 
 export type SeparationStatus = "none" | "partial" | "full";
 
+/**
+ * The Meili predicate behind the Separated tab — ONE literal, two consumers
+ * (`orders/filter/route.ts` and `orders/counts/route.ts`).
+ *
+ * It filters `separation_state`, the tri-state indexed field, NOT `is_separated`:
+ * that boolean is the mirror of `metadata.is_separated`, which is written only
+ * for `full`, so a tab filtering on it could never show a partial separation —
+ * two of the three live ones were invisible until 2026-08-13.
+ *
+ * Shared rather than written twice because a badge computing its own version of
+ * a tab's membership is the list contradicting itself, and these two have
+ * already been caught disagreeing once.
+ */
+export const SEPARATED_TAB_FILTER = 'separation_state IN ["partial", "full"]';
+
 export interface SeparationStatusLine {
   /** Order quantity of the line. */
   quantity: number;

@@ -126,6 +126,21 @@ export interface OrderMeiliDoc {
   is_open: boolean;
   is_closed: boolean;
   is_separated: boolean;
+  /**
+   * Tri-state the Separated tab actually filters on.
+   *
+   * `is_separated` above stays the boolean mirror of `metadata.is_separated`,
+   * which the separations route writes as `status === "full"` only. Filtering
+   * the tab on it meant a partially separated order could never appear there —
+   * two of the three live separations were invisible. Widening `is_separated`
+   * instead would have made the indexed field and the metadata field of the
+   * same name mean different things, which is how the fulfillment_status
+   * divergence (S11417) happened; the tri-state gets its own name instead.
+   *
+   * Gated exactly like is_separated: a closed or fully invoiced order is no
+   * longer awaiting separation, so it reads "none" whatever its rows say.
+   */
+  separation_state: "none" | "partial" | "full";
   is_canceled: boolean;
   is_voided: boolean;
   is_web: boolean;
@@ -481,6 +496,19 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   // sync subscriber on invoice + order-edit events.
   const isSeparated =
     !!meta.is_separated && !isClosed && meta.fully_invoiced !== true;
+  // Same gate, three states. metadata.separation_status is written by the
+  // separations and product-status routes; orders that predate per-line
+  // tracking carry only the boolean, which deriveSeparationStatus honors as
+  // "full" — mirrored here so a legacy order keeps the tab membership it had.
+  const rawSeparation = asString(meta.separation_status);
+  const separationState: "none" | "partial" | "full" =
+    isClosed || meta.fully_invoiced === true
+      ? "none"
+      : rawSeparation === "partial" || rawSeparation === "full"
+        ? rawSeparation
+        : meta.is_separated
+          ? "full"
+          : "none";
 
   const displayId = order.display_id ?? 0;
 
@@ -506,6 +534,7 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     is_open: isOpen,
     is_closed: isClosed,
     is_separated: isSeparated,
+    separation_state: separationState,
     is_canceled: isCanceled,
     is_voided: isVoided,
     is_web: isWeb,

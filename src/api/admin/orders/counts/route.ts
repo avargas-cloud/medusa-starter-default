@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { parseRep, repFilter } from "../_lib/rep-filter";
+import { SEPARATED_TAB_FILTER } from "../_lib/separation-status";
 
 /**
  * GET /admin/orders/counts?from=<ms>&to=<ms>&showCancelled=true|false
@@ -118,7 +119,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         countExact([...tabBase, "is_closed = true"]),
         countExact([...tabBase, "is_unpaid = true"]),
         countExact([...tabBase, "is_web = true"]),
-        countExact([...tabBase, "is_separated = true"]),
+        // Same literal the filter route uses — the badge and the table it
+        // labels cannot disagree about what "Separated" means.
+        countExact([...tabBase, SEPARATED_TAB_FILTER]),
         // Must mirror TAB_FILTER.medusa_open in the filter route exactly, or the
         // badge and the table it labels disagree.
         countExact([

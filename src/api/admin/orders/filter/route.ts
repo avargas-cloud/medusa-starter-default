@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { hydrateOrderRows } from "../_lib/hydrate-order-rows";
 import { parseRep, repFilter } from "../_lib/rep-filter";
+import { SEPARATED_TAB_FILTER } from "../_lib/separation-status";
 
 /**
  * GET /admin/orders/filter?tab=<tab>&payment=<effective>
@@ -22,7 +23,7 @@ const TAB_FILTER: Record<string, string> = {
   open: "is_open = true",
   closed: "is_closed = true",
   web: "is_web = true",
-  separated: "is_separated = true",
+  separated: SEPARATED_TAB_FILTER,
   // Orders the POS presents as finished that Medusa never closed: the operator
   // sees them delivered/shipped, but order.status is still pending, so
   // completeOrderWorkflow either never ran or one of its four guards blocked it
