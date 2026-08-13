@@ -25,6 +25,13 @@ const FACTORY_COST = `COALESCE(${purchaseCostDollars("pv")}, 0)`
 
 const LANDED_COST = `COALESCE(${avgCostDollars("pv")}, 0)`
 
+// QuickBooks account that defines a purchasing-agent commission charge. Matched
+// as a PREFIX (`Commission for Purchase:Veetech Representative` is the only
+// sub-account in use today) and case-insensitively, so a second agent's
+// sub-account under the same parent is picked up without a code change.
+// See fetchAgentCommission for why the account name is the whole definition.
+const COMMISSION_ACCOUNT_PREFIX = 'Commission for Purchase%'
+
 // Owned quantity — the WHOLE shelf (2026-07-24). This used to be
 // GREATEST(0, stocked - reserved), which was wrong twice over:
 //
@@ -411,6 +418,61 @@ async function fetchPeriodReceivedSplit(pg: any, from: string, to: string) {
   }
 }
 
+// Purchasing-agent commission billed in [from, to) — the third number on the
+// China → Miami arrow (user request 2026-08-13).
+//
+// SOURCED FROM THE BILLS, never recomputed as 15% of anything. Every one of
+// the 25 commission bills in production is exactly 15.00% of its PO's subtotal
+// (measured 2026-08-13, to the cent), so a hardcoded rate would agree with the
+// bills today and lie the day the contract's rate moves or a shipment carries
+// a negotiated adjustment. Same discipline the drift engine already applies:
+// the agent's commission is reconciled, never recomputed.
+//
+// DATED BY `document_date`, NOT by the receipt event that `Received` above is
+// scoped to — a deliberate mismatch, decided by the user on 2026-08-13: there
+// is a contract with a $2,000/month floor and the contract counts by INVOICE
+// date, so the report has to keep the contract's own calendar. Consequence
+// worth knowing before "fixing" it: Veetech invoices its commission when the
+// goods SHIP, 1-4 weeks before they land, so this number and the Received
+// number directly above it describe DIFFERENT shipments in the same month
+// (August 2026: $1,666.93 of commission against $2,571.88 of merchandise
+// received at purchase cost). Their ratio is not the commission rate.
+//
+// The account name IS the definition — no `is_china_agent` filter. If another
+// agent ever bills against the same account, that is still purchasing-agent
+// commission on this lane and belongs in this number.
+//
+// Drafts are excluded (user decision, same day): only a confirmed bill counts.
+// Today that is load-bearing, not cosmetic — one draft (VB-1095, $596.46) is
+// the difference between August reading above or below the contract floor.
+//
+// The line amount is `qty * unit_cost_cents`: `vendor_bill_line.amount_cents`
+// is NULL on all 25 commission lines, so reading that column would report $0.
+// Exported so `scripts/verify/verify-supply-chain-commission.ts` exercises THIS
+// function against independently-measured expected totals, instead of a copy of
+// its SQL that would agree with a mutation.
+export async function fetchAgentCommission(
+  pg: any,
+  from: string,
+  to: string
+): Promise<{ cents: number; orders: number }> {
+  const result = await pg.raw(
+    `SELECT
+       COALESCE(SUM(vbl.qty * vbl.unit_cost_cents), 0)::bigint AS cents,
+       COUNT(DISTINCT COALESCE(vb.purchase_order_id, vb.id)) AS orders
+     FROM vendor_bill vb
+     JOIN vendor_bill_line vbl ON vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
+     WHERE vb.deleted_at IS NULL
+       AND vb.status IN ('confirmed', 'synced')
+       AND vbl.qb_account_full_name ILIKE ?
+       AND COALESCE(vb.document_date, vb.created_at) >= ?
+       AND COALESCE(vb.document_date, vb.created_at) < ?`,
+    [COMMISSION_ACCOUNT_PREFIX, from, to]
+  )
+  const r = result.rows[0]
+  return { cents: Number(r?.cents ?? 0), orders: Number(r?.orders ?? 0) }
+}
+
 // Inventory-count adjustments applied to Miami in [from, to) — the third
 // movement source of the Miami ledger (alongside Received and Sold) and,
 // until now, the only one with no representation anywhere on the page.
@@ -707,6 +769,12 @@ interface PoAmounts {
   // fetchPeriodReceivedSplit's comment for why this is never period-scoped).
   localVendorInTransitCents?: number
   chinaAgentInTransitCents?: number
+  // "period" mode only: what the purchasing agent BILLED in the period, by the
+  // bill's document date (see fetchAgentCommission — deliberately NOT the
+  // receipt date the Received figures above use). China lane only; local
+  // vendors have no agent and therefore no counterpart field.
+  agentCommissionCents?: number
+  agentCommissionOrders?: number
 }
 
 // Factory orders, same 3-way branch as fetchPoAmounts — "current" shows live
@@ -760,10 +828,11 @@ async function fetchPoAmounts(
       chinaAgentInTransitCents: r.chinaAgentCents,
     }
   }
-  const [createdR, receivedR, outstandingR] = await Promise.all([
+  const [createdR, receivedR, outstandingR, commissionR] = await Promise.all([
     fetchPoSpend(pg, from, to),
     fetchPeriodReceivedSplit(pg, from, to),
     isInProgress ? fetchCurrentPoOutstanding(pg) : Promise.resolve(null),
+    fetchAgentCommission(pg, from, to),
   ])
   return {
     localVendorCents: createdR.localVendorCents,
@@ -772,6 +841,8 @@ async function fetchPoAmounts(
     chinaAgentCreatedCents: createdR.chinaAgentCents,
     localVendorReceivedCents: receivedR.vendorReceivedCents,
     chinaAgentReceivedCents: receivedR.agentReceivedCents,
+    agentCommissionCents: commissionR.cents,
+    agentCommissionOrders: commissionR.orders,
     ...(outstandingR
       ? {
           localVendorInTransitCents: outstandingR.localVendorCents,
@@ -996,6 +1067,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         ...(poAmounts.chinaAgentCreatedCents !== undefined ? { created: poAmounts.chinaAgentCreatedCents / 100 } : {}),
         ...(poAmounts.chinaAgentReceivedCents !== undefined ? { received: poAmounts.chinaAgentReceivedCents / 100 } : {}),
         ...(poAmounts.chinaAgentInTransitCents !== undefined ? { in_transit: poAmounts.chinaAgentInTransitCents / 100 } : {}),
+        // What the agent invoiced in the period, by BILL DOCUMENT DATE — a
+        // different event from `received` above, on purpose (fetchAgentCommission).
+        // Absent in "current" mode, which has no period to bill against.
+        ...(poAmounts.agentCommissionCents !== undefined ? { commission: poAmounts.agentCommissionCents / 100 } : {}),
+        ...(poAmounts.agentCommissionOrders !== undefined ? { commission_orders: poAmounts.agentCommissionOrders } : {}),
       },
       miami_inventory_value: miamiInventoryValueNet,
       china_inventory_value: chinaInventoryValue,
