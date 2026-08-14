@@ -9,7 +9,12 @@ export function accountAllowedForVendorBillType(
 ) {
   const fullName = account.full_name.toLowerCase();
   if (billType === "service") {
-    return fullName === "commission for purchase:veetech representative";
+    return (
+      fullName === "commission for purchase:veetech representative" ||
+      // Order Commissions v1 (docs/ORDER_COMMISSIONS_PLAN.md §11): el bill del
+      // caso 1 factura la comisión de VENTA contra esta cuenta COGS.
+      fullName === "commission for sale:referral"
+    );
   }
   if (billType === "freight") {
     return (

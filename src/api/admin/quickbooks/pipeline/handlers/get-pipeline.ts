@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
 import {
+  COMMISSION_PIPELINE_STEPS,
   PURCHASE_PIPELINE_STEPS,
   SALES_PIPELINE_EXCLUDED_STEPS,
   salesPipelineStepScopeSql,
@@ -20,6 +21,9 @@ export async function GET(
     const offset = parseInt(req.query.offset as string) || 0;
     const status = req.query.status as string | undefined;
     const step = req.query.step as string | undefined;
+    // tab=commissions → el lane completo del Commissions Pipeline (2 steps);
+    // `step` puntual sigue disponible para filtrar uno solo.
+    const tab = req.query.tab as string | undefined;
     const refId = req.query.reference_id as string | undefined;
     const search = req.query.search as string | undefined;
     const sortBy =
@@ -94,6 +98,9 @@ export async function GET(
     if (step) {
       conditions.push(`p.step = $${p++}`);
       values.push(step);
+    } else if (tab === "commissions") {
+      conditions.push(`p.step = ANY($${p++}::text[])`);
+      values.push([...COMMISSION_PIPELINE_STEPS]);
     } else {
       // Exclude steps that have dedicated tabs in the QB pipeline UI.
       // Scope shared with the badge summary below — see sales-pipeline-scope.ts.
@@ -248,10 +255,14 @@ export async function GET(
     // a count for every status bucket, not just the active one.
     const summaryStepCondition = step
       ? `step = $1`
-      : salesPipelineStepScopeSql(1);
+      : tab === "commissions"
+        ? `step = ANY($1::text[])`
+        : salesPipelineStepScopeSql(1);
     const summaryValues: unknown[] = step
       ? [step]
-      : [SALES_PIPELINE_EXCLUDED_STEPS];
+      : tab === "commissions"
+        ? [[...COMMISSION_PIPELINE_STEPS]]
+        : [SALES_PIPELINE_EXCLUDED_STEPS];
     const { rows: summary } = await client.query(
       `SELECT status, COUNT(*) AS count
        FROM qb_order_pipeline

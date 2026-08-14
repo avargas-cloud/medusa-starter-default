@@ -86,7 +86,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                 THEN 1 ELSE 0 END      AS payment_count
          FROM customer_payment
          WHERE deleted_at IS NULL
-           AND type = 'payment'
+           AND type = 'payment' AND COALESCE(metadata->>'is_commission_credit', '') <> 'true'
            AND ${dayKeyExpr} >= ?
            AND ${dayKeyExpr} <= ?
 

@@ -1,0 +1,53 @@
+/**
+ * GET /admin/commissions/summary-1099?year=YYYY
+ *
+ * Acumulado por beneficiario por año calendario, SUMANDO los dos caminos
+ * (§5.1 del plan). El camino bill/check entra solo al 1099 de QuickBooks; el
+ * store_credit es fiscalmente reportable igual (IRS: referral fees y
+ * compensación no monetaria a FMV) — este número es el que el contador
+ * necesita en enero sin cruzar bills contra payments a mano.
+ */
+import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
+import { getDbPool } from "../../../utils/db-pool";
+import { assertAccounting } from "../_lib/guard";
+
+export async function GET(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+): Promise<void> {
+  if (!(await assertAccounting(req, res))) return;
+
+  const now = new Date();
+  const year = Number.parseInt(String(req.query.year ?? now.getUTCFullYear()), 10);
+  if (!Number.isInteger(year) || year < 2020 || year > now.getUTCFullYear() + 1) {
+    res.status(400).json({ error: "year is invalid." });
+    return;
+  }
+
+  try {
+    const pool = getDbPool();
+    const { rows } = await pool.query(
+      `SELECT COALESCE(v.full_name, r.display_name)           AS beneficiary,
+              r.qb_vendor_id,
+              SUM(s.amount_cents)::bigint                     AS total_cents,
+              SUM(s.amount_cents)
+                FILTER (WHERE s.method = 'vendor_bill')::bigint AS bill_cents,
+              SUM(s.amount_cents)
+                FILTER (WHERE s.method = 'store_credit')::bigint AS credit_cents,
+              COUNT(*)                                        AS settlements
+         FROM commission_settlement s
+         JOIN order_commission_recipient r ON r.id = s.recipient_id
+         LEFT JOIN qb_vendor v ON v.id = r.qb_vendor_id
+        WHERE s.status = 'confirmed'
+          AND EXTRACT(YEAR FROM COALESCE(r.settled_at, s.updated_at)) = $1
+        GROUP BY 1, 2
+        ORDER BY total_cents DESC`,
+      [year]
+    );
+    res.json({ year, beneficiaries: rows });
+  } catch (err) {
+    console.error("[commissions] summary-1099 failed:", err);
+    res.status(500).json({ error: "Could not compute the 1099 accumulator." });
+  }
+}

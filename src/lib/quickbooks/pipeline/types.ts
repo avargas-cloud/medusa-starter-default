@@ -49,7 +49,13 @@ export type PipelineStep =
   // pertenece a otro dueño. Ver lib/quickbooks/damage/sync-damage-adjustment.ts.
   | "cm_damage_adjustment"
   | "cm_damage_adjustment_mod"
-  | "void_cm_damage_adjustment";
+  | "void_cm_damage_adjustment"
+  // Commissions Pipeline (lane propio, delta v2 del plan de comisiones):
+  // el par del caso store_credit — CheckAdd desde la clearing al vendor, y
+  // ReceivePaymentAdd sin aplicar depositado a la misma clearing (el crédito).
+  // Ver lib/quickbooks/handlers/handle-commission-settlement.ts.
+  | "commission_check"
+  | "commission_payment";
 
 export type PipelineStatus =
   | "pending"

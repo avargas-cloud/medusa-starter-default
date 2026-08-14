@@ -184,7 +184,7 @@ async function computeLiveRangeReport(
        FROM customer_payment cp
        LEFT JOIN applied a ON a.payment_id = cp.id
        LEFT JOIN latest_defer ld ON ld.payment_id = cp.id
-       WHERE cp.deleted_at IS NULL AND cp.type = 'payment'
+       WHERE cp.deleted_at IS NULL AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
      )
      SELECT
        COALESCE(SUM(gross), 0)::bigint   AS gross_payments_cents,

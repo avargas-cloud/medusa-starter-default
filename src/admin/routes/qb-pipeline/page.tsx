@@ -7,6 +7,7 @@ import { BridgeStatus } from "../qb-sync/components/BridgeStatus";
 import { PipelineTable } from "../qb-sync/components/PipelineTable";
 
 import { BillPaymentsPipelineSection } from "./components/BillPaymentsPipelineSection";
+import { CommissionsPipelineSection } from "./components/CommissionsPipelineSection";
 import { CustomerSyncPipelineSection } from "./components/CustomerSyncPipelineSection";
 import { InventoryAdjustmentPipelineSection } from "./components/InventoryAdjustmentPipelineSection";
 import { ItemPipelineSection } from "./components/ItemPipelineSection";
@@ -102,6 +103,12 @@ const QbPipelinePage = () => {
             Bill Payments
           </Tabs.Trigger>
           <Tabs.Trigger
+            value="commissions"
+            className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
+          >
+            Commissions
+          </Tabs.Trigger>
+          <Tabs.Trigger
             value="vendors"
             className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
           >
@@ -128,6 +135,9 @@ const QbPipelinePage = () => {
         </Tabs.Content>
         <Tabs.Content value="bill-payments" className="pt-4">
           <BillPaymentsPipelineSection />
+        </Tabs.Content>
+        <Tabs.Content value="commissions" className="pt-4">
+          <CommissionsPipelineSection />
         </Tabs.Content>
         <Tabs.Content value="vendors" className="pt-4">
           <VendorPipelineSection />

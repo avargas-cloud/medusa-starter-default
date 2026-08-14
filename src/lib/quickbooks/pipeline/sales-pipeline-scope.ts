@@ -43,6 +43,16 @@ export const CUSTOMER_SYNC_STEPS = ["customer_data_ext"] as const;
 export const BILL_PAYMENT_STEPS = ["vendor_bill_payment_check"] as const;
 
 /**
+ * Steps surfaced by the Commissions Pipeline tab (delta v2 del plan de
+ * comisiones): el check contable desde la clearing y el ReceivePayment sin
+ * aplicar que materializa el crédito del beneficiario.
+ */
+export const COMMISSION_PIPELINE_STEPS = [
+  "commission_check",
+  "commission_payment",
+] as const;
+
+/**
  * Every step that has its own tab — and therefore must be excluded from both the
  * Sales Pipeline listing and its status badges.
  */
@@ -51,6 +61,7 @@ export const SALES_PIPELINE_EXCLUDED_STEPS: string[] = [
   ...INVENTORY_ADJUSTMENT_STEPS,
   ...PURCHASE_PIPELINE_STEPS,
   ...BILL_PAYMENT_STEPS,
+  ...COMMISSION_PIPELINE_STEPS,
 ];
 
 /**

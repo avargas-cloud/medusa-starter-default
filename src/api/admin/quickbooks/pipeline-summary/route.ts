@@ -3,6 +3,7 @@ import { Client } from "pg";
 
 import {
   BILL_PAYMENT_STEPS,
+  COMMISSION_PIPELINE_STEPS,
   PURCHASE_PIPELINE_STEPS,
 } from "../../../../lib/quickbooks/pipeline/sales-pipeline-scope";
 
@@ -100,6 +101,7 @@ const NON_SALES_STEPS = [
   ...CUSTOMER_STEPS,
   ...PURCHASE_PIPELINE_STEPS,
   ...BILL_PAYMENT_STEPS,
+  ...COMMISSION_PIPELINE_STEPS,
 ];
 
 export async function GET(
@@ -130,6 +132,16 @@ export async function GET(
         WHERE step = ANY($1::text[])
         GROUP BY status`,
       [[...BILL_PAYMENT_STEPS]]
+    );
+
+    // 1c) Commissions Pipeline = el par check/payment del caso store_credit de
+    //     las comisiones por orden (lane propio, ver sales-pipeline-scope.ts).
+    const commissions = await client.query<StatusRow>(
+      `SELECT status, COUNT(*) AS count
+         FROM qb_order_pipeline
+        WHERE step = ANY($1::text[])
+        GROUP BY status`,
+      [[...COMMISSION_PIPELINE_STEPS]]
     );
 
     // 2) Customer sync = qb_order_pipeline restricted to customer steps.
@@ -220,6 +232,7 @@ export async function GET(
       // `tab` must match the Tabs.Trigger value in qb-pipeline/page.tsx — clicking
       // the row jumps to that tab, and a wrong value jumps nowhere.
       build("bill_payments", "Bill Payments", "bill-payments", billPayments.rows),
+      build("commissions", "Commissions", "commissions", commissions.rows),
       build("vendors", "Vendors", "vendors", vendors.rows),
       build("customers", "Customer Sync", "customer-sync", customers.rows),
     ];

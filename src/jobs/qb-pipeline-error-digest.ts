@@ -17,6 +17,7 @@ import { collectVoidOrphanSection } from "./_lib/_qb-void-orphan-section";
 import { collectReservationDriftSection } from "./_lib/_reservation-drift-section";
 import { collectDiscountInvariantSection } from "./_lib/_discount-invariant-section";
 import { collectRoundingInvariantSection } from "./_lib/_rounding-invariant-section";
+import { collectCommissionInvariantSection } from "./_lib/_commission-invariant-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -667,6 +668,13 @@ export async function buildDigestEmail(
   // sostenga. Silencio = limpio. Fail-isolated.
   const roundingInvariantSection = await collectRoundingInvariantSection(knex, logger);
   if (roundingInvariantSection) sections.push(roundingInvariantSection);
+
+  // Sección 11 — Order Commissions: clearing desbalanceada (check confirmado
+  // sin su payment), liquidaciones atascadas >24h, y refunds posteriores a una
+  // comisión liquidada (clawback manual — fuera de v1 a propósito).
+  // Silencio = limpio. Fail-isolated.
+  const commissionSection = await collectCommissionInvariantSection(knex, logger);
+  if (commissionSection) sections.push(commissionSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 

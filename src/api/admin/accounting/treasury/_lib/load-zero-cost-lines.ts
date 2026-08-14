@@ -73,7 +73,7 @@ export async function loadZeroCostLines(
       WHERE pa.voided_at IS NULL
         AND pa.deleted_at IS NULL
         AND cp.deleted_at IS NULL
-        AND cp.type = 'payment'
+        AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
         AND COALESCE(cp.method, '') <> 'credit_memo'
         AND cp.status <> 'voided'
         AND cp.received_at >= ? AND cp.received_at <= ?

@@ -136,7 +136,7 @@ export async function loadUnattributedPayments(
       SELECT cp.id AS payment_id,
         LEAST(GREATEST(COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount), 0), cp.amount) AS refunded_cents
       FROM customer_payment cp
-      WHERE cp.deleted_at IS NULL AND cp.type = 'payment'
+      WHERE cp.deleted_at IS NULL AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
         AND cp.status IN ('refunded', 'partial_refunded')
     )
     SELECT
@@ -170,7 +170,7 @@ export async function loadUnattributedPayments(
     LEFT JOIN treasury_payment_credit_resolution tpcr ON tpcr.payment_id = cp.id
     LEFT JOIN "order" mo ON mo.id = cp.metadata->>'order_id' AND mo.deleted_at IS NULL
     WHERE cp.deleted_at IS NULL
-      AND cp.type = 'payment'
+      AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
       AND cp.status <> 'voided'
       AND COALESCE(cp.method, '') <> 'credit_memo'
       AND COALESCE(ld.effective_treasury_date, cp.received_at::date) >= ?::date

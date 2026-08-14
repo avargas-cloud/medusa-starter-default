@@ -94,7 +94,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
          FROM (
            SELECT DISTINCT cp.received_at::date AS day
              FROM customer_payment cp
-            WHERE cp.type = 'payment' AND cp.deleted_at IS NULL
+            WHERE cp.type = 'payment' AND cp.deleted_at IS NULL AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
               AND cp.status <> 'voided'
               AND COALESCE(cp.method, '') <> 'credit_memo'
               AND cp.received_at::date < ?::date

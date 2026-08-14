@@ -1,0 +1,79 @@
+/**
+ * Order Commissions — máquina de estados. Reglas: docs/ORDER_COMMISSIONS_PLAN.md §6.
+ */
+import {
+  canApprove,
+  canReSaveAssignment,
+  canStartSettlement,
+  canVoid,
+  isOpen,
+  refreshedState,
+} from "../../lib/commissions/transitions";
+
+const NOW = new Date("2026-08-14T12:00:00Z");
+const PAST = new Date("2026-08-01T00:00:00Z");
+const FUTURE = new Date("2026-09-01T00:00:00Z");
+
+describe("refreshedState", () => {
+  it("draft con devengo vencido pasa a eligible", () => {
+    expect(refreshedState("draft", PAST, NOW)).toBe("eligible");
+  });
+
+  it("draft con devengo futuro se queda en draft", () => {
+    expect(refreshedState("draft", FUTURE, NOW)).toBe("draft");
+  });
+
+  it("draft sin fecha (falta pago o factura) se queda en draft", () => {
+    expect(refreshedState("draft", null, NOW)).toBe("draft");
+  });
+
+  it("eligible cuya condición dejó de valer (refund reabrió el pago) vuelve a draft", () => {
+    expect(refreshedState("eligible", null, NOW)).toBe("draft");
+    expect(refreshedState("eligible", FUTURE, NOW)).toBe("draft");
+  });
+
+  it("estados terminales y aprobados no se mueven solos", () => {
+    for (const s of ["approved", "settling", "closed", "void"] as const) {
+      expect(refreshedState(s, PAST, NOW)).toBe(s);
+      expect(refreshedState(s, null, NOW)).toBe(s);
+    }
+  });
+});
+
+describe("guardas de transición", () => {
+  it("solo eligible se puede aprobar", () => {
+    expect(canApprove("eligible")).toBe(true);
+    for (const s of ["draft", "approved", "settling", "closed", "void"] as const) {
+      expect(canApprove(s)).toBe(false);
+    }
+  });
+
+  it("solo approved arranca liquidación", () => {
+    expect(canStartSettlement("approved")).toBe(true);
+    for (const s of ["draft", "eligible", "settling", "closed", "void"] as const) {
+      expect(canStartSettlement(s)).toBe(false);
+    }
+  });
+
+  it("void solo antes de que la plata salga", () => {
+    expect(canVoid("draft")).toBe(true);
+    expect(canVoid("eligible")).toBe(true);
+    expect(canVoid("approved")).toBe(true);
+    expect(canVoid("settling")).toBe(false);
+    expect(canVoid("closed")).toBe(false);
+    expect(canVoid("void")).toBe(false);
+  });
+
+  it("re-guardar la asignación exige todos en draft", () => {
+    expect(canReSaveAssignment(["draft", "draft"])).toBe(true);
+    expect(canReSaveAssignment(["draft", "eligible"])).toBe(false);
+    expect(canReSaveAssignment([])).toBe(true);
+  });
+
+  it("OPEN agrupa todo lo no terminal", () => {
+    expect(isOpen("draft")).toBe(true);
+    expect(isOpen("settling")).toBe(true);
+    expect(isOpen("closed")).toBe(false);
+    expect(isOpen("void")).toBe(false);
+  });
+});

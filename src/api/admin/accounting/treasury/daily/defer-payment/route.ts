@@ -80,7 +80,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
        LEFT JOIN treasury_distribution_log dst_locked
          ON dst_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.received_at::date) + INTERVAL '1 day'
         AND dst_locked.executed_at IS NOT NULL
-       WHERE cp.id = ? AND cp.deleted_at IS NULL AND cp.type = 'payment'`,
+       WHERE cp.id = ? AND cp.deleted_at IS NULL AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'`,
       [body.payment_id]
     );
     const lockInfo = lockCheck.rows?.[0];
@@ -131,7 +131,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         AND dst_locked.executed_at IS NOT NULL
        WHERE cp.id = ?
          AND cp.deleted_at IS NULL
-         AND cp.type = 'payment'
+         AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
          AND cp.status <> 'voided'
          AND (cp.amount - COALESCE(a.applied, 0)) > 0
          AND src_locked.distribution_date IS NULL
@@ -156,7 +156,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
            FROM payment_application
            WHERE payment_id = cp.id AND voided_at IS NULL AND deleted_at IS NULL
          ) a ON TRUE
-         WHERE cp.id = ? AND cp.deleted_at IS NULL AND cp.type = 'payment'`,
+         WHERE cp.id = ? AND cp.deleted_at IS NULL AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'`,
         [body.payment_id]
       );
       const info = check.rows?.[0];

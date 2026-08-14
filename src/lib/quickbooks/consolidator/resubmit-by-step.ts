@@ -2000,6 +2000,38 @@ export async function resubmitByStep(
         break;
       }
 
+      case "commission_check": {
+        const { dispatchCommissionCheck } =
+          require("../handlers/handle-commission-settlement") as typeof import("../handlers/handle-commission-settlement");
+        await dispatchCommissionCheck(
+          {
+            id: row.id,
+            reference_id: row.reference_id ?? null,
+            step: row.step,
+            payload: row.payload ?? null,
+            retry_count: row.retry_count ?? 0,
+          },
+          logger
+        );
+        break;
+      }
+
+      case "commission_payment": {
+        const { dispatchCommissionPayment } =
+          require("../handlers/handle-commission-settlement") as typeof import("../handlers/handle-commission-settlement");
+        await dispatchCommissionPayment(
+          {
+            id: row.id,
+            reference_id: row.reference_id ?? null,
+            step: row.step,
+            payload: row.payload ?? null,
+            retry_count: row.retry_count ?? 0,
+          },
+          logger
+        );
+        break;
+      }
+
       case "vendor_bill_payment_check": {
         const txnId =
           row.qb_txn_id ??

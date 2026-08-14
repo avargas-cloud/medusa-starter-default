@@ -1191,6 +1191,69 @@ export async function pollSubmittedRows(
           }
         }
 
+        // commission_check confirmado → estampar el TxnID del cheque en el
+        // settlement. El commission_payment (waiting, depends_on de esta fila)
+        // lo despierta runWakeDependentsPass en el próximo tick.
+        if (txnId && row.step === "commission_check" && row.reference_id) {
+          try {
+            await pool.query(
+              `UPDATE commission_settlement
+                  SET qb_check_txn_id = $2, status = 'qb_waiting', updated_at = NOW()
+                WHERE id = $1`,
+              [row.reference_id, txnId]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ commission_check confirmed → settlement ${row.reference_id} check=${txnId}`
+            );
+          } catch (ccErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not stamp settlement after commission_check: ${ccErr.message}`
+            );
+          }
+        }
+
+        // commission_payment confirmado → settlement confirmed, beneficiario
+        // closed, y el customer_payment del crédito queda synced con su TxnID
+        // (merge parcial de metadata: jamás reemplazar la columna entera).
+        if (txnId && row.step === "commission_payment" && row.reference_id) {
+          try {
+            const { rows: csetRows } = await pool.query(
+              `UPDATE commission_settlement
+                  SET qb_payment_txn_id = $2, status = 'confirmed', updated_at = NOW()
+                WHERE id = $1
+                RETURNING recipient_id`,
+              [row.reference_id, txnId]
+            );
+            const recipientId = csetRows[0]?.recipient_id as string | undefined;
+            if (recipientId) {
+              await pool.query(
+                `UPDATE order_commission_recipient
+                    SET state = 'closed', settled_at = NOW(), updated_at = NOW()
+                  WHERE id = $1 AND state = 'settling'`,
+                [recipientId]
+              );
+            }
+            const cpayId = (row.payload as Record<string, unknown> | null)
+              ?.customerPaymentId as string | undefined;
+            if (cpayId) {
+              await pool.query(
+                `UPDATE customer_payment
+                    SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                        updated_at = NOW()
+                  WHERE id = $1`,
+                [cpayId, JSON.stringify({ qb_txn_id: txnId, qb_sync_status: "synced" })]
+              );
+            }
+            logger.info(
+              `${LOG_PREFIX} ✅ commission_payment confirmed → settlement ${row.reference_id} closed, payment=${txnId}`
+            );
+          } catch (cpErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not close settlement after commission_payment: ${cpErr.message}`
+            );
+          }
+        }
+
         if (txnId && row.step === "payment" && row.reference_id) {
           try {
             const { rows: cpRows } = await pool.query(
