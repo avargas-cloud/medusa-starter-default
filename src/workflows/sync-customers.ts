@@ -104,6 +104,13 @@ export const syncCustomersToMeiliStep = createStep(
             "price_level",
             "has_account",
             "groups",
+            // `status` vive en el índice de prod desde siempre, e `id` lo exige
+            // searchCustomersByIds (la página /customers entera): el código
+            // declaraba MENOS que lo que prod tiene, así que todo índice
+            // recreado desde acá (sandbox post-restore, un re-run en prod)
+            // nacía roto para la búsqueda por ids. 2026-08-14.
+            "status",
+            "id",
           ],
           sortableAttributes: [
             "company_name",
