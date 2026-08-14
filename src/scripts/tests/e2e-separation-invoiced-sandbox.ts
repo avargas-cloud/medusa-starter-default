@@ -57,13 +57,15 @@ async function api(
   token: string,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  extraHeaders: Record<string, string> = {}
 ): Promise<{ status: number; json: any }> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...extraHeaders,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -81,6 +83,16 @@ async function filterRow(token: string, orderId: string): Promise<any | null> {
   if (res.status !== 200) return null;
   const rows = (res.json?.orders ?? res.json?.rows ?? []) as any[];
   return rows.find((r) => r.id === orderId) ?? null;
+}
+
+const MEILI = process.env.SANDBOX_MEILI_URL ?? "http://localhost:7799";
+const MEILI_KEY = process.env.SANDBOX_MEILI_KEY ?? "sandbox_master_key";
+
+async function meiliDoc(orderId: string): Promise<any | null> {
+  const res = await fetch(`${MEILI}/indexes/orders/documents/${orderId}`, {
+    headers: { Authorization: `Bearer ${MEILI_KEY}` },
+  });
+  return res.ok ? await res.json() : null;
 }
 
 async function waitFor<T>(
@@ -239,6 +251,9 @@ async function main() {
 
     // ── 3. Invoice REAL por API → evento → stamp (el fix) ────────────────────
     console.log("\n3. Invoice real por API (última unidad) → pos.invoice.created");
+    // Idempotency-Key único por corrida: sin él, el dedup por content
+    // fingerprint matchea el attempt de una corrida ANTERIOR (cuyo invoice el
+    // revert ya borró) y la ruta devuelve 404 sobre un id muerto.
     const invRes = await api(token, "POST", "/admin/invoices", {
       order_id: f.order_id,
       order_display_id: f.display_id,
@@ -259,7 +274,7 @@ async function main() {
       tax: 0,
       total: 1000,
       amount_paid: 0,
-    });
+    }, { "Idempotency-Key": `e2e-sep-inv-${Date.now()}` });
     apiInvoiceId = invRes.json?.invoice?.id ?? null;
     check("invoice API creado", (invRes.status === 200 || invRes.status === 201) && !!apiInvoiceId,
       `status ${invRes.status} ${JSON.stringify(invRes.json).slice(0, 200)}`);
@@ -280,6 +295,23 @@ async function main() {
       row2 === null || row2?.separation_pending?.pending === 0 || row2?.separation_pending == null,
       JSON.stringify(row2?.separation_pending)
     );
+    // Badge + tab (owner 2026-08-14): una orden ABIERTA fully invoiced entra al
+    // tab Separated — el doc Meili (lo que SEPARATED_TAB_FILTER filtra) dice
+    // "full", y is_separated NO se ensancha (sigue espejo del metadata físico).
+    const docFull = await waitFor("doc Meili separation_state=full", async () => {
+      const d = await meiliDoc(f.order_id);
+      return d?.separation_state === "full" ? d : null;
+    });
+    check(
+      "doc Meili: separation_state=full (membership del tab Separated)",
+      docFull?.separation_state === "full",
+      `state=${docFull?.separation_state}`
+    );
+    check(
+      "doc Meili: is_separated sigue false (no se ensancha)",
+      docFull?.is_separated === false,
+      `is_separated=${docFull?.is_separated}`
+    );
 
     // ── 4. Void → evento → el flag y el pending REVIERTEN solos ─────────────
     console.log("\n4. Void del invoice API → pos.invoice.voided");
@@ -299,6 +331,15 @@ async function main() {
       "lista: pending=1 de nuevo (el legacy sigue cubriendo el resto)",
       row3?.separation_pending?.pending === 1,
       JSON.stringify(row3?.separation_pending)
+    );
+    const docNone = await waitFor("doc Meili vuelve a none tras void", async () => {
+      const d = await meiliDoc(f.order_id);
+      return d?.separation_state === "none" ? d : null;
+    });
+    check(
+      "doc Meili: separation_state=none tras void (sale del tab)",
+      docNone?.separation_state === "none",
+      `state=${docNone?.separation_state}`
     );
 
     // ── 5. Negativas ─────────────────────────────────────────────────────────
@@ -326,6 +367,13 @@ async function main() {
         [apiInvoiceId]
       ).catch(() => {});
     }
+    // El claim de idempotencia sobrevive al DELETE del invoice y una corrida
+    // futura con el mismo payload heredaría un id muerto → limpiarlo también.
+    await db.query(
+      `DELETE FROM invoice_create_attempt
+        WHERE invoice_id = ANY($1::text[])`,
+      [[e2eIds.invoice, apiInvoiceId].filter(Boolean)]
+    ).catch(() => {});
     await db.query(`UPDATE "order" SET metadata = $2::jsonb WHERE id = $1`, [
       f.order_id,
       JSON.stringify(metaBefore ?? {}),

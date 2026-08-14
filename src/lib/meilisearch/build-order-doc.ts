@@ -489,21 +489,28 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     isPosClosed ||
     CLOSED_FULFILLMENT.has(fulfillmentStatus);
   const isOpen = !isClosed && OPEN_FULFILLMENT.has(fulfillmentStatus);
-  // A separated (layaway) order leaves the Separated view once it is no longer
-  // an open order: either fulfilled/shipped/delivered OR fully invoiced (every
-  // remaining line billed — also covers an order edited down until nothing is
-  // left to dispatch). meta.fully_invoiced is maintained by the order Meili
-  // sync subscriber on invoice + order-edit events.
+  // is_separated stays the strict mirror of metadata.is_separated (physical
+  // full separation only, gated by closed/billed as before) — widening a field
+  // that shares a name with a metadata key is how S11417 happened. The tab
+  // stopped reading it on 2026-08-13; separation_state below is the membership.
   const isSeparated =
     !!meta.is_separated && !isClosed && meta.fully_invoiced !== true;
-  // Same gate, three states. metadata.separation_status is written by the
-  // separations and product-status routes; orders that predate per-line
-  // tracking carry only the boolean, which deriveSeparationStatus honors as
-  // "full" — mirrored here so a legacy order keeps the tab membership it had.
+  // Membership of the Separated tab, three states. A CLOSED order is always
+  // "none". An OPEN order billed in full reads "full" (owner decision
+  // 2026-08-14): every remaining unit is spoken for on an invoice, which the
+  // separation surface treats as covered — the row wears the Separated badge
+  // and stays in the tab until delivery/close, instead of going blank.
+  // (Supersedes the 2026-08-11 rule where fully billed dropped OUT of the tab.)
+  // metadata.separation_status is written by the separations route; orders
+  // that predate per-line tracking carry only the boolean, which
+  // deriveSeparationStatus honors as "full" — mirrored here so a legacy order
+  // keeps the tab membership it had. meta.fully_invoiced is maintained by the
+  // order Meili sync subscriber on invoice + order-edit events.
   const rawSeparation = asString(meta.separation_status);
-  const separationState: "none" | "partial" | "full" =
-    isClosed || meta.fully_invoiced === true
-      ? "none"
+  const separationState: "none" | "partial" | "full" = isClosed
+    ? "none"
+    : meta.fully_invoiced === true
+      ? "full"
       : rawSeparation === "partial" || rawSeparation === "full"
         ? rawSeparation
         : meta.is_separated
