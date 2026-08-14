@@ -112,6 +112,21 @@ export interface QbReceivePaymentPayload {
   invoiceId?: string;
   creditTxnId?: string;
   depositAccount?: string;
+  /**
+   * Write-off de redondeo aplicado A LA APLICACIÓN del pago — el mecanismo
+   * nativo "Discount and Credits" de QuickBooks. Cancela el residuo de centavos
+   * que deja una orden facturada en partes SIN TOCAR LA FACTURA, que es lo que
+   * hace desaparecer el riesgo de romperle el LinkToTxn a una factura SO-linked.
+   *
+   * Los dos van JUNTOS o no va ninguno: un monto sin cuenta deja que QuickBooks
+   * elija dónde postear el asiento. El bridge impone esa atomicidad además de
+   * este contrato (`buildDiscountXml`).
+   *
+   * `discountAmount` en DÓLARES (el resto de este payload también); el tope en
+   * centavos vive en `lib/rounding/write-off.ts`.
+   */
+  discountAmount?: number;
+  discountAccountListId?: string;
 }
 
 export interface QbCreateInvoicePayload {

@@ -10,9 +10,29 @@ import {
   QbAsyncResult,
 } from "./types";
 
+/**
+ * Una aplicación del pago, tal como QuickBooks la tiene HOY.
+ *
+ * El par `discount*` se lee y se re-emite por la misma razón que existe todo
+ * este read-merge-replace: `AppliedToTxnMod` es REPLACE-ALL. Una aplicación que
+ * ya llevaba un write-off de redondeo y se re-manda SIN él pierde el descuento,
+ * y el centavo que se había saldado vuelve a aparecer como saldo abierto de una
+ * factura que nadie va a pagar — silenciosamente, y sólo en las facturas que NO
+ * son el objetivo del Mod actual. Es exactamente la forma del clobber de agosto
+ * 2026, con otro campo.
+ */
+export interface AppliedInvoiceState {
+  invoiceId: string;
+  amount: number;
+  /** Descuento ya aplicado en QB a ESTA aplicación (dólares). */
+  discountAmount?: number;
+  /** Cuenta contra la que se posteó ese descuento. */
+  discountAccountListId?: string;
+}
+
 export interface PaymentCurrentState {
   editSequence: string;
-  appliedToInvoices: { invoiceId: string; amount: number }[];
+  appliedToInvoices: AppliedInvoiceState[];
   /** Header totals — lets callers cross-check the applied list against what the
    * header claims is applied (totalAmount − unusedPayment). */
   totalAmount: number | null;
@@ -20,6 +40,61 @@ export interface PaymentCurrentState {
   /** QB customer ListID from the payment's own CustomerRef — the bridge's
    * /merge-apply route requires it, and reading it here saves callers a lookup. */
   customerListId: string | null;
+}
+
+/**
+ * Mergea UNA aplicación nueva contra la lista que QuickBooks tiene hoy, y
+ * devuelve la lista COMPLETA que hay que re-emitir.
+ *
+ * Existe como función pura y exportada, y no como veinte líneas dentro de
+ * `mergeApplyPaymentInQb`, porque es la regla que decide si un write-off ya
+ * asentado sobrevive — y una regla enterrada dentro de una función que hace red
+ * no se puede probar sin montar el bridge entero.
+ *
+ * Dos invariantes, los dos por `AppliedToTxnMod` = REPLACE-ALL:
+ *
+ * 1. **Toda aplicación que no es el objetivo viaja INTACTA**, con su descuento.
+ *    Omitirlo se lo borra: esa factura recupera su centavo abierto sin que nada
+ *    falle, y sólo se nota mirando la factura.
+ * 2. **`undefined` en el objetivo significa "no lo toques", nunca "borralo".**
+ *    Un apply posterior a la misma factura por un motivo cualquiera no puede
+ *    revertir el ajuste; anularlo es una operación explícita.
+ */
+export function mergeAppliedInvoices(
+  current: readonly AppliedInvoiceState[],
+  target: AppliedInvoiceState
+): AppliedInvoiceState[] {
+  const merged: AppliedInvoiceState[] = current.map((a) => ({ ...a }));
+  const idx = merged.findIndex((a) => a.invoiceId === target.invoiceId);
+  const existing = idx >= 0 ? merged[idx] : undefined;
+
+  const incoming =
+    Number(target.discountAmount ?? 0) > 0 &&
+    (target.discountAccountListId ?? "").trim().length > 0
+      ? {
+          discountAmount: Number(target.discountAmount),
+          discountAccountListId: target.discountAccountListId!.trim(),
+        }
+      : null;
+
+  const preserved =
+    existing?.discountAmount !== undefined &&
+    existing?.discountAccountListId !== undefined
+      ? {
+          discountAmount: existing.discountAmount,
+          discountAccountListId: existing.discountAccountListId,
+        }
+      : {};
+
+  const entry: AppliedInvoiceState = {
+    invoiceId: target.invoiceId,
+    amount: target.amount,
+    ...(incoming ?? preserved),
+  };
+
+  if (idx >= 0) merged[idx] = entry;
+  else merged.push(entry);
+  return merged;
 }
 
 export interface MergeApplyResult {
@@ -302,12 +377,29 @@ export async function fetchPaymentCurrentState(
       : [appliedRaw]
     : [];
 
-  const appliedToInvoices = appliedArr
+  const appliedToInvoices: AppliedInvoiceState[] = appliedArr
     .map((a) => {
       const rawAmount = parseFloat(String(a?.PaymentAmount ?? a?.Amount ?? "0"));
+      // Descuento vigente en QB para esta aplicación. Se preserva a través del
+      // merge porque el Mod es REPLACE-ALL: omitirlo lo BORRA (ver el docstring
+      // de AppliedInvoiceState).
+      const rawDiscount = parseFloat(String(a?.DiscountAmount ?? ""));
+      const discountAccount = String(
+        a?.DiscountAccountRef?.ListID ?? ""
+      ).trim();
+      const hasDiscount =
+        Number.isFinite(rawDiscount) &&
+        Math.abs(rawDiscount) > 0.005 &&
+        discountAccount.length > 0;
       return {
         invoiceId: String(a?.TxnID || ""),
         amount: Number.isFinite(rawAmount) ? Math.abs(rawAmount) : 0,
+        ...(hasDiscount
+          ? {
+              discountAmount: Math.abs(rawDiscount),
+              discountAccountListId: discountAccount,
+            }
+          : {}),
       };
     })
     .filter((a) => a.invoiceId && a.amount > 0);
@@ -368,6 +460,14 @@ export async function mergeApplyPaymentInQb(payload: {
   invoiceId: string;
   creditTxnId: string;
   memo?: string;
+  /**
+   * Write-off de redondeo para ESTA aplicación (dólares + cuenta). Sólo afecta a
+   * `invoiceId`; las demás aplicaciones conservan el descuento que ya tengan en
+   * QuickBooks. Omitirlo NO borra un descuento previo de esta factura — para eso
+   * hay que anular el ajuste explícitamente.
+   */
+  discountAmount?: number;
+  discountAccountListId?: string;
   log?: (msg: string) => void;
   onQueued?: (operationId: string) => Promise<void>;
 }): Promise<QbBridgeResult<MergeApplyResult>> {
@@ -406,17 +506,29 @@ export async function mergeApplyPaymentInQb(payload: {
     );
 
     // ── Step 2: merge the new application into the list ────────────────────
-    const merged = [...state.appliedToInvoices];
-    const existingIdx = merged.findIndex(
-      (a) => a.invoiceId === payload.invoiceId
-    );
-    if (existingIdx >= 0) {
-      merged[existingIdx] = {
-        invoiceId: payload.invoiceId,
-        amount: newAmount,
-      };
-    } else {
-      merged.push({ invoiceId: payload.invoiceId, amount: newAmount });
+    //
+    // Las aplicaciones que NO son el objetivo viajan intactas — descuento
+    // incluido. Reescribir una de ellas sin su `DiscountAmount` la dejaría sin
+    // el write-off que ya tenía (Mod = REPLACE-ALL), y esa factura volvería a
+    // mostrar el centavo abierto sin que nada falle ni se registre.
+    const merged = mergeAppliedInvoices(state.appliedToInvoices, {
+      invoiceId: payload.invoiceId,
+      amount: newAmount,
+      ...(payload.discountAmount !== undefined
+        ? { discountAmount: payload.discountAmount }
+        : {}),
+      ...(payload.discountAccountListId !== undefined
+        ? { discountAccountListId: payload.discountAccountListId }
+        : {}),
+    });
+
+    const carriedDiscounts = merged.filter(
+      (a) => a.discountAmount !== undefined
+    ).length;
+    if (carriedDiscounts > 0) {
+      log(
+        `[QB] 💠 Mod lleva ${carriedDiscounts} aplicación(es) con descuento de redondeo — preservarlas es obligatorio: AppliedToTxnMod es REPLACE-ALL`
+      );
     }
 
     // ── Step 3: send the Mod with full list ────────────────────────────────

@@ -11,12 +11,14 @@ import { InvoicePayment } from "./models/invoice-payment";
 import InvoiceTracking from "./models/invoice-tracking";
 import PosInvoice from "./models/pos-invoice";
 import PosInvoiceItem from "./models/pos-invoice-item";
+import RoundingAdjustment from "./models/rounding-adjustment";
 
 class InvoiceModuleService extends MedusaService({
   PosInvoice,
   PosInvoiceItem,
   InvoiceTracking,
   InvoicePayment,
+  RoundingAdjustment,
 }) {
   /**
    * Run `work` inside a single physical DB transaction on the invoice module's

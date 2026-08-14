@@ -14,6 +14,12 @@ import { reconcileOrderReservations } from "../../../../../../lib/finance/reconc
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 import { handleOrderApply } from "./handle-order-apply";
 import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
+import {
+  createRoundingWriteOff,
+  getLiveRoundingWriteOffCents,
+} from "../../../../../../lib/rounding/create-write-off";
+import { createOverageWriteOff } from "../../../../../../lib/rounding/overage";
+import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
 
 /**
  * POST /admin/finance/payments/:id/apply
@@ -177,7 +183,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       req.scope,
       invoice_id
     );
-    const invoiceBalanceDue = Math.max(0, invoiceTotal - invoiceAmountPaid);
+    // Un ajuste de redondeo ya emitido cubre esos centavos: sin restarlos acá,
+    // este clamp deja pasar plata real contra un residuo YA absorbido, y el
+    // mismo centavo queda cobrado dos veces. Es el MISMO invariante que el
+    // recálculo de más abajo, y por eso se resta en los dos lugares — el E2E
+    // encontró primero uno y después el otro.
+    const invoiceWrittenOff = await getLiveRoundingWriteOffCents(
+      req.scope,
+      invoice_id
+    );
+    const invoiceBalanceDue = Math.max(
+      0,
+      invoiceTotal - invoiceAmountPaid - invoiceWrittenOff
+    );
 
     if (invoiceBalanceDue <= 0) {
       return res.status(400).json({
@@ -318,7 +336,34 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       req.scope,
       invoice_id
     );
-    const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
+    // MISMO `invoiceWrittenOff` del clamp de arriba, a propósito: son la misma
+    // pregunta ("¿cuánto de esta factura ya se absorbió?") y computarla dos
+    // veces es exactamente cómo los dos lugares vuelven a divergir. Ningún
+    // ajuste se emite entre ambos puntos, así que el valor sigue vigente.
+    const rawBalanceDue = Math.max(
+      0,
+      getNum(invoice.total) - totalInvoicePaid - invoiceWrittenOff
+    );
+
+    // Residuo de redondeo: una orden facturada en partes deja centavos abiertos
+    // que nadie va a pagar, porque el tax se redondea una vez POR FACTURA
+    // (`Σ round(baseᵢ × tasa) ≠ round(Σ baseᵢ × tasa)`) mientras el pago se
+    // cobró con la convención de la orden entera. Absorberlo NO edita la
+    // factura —sigue siendo el snapshot inmutable que era— sino que registra
+    // CÓMO se saldó, con tope, actor y motivo.
+    //
+    // Lo que venía pasando en su lugar: conciliar a mano creando un pago de un
+    // centavo que el cliente nunca hizo, o sea plata inventada en su cuenta
+    // corriente. Un ajuste rotulado es estrictamente mejor que eso.
+    const writeOff = await createRoundingWriteOff(req.scope, {
+      invoiceId: invoice_id,
+      invoiceNumber: (invoice as any).invoice_number ?? invoice_id,
+      orderId: invoice.order_id ?? null,
+      balanceDueCents: rawBalanceDue,
+      actor: applied_by || null,
+    });
+
+    const balanceDue = writeOff.created ? 0 : rawBalanceDue;
     const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial";
 
     // Backfill pos_invoice.payment_method on the FIRST applied payment when
@@ -342,6 +387,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       status: newInvoiceStatus,
       ...invoiceMethodBackfill,
     });
+
+    // 6b. Overage — la dirección ESPEJO, y se evalúa RECIÉN ACÁ.
+    //
+    // El sobrante no pertenece a ninguna factura: pertenece al pago. Y sólo se
+    // puede diagnosticar DESPUÉS de saldar esta factura, porque antes "sobra
+    // plata" es indistinguible de "todavía falta facturar" — absorberlo ahí
+    // sería quedarse con un adelanto del cliente.
+    //
+    // `decideOverage` exige las tres condiciones (remanente ≤ tope · orden
+    // totalmente facturada · ninguna factura debiendo). El caso normal, de
+    // lejos, es que no haga nada.
+    const overage = await createOverageWriteOff(req.scope, {
+      paymentId,
+      paymentRef: (payment as any).display_id ?? paymentId,
+      actor: applied_by || null,
+      // Fecha del negocio, nunca el reloj de la PC donde corre QuickBooks.
+      businessDate: getBusinessDateString(),
+    });
+    if (overage.created) {
+      await financeService
+        .updateCustomerPayments({ id: paymentId, status: "applied" })
+        .catch(() => {}); // no-fatal: la fila del ajuste ya es la verdad
+    }
 
     // 7. Register in Medusa native Payment Module (best-effort, every payment)
     if (invoice.order_id) {

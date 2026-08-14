@@ -7,6 +7,8 @@ import {
   applyCreditMemoToInvoiceInQb,
 } from "../qb-bridge-client";
 import { withQbLockResult } from "../qb-locks";
+import { getLiveRoundingWriteOffCents } from "../../rounding/create-write-off";
+import { loadRoundingConfig } from "../../rounding/config";
 import {
   writePipelineRow,
   cacheEditSequence,
@@ -617,6 +619,47 @@ export async function handlePosPaymentApplied({
     return;
   }
 
+  // ── Write-off de redondeo (shortage) ──────────────────────────────────────
+  //
+  // Se resuelve EN EL DISPATCH, no al encolar: entre que la fila se encola y
+  // llega acá pueden pasar minutos, y el ajuste puede haberse emitido o anulado
+  // en el medio. Leerlo ahora es leer la verdad vigente.
+  //
+  // Viaja como `DiscountAmount` + cuenta dentro de la aplicación del pago — el
+  // mecanismo nativo "Discount and Credits". La factura NO se toca: es lo que
+  // mantiene a salvo el `LinkToTxn` de una factura SO-linked.
+  //
+  // El path de credit_memo queda FUERA por construcción: es un
+  // ReceivePaymentAdd (no idempotente) y el write-off nace de dinero real, no
+  // de un crédito. No es cobertura faltante.
+  let roundingDiscount: {
+    discountAmount: number;
+    discountAccountListId: string;
+  } | null = null;
+  if (!isCreditMemoPayment) {
+    try {
+      const cents = await getLiveRoundingWriteOffCents(container, invoice_id);
+      const cfg = await loadRoundingConfig();
+      const account = cfg?.shortageAccountListId ?? null;
+      if (cents > 0 && account) {
+        roundingDiscount = {
+          discountAmount: cents / 100,
+          discountAccountListId: account,
+        };
+        logger.info(
+          `${LOG_PREFIX} 💠 Adjuntando write-off de redondeo de ${cents}¢ a la aplicación (cuenta ${account})`
+        );
+      }
+    } catch (rErr: any) {
+      // Fail-open a propósito: no poder leer el ajuste nunca debe impedir que
+      // el pago se aplique en QuickBooks. El residuo queda visible en la
+      // factura, que es el estado previo a este mecanismo.
+      logger.warn(
+        `${LOG_PREFIX} No se pudo resolver el write-off de redondeo: ${rErr.message}`
+      );
+    }
+  }
+
   await withQbLockResult(`qb-payment:${paymentTxnId}`, async () => {
     const applyResult = isCreditMemoPayment
       ? await applyCreditMemoToInvoiceInQb({
@@ -641,6 +684,7 @@ export async function handlePosPaymentApplied({
           amount: amountForQbCents / 100,
           creditTxnId: paymentTxnId!,
           memo: updatedMemo,
+          ...(roundingDiscount ?? {}),
           log: (m: string) => logger.info(m),
           onQueued,
         });

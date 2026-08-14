@@ -283,6 +283,31 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     : [];
   const customerMap = Object.fromEntries(customers.map((c: any) => [c.id, c]));
 
+  // Ajustes de redondeo VIVOS de este lote, en UNA sola consulta.
+  //
+  // Va acá y no sólo en el detail route porque la pantalla de invoice arma su
+  // `activeInvoice` desde ESTA lista (`listInvoices(orderId)`), nunca desde
+  // `/admin/invoices/:id`. Un campo que exista sólo en el detail llega
+  // `undefined` a la UI y la fila simplemente no se dibuja — sin error, sin
+  // type error, sin nada que mirar. Es la regla de paridad LIST↔DETAIL, que acá
+  // muerde en la dirección inversa a la habitual.
+  const roundingByInvoiceId: Record<string, number> = {};
+  if (invoices.length > 0) {
+    try {
+      const rows = await (invoiceService as any).listRoundingAdjustments({
+        invoice_id: invoices.map((i: any) => i.id),
+        voided_at: null,
+      });
+      for (const r of rows ?? []) {
+        if (!r?.invoice_id) continue;
+        roundingByInvoiceId[r.invoice_id] =
+          (roundingByInvoiceId[r.invoice_id] ?? 0) + Number(r.amount_cents ?? 0);
+      }
+    } catch {
+      /* no-crítico: sin ajustes la lista se comporta como antes */
+    }
+  }
+
   const enriched = invoices.map((inv: any) => ({
     ...inv,
     // The `items` hasMany has no default ORDER BY → restore insertion (ULID id)
@@ -291,6 +316,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       ? {}
       : { items: sortDocItemsByInsertion(inv.items) }),
     customer: customerMap[inv.customer_id] ?? null,
+    rounding_adjustment_cents: roundingByInvoiceId[inv.id] ?? 0,
   }));
 
   return res.json(

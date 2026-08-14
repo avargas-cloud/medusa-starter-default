@@ -62,6 +62,16 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
   }
 
+  // Ajuste de redondeo VIVO de esta factura, si lo tiene. No es un pago —es el
+  // asiento que explica por qué el balance cerró sin que entrara el último
+  // centavo— así que viaja aparte de `payments` y NO se suma a `amount_paid`:
+  // mezclarlo sería exactamente el pago-fantasma que este mecanismo elimina.
+  // A lo sumo hay uno vivo (índice único parcial).
+  const roundingAdjustment = await (invoiceService as any)
+    .listRoundingAdjustments({ invoice_id: id, voided_at: null })
+    .then((rows: any[]) => rows?.[0] ?? null)
+    .catch(() => null);
+
   const hydratedInvoice = {
     ...invoice,
     items: invoiceItems.map((item) => ({
@@ -70,9 +80,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         ? thumbnailByVariantId.get(item.variant_id) ?? null
         : null,
     })),
+    /** Centavos absorbidos por redondeo. 0 = la factura cerró sin ajuste. */
+    rounding_adjustment_cents: roundingAdjustment
+      ? Number(roundingAdjustment.amount_cents ?? 0)
+      : 0,
   };
 
-  return res.json({ invoice: hydratedInvoice, payments });
+  return res.json({
+    invoice: hydratedInvoice,
+    payments,
+    rounding_adjustment: roundingAdjustment,
+  });
 }
 
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {

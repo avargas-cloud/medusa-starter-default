@@ -16,6 +16,7 @@ import { collectReverseVoidSection } from "./_lib/_qb-reverse-void-section";
 import { collectVoidOrphanSection } from "./_lib/_qb-void-orphan-section";
 import { collectReservationDriftSection } from "./_lib/_reservation-drift-section";
 import { collectDiscountInvariantSection } from "./_lib/_discount-invariant-section";
+import { collectRoundingInvariantSection } from "./_lib/_rounding-invariant-section";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -659,6 +660,13 @@ export async function buildDigestEmail(
   // inventario legacy va en la descripción, nunca como alarma. Fail-isolated.
   const discountInvariantSection = await collectDiscountInvariantSection(knex, logger);
   if (discountInvariantSection) sections.push(discountInvariantSection);
+
+  // Sección 10 — invariante del write-off de redondeo: por cada orden con
+  // ajuste vivo, `Σ facturas = aplicado + Σ ajustes`. El mecanismo hace cumplir
+  // esa igualdad por FACTURA; esto verifica que la deducción a nivel orden se
+  // sostenga. Silencio = limpio. Fail-isolated.
+  const roundingInvariantSection = await collectRoundingInvariantSection(knex, logger);
+  if (roundingInvariantSection) sections.push(roundingInvariantSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 
