@@ -13,6 +13,7 @@
 import type { Pool } from "pg";
 
 import { USA_LOC } from "../../../../../lib/locations";
+import { allocateInvoicedToLines } from "../../../../../lib/invoices/per-line-invoiced";
 import type {
   InventorySnapshot,
   SeparationLineInput,
@@ -24,9 +25,9 @@ export interface SeparationOrderLine extends SeparationLineInput {
   /** Real fulfilled quantity (the inherited `fulfilled` field carries COVERED —
    *  max(fulfilled, invoiced) — because both modals show only pending work). */
   fulfilledActual: number;
-  /** Quantity on active (non-voided) POS invoices, linked per line by
-   *  order_line_item_id (Delivery v2). Legacy invoices without the link are
-   *  covered by the order-level fully_invoiced fallback. */
+  /** Quantity on active (non-voided, non-draft) POS invoices: linked per line
+   *  by order_line_item_id (Delivery v2) plus the variant/SKU FIFO allocation
+   *  of legacy items without the link (per-line-invoiced.ts). */
   invoiced: number;
 }
 
@@ -65,6 +66,7 @@ function num(v: unknown): number {
 interface LineRow {
   line_id: string;
   sku: string | null;
+  variant_id: string | null;
   description: string | null;
   quantity: unknown;
   fulfilled_quantity: unknown;
@@ -94,6 +96,7 @@ export async function loadSeparationData(
   const lineRes = await pool.query<LineRow>(
     `SELECT oli.id                    AS line_id,
             oli.variant_sku           AS sku,
+            oli.variant_id            AS variant_id,
             COALESCE(
               NULLIF(oli.metadata->>'sales_description', ''),
               NULLIF(pv.metadata->>'sales_description', ''),
@@ -131,7 +134,7 @@ export async function loadSeparationData(
               JOIN pos_invoice pi
                 ON pi.id = pii.invoice_id
                AND pi.deleted_at IS NULL
-               AND pi.status <> 'voided'
+               AND pi.status NOT IN ('voided', 'draft')
              WHERE pii.order_line_item_id = oli.id
                AND pii.deleted_at IS NULL
        ) inv ON true
@@ -147,14 +150,52 @@ export async function loadSeparationData(
   const metadata = (order.metadata ?? {}) as Record<string, unknown>;
   // Both modals show PENDING work only (owner decision 2026-08-11): invoiced
   // units are done as far as separation/purchasing go. Per-line attribution
-  // needs order_line_item_id on the invoice items (Delivery v2 era); legacy
-  // invoices lack it, so a fully_invoiced order covers everything wholesale.
+  // prefers order_line_item_id (persisted since Delivery v2, 2026-08-08);
+  // items billed before that — or by any path that omits the link — fall back
+  // to the variant/SKU FIFO pool below, and a fully_invoiced order covers
+  // everything wholesale regardless.
   const orderFullyInvoiced = metadata.fully_invoiced === true;
+
+  // Invoice items with no line identity, allocated across this order's lines
+  // by variant/SKU. Every affected production order (15 as of 2026-08-14) is
+  // pre-Delivery-v2, so without this pool their billed units read as pending
+  // separation work in both modals AND the list.
+  const unattributedRes = await pool.query<{
+    variant_id: string | null;
+    sku: string | null;
+    qty: unknown;
+  }>(
+    `SELECT pii.variant_id, pii.sku, SUM(pii.quantity) AS qty
+       FROM pos_invoice_item pii
+       JOIN pos_invoice pi
+         ON pi.id = pii.invoice_id
+        AND pi.deleted_at IS NULL
+        AND pi.status NOT IN ('voided', 'draft')
+      WHERE pi.order_id = $1
+        AND pii.order_line_item_id IS NULL
+        AND pii.deleted_at IS NULL
+      GROUP BY pii.variant_id, pii.sku`,
+    [orderId]
+  );
+  const invoicedByLine = allocateInvoicedToLines(
+    lineRes.rows.map((r) => ({
+      lineId: r.line_id,
+      variantId: r.variant_id,
+      sku: r.sku,
+      quantity: num(r.quantity),
+      directInvoiced: num(r.invoiced),
+    })),
+    unattributedRes.rows.map((r) => ({
+      variantId: r.variant_id,
+      sku: r.sku,
+      quantity: num(r.qty),
+    }))
+  );
 
   const lines: SeparationOrderLine[] = lineRes.rows.map((r) => {
     const quantity = num(r.quantity);
     const fulfilledActual = num(r.fulfilled_quantity);
-    const invoiced = num(r.invoiced);
+    const invoiced = invoicedByLine.get(r.line_id) ?? num(r.invoiced);
     const covered = orderFullyInvoiced
       ? quantity
       : Math.min(quantity, Math.max(fulfilledActual, invoiced));

@@ -1,4 +1,5 @@
 import { USA_LOC } from "../../../../lib/locations";
+import { allocateInvoicedToLines } from "../../../../lib/invoices/per-line-invoiced";
 import {
   computeSeparationCaps,
   type InventorySnapshot,
@@ -43,13 +44,45 @@ interface SqlClient {
 interface AvailabilityRow {
   order_id: string;
   line_id: string;
+  order_fully_invoiced: boolean | null;
+  variant_id: string | null;
+  sku: string | null;
   quantity: unknown;
   fulfilled: unknown;
   separated: unknown;
+  invoiced_direct: unknown;
   inventory_item_id: string | null;
   stocked: unknown;
   separated_elsewhere: unknown;
 }
+
+interface UnattributedInvoicedRow {
+  order_id: string;
+  variant_id: string | null;
+  sku: string | null;
+  qty: unknown;
+}
+
+/**
+ * Invoice items with no order_line_item_id, grouped per order — the pool
+ * allocateInvoicedToLines spreads across that order's lines by variant/SKU.
+ * Same rule as separation-data.ts, because this module's contract is that the
+ * list can never disagree with the modal about what still needs separating.
+ */
+const UNATTRIBUTED_INVOICED_SQL = `
+  SELECT pi.order_id,
+         pii.variant_id,
+         pii.sku,
+         SUM(pii.quantity) AS qty
+    FROM pos_invoice pi
+    JOIN pos_invoice_item pii
+      ON pii.invoice_id = pi.id AND pii.deleted_at IS NULL
+   WHERE pi.order_id = ANY(?::text[])
+     AND pi.deleted_at IS NULL
+     AND pi.status NOT IN ('voided', 'draft')
+     AND pii.order_line_item_id IS NULL
+   GROUP BY pi.order_id, pii.variant_id, pii.sku
+`;
 
 function num(v: unknown): number {
   const n = typeof v === "number" ? v : Number(v);
@@ -78,16 +111,22 @@ function num(v: unknown): number {
  */
 const AVAILABILITY_SQL = `
   WITH ord AS (
-    SELECT o.id, o.version
+    SELECT o.id,
+           o.version,
+           (o.metadata->>'fully_invoiced' = 'true') AS fully_invoiced
       FROM "order" o
      WHERE o.id = ANY(?::text[]) AND o.deleted_at IS NULL
   ),
   line AS (
     SELECT oi.order_id,
            oi.item_id                         AS line_id,
+           o.fully_invoiced                   AS order_fully_invoiced,
+           oli.variant_id                     AS variant_id,
+           oli.variant_sku                    AS sku,
            oi.quantity                        AS quantity,
            COALESCE(oi.fulfilled_quantity, 0) AS fulfilled,
            COALESCE(sep.qty, 0)               AS separated,
+           COALESCE(inv.qty, 0)               AS invoiced_direct,
            pvii.inventory_item_id             AS inventory_item_id
       FROM ord o
       JOIN order_item oi
@@ -96,6 +135,16 @@ const AVAILABILITY_SQL = `
         ON oli.id = oi.item_id AND oli.deleted_at IS NULL
       LEFT JOIN order_line_separation sep
         ON sep.order_id = oi.order_id AND sep.order_line_item_id = oi.item_id
+      LEFT JOIN LATERAL (
+           SELECT SUM(pii.quantity) AS qty
+             FROM pos_invoice_item pii
+             JOIN pos_invoice pi
+               ON pi.id = pii.invoice_id
+              AND pi.deleted_at IS NULL
+              AND pi.status NOT IN ('voided', 'draft')
+            WHERE pii.order_line_item_id = oli.id
+              AND pii.deleted_at IS NULL
+      ) inv ON TRUE
       LEFT JOIN product_variant_inventory_item pvii
         ON pvii.variant_id = oli.variant_id AND pvii.deleted_at IS NULL
   ),
@@ -119,9 +168,13 @@ const AVAILABILITY_SQL = `
   )
   SELECT l.order_id,
          l.line_id,
+         l.order_fully_invoiced,
+         l.variant_id,
+         l.sku,
          l.quantity,
          l.fulfilled,
          l.separated,
+         l.invoiced_direct,
          l.inventory_item_id,
          COALESCE(il.stocked_quantity, 0)            AS stocked,
          COALESCE(ct.total, 0) - COALESCE(co.own, 0) AS separated_elsewhere
@@ -156,8 +209,12 @@ export async function loadSeparationPending(
   const out = new Map<string, SeparationPending>();
   if (orderIds.length === 0) return out;
 
-  const result = await pg.raw(AVAILABILITY_SQL, [orderIds, USA_LOC]);
+  const [result, unattributedResult] = await Promise.all([
+    pg.raw(AVAILABILITY_SQL, [orderIds, USA_LOC]),
+    pg.raw(UNATTRIBUTED_INVOICED_SQL, [orderIds]),
+  ]);
   const rows = result.rows as AvailabilityRow[];
+  const unattributedRows = unattributedResult.rows as UnattributedInvoicedRow[];
 
   const byOrder = new Map<string, AvailabilityRow[]>();
   for (const row of rows) {
@@ -166,18 +223,54 @@ export async function loadSeparationPending(
     else byOrder.set(row.order_id, [row]);
   }
 
+  const unattributedByOrder = new Map<string, UnattributedInvoicedRow[]>();
+  for (const row of unattributedRows) {
+    const list = unattributedByOrder.get(row.order_id);
+    if (list) list.push(row);
+    else unattributedByOrder.set(row.order_id, [row]);
+  }
+
   for (const [orderId, orderRows] of byOrder) {
-    const lines: SeparationLineInput[] = orderRows.map((row) => ({
-      lineId: row.line_id,
-      quantity: num(row.quantity),
-      fulfilled: num(row.fulfilled),
-      // Display-only in the cap math since 2026-08-12; the pool arbiter is the
-      // separation, not the reservation. Zero keeps this honest rather than
-      // inventing a number the caps never read.
-      reserved: 0,
-      inventoryItemId: row.inventory_item_id,
-      separated: num(row.separated),
-    }));
+    // Invoiced units are done as far as separation goes (owner decision
+    // 2026-08-11, same rule separation-data.ts applies to the modals): a line's
+    // work-reducing quantity is COVERED = max(fulfilled, invoiced), never raw
+    // fulfilled. Without this, an order billed but not yet delivered kept
+    // announcing "To Separate" for units already spoken for on an invoice.
+    const invoicedByLine = allocateInvoicedToLines(
+      orderRows.map((row) => ({
+        lineId: row.line_id,
+        variantId: row.variant_id,
+        sku: row.sku,
+        quantity: num(row.quantity),
+        directInvoiced: num(row.invoiced_direct),
+      })),
+      (unattributedByOrder.get(orderId) ?? []).map((row) => ({
+        variantId: row.variant_id,
+        sku: row.sku,
+        quantity: num(row.qty),
+      }))
+    );
+
+    const lines: SeparationLineInput[] = orderRows.map((row) => {
+      const quantity = num(row.quantity);
+      const invoiced = invoicedByLine.get(row.line_id) ?? 0;
+      // Wholesale fallback mirrors separation-data.ts: a fully_invoiced order
+      // covers everything even where legacy items defeat per-line attribution.
+      const covered = row.order_fully_invoiced
+        ? quantity
+        : Math.min(quantity, Math.max(num(row.fulfilled), invoiced));
+      return {
+        lineId: row.line_id,
+        quantity,
+        fulfilled: covered,
+        // Display-only in the cap math since 2026-08-12; the pool arbiter is the
+        // separation, not the reservation. Zero keeps this honest rather than
+        // inventing a number the caps never read.
+        reserved: 0,
+        inventoryItemId: row.inventory_item_id,
+        separated: num(row.separated),
+      };
+    });
 
     const inventory = new Map<string, InventorySnapshot>();
     for (const row of orderRows) {

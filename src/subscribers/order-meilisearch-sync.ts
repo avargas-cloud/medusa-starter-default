@@ -286,7 +286,8 @@ async function resolveOrderIdsFromFulfillments(
 async function stampFullyInvoiced(
   orderId: string,
   container: any,
-  logger: any
+  logger: any,
+  opts: { always?: boolean } = {}
 ): Promise<void> {
   try {
     const orderModule = container.resolve(Modules.ORDER);
@@ -295,25 +296,42 @@ async function stampFullyInvoiced(
     });
     const meta = (order?.metadata ?? {}) as Record<string, unknown>;
 
-    // The flag is ONLY consumed by the Separated derivation (separation_state
-    // && !closed && !fully_invoiced). For non-separated orders it's irrelevant,
-    // so skip the invoice load entirely — keeps order.updated cheap (it fires
-    // on every edit step). Marking an order separated emits order.updated, so a
-    // newly-separated order is still picked up on its next event.
+    // Invoice events (`always`) stamp unconditionally: the flag gates the
+    // ENTIRE separation surface (tab, badge, To Separate slot — build-order-doc
+    // and the POS both read `fully_invoiced !== true`), not just the Separated
+    // tab exit. Gating the stamp on "already separated" left every order that
+    // was invoiced WITHOUT ever being separated shouting "To Separate" forever
+    // (S2918: 1/1 billed, zero separation rows, no flag — invisible to this
+    // function for life). Invoice events are rare, so there is no cost to keep
+    // cheap here.
     //
-    // separation_status is checked ALONGSIDE the boolean, not instead of it:
-    // is_separated is written only for `full`, so gating on it alone left a
-    // partially separated order without this flag forever — and once the tab
-    // started admitting partials (2026-08-13) that meant an order that entered
-    // the Separated tab could never leave it, however completely it was billed.
-    const sep = meta.separation_status;
-    if (!meta.is_separated && sep !== "partial" && sep !== "full") return;
+    // order.updated still self-gates — it fires on every edit step — but on a
+    // wider stake: separated orders (either signal — is_separated is written
+    // only for `full`, so the boolean alone missed partials) OR orders already
+    // carrying the flag. The latter is how a stale `true` would get corrected:
+    // an order billed in full and then edited UP fires order.updated only, and
+    // skipping it would freeze `fully_invoiced=true` on an order with new
+    // unbilled units — hidden from separation entirely, the inverse of the bug
+    // above. (No production order had hit this as of 2026-08-14; the guard is
+    // for the first one that does.)
+    if (!opts.always) {
+      const sep = meta.separation_status;
+      const hasStake =
+        !!meta.is_separated ||
+        sep === "partial" ||
+        sep === "full" ||
+        meta.fully_invoiced !== undefined;
+      if (!hasStake) return;
+    }
 
     const fullyInvoiced = await loadFullyInvoicedForOrder(orderId, container);
     if (meta.fully_invoiced === fullyInvoiced) return;
 
+    // Only the changed key travels — Medusa deep-merges order metadata, and
+    // re-sending a snapshot read moments ago is the clobber pattern that bit
+    // handle-pos-payment-created (2026-08-07).
     await orderModule.updateOrders(orderId, {
-      metadata: { ...meta, fully_invoiced: fullyInvoiced },
+      metadata: { fully_invoiced: fullyInvoiced },
     });
     logger.info(
       `[MEILI-ORDER-SYNC] order ${orderId} fully_invoiced → ${fullyInvoiced}`
@@ -425,7 +443,7 @@ export default async function orderMeilisearchSubscriber({
       );
       return;
     }
-    await stampFullyInvoiced(orderId, container, logger);
+    await stampFullyInvoiced(orderId, container, logger, { always: true });
     await syncOrders([orderId], container, logger);
     return;
   }
@@ -459,11 +477,11 @@ export default async function orderMeilisearchSubscriber({
 
   if (UPSERT_EVENTS.has(event.name)) {
     // Recompute fully_invoiced before reindexing. stampFullyInvoiced self-gates
-    // on is_separated, so this is a no-op for the vast majority of orders.
-    // Covers the "order edited down until nothing's left to dispatch" case:
-    // editing quantities fires order.updated (not an invoice event), and the
-    // now-smaller line quantities may already be fully covered by prior
-    // partial invoices → the order drops out of Separated.
+    // on separation state or an existing flag, so this is a no-op for the vast
+    // majority of orders. Covers both edit directions: edited DOWN until prior
+    // partial invoices cover everything → the order drops out of Separated;
+    // edited UP after being billed in full → the stale `true` is corrected and
+    // the order resurfaces as needing separation.
     for (const id of orderIds) {
       await stampFullyInvoiced(id, container, logger);
     }
