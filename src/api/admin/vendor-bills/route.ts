@@ -11,6 +11,7 @@
  *   offset   (default 0)
  *   status   (draft | confirmed | synced)
  *   po_id    (purchase_order.id)
+ *   vendor_id (qb_vendor.id)
  *   q        search bill #, Vendor PI/ref, PO, QB ref, vendor, receipt
  *   sort_by  (bill_number | document_date | due_date | po_number)
  *   sort_dir (asc | desc)
@@ -40,6 +41,7 @@ const listQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
   status: z.string().optional(),
   po_id: z.string().optional(),
+  vendor_id: z.string().optional(),
   bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
   q: z.string().trim().max(100).optional(),
   sort_by: z
@@ -131,7 +133,7 @@ export async function GET(
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
-  const { limit, offset, status, po_id, bill_type, q, sort_by, sort_dir } =
+  const { limit, offset, status, po_id, vendor_id, bill_type, q, sort_by, sort_dir } =
     parsed.data;
 
   const knex = (
@@ -157,6 +159,10 @@ export async function GET(
   if (po_id) {
     whereClauses.push(`vb.purchase_order_id = ?`);
     bindings.push(po_id);
+  }
+  if (vendor_id) {
+    whereClauses.push(`vb.vendor_id = ?`);
+    bindings.push(vendor_id);
   }
   if (bill_type) {
     whereClauses.push(`vb.bill_type = ?`);
