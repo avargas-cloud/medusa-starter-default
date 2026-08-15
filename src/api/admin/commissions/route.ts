@@ -46,6 +46,7 @@ interface ListRow {
   settled_at: Date | null;
   void_reason: string | null;
   commission_id: string;
+  commission_display_number: string | number | null;
   order_id: string;
   base_cents: string | number;
   discount_bps: number;
@@ -116,7 +117,8 @@ export async function GET(
               COALESCE(r.qb_vendor_id, cvl.qb_vendor_id) AS qb_vendor_id,
               r.assigned_by, r.assigned_at, r.approved_by, r.approved_at,
               r.settled_by, r.settled_at, r.void_reason,
-              c.id AS commission_id, c.order_id, c.base_cents, c.discount_bps,
+              c.id AS commission_id, c.display_number AS commission_display_number,
+              c.order_id, c.base_cents, c.discount_bps,
               c.cap_bps, c.wait_days, c.currency_code,
               o.display_id AS order_display_id,
               o.metadata->>'document_number' AS order_document_number,
@@ -171,6 +173,10 @@ export async function GET(
       count: rows.length,
       rows: rows.map((r) => ({
         recipient_id: r.id,
+        commission_number:
+          r.commission_display_number == null
+            ? null
+            : `COM-${r.commission_display_number}`,
         state: r.state,
         is_open: isOpen(r.state),
         order_id: r.order_id,

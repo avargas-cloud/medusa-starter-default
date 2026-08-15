@@ -137,6 +137,29 @@ export interface SaveAssignmentInput {
   actorId: string | null;
 }
 
+/**
+ * COM-#### gapless: claims the next `order_commission` counter value with
+ * UPDATE ... RETURNING inside the caller's transaction — a rolled-back
+ * assignment never burns a number. Throws if the counter row is missing
+ * (migration 1782700000000 not run) rather than falling back.
+ */
+async function allocateCommissionNumber(client: PoolClient): Promise<number> {
+  const { rows } = await client.query<{ value: string | number }>(
+    `UPDATE document_number_counter
+        SET value = value + 1, updated_at = now()
+      WHERE name = 'order_commission'
+      RETURNING value`
+  );
+  const first = rows[0];
+  if (!first) {
+    throw new CommissionError(
+      "invalid_state",
+      "The 'order_commission' number counter is missing — run migration 1782700000000."
+    );
+  }
+  return Number(first.value);
+}
+
 export async function saveAssignment(
   client: PoolClient,
   input: SaveAssignmentInput
@@ -214,11 +237,12 @@ export async function saveAssignment(
     );
   } else {
     commissionId = newId("ocom");
+    const displayNumber = await allocateCommissionNumber(client);
     await client.query(
       `INSERT INTO order_commission
          (id, order_id, currency_code, item_subtotal_cents, discount_cents, base_cents,
-          discount_bps, cap_bps, wait_days, assigned_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          discount_bps, cap_bps, wait_days, assigned_by, display_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         commissionId,
         input.orderId,
@@ -230,6 +254,7 @@ export async function saveAssignment(
         input.capBps,
         input.waitDays,
         input.actorId,
+        displayNumber,
       ]
     );
   }
