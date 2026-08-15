@@ -61,6 +61,7 @@ interface ListRow {
   qb_check_txn_id: string | null;
   qb_payment_txn_id: string | null;
   failure_reason: string | null;
+  vendor_bill_number: string | null;
 }
 
 export async function GET(
@@ -132,7 +133,8 @@ export async function GET(
               s.id AS settlement_id, s.method AS settlement_method,
               s.status AS settlement_status, s.vendor_bill_id,
               s.customer_payment_id, s.qb_check_txn_id, s.qb_payment_txn_id,
-              s.failure_reason
+              s.failure_reason,
+              svb.number AS vendor_bill_number
          FROM order_commission_recipient r
          JOIN order_commission c
            ON c.id = r.order_commission_id AND c.deleted_at IS NULL
@@ -158,6 +160,8 @@ export async function GET(
             ORDER BY cs.created_at DESC, cs.id DESC
             LIMIT 1
          ) s ON TRUE
+         LEFT JOIN vendor_bill svb
+           ON svb.id = s.vendor_bill_id AND svb.deleted_at IS NULL
         WHERE r.deleted_at IS NULL AND ${stateFilter}
         ORDER BY r.assigned_at DESC, r.id DESC`
     );
@@ -204,6 +208,7 @@ export async function GET(
               method: r.settlement_method,
               status: r.settlement_status,
               vendor_bill_id: r.vendor_bill_id,
+              vendor_bill_number: r.vendor_bill_number,
               customer_payment_id: r.customer_payment_id,
               qb_check_txn_id: r.qb_check_txn_id,
               qb_payment_txn_id: r.qb_payment_txn_id,
