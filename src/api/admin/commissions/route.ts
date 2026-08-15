@@ -107,7 +107,11 @@ export async function GET(
         : `r.state IN ('closed', 'void')`;
     const { rows } = await pool.query<ListRow>(
       `SELECT r.id, r.state, r.percent_bps, r.amount_cents, r.eligible_at,
-              r.payout_method, r.display_name, r.customer_id, r.qb_vendor_id,
+              r.payout_method, r.display_name, r.customer_id,
+              -- Vendor EFECTIVO: la columna del recipient o, para beneficiarios
+              -- asignados por identidad de customer, su customer_vendor_link —
+              -- mismo orden de resolución que resolveBeneficiary() en settle.
+              COALESCE(r.qb_vendor_id, cvl.qb_vendor_id) AS qb_vendor_id,
               r.assigned_by, r.assigned_at, r.approved_by, r.approved_at,
               r.settled_by, r.settled_at, r.void_reason,
               c.id AS commission_id, c.order_id, c.base_cents, c.discount_bps,
@@ -138,6 +142,11 @@ export async function GET(
             WHERE pi.order_id = c.order_id
               AND pi.deleted_at IS NULL AND pi.status NOT IN ('draft', 'voided')
          ) inv ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT l.qb_vendor_id FROM customer_vendor_link l
+            WHERE l.customer_id = r.customer_id AND l.deleted_at IS NULL
+            LIMIT 1
+         ) cvl ON TRUE
          LEFT JOIN "user" ua ON ua.id = r.assigned_by
          LEFT JOIN "user" uap ON uap.id = r.approved_by
          LEFT JOIN "user" us ON us.id = r.settled_by
