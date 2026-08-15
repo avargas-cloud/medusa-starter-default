@@ -52,6 +52,7 @@ interface ListRow {
   cap_bps: number;
   currency_code: string;
   order_display_id: string | number | null;
+  order_document_number: string | null;
   settlement_id: string | null;
   settlement_method: string | null;
   settlement_status: string | null;
@@ -117,6 +118,7 @@ export async function GET(
               c.id AS commission_id, c.order_id, c.base_cents, c.discount_bps,
               c.cap_bps, c.wait_days, c.currency_code,
               o.display_id AS order_display_id,
+              o.metadata->>'document_number' AS order_document_number,
               -- Las DOS condiciones del devengo, por separado (la UI las muestra
               -- explícitas): pago completo hoy, y última factura + espera.
               COALESCE(omp.order_total_cents > 0
@@ -169,6 +171,7 @@ export async function GET(
         is_open: isOpen(r.state),
         order_id: r.order_id,
         order_display_id: r.order_display_id == null ? null : String(r.order_display_id),
+        order_document_number: r.order_document_number,
         display_name: r.display_name,
         customer_id: r.customer_id,
         qb_vendor_id: r.qb_vendor_id,
