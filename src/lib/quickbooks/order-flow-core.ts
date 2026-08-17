@@ -37,6 +37,7 @@ import { buildQbCustomerName } from "./build-customer-name";
 import { createSalesReceiptInQb } from "./client/sales-receipts";
 import {
   claimSalesReceiptAttempt,
+  adoptSalesReceiptClaim,
   releaseSalesReceiptClaim,
   markSalesReceiptSubmitted,
   confirmSalesReceiptRow,
@@ -1351,6 +1352,13 @@ export async function processSalesReceiptInQb(receipt: {
    * still book to the original business day.
    */
   receiptDate?: string | Date | null;
+  /**
+   * Id de una fila de pipeline que el dispatcher del consolidator YA reclamó
+   * (`processing`). Cuando viene, se ADOPTA esa fila en vez de reclamar una
+   * nueva: sin esto el handler que el propio dispatcher invoca se detecta a sí
+   * mismo como ADD en vuelo y nunca despacha. Ver adoptSalesReceiptClaim.
+   */
+  preclaimedRowId?: string | null;
 }): Promise<{
   enabled: boolean;
   operationId?: string;
@@ -1370,17 +1378,22 @@ export async function processSalesReceiptInQb(receipt: {
   // Idempotency-Key (below), so the bridge — not just our own state — can
   // recognize a retry and return the already-created document instead of
   // minting a second one. See pipeline/claim-sales-receipt.ts.
-  const claim = await claimSalesReceiptAttempt({
-    orderId: receipt.orderId,
-    referenceId: receipt.referenceId,
-    medusaRefNumber: receipt.orderDisplayId
-      ? `S${receipt.orderDisplayId}`
-      : null,
-    payload: {
-      qbCustomerId: receipt.qbCustomerId,
-      paymentMethod: receipt.paymentMethod,
-    },
-  });
+  const claim = receipt.preclaimedRowId
+    ? await adoptSalesReceiptClaim(receipt.preclaimedRowId, {
+        orderId: receipt.orderId,
+        referenceId: receipt.referenceId,
+      })
+    : await claimSalesReceiptAttempt({
+        orderId: receipt.orderId,
+        referenceId: receipt.referenceId,
+        medusaRefNumber: receipt.orderDisplayId
+          ? `S${receipt.orderDisplayId}`
+          : null,
+        payload: {
+          qbCustomerId: receipt.qbCustomerId,
+          paymentMethod: receipt.paymentMethod,
+        },
+      });
   if (!claim.ok) {
     console.log(
       `${prefix} ⏸ Sales Receipt already in-flight for order ${receipt.orderId} (ref ${receipt.referenceId}) — skipping duplicate attempt`

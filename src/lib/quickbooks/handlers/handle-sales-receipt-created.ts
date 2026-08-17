@@ -37,7 +37,16 @@ export async function handleSalesReceiptCreated(
   orderModule: any,
   customerModule: any,
   _container: any,
-  logger: any
+  logger: any,
+  /**
+   * `preclaimedRowId`: la fila de pipeline que el dispatcher del consolidator
+   * YA puso en `processing` antes de invocar este handler. Sin ella, el claim
+   * de más abajo choca contra el índice de filas vivas y este handler se
+   * detecta a sí mismo como ADD en vuelo — el deadlock que dejó al 100% de las
+   * ventas del 2026-08-17 fuera de QuickBooks. Sólo la pasa `resubmit-by-step`;
+   * el camino por evento sigue reclamando su propia fila.
+   */
+  opts?: { preclaimedRowId?: string | null }
 ) {
   const orderId = data.order_id || data.id;
   logger.info(
@@ -568,6 +577,7 @@ export async function handleSalesReceiptCreated(
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
     receiptDate,
+    preclaimedRowId: opts?.preclaimedRowId ?? null,
   });
 
   if (result.skipped) {

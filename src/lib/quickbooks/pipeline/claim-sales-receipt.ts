@@ -90,6 +90,45 @@ export async function claimSalesReceiptAttempt(input: {
 }
 
 /**
+ * ADOPTA una fila que YA fue reclamada por el dispatcher del consolidator.
+ *
+ * Por qué existe: `runPendingDispatchPass` pone la fila en `processing` ANTES
+ * de llamar al handler, y `claimSalesReceiptAttempt` sólo sabe reusar filas
+ * `failed` — así que el handler que el propio dispatcher invoca choca contra
+ * el índice de filas vivas y se auto-detecta como su propio ADD en vuelo
+ * (`in_flight`), sin despachar nunca. Es el self-detect deadlock que ya mordió
+ * a los estimates el 2026-08-11, acá reintroducido para sales receipt cuando el
+ * claim se movió delante del bridge (`66cb6416`, 2026-08-17): el 100% de las
+ * ventas posteriores quedó sin llegar a QuickBooks.
+ *
+ * La fila adoptada conserva su id ⇒ conserva su `Idempotency-Key`
+ * (`sales-receipt:<rowId>`), que es justo lo que hace seguro el reintento.
+ *
+ * Verifica identidad y estado en vez de confiar en el id recibido: si la fila
+ * no es la que el caller cree, NO cae a un claim nuevo — devuelve `in_flight`.
+ * Emitir un ADD contra una fila equivocada mintea un documento duplicado, así
+ * que ante la duda el default es no emitir.
+ */
+export async function adoptSalesReceiptClaim(
+  rowId: string,
+  input: { orderId: string; referenceId: string }
+): Promise<SalesReceiptClaim> {
+  const pool = getDbPool();
+  const { rows } = await pool.query(
+    `SELECT id FROM qb_order_pipeline
+      WHERE id = $1
+        AND step = 'sales_receipt'
+        AND order_id = $2
+        AND reference_id = $3
+        AND status = 'processing'
+        AND bridge_op_id IS NULL`,
+    [rowId, input.orderId, input.referenceId]
+  );
+  if (rows.length === 0) return { ok: false, reason: "in_flight" };
+  return { ok: true, rowId, reused: true };
+}
+
+/**
  * Libera un claim cuyo ADD nunca llegó a QuickBooks (el bridge tiró error o
  * no devolvió `operationId`). Deja la fila `failed` (con backoff, a
  * diferencia de write_check: este ADD lo dispara un evento automático del

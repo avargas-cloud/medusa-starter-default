@@ -339,7 +339,14 @@ export async function resubmitByStep(
           orderModule,
           customerModule,
           container,
-          logger
+          logger,
+          // preclaimedRowId: ESTA fila ya está 'processing' porque la reclamó
+          // el dispatch pass. Sin la adopción, claimSalesReceiptAttempt no la
+          // reusa (sólo reusa 'failed'), el INSERT choca contra el índice de
+          // filas vivas y el handler se skipea a sí mismo como "in_flight" —
+          // el ADD no sale nunca (2026-08-17, el mismo deadlock que el
+          // excludeRowId del case "estimate" cierra más arriba).
+          { preclaimedRowId: row.id }
         );
         break;
       }
