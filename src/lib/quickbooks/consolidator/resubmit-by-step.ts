@@ -323,10 +323,17 @@ export async function resubmitByStep(
           [row.id]
         );
         const srPayload = srRow.rows[0]?.payload as Record<string, unknown> | null;
-        const eventData =
-          srPayload && Object.keys(srPayload).length > 0
-            ? { id: row.order_id, ...srPayload }
-            : { id: row.order_id };
+        // invoice_id MUST come from row.reference_id (the claim's own key),
+        // never rebuilt from payload: claimSalesReceiptAttempt re-uses this
+        // exact row on retry by matching (order_id, reference_id) — passing
+        // a different/missing invoice_id here would make the retry claim a
+        // NEW row (new Idempotency-Key) instead of reusing this one, which
+        // is exactly the duplicate-ADD gap this claim exists to close.
+        const eventData = {
+          id: row.order_id,
+          ...(srPayload && Object.keys(srPayload).length > 0 ? srPayload : {}),
+          invoice_id: row.reference_id,
+        };
         await handleSalesReceiptCreated(
           eventData as any,
           orderModule,

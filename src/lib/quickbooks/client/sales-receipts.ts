@@ -20,9 +20,18 @@ import {
 /**
  * Creates a QuickBooks Sales Receipt via the bridge.
  * This is an async bridge operation — poll operationId to confirm txnId.
+ *
+ * `idempotencyKey` is REQUIRED (not derived from `payload.refNumber`, which
+ * QuickBooks auto-assigns and we never send — deriving the key from it was
+ * the root cause of INV-21474/21475/21476 duplicating in QB during a
+ * 2026-08-17 network outage: the key was always `undefined`, so the bridge
+ * never deduped a retry. Callers must pass a key stable BEFORE the QB doc
+ * exists — the `qb_order_pipeline` row id claimed via
+ * `claimSalesReceiptAttempt` (pipeline/claim-sales-receipt.ts).
  */
 export async function createSalesReceiptInQb(
-  payload: QbCreateSalesReceiptPayload
+  payload: QbCreateSalesReceiptPayload,
+  opts: { idempotencyKey: string }
 ): Promise<QbBridgeResult<QbAsyncResult>> {
   if (DRY_RUN) {
     console.log(
@@ -55,9 +64,7 @@ export async function createSalesReceiptInQb(
         ...(item.taxable === false ? { taxable: false } : {}),
       })),
     }, {
-      idempotencyKey: payload.refNumber
-        ? `sales-receipt:${payload.refNumber}`
-        : undefined,
+      idempotencyKey: opts.idempotencyKey,
     });
 
     const operationId = data?.operationId;

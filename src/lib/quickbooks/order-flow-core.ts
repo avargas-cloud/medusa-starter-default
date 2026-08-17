@@ -35,6 +35,12 @@
 import { computeBatchDay, getBatchCutoff } from "../finance/batch-day";
 import { buildQbCustomerName } from "./build-customer-name";
 import { createSalesReceiptInQb } from "./client/sales-receipts";
+import {
+  claimSalesReceiptAttempt,
+  releaseSalesReceiptClaim,
+  markSalesReceiptSubmitted,
+  confirmSalesReceiptRow,
+} from "./pipeline/claim-sales-receipt";
 import { getFloat } from "./handlers/utils";
 import {
   checkBridgeHealth,
@@ -1314,15 +1320,21 @@ function mapPaymentMethodToQb(method: string | undefined): string | undefined {
  */
 export async function processSalesReceiptInQb(receipt: {
   orderId: string;
+  /**
+   * Natural key for the idempotency claim — the pos_invoice id backing this
+   * sale. Falls back to `orderId` at the callsite when no invoice exists yet.
+   * REQUIRED: without a stable key claimed before the bridge call, a retry
+   * after a lost confirmation cannot be told apart from a fresh sale — the
+   * exact gap that duplicated INV-21474/21475/21476 in QB (2026-08-17).
+   */
+  referenceId: string;
   orderDisplayId?: number;
   qbCustomerId: string;
   paymentMethod?: string;
   prebuiltItems?: QbOrderItem[];
-  onSubmitted?: (operationId: string) => Promise<void>; // Persist bridge_op_id before polling
   salesTaxCode?: string;
   qbTaxItemListid?: string;
   salesRep?: string;
-  refNumber?: string;
   memo?: string;
   /**
    * Source date for the QB <TxnDate>. Should be the pos_invoice created_at
@@ -1345,6 +1357,29 @@ export async function processSalesReceiptInQb(receipt: {
 
   const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]";
 
+  // Claim the pipeline row BEFORE touching the bridge. Its id becomes the
+  // Idempotency-Key (below), so the bridge — not just our own state — can
+  // recognize a retry and return the already-created document instead of
+  // minting a second one. See pipeline/claim-sales-receipt.ts.
+  const claim = await claimSalesReceiptAttempt({
+    orderId: receipt.orderId,
+    referenceId: receipt.referenceId,
+    medusaRefNumber: receipt.orderDisplayId
+      ? `S${receipt.orderDisplayId}`
+      : null,
+    payload: {
+      qbCustomerId: receipt.qbCustomerId,
+      paymentMethod: receipt.paymentMethod,
+    },
+  });
+  if (!claim.ok) {
+    console.log(
+      `${prefix} ⏸ Sales Receipt already in-flight for order ${receipt.orderId} (ref ${receipt.referenceId}) — skipping duplicate attempt`
+    );
+    return { enabled: true, skipped: true, skipReason: "in_flight" };
+  }
+  const rowId = claim.rowId;
+
   const logId = await QbSyncLogger.start({
     operation: "sales_receipt",
     orderId: receipt.orderId,
@@ -1359,24 +1394,31 @@ export async function processSalesReceiptInQb(receipt: {
     `${prefix} Creating Sales Receipt for order #${receipt.orderDisplayId || receipt.orderId}...`
   );
 
-  const srResult = await createSalesReceiptInQb({
-    customerId: receipt.qbCustomerId,
-    // TxnDate = merchant batch day (same cutoff rule as Invoice/ReceivePayment).
-    date: computeBatchDay(receipt.receiptDate ?? null, await getBatchCutoff()),
-    items: receipt.prebuiltItems || [],
-    salesTaxCode: receipt.salesTaxCode,
-    qbTaxItemListid: receipt.qbTaxItemListid,
-    salesRep: receipt.salesRep,
-    paymentMethod: mapPaymentMethodToQb(receipt.paymentMethod),
-    memo:
-      receipt.memo ||
-      `Sales Receipt for Order ${receipt.orderDisplayId || receipt.orderId}`,
-  });
+  const srResult = await createSalesReceiptInQb(
+    {
+      customerId: receipt.qbCustomerId,
+      // TxnDate = merchant batch day (same cutoff rule as Invoice/ReceivePayment).
+      date: computeBatchDay(receipt.receiptDate ?? null, await getBatchCutoff()),
+      items: receipt.prebuiltItems || [],
+      salesTaxCode: receipt.salesTaxCode,
+      qbTaxItemListid: receipt.qbTaxItemListid,
+      salesRep: receipt.salesRep,
+      paymentMethod: mapPaymentMethodToQb(receipt.paymentMethod),
+      memo:
+        receipt.memo ||
+        `Sales Receipt for Order ${receipt.orderDisplayId || receipt.orderId}`,
+    },
+    { idempotencyKey: `sales-receipt:${rowId}` }
+  );
 
   if (!srResult.success) {
     console.error(`[QB] ❌ Failed to create Sales Receipt: ${srResult.error}`);
     await QbSyncLogger.fail(
       logId,
+      srResult.error || "Sales Receipt creation failed"
+    );
+    await releaseSalesReceiptClaim(
+      rowId,
       srResult.error || "Sales Receipt creation failed"
     );
     return { enabled: true, error: srResult.error };
@@ -1388,12 +1430,12 @@ export async function processSalesReceiptInQb(receipt: {
   );
   QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {});
 
-  // Persist bridge_op_id immediately so Retry can re-poll even if server crashes during polling
-  if (receipt.onSubmitted && asyncData.operationId !== "DRY_RUN") {
-    try {
-      await receipt.onSubmitted(asyncData.operationId);
-    } catch {}
-  }
+  // Persist bridge_op_id immediately (UPDATE of the claimed row) so a
+  // retry can re-poll even if the server crashes mid-poll, instead of
+  // re-dispatching the ADD.
+  try {
+    await markSalesReceiptSubmitted(rowId, asyncData.operationId);
+  } catch {}
 
   let srTxnId = asyncData.txnId;
   let srRefNumber = asyncData.refNumber;
@@ -1408,6 +1450,12 @@ export async function processSalesReceiptInQb(receipt: {
     } catch (pollErr: any) {
       console.error(`[QB] ❌ Sales Receipt polling failed: ${pollErr.message}`);
       await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`);
+      // Deliberately NOT releasing the claim here: the ADD was already
+      // accepted by the bridge (we have an operationId) — the outcome is
+      // ambiguous, not a known failure. Leaving the row 'submitted' lets the
+      // consolidator's poll-submitted-rows / stale-cleanup pass resolve it
+      // against the bridge's own operation status instead of blindly
+      // retrying, which is exactly the class of bug this fix closes.
       return { enabled: true, error: `Polling failed: ${pollErr.message}` };
     }
   }
@@ -1416,6 +1464,13 @@ export async function processSalesReceiptInQb(receipt: {
     console.log(
       `${prefix} ✅ Sales Receipt created. TxnID: ${srTxnId}, Ref: ${srRefNumber || "pending"}, EditSeq: ${srEditSequence ?? "none"}`
     );
+    try {
+      await confirmSalesReceiptRow(rowId, {
+        txnId: srTxnId,
+        refNumber: srRefNumber ?? null,
+        bridgeOpId: asyncData.operationId,
+      });
+    } catch {}
   }
 
   await QbSyncLogger.complete(logId, {

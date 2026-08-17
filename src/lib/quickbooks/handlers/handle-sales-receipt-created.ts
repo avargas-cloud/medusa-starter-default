@@ -533,20 +533,11 @@ export async function handleSalesReceiptCreated(
     );
   }
 
-  // Pre-flight: transition waiting → pending so the UI shows progress
-  try {
-    await writePipelineRow({
-      orderId,
-      referenceId: data.invoice_id || null,
-      referenceType: data.invoice_id ? "pos_invoice" : null,
-      step: "sales_receipt",
-      status: "pending",
-    });
-  } catch (pErr: any) {
-    logger.warn(
-      `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`
-    );
-  }
+  // No separate pre-flight "pending" write: processSalesReceiptInQb claims
+  // the pipeline row itself (status 'processing') right before calling the
+  // bridge — see pipeline/claim-sales-receipt.ts. A second, earlier write
+  // here would collide with that claim's unique index the moment both are
+  // live at once.
 
   // Resolve the QB PaymentMethod via the canonical split-aware helper:
   //   credit_card → send card_brand (Visa/MasterCard/Amex/Discover/Capital One)
@@ -567,6 +558,7 @@ export async function handleSalesReceiptCreated(
 
   const result = await processSalesReceiptInQb({
     orderId,
+    referenceId: data.invoice_id || orderId,
     orderDisplayId: order.display_id,
     qbCustomerId,
     paymentMethod: qbPaymentMethod,
@@ -576,20 +568,12 @@ export async function handleSalesReceiptCreated(
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
     receiptDate,
-    onSubmitted: async (operationId) => {
-      await writePipelineRow({
-        orderId,
-        referenceId: data.invoice_id || null,
-        referenceType: data.invoice_id ? "pos_invoice" : null,
-        step: "sales_receipt",
-        status: "submitted",
-        bridgeOpId: operationId,
-      });
-    },
   });
 
   if (result.skipped) {
-    logger.info(`${LOG_PREFIX} ⏭️ Sales Receipt skipped (QB disabled)`);
+    logger.info(
+      `${LOG_PREFIX} ⏭️ Sales Receipt skipped (${result.skipReason || "QB disabled"})`
+    );
     return;
   }
   if (result.error) {
@@ -601,41 +585,16 @@ export async function handleSalesReceiptCreated(
         metadata: { ...(order.metadata || {}), qb_sync_status: "error" },
       });
     } catch (mErr) {}
-    try {
-      await writePipelineRow({
-        orderId,
-        referenceId: data.invoice_id || null,
-        referenceType: data.invoice_id ? "pos_invoice" : null,
-        step: "sales_receipt",
-        status: "failed",
-        error: result.error,
-      });
-    } catch (pErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`
-      );
-    }
+    // No pipeline write here: processSalesReceiptInQb already left the
+    // claimed row 'failed' (releaseSalesReceiptClaim) or 'submitted' for an
+    // ambiguous poll failure — see its comments for why the ambiguous case
+    // deliberately does NOT release the claim.
     return;
   }
 
   if (result.txnId || result.operationId) {
-    // Record in pipeline
-    try {
-      await writePipelineRow({
-        orderId,
-        referenceId: data.invoice_id || null,
-        referenceType: data.invoice_id ? "pos_invoice" : null,
-        step: "sales_receipt",
-        status: result.operationId && !result.txnId ? "submitted" : "confirmed",
-        bridgeOpId: result.operationId || null,
-        qbTxnId: result.txnId || null,
-        qbRefNumber: result.refNumber || null,
-      });
-    } catch (pErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`
-      );
-    }
+    // processSalesReceiptInQb already wrote the pipeline row (claimed +
+    // updated to submitted/confirmed) — nothing to record here.
 
     // Camino INLINE de confirmación — ver pipeline/void-intent.ts. Si el SR fue
     // voideado mientras su ADD estaba en vuelo, este es el primer momento en que
