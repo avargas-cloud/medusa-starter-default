@@ -25,8 +25,44 @@ export function discountBpsOf(input: CommissionBaseInput): number {
   return Math.round((input.discountCents / input.itemSubtotalCents) * 10_000);
 }
 
+/**
+ * Cómo se cargó un beneficiario, y por lo tanto QUÉ campo es su verdad:
+ *  - 'percent' → `percentBps`; el monto se deriva y sigue a la base.
+ *  - 'fixed'   → `fixedAmountCents`; el monto está clavado y el % se deriva.
+ */
+export type CommissionAmountMode = "percent" | "fixed";
+
+/** La parte de un beneficiario que decide su plata. */
+export interface RecipientAmount {
+  mode: CommissionAmountMode;
+  percentBps: number;
+  fixedAmountCents?: number | null;
+}
+
+/**
+ * Los centavos que le tocan a un beneficiario sobre una base dada.
+ * En 'fixed' la base NO participa: ese es el punto del modo.
+ */
+export function effectiveAmountCents(baseCents: number, r: RecipientAmount): number {
+  if (r.mode === "fixed") return Math.max(0, Math.round(r.fixedAmountCents ?? 0));
+  return recipientAmountCents(baseCents, r.percentBps);
+}
+
+/**
+ * El % VIVO de un beneficiario sobre la base vigente — lo que mide el cap.
+ * Una fila fija sobre base 0 no tiene % determinable (sería infinito): devuelve
+ * null, y el cap lo trata como no evaluable en vez de contarlo como 0. Contarlo
+ * como 0 dejaría pasar cualquier monto sobre una orden sin base.
+ */
+export function effectiveBps(baseCents: number, r: RecipientAmount): number | null {
+  if (r.mode === "percent") return r.percentBps;
+  const fixed = Math.round(r.fixedAmountCents ?? 0);
+  if (baseCents <= 0) return fixed > 0 ? null : 0;
+  return Math.round((fixed / baseCents) * 10_000);
+}
+
 export interface CapCheckInput extends CommissionBaseInput {
-  recipientPercentsBps: number[];
+  recipients: RecipientAmount[];
   capBps: number;
 }
 
@@ -36,18 +72,33 @@ export interface CapCheckResult {
   totalCommissionBps: number;
   combinedBps: number;
   capBps: number;
+  /** true = hay una fila fija sobre base 0: el cap no se puede evaluar. */
+  undeterminedFixed: boolean;
 }
 
 export function checkCombinedCap(input: CapCheckInput): CapCheckResult {
   const discountBps = discountBpsOf(input);
-  const totalCommissionBps = input.recipientPercentsBps.reduce((acc, bps) => acc + bps, 0);
+  const baseCents = commissionBaseCents(input);
+
+  let undeterminedFixed = false;
+  let totalCommissionBps = 0;
+  for (const r of input.recipients) {
+    const bps = effectiveBps(baseCents, r);
+    if (bps === null) {
+      undeterminedFixed = true;
+      continue;
+    }
+    totalCommissionBps += bps;
+  }
+
   const combinedBps = discountBps + totalCommissionBps;
   return {
-    ok: combinedBps <= input.capBps,
+    ok: !undeterminedFixed && combinedBps <= input.capBps,
     discountBps,
     totalCommissionBps,
     combinedBps,
     capBps: input.capBps,
+    undeterminedFixed,
   };
 }
 
@@ -55,10 +106,9 @@ export function recipientAmountCents(baseCents: number, percentBps: number): num
   return Math.round((baseCents * percentBps) / 10_000);
 }
 
-export interface RecipientInput {
+export interface RecipientInput extends RecipientAmount {
   customerId?: string;
   qbVendorId?: string;
-  percentBps: number;
 }
 
 export type RecipientsValidation =
@@ -69,6 +119,7 @@ export type RecipientsValidation =
         | "no_recipients"
         | "too_many_recipients"
         | "invalid_percent"
+        | "invalid_fixed_amount"
         | "missing_identity"
         | "duplicate_recipient";
     };
@@ -79,7 +130,14 @@ export function validateRecipients(recipients: RecipientInput[]): RecipientsVali
 
   const seen = new Set<string>();
   for (const r of recipients) {
-    if (!Number.isFinite(r.percentBps) || r.percentBps <= 0) {
+    // Cada modo exige SU campo. El del otro modo no se mira, así que un
+    // percent_bps de arrastre nunca puede decidir la plata de una fila fija.
+    if (r.mode === "fixed") {
+      const fixed = r.fixedAmountCents;
+      if (!Number.isFinite(fixed ?? NaN) || !Number.isInteger(fixed) || (fixed as number) <= 0) {
+        return { ok: false, reason: "invalid_fixed_amount" };
+      }
+    } else if (!Number.isFinite(r.percentBps) || r.percentBps <= 0) {
       return { ok: false, reason: "invalid_percent" };
     }
     if (!r.customerId && !r.qbVendorId) {

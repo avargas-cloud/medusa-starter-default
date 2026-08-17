@@ -127,13 +127,24 @@ export function commissionRefNumber(orderDisplayId: string | null, ordinal: numb
   return `RC-${display}-${ordinal}`;
 }
 
+/**
+ * El memo nombra la comisión COMO SE PACTÓ: una por porcentaje dice su %, una
+ * de monto fijo dice su monto. Derivarle un % a una fija pondría en un
+ * documento contable un número que nadie acordó (y que además se mueve con la
+ * base). Las filas por % conservan el formato exacto de siempre.
+ */
 export function commissionMemo(
-  percentBps: number,
+  amount: { mode: "percent" | "fixed"; percentBps: number; fixedAmountCents?: number | null },
   orderDisplayId: string | null,
   beneficiaryName: string
 ): string {
-  const pct = (percentBps / 100).toFixed(percentBps % 100 === 0 ? 0 : 2);
-  return `Commission ${pct}% Order ${orderDisplayId ?? "?"} — ${beneficiaryName}`;
+  const order = orderDisplayId ?? "?";
+  if (amount.mode === "fixed") {
+    const dollars = (Math.round(amount.fixedAmountCents ?? 0) / 100).toFixed(2);
+    return `Commission $${dollars} Order ${order} — ${beneficiaryName}`;
+  }
+  const pct = (amount.percentBps / 100).toFixed(amount.percentBps % 100 === 0 ? 0 : 2);
+  return `Commission ${pct}% Order ${order} — ${beneficiaryName}`;
 }
 
 export interface SettlementInsert {

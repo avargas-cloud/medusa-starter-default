@@ -15,7 +15,11 @@ import {
   loadCommissionBusinessConfig,
 } from "../../../../../lib/commissions/config";
 import { readOrderMoneySnapshot } from "../../../../../lib/commissions/order-money";
-import { recipientAmountCents } from "../../../../../lib/commissions/calculator";
+import {
+  effectiveAmountCents,
+  effectiveBps,
+  type CommissionAmountMode,
+} from "../../../../../lib/commissions/calculator";
 import {
   asInt,
   CommissionError,
@@ -33,6 +37,8 @@ interface RecipientBody {
   qb_vendor_id?: unknown;
   display_name?: unknown;
   percent_bps?: unknown;
+  amount_mode?: unknown;
+  fixed_amount_cents?: unknown;
 }
 
 function requireOrderId(req: MedusaRequest, res: MedusaResponse): string | null {
@@ -52,16 +58,28 @@ function commissionErrorResponse(res: MedusaResponse, err: CommissionError): voi
 
 function serializeRecipient(r: RecipientRow, baseCents: number) {
   const frozen = r.amount_cents == null ? null : asInt(r.amount_cents);
+  const amount = {
+    mode: r.amount_mode,
+    percentBps: r.percent_bps,
+    fixedAmountCents: r.fixed_amount_cents == null ? null : asInt(r.fixed_amount_cents),
+  };
   return {
     id: r.id,
     customer_id: r.customer_id,
     qb_vendor_id: r.qb_vendor_id,
     display_name: r.display_name,
-    percent_bps: r.percent_bps,
+    /**
+     * El % VIVO sobre la base vigente. En una fila fija se deriva del monto,
+     * así que se mueve solo cuando la orden cambia — es exactamente lo que el
+     * cap tiene que medir. Una fila ya congelada conserva el suyo.
+     */
+    percent_bps: frozen != null ? r.percent_bps : effectiveBps(baseCents, amount) ?? r.percent_bps,
+    amount_mode: r.amount_mode,
+    fixed_amount_cents: amount.fixedAmountCents,
     state: r.state,
     eligible_at: r.eligible_at,
-    /** Congelado al aprobar; antes, derivado en vivo de la base vigente. */
-    amount_cents: frozen ?? recipientAmountCents(baseCents, r.percent_bps),
+    /** Congelado al aprobar; antes, derivado en vivo según el modo. */
+    amount_cents: frozen ?? effectiveAmountCents(baseCents, amount),
     amount_is_frozen: frozen != null,
   };
 }
@@ -134,7 +152,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     customerId?: string;
     qbVendorId?: string;
     displayName: string;
+    mode: CommissionAmountMode;
     percentBps: number;
+    fixedAmountCents?: number | null;
   }> = [];
   for (const raw of body.recipients as RecipientBody[]) {
     const customerId = typeof raw.customer_id === "string" && raw.customer_id ? raw.customer_id : undefined;
@@ -143,16 +163,36 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         ? raw.qb_vendor_id
         : undefined;
     const displayName = typeof raw.display_name === "string" ? raw.display_name.trim() : "";
-    const percentBps = Number(raw.percent_bps);
     if (!displayName) {
       res.status(400).json({ error: "Each recipient needs a display_name." });
       return;
     }
+
+    // Sin `amount_mode` es 'percent': los callers previos siguen andando igual.
+    if (raw.amount_mode !== undefined && raw.amount_mode !== "percent" && raw.amount_mode !== "fixed") {
+      res.status(400).json({ error: "amount_mode must be 'percent' or 'fixed'." });
+      return;
+    }
+    const mode: CommissionAmountMode = raw.amount_mode === "fixed" ? "fixed" : "percent";
+
+    if (mode === "fixed") {
+      const fixedAmountCents = Number(raw.fixed_amount_cents);
+      if (!Number.isInteger(fixedAmountCents) || fixedAmountCents <= 0) {
+        res
+          .status(400)
+          .json({ error: "fixed_amount_cents must be a positive integer (cents)." });
+        return;
+      }
+      recipients.push({ customerId, qbVendorId, displayName, mode, percentBps: 0, fixedAmountCents });
+      continue;
+    }
+
+    const percentBps = Number(raw.percent_bps);
     if (!Number.isInteger(percentBps)) {
       res.status(400).json({ error: "percent_bps must be an integer (bps)." });
       return;
     }
-    recipients.push({ customerId, qbVendorId, displayName, percentBps });
+    recipients.push({ customerId, qbVendorId, displayName, mode, percentBps });
   }
 
   const pool = getDbPool();

@@ -159,6 +159,49 @@ console.log("verify-order-commissions — registro del Commissions Pipeline\n");
   );
 }
 
+// 9 · UNA sola derivación del monto de un beneficiario
+//
+// Desde que existe el modo 'fixed', "cuánto le toca" ya no es base × bps: una
+// fila fija vale su monto y su % se deriva al revés. Hay DOS lectores del mismo
+// dato (el modal de la orden y el listado de contabilidad) y si cada uno tiene
+// su fórmula se contradicen en pantalla sin que nada falle — el patrón exacto
+// que ya costó caro en el índice de órdenes y en el scope del Sales Pipeline.
+// Por eso `recipientAmountCents` (la fórmula CRUDA por porcentaje) queda
+// encapsulada dentro del calculador y todo lector pasa por `effectiveAmountCents`.
+{
+  const READERS = [
+    "src/api/admin/commissions/orders/[orderId]/route.ts",
+    "src/api/admin/commissions/route.ts",
+  ];
+  for (const rel of READERS) {
+    const src = read(rel);
+    check(
+      `${rel.split("/").slice(-2).join("/")} deriva el monto con effectiveAmountCents`,
+      src.includes("effectiveAmountCents")
+    );
+    check(
+      `${rel.split("/").slice(-2).join("/")} NO usa la fórmula cruda recipientAmountCents`,
+      !src.includes("recipientAmountCents")
+    );
+    check(
+      `${rel.split("/").slice(-2).join("/")} sirve amount_mode al cliente`,
+      src.includes("amount_mode")
+    );
+  }
+
+  // El cap se mide en PORCENTAJE incluso para las filas fijas: si el escritor
+  // dejara de convertirlas, un monto fijo sería la vía para saltear el tope.
+  const writer = read("src/lib/commissions/writer.ts");
+  check(
+    "el escritor rechaza un monto fijo sobre base 0 (cap no evaluable)",
+    writer.includes("undeterminedFixed") && writer.includes("fixed_amount_without_base")
+  );
+  check(
+    "approve congela POR MODO, no reconstruyendo desde bps",
+    writer.includes("effectiveAmountCents(asInt(row.base_cents)")
+  );
+}
+
 console.log("");
 if (failures.length > 0) {
   console.error(`❌ ${failures.length} chequeo(s) fallaron:`);

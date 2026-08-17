@@ -11,10 +11,21 @@ import {
   checkCombinedCap,
   commissionBaseCents,
   discountBpsOf,
+  effectiveAmountCents,
+  effectiveBps,
   eligibleAt,
   recipientAmountCents,
   validateRecipients,
 } from "../../lib/commissions/calculator";
+
+/** Azúcar de test: un beneficiario cargado por porcentaje. */
+const pct = (percentBps: number) => ({ mode: "percent" as const, percentBps });
+/** Azúcar de test: un beneficiario cargado por monto fijo, en CENTS. */
+const fixed = (fixedAmountCents: number) => ({
+  mode: "fixed" as const,
+  percentBps: 0,
+  fixedAmountCents,
+});
 
 describe("commissionBaseCents", () => {
   it("resta el descuento del subtotal de ítems (ejemplo canónico del owner)", () => {
@@ -55,7 +66,7 @@ describe("checkCombinedCap", () => {
     const r = checkCombinedCap({
       itemSubtotalCents: 100_000,
       discountCents: 10_000,
-      recipientPercentsBps: [500, 500],
+      recipients: [pct(500), pct(500)],
       capBps: 2000,
     });
     expect(r.ok).toBe(true);
@@ -68,7 +79,7 @@ describe("checkCombinedCap", () => {
     const r = checkCombinedCap({
       itemSubtotalCents: 100_000,
       discountCents: 10_000,
-      recipientPercentsBps: [500, 500, 100],
+      recipients: [pct(500), pct(500), pct(100)],
       capBps: 2000,
     });
     expect(r.ok).toBe(false);
@@ -79,10 +90,111 @@ describe("checkCombinedCap", () => {
     const r = checkCombinedCap({
       itemSubtotalCents: 100_000,
       discountCents: 0,
-      recipientPercentsBps: [2000],
+      recipients: [pct(2000)],
       capBps: 2000,
     });
     expect(r.ok).toBe(true);
+  });
+
+  // ── Monto fijo contra el cap ───────────────────────────────────────────────
+  // El cap se mide SIEMPRE en porcentaje: una fila fija se convierte a su %
+  // efectivo sobre la base vigente. Si no, un monto fijo sería la vía para
+  // saltear el tope.
+
+  it("convierte un monto fijo a su % efectivo sobre la base y lo suma al cap", () => {
+    // Base = 100.000 − 10.000 = 90.000¢. $45,00 fijos = 4.500¢ = 500 bps.
+    const r = checkCombinedCap({
+      itemSubtotalCents: 100_000,
+      discountCents: 10_000,
+      recipients: [fixed(4_500), pct(500)],
+      capBps: 2000,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.totalCommissionBps).toBe(1000);
+    expect(r.combinedBps).toBe(2000);
+  });
+
+  it("un monto fijo que pasa el cap se RECHAZA igual que un porcentaje", () => {
+    // Sin descuento la base es el subtotal: 100.000¢. $201 fijos = 2.010 bps,
+    // apenas por encima del cap de 2.000.
+    const r = checkCombinedCap({
+      itemSubtotalCents: 100_000,
+      discountCents: 0,
+      recipients: [fixed(20_100)],
+      capBps: 2000,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.totalCommissionBps).toBe(2010);
+    expect(r.undeterminedFixed).toBe(false);
+  });
+
+  it("el mismo monto fijo pasa o no según la BASE, no según su tamaño", () => {
+    // Espejo del anterior con una base mayor: los mismos $201 caen a 1.005 bps.
+    const r = checkCombinedCap({
+      itemSubtotalCents: 200_000,
+      discountCents: 0,
+      recipients: [fixed(20_100)],
+      capBps: 2000,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.totalCommissionBps).toBe(1005);
+  });
+
+  it("un monto fijo sobre base CERO no es evaluable: no pasa, y se marca", () => {
+    const r = checkCombinedCap({
+      itemSubtotalCents: 0,
+      discountCents: 0,
+      recipients: [fixed(50_000)],
+      capBps: 2000,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.undeterminedFixed).toBe(true);
+  });
+
+  it("base cero NO cuenta un monto fijo como 0 bps (sería saltear el cap entero)", () => {
+    const r = checkCombinedCap({
+      itemSubtotalCents: 0,
+      discountCents: 0,
+      recipients: [fixed(9_999_999)],
+      capBps: 2000,
+    });
+    expect(r.totalCommissionBps).toBe(0);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("effectiveAmountCents / effectiveBps", () => {
+  it("una fila por % deriva su monto de la base", () => {
+    expect(effectiveAmountCents(90_000, pct(500))).toBe(4_500);
+  });
+
+  it("una fila FIJA vale su monto exacto y la base no la toca", () => {
+    expect(effectiveAmountCents(90_000, fixed(50_000))).toBe(50_000);
+    expect(effectiveAmountCents(10, fixed(50_000))).toBe(50_000);
+    expect(effectiveAmountCents(0, fixed(50_000))).toBe(50_000);
+  });
+
+  it("el centavo exacto sobrevive: $500 sobre $29.018,23 NO se degrada a $499,11", () => {
+    // Es el caso que motivó el modo: 500,00 vale 172,31 bps y guardarlo como
+    // 172 bps devolvía 499,11. Guardando el monto, vuelve intacto.
+    const base = 2_901_823;
+    expect(effectiveAmountCents(base, fixed(50_000))).toBe(50_000);
+    expect(effectiveAmountCents(base, pct(172))).toBe(49_911);
+  });
+
+  it("el % de una fila fija se DERIVA de la base vigente", () => {
+    expect(effectiveBps(2_901_823, fixed(50_000))).toBe(172);
+    expect(effectiveBps(90_000, fixed(4_500))).toBe(500);
+  });
+
+  it("una fila fija sobre base cero no tiene % determinable", () => {
+    expect(effectiveBps(0, fixed(50_000))).toBeNull();
+    expect(effectiveBps(0, fixed(0))).toBe(0);
+  });
+
+  it("el % de una fila por porcentaje es el guardado, sin derivar", () => {
+    expect(effectiveBps(0, pct(500))).toBe(500);
+    expect(effectiveBps(90_000, pct(500))).toBe(500);
   });
 });
 
@@ -103,8 +215,8 @@ describe("recipientAmountCents", () => {
 
 describe("validateRecipients", () => {
   const ok = [
-    { customerId: "cus_1", percentBps: 500 },
-    { qbVendorId: "80000-123", percentBps: 300 },
+    { customerId: "cus_1", ...pct(500) },
+    { qbVendorId: "80000-123", ...pct(300) },
   ];
 
   it("acepta hasta 3 beneficiarios con porcentaje positivo", () => {
@@ -112,31 +224,72 @@ describe("validateRecipients", () => {
   });
 
   it("rechaza más de 3", () => {
-    const four = [...ok, { customerId: "cus_2", percentBps: 100 }, { customerId: "cus_3", percentBps: 100 }];
+    const four = [...ok, { customerId: "cus_2", ...pct(100) }, { customerId: "cus_3", ...pct(100) }];
     const r = validateRecipients(four);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("too_many_recipients");
   });
 
   it("rechaza porcentaje cero o negativo", () => {
-    const r = validateRecipients([{ customerId: "cus_1", percentBps: 0 }]);
+    const r = validateRecipients([{ customerId: "cus_1", ...pct(0) }]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("invalid_percent");
   });
 
   it("rechaza beneficiario sin identidad (ni customer ni vendor)", () => {
-    const r = validateRecipients([{ percentBps: 100 }]);
+    const r = validateRecipients([{ ...pct(100) }]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("missing_identity");
   });
 
   it("rechaza beneficiario repetido (mismo customer)", () => {
     const r = validateRecipients([
-      { customerId: "cus_1", percentBps: 100 },
-      { customerId: "cus_1", percentBps: 200 },
+      { customerId: "cus_1", ...pct(100) },
+      { customerId: "cus_1", ...pct(200) },
     ]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("duplicate_recipient");
+  });
+
+  // ── Modo fijo ──────────────────────────────────────────────────────────────
+
+  it("acepta un beneficiario por monto fijo", () => {
+    expect(validateRecipients([{ customerId: "cus_1", ...fixed(50_000) }])).toEqual({ ok: true });
+  });
+
+  it("rechaza un monto fijo cero o negativo", () => {
+    for (const amount of [0, -1]) {
+      const r = validateRecipients([{ customerId: "cus_1", ...fixed(amount) }]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toBe("invalid_fixed_amount");
+    }
+  });
+
+  it("rechaza un monto fijo con centavos fraccionarios", () => {
+    const r = validateRecipients([{ customerId: "cus_1", ...fixed(500.5) }]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("invalid_fixed_amount");
+  });
+
+  it("una fila fija NO se valida por su percent_bps: el del otro modo no se mira", () => {
+    // percentBps 0 sería inválido en modo 'percent'; en 'fixed' es irrelevante
+    // porque no decide plata. Si el validador mirara los dos campos, un
+    // percent_bps de arrastre podría rechazar (o peor, gobernar) una fila fija.
+    expect(validateRecipients([{ customerId: "cus_1", mode: "fixed", percentBps: 0, fixedAmountCents: 1 }])).toEqual({
+      ok: true,
+    });
+  });
+
+  it("una fila por % sin monto fijo sigue siendo válida (nada exige el campo del otro modo)", () => {
+    expect(validateRecipients([{ customerId: "cus_1", ...pct(1) }])).toEqual({ ok: true });
+  });
+
+  it("mezcla los dos modos en la misma asignación", () => {
+    const r = validateRecipients([
+      { customerId: "cus_1", ...pct(500) },
+      { qbVendorId: "80000-123", ...fixed(25_000) },
+    ]);
+    expect(r).toEqual({ ok: true });
   });
 
   it("rechaza lista vacía", () => {

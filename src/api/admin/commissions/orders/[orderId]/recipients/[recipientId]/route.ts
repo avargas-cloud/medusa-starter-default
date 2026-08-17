@@ -225,7 +225,12 @@ async function handleSettle(
       const ordinal = recipientOrdinal(existing.recipients, recipient.id);
       const refNumber = commissionRefNumber(money?.orderDisplayId ?? null, ordinal);
       const memo = commissionMemo(
-        recipient.percent_bps,
+        {
+          mode: recipient.amount_mode,
+          percentBps: recipient.percent_bps,
+          fixedAmountCents:
+            recipient.fixed_amount_cents == null ? null : asInt(recipient.fixed_amount_cents),
+        },
         money?.orderDisplayId ?? null,
         recipient.display_name
       );

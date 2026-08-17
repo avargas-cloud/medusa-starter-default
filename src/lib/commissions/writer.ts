@@ -21,9 +21,11 @@ import {
   checkCombinedCap,
   commissionBaseCents,
   discountBpsOf,
+  effectiveAmountCents,
+  effectiveBps,
   eligibleAt as computeEligibleAt,
-  recipientAmountCents,
   validateRecipients,
+  type CommissionAmountMode,
   type RecipientInput,
 } from "./calculator";
 import { canApprove, canReSaveAssignment, canVoid, refreshedState, type RecipientState } from "./transitions";
@@ -43,7 +45,8 @@ export class CommissionError extends Error {
       | "assignment_locked"
       | "not_found"
       | "invalid_state"
-      | "beneficiary_is_order_customer",
+      | "beneficiary_is_order_customer"
+      | "fixed_amount_without_base",
     message: string,
     public readonly details?: Record<string, unknown>
   ) {
@@ -84,7 +87,11 @@ export interface RecipientRow {
   qb_vendor_id: string | null;
   display_name: string;
   percent_bps: number;
+  /** Congelado al aprobar. NO confundir con `fixed_amount_cents`. */
   amount_cents: string | number | null;
+  amount_mode: CommissionAmountMode;
+  /** La verdad de una fila 'fixed'; NULL en las 'percent'. */
+  fixed_amount_cents: string | number | null;
   eligible_at: Date | null;
   state: RecipientState;
   payout_method: string | null;
@@ -185,9 +192,18 @@ export async function saveAssignment(
   const cap = checkCombinedCap({
     itemSubtotalCents: input.money.itemSubtotalCents,
     discountCents: input.money.discountCents,
-    recipientPercentsBps: input.recipients.map((r) => r.percentBps),
+    recipients: input.recipients,
     capBps: input.capBps,
   });
+  // Un monto fijo sobre base 0 no tiene % contra el cual medir el cap: se
+  // rechaza en vez de dejarlo pasar como si fuera 0% (sería la vía para
+  // saltear el tope entero).
+  if (cap.undeterminedFixed) {
+    throw new CommissionError(
+      "fixed_amount_without_base",
+      "This order has no commission base — a fixed amount cannot be assigned against it."
+    );
+  }
   if (!cap.ok) {
     throw new CommissionError("cap_exceeded", "Discount + commissions exceed the cap.", { ...cap });
   }
@@ -263,18 +279,25 @@ export async function saveAssignment(
   for (const r of input.recipients) {
     const id = newId("ocre");
     recipientIds.push(id);
+    const isFixed = r.mode === "fixed";
+    // En 'fixed', `percent_bps` es el % al que equivalía AL ASIGNAR: queda como
+    // testigo histórico (memo, auditoría) y nunca decide plata. El % vivo se
+    // deriva de la base vigente en cada lectura.
+    const storedPercentBps = isFixed ? (effectiveBps(base, r) ?? 0) : r.percentBps;
     await client.query(
       `INSERT INTO order_commission_recipient
          (id, order_commission_id, customer_id, qb_vendor_id, display_name,
-          percent_bps, eligible_at, state, assigned_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8)`,
+          percent_bps, amount_mode, fixed_amount_cents, eligible_at, state, assigned_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draft',$10)`,
       [
         id,
         commissionId,
         r.customerId ?? null,
         r.qbVendorId ?? null,
         r.displayName,
-        r.percentBps,
+        storedPercentBps,
+        isFixed ? "fixed" : "percent",
+        isFixed ? Math.round(r.fixedAmountCents ?? 0) : null,
         eligible,
         input.actorId,
       ]
@@ -349,7 +372,13 @@ export async function approveRecipient(
     });
   }
 
-  const amountCents = recipientAmountCents(asInt(row.base_cents), row.percent_bps);
+  // Congela por MODO: una fila fija congela el centavo que se tipeó, no una
+  // reconstrucción desde bps (que es justo la precisión que el modo evita).
+  const amountCents = effectiveAmountCents(asInt(row.base_cents), {
+    mode: row.amount_mode,
+    percentBps: row.percent_bps,
+    fixedAmountCents: row.fixed_amount_cents == null ? null : asInt(row.fixed_amount_cents),
+  });
   await client.query(
     `UPDATE order_commission_recipient
         SET state = 'approved', amount_cents = $2, approved_by = $3, approved_at = NOW(),

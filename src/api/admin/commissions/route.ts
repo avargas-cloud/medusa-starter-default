@@ -14,7 +14,11 @@ import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/frame
 import { getDbPool } from "../../utils/db-pool";
 import { readOrderMoneySnapshot } from "../../../lib/commissions/order-money";
 import { refreshCommission, withOrderCommissionLock, asInt } from "../../../lib/commissions/writer";
-import { recipientAmountCents } from "../../../lib/commissions/calculator";
+import {
+  effectiveAmountCents,
+  effectiveBps,
+  type CommissionAmountMode,
+} from "../../../lib/commissions/calculator";
 import { reconcileVendorBillSettlements } from "../../../lib/commissions/settle";
 import { isOpen, type RecipientState } from "../../../lib/commissions/transitions";
 import { assertAccounting } from "./_lib/guard";
@@ -33,6 +37,8 @@ interface ListRow {
   state: RecipientState;
   percent_bps: number;
   amount_cents: string | number | null;
+  amount_mode: CommissionAmountMode;
+  fixed_amount_cents: string | number | null;
   eligible_at: Date | null;
   payout_method: string | null;
   display_name: string;
@@ -103,6 +109,15 @@ export async function GET(
       }
     }
 
+    // Misma derivación que el modal de la orden: una fila fija vale su monto,
+    // una por % vale base × bps. Dos lectores del mismo dato NO pueden tener
+    // dos fórmulas — se contradicen en pantalla sin que nada avise.
+    const toRecipientAmount = (r: ListRow) => ({
+      mode: r.amount_mode,
+      percentBps: r.percent_bps,
+      fixedAmountCents: r.fixed_amount_cents == null ? null : asInt(r.fixed_amount_cents),
+    });
+
     // 3 · Listado.
     const stateFilter =
       tab === "open"
@@ -110,6 +125,7 @@ export async function GET(
         : `r.state IN ('closed', 'void')`;
     const { rows } = await pool.query<ListRow>(
       `SELECT r.id, r.state, r.percent_bps, r.amount_cents, r.eligible_at,
+              r.amount_mode, r.fixed_amount_cents,
               r.payout_method, r.display_name, r.customer_id,
               -- Vendor EFECTIVO: la columna del recipient o, para beneficiarios
               -- asignados por identidad de customer, su customer_vendor_link —
@@ -185,10 +201,14 @@ export async function GET(
         display_name: r.display_name,
         customer_id: r.customer_id,
         qb_vendor_id: r.qb_vendor_id,
-        percent_bps: r.percent_bps,
+        percent_bps:
+          r.amount_cents != null
+            ? r.percent_bps
+            : effectiveBps(asInt(r.base_cents), toRecipientAmount(r)) ?? r.percent_bps,
+        amount_mode: r.amount_mode,
         amount_cents:
           r.amount_cents == null
-            ? recipientAmountCents(asInt(r.base_cents), r.percent_bps)
+            ? effectiveAmountCents(asInt(r.base_cents), toRecipientAmount(r))
             : asInt(r.amount_cents),
         amount_is_frozen: r.amount_cents != null,
         base_cents: asInt(r.base_cents),
