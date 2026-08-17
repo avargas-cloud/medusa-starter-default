@@ -46,6 +46,18 @@ export async function runTimeoutPass(logger: any): Promise<void> {
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
+// vendor_bill_payment_check is a read-only BillQuery — unlike an ADD/MOD, waiting
+// longer carries no duplicate-document risk, and the bridge has been measured
+// taking 4h+ on this step during its periodic backlog windows. Give it more
+// rope than the 2h default before treating it as abandoned.
+const VENDOR_BILL_PAYMENT_CHECK_GIVEUP_MS = 6 * 60 * 60 * 1000;
+
+function giveupThresholdMs(step: string): number {
+  return step === "vendor_bill_payment_check"
+    ? VENDOR_BILL_PAYMENT_CHECK_GIVEUP_MS
+    : TWO_HOURS_MS;
+}
+
 /**
  * Stale submitted cleanup: rows stuck in 'submitted' for >30 minutes are
  * marked failed and their EditSequence cache is invalidated so stale sequences
@@ -55,7 +67,8 @@ const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
  * outstanding bridge_op_id. If the op is still pending/processing we extend
  * the submitted window instead of giving up — a blind fail while the bridge is
  * still working causes a duplicate document in QB on the next retry.
- * We only force-fail after 2 hours of pending bridge status.
+ * We only force-fail after 2 hours of pending bridge status (longer for
+ * vendor_bill_payment_check — see giveupThresholdMs).
  */
 export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
   const pool = getDbPool();
@@ -80,7 +93,7 @@ export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
             const submittedMs = row.submitted_at
               ? Date.now() - new Date(row.submitted_at as string).getTime()
               : Infinity;
-            if (submittedMs < TWO_HOURS_MS) {
+            if (submittedMs < giveupThresholdMs(row.step as string)) {
               // Bridge is still working — extend the window to prevent a
               // premature fail that would trigger a duplicate QB submission.
               await pool.query(
@@ -92,9 +105,9 @@ export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
               );
               continue;
             }
-            // Pending for >2 hours — abandon
+            // Pending past the step's give-up threshold — abandon
             logger.warn(
-              `${LOG_PREFIX} ⏱️ Row ${row.id} (step=${row.step}) bridge op pending >2h — marking failed`
+              `${LOG_PREFIX} ⏱️ Row ${row.id} (step=${row.step}) bridge op pending past ${giveupThresholdMs(row.step as string) / 3_600_000}h threshold — marking failed`
             );
             shouldFail = true;
           } else if (opStatus === "completed") {
