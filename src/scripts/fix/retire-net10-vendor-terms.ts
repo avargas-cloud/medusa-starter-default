@@ -77,6 +77,22 @@ const EXPLICIT: Record<string, string> = {
   // reescrito. Estos vendors cambian de aca en adelante.
   "ADI GLOBAL": "Net-30",
   "ELA Florida": "Due on receipt",
+
+  // ── Resolucion de un split brain, no un cambio de termino (2026-08-17) ──
+  // Goodlite era el UNICO vendor de 1109 cuyo campo canonico y su espejo se
+  // contradecian: `terms_ref_name` decia "Due on receipt" (lo que QuickBooks
+  // tiene) y `metadata.payment_terms` decia "Net 30" con 30 dias — que es el
+  // numero con el que se venian calculando sus vencimientos. Los dos no pueden
+  // ser ciertos, y ninguna regla puede elegir: lo decidio el owner, Net-30.
+  //
+  // Por eso entra por ONLY y con FROM_TERMS="Due on receipt", que es donde el
+  // filtro canonico lo encuentra. El plazo se ALARGA de 0 a 30 dias, asi que
+  // ninguna factura suya se vuelve exigible antes de lo que ya era.
+  //
+  // Sus 3 bills adoptados quedaron sin nombre a proposito en el backfill del
+  // 2026-08-17 justo por esta contradiccion; con el vendor en Net-30 los nombra
+  // la regla 1 (el termino del vendor coincide con los 30 dias que guardaron).
+  "Goodlite": "Net-30",
 };
 
 /** Only used for vendors on FROM_TERM that EXPLICIT does not name. */
