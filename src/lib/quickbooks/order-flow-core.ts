@@ -737,6 +737,11 @@ export function buildQbOrderDiscountLines(
  *  - Otherwise → return a QB item using the "SHIPPING & HANDLING" product name,
  *    qty=1, price=shipping amount, desc=shipping method name
  *
+ * The line is ALWAYS non-taxable: the POS never puts shipping in the tax base
+ * (`pos-totals.ts` computes tax over the taxable line subset and adds shipping
+ * AFTER), so a taxable shipping line makes QuickBooks charge tax the customer
+ * was never billed — and the invoice stops matching its payment.
+ *
  * @param shippingMethods - Array of shipping methods from the Medusa order (admin API, amounts in dollars)
  */
 export function buildShippingQbItem(
@@ -787,6 +792,10 @@ export function buildShippingQbItem(
     amount: amount,
     desc: name,
     noSite: true, // shipping is a non-inventory item — QB error 3140 if Site is set
+    // Without this the bridge takes its `Tax` branch for every line that has a
+    // productId whenever the document carries a salesTaxCode, and QuickBooks
+    // taxes the freight. See the doc comment above.
+    taxable: false,
   };
 }
 

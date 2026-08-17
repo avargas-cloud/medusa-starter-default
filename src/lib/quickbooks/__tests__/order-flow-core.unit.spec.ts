@@ -350,4 +350,23 @@ describe("buildShippingQbItem", () => {
     ]);
     expect(item!.desc).toBe("Express");
   });
+
+  // The POS never puts shipping in the tax base, so the QB line must say so
+  // explicitly. Without `taxable: false` the bridge emits
+  // <SalesTaxCodeRef>Tax</SalesTaxCodeRef> for any line that has a productId
+  // whenever the document carries a salesTaxCode, and QuickBooks taxes the
+  // freight — which is how QB 19733 ended up $3.85 above POS invoice 21481.
+  it("always marks the shipping line non-taxable", () => {
+    expect(
+      buildShippingQbItem([{ name: "FedEx Ground", amount: 25.5 }])!.taxable
+    ).toBe(false);
+    expect(
+      buildShippingQbItem([{ name: "UPS", amount: 10 }], "80000999-1234567890")!
+        .taxable
+    ).toBe(false);
+    expect(
+      buildShippingQbItem([{ shipping_option: { name: "Express" }, amount: 30 }])!
+        .taxable
+    ).toBe(false);
+  });
 });
