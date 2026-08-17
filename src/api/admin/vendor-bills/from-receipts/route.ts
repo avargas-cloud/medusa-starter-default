@@ -42,7 +42,7 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
-import { resolveVendorBillPaymentTermsDays } from "../../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { resolveVendorBillPaymentTerms } from "../../../../lib/purchase-orders/vendor-bill-payment-terms";
 import {
   findDuplicateVendorBillReference,
   normalizeRequiredVendorBillReference,
@@ -164,10 +164,8 @@ export async function POST(
   if (!po) {
     return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
   }
-  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
-    knex,
-    po.vendor_id
-  );
+  const { days: paymentTermsDays, name: paymentTermsName } =
+    await resolveVendorBillPaymentTerms(knex, po.vendor_id);
 
   // ── Union lines across the receipt set ──────────────────────────────────────
   const sourceLines = await resolveReceiptLineUnion(knex, receiptIds);
@@ -210,7 +208,7 @@ export async function POST(
          id, number, purchase_order_receipt_id, purchase_order_id,
          vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
          bill_type, status, reference_id, document_date,
-         payment_terms_days, due_date,
+         payment_terms_days, payment_terms_name, due_date,
          commission_mode, commission_rate_bps, commission_amount_cents,
          freight_included, freight_amount_cents,
          tariff_included, tariff_amount_cents,
@@ -220,7 +218,7 @@ export async function POST(
          ?, ?, NULL, ?,
          ?, ?, ?,
          'regular', 'draft', ?, COALESCE(?::timestamptz, NOW()),
-         ?, COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
+         ?, ?, COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
          'percent', 0, 0,
          false, 0,
          false, 0,
@@ -237,6 +235,7 @@ export async function POST(
         referenceId,
         documentDate,
         paymentTermsDays,
+        paymentTermsName,
         documentDate,
         paymentTermsDays,
       ]

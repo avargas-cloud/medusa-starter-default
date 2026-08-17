@@ -10,7 +10,7 @@ import {
   UnauthenticatedError,
 } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
-import { resolveVendorBillPaymentTermsDays } from "../../../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { resolveVendorBillPaymentTerms } from "../../../../../lib/purchase-orders/vendor-bill-payment-terms";
 import {
   findDuplicateVendorBillReference,
   normalizeRequiredVendorBillReference,
@@ -97,10 +97,8 @@ export async function POST(
       code: "vendor_required",
     });
   }
-  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
-    knex,
-    po.vendor_id
-  );
+  const { days: paymentTermsDays, name: paymentTermsName } =
+    await resolveVendorBillPaymentTerms(knex, po.vendor_id);
 
   // A PO may carry SEVERAL regular bills. A vendor that ships one order across
   // two deliveries invoices each one separately, and those invoices routinely
@@ -178,13 +176,13 @@ export async function POST(
          id, number, purchase_order_id, purchase_order_receipt_id,
          vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
          bill_type, status, reference_id, document_date,
-         payment_terms_days, due_date, commission_mode,
+         payment_terms_days, payment_terms_name, due_date, commission_mode,
          commission_rate_bps, commission_amount_cents,
          freight_included, freight_amount_cents,
          tariff_included, tariff_amount_cents, notes, created_at, updated_at
        ) VALUES (
          ?, ?, ?, NULL, ?, ?, ?, 'regular', 'draft', ?,
-         COALESCE(?::timestamptz, NOW()), ?,
+         COALESCE(?::timestamptz, NOW()), ?, ?,
          COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
          ?, 0, 0, false, 0, false, 0, ?,
          NOW(), NOW()
@@ -199,6 +197,7 @@ export async function POST(
         referenceId,
         parsed.data.document_date ?? null,
         paymentTermsDays,
+        paymentTermsName,
         parsed.data.document_date ?? null,
         paymentTermsDays,
         parsed.data.commission_mode,

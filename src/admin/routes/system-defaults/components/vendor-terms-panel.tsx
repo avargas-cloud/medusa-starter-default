@@ -24,6 +24,13 @@ interface VendorTerm {
   day_of_month_due: number | null;
   due_next_month_days: number | null;
   exists_in_qb: boolean;
+  /**
+   * Still live in the QuickBooks Terms list. DISTINCT from `exists_in_qb`,
+   * which only says the name is known there: a term QuickBooks has retired is
+   * present and inactive at the same time, so the QuickBooks column alone reads
+   * "present" for 16 of the 33 rows here and tells nobody they are dead.
+   */
+  is_active: boolean;
   sort_order: number;
 }
 
@@ -170,6 +177,11 @@ export const VendorTermsPanel = () => {
         {data && (
           <>
             <Badge color="green">{data.counts.total} terms</Badge>
+            {/* The count that answers "how many can anyone actually pick" —
+                the pickers offer only the live ones. */}
+            <Badge color="grey">
+              {data.terms.filter((t) => t.is_active).length} active
+            </Badge>
             <Badge color={data.counts.in_quickbooks === data.counts.total ? "green" : "orange"}>
               {data.counts.in_quickbooks} in QuickBooks
             </Badge>
@@ -202,6 +214,7 @@ export const VendorTermsPanel = () => {
               <tr>
                 <th className="text-left px-4 py-2 font-medium">Term</th>
                 <th className="text-left px-4 py-2 font-medium">Rule</th>
+                <th className="text-left px-4 py-2 font-medium">Status</th>
                 <th className="text-left px-4 py-2 font-medium">QuickBooks</th>
                 <th className="px-4 py-2" />
               </tr>
@@ -211,6 +224,13 @@ export const VendorTermsPanel = () => {
                 <tr key={t.id} className="border-b border-ui-border-base">
                   <td className="px-4 py-2">{t.name}</td>
                   <td className="px-4 py-2 text-ui-fg-subtle">{describeRule(t)}</td>
+                  <td className="px-4 py-2">
+                    {t.is_active ? (
+                      <Badge color="green">Active</Badge>
+                    ) : (
+                      <Badge color="grey">Inactive</Badge>
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     {t.exists_in_qb ? (
                       <Badge color="green">present</Badge>
@@ -261,7 +281,7 @@ export const VendorTermsPanel = () => {
               {(data?.rejected ?? []).map((r) => (
                 <tr key={r.id} className="border-b border-ui-border-base bg-ui-bg-subtle">
                   <td className="px-4 py-2">{r.value}</td>
-                  <td className="px-4 py-2 text-ui-fg-error" colSpan={2}>
+                  <td className="px-4 py-2 text-ui-fg-error" colSpan={3}>
                     no usable rule — not offered to anyone until fixed
                   </td>
                   <td className="px-4 py-2" />

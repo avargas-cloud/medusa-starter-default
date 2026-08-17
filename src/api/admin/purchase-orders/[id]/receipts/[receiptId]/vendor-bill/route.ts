@@ -21,7 +21,7 @@ import { z } from "zod";
 import { getActorUserId, UnauthenticatedError } from "../../../../_lib/auth";
 import { zodErrorToBody } from "../../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../../_lib/service-resolver";
-import { resolveVendorBillPaymentTermsDays } from "../../../../../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { resolveVendorBillPaymentTerms } from "../../../../../../../lib/purchase-orders/vendor-bill-payment-terms";
 import {
   findDuplicateVendorBillReference,
   normalizeRequiredVendorBillReference,
@@ -263,10 +263,8 @@ export async function POST(
       .json({ error: "Purchase order not found", code: "not_found" });
   }
   const vendorId = (po as { vendor_id?: string }).vendor_id ?? null;
-  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
-    knex,
-    vendorId
-  );
+  const { days: paymentTermsDays, name: paymentTermsName } =
+    await resolveVendorBillPaymentTerms(knex, vendorId);
 
   // Fetch receipt lines to create bill lines
   const receiptLines = (await service.listPurchaseOrderReceiptLines(
@@ -367,6 +365,7 @@ export async function POST(
     status: "draft",
     reference_id: referenceId,
     payment_terms_days: paymentTermsDays,
+    payment_terms_name: paymentTermsName,
     due_date: new Date(Date.now() + paymentTermsDays * 24 * 60 * 60 * 1000),
     commission_mode: body.commission_mode,
     commission_rate_bps: body.commission_rate_bps,

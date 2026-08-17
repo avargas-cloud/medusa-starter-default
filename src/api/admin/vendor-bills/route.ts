@@ -27,7 +27,7 @@ import { z } from "zod";
 import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
 import { accountAllowedForVendorBillType } from "../../../lib/purchase-orders/vendor-bill-account-rules";
-import { resolveVendorBillPaymentTermsDays } from "../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { resolveVendorBillPaymentTerms } from "../../../lib/purchase-orders/vendor-bill-payment-terms";
 import {
   findDuplicateVendorBillReference,
   normalizeRequiredVendorBillReference,
@@ -395,10 +395,8 @@ export async function POST(
   }
   const vendorName =
     vendor.company_name ?? vendor.full_name ?? vendor.name ?? vendor.id;
-  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
-    knex,
-    vendor.id
-  );
+  const { days: paymentTermsDays, name: paymentTermsName } =
+    await resolveVendorBillPaymentTerms(knex, vendor.id);
 
   const accountResult = await knex.raw(
     `SELECT qb_list_id, full_name, account_type
@@ -459,6 +457,7 @@ export async function POST(
        reference_id,
        document_date,
        payment_terms_days,
+       payment_terms_name,
        due_date,
        commission_mode,
        commission_rate_bps,
@@ -473,7 +472,7 @@ export async function POST(
      ) VALUES (
        ?,
        ?, NULL, NULL, ?, ?, ?, ?, 'draft', ?,
-       COALESCE(?::timestamptz, NOW()), ?,
+       COALESCE(?::timestamptz, NOW()), ?, ?,
        COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
        ?, 0, 0, false, 0, false, 0, ?, NOW(), NOW()
      )
@@ -488,6 +487,7 @@ export async function POST(
         referenceId,
         body.document_date ?? null,
         paymentTermsDays,
+        paymentTermsName,
         body.document_date ?? null,
         paymentTermsDays,
         body.commission_mode,
