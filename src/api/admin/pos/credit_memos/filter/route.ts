@@ -14,6 +14,7 @@ type ReturnListDbRow = {
   order_id: string | null;
   status: string;
   total: string | number;
+  tax: string | number;
   credit_available: string | number | null;
   created_at: string;
   notes: string | null;
@@ -135,6 +136,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           cm.order_id,
           cm.status,
           cm.total,
+          cm.tax,
           credit.credit_available,
           cm.created_at,
           cm.notes,
@@ -165,12 +167,22 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       bindings
     );
 
-    const creditMemos = (result.rows ?? []).map((row) => ({
-      ...row,
-      total: Number(row.total),
-      credit_available:
-        row.credit_available == null ? null : Number(row.credit_available),
-    }));
+    const creditMemos = (result.rows ?? []).map((row) => {
+      // Same convention as pos_invoice.untaxed_total (subtotal + shipping,
+      // i.e. total − tax), so the Returns footer and the Invoices footer sum
+      // comparable numbers. Money columns of the POS are CENTS.
+      const total = Number(row.total);
+      const tax = Number(row.tax ?? 0);
+      return {
+        ...row,
+        total,
+        tax,
+        untaxed_total:
+          Number.isFinite(total) && Number.isFinite(tax) ? total - tax : total,
+        credit_available:
+          row.credit_available == null ? null : Number(row.credit_available),
+      };
+    });
     return res.json({
       credit_memos: creditMemos,
       count: creditMemos.length,
