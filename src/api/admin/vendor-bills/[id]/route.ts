@@ -72,6 +72,7 @@ import {
   type PoLineCostChange,
 } from "../../../../lib/purchase-orders/po-cost-propagation";
 import type { PurchaseDependencyKnex } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
+import { computeLandedLines } from "../../../../lib/purchase-orders/landed-allocation";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -180,6 +181,10 @@ const vendorBillPatchSchema = z.object({
   payment_terms_days: z.number().int().min(0).max(365).nullish(),
   payment_terms_name: z.string().trim().min(1).max(31).nullish(),
   due_date: z.string().datetime().nullish(),
+  // Freight allocation policy for this bill's `freight_charge` line(s) — see
+  // lib/purchase-orders/freight-policy.ts. NULL (default) = legacy, the
+  // charge stays a pure ExpenseLine. Draft-only (see the guard below).
+  freight_allocation_basis: z.enum(["units", "value", "cbm"]).nullable().optional(),
   commission_mode: z.enum(["percent", "fixed"]).optional(),
   commission_rate_bps: z.number().int().min(0).max(100_000).optional(),
   commission_amount_cents: z.number().int().min(0).max(1_000_000_000).optional(),
@@ -302,6 +307,11 @@ export async function GET(
        vb.freight_amount_cents,
        vb.freight_invoice_number,
        vb.freight_vendor_bill_id,
+       -- NULL = legacy policy (freight ships as its own expense line and is
+       -- NOT capitalized). The POS reads this back to render the frozen basis
+       -- on a confirmed bill, so dropping it here would make every bill look
+       -- legacy no matter what was actually stored at confirm.
+       vb.freight_allocation_basis,
        vb.tariff_included,
        vb.tariff_amount_cents,
        vb.tariff_number,
@@ -1121,6 +1131,60 @@ export async function PATCH(
     }
   }
 
+  // ── Freight allocation basis — draft-only, and 'cbm' requires full coverage ──
+  // Locked once the bill leaves draft: the confirm route freezes the pool
+  // allocation (and, for capitalized bills, the QB payload) against whatever
+  // basis was in effect at confirm time — changing it afterwards would mean
+  // the stored per-line figures no longer match what a re-derivation would
+  // produce, the same freeze discipline as `cbm_per_unit`.
+  if ("freight_allocation_basis" in patch) {
+    if (bill.status !== "draft") {
+      return res.status(409).json({
+        error:
+          "Freight allocation basis can only be changed while the bill is a draft",
+        code: "freight_basis_locked",
+      });
+    }
+    if (patch.freight_allocation_basis === "cbm") {
+      const cbmRows = await knex.raw(
+        `SELECT vbl.qty::int AS qty, (pv.metadata->>'cbm') AS cbm
+           FROM vendor_bill_line vbl
+           LEFT JOIN product_variant pv
+             ON pv.id = vbl.product_variant_id AND pv.deleted_at IS NULL
+          WHERE vbl.vendor_bill_id = ? AND vbl.deleted_at IS NULL
+            AND COALESCE(vbl.line_type, 'product') = 'product'`,
+        [id]
+      );
+      // Reuse `computeLandedLines`' own definition of "coverage" rather than
+      // re-deriving it in SQL — a hand-rolled count here is exactly how this
+      // check and the confirm route's freightCoverage signal would drift.
+      const { freightCoverage } = computeLandedLines(
+        (cbmRows.rows as Array<{ qty: number; cbm: string | null }>).map(
+          (r) => {
+            const parsed = r.cbm == null ? NaN : parseFloat(r.cbm);
+            return {
+              qty: r.qty,
+              unit_cost_cents: 0,
+              cbm_per_unit: Number.isFinite(parsed) ? parsed : null,
+            };
+          }
+        ),
+        { commissionCents: 0, freightCents: 0, tariffCents: 0, taxCents: 0 },
+        { freightBasis: "cbm" }
+      );
+      if (!freightCoverage.complete) {
+        return res.status(409).json({
+          error:
+            `Freight basis 'cbm' requires every product line to have a CBM — ` +
+            `${freightCoverage.linesWithCbm} of ${freightCoverage.linesTotal} do`,
+          code: "freight_cbm_coverage_incomplete",
+          lines_with_cbm: freightCoverage.linesWithCbm,
+          lines_total: freightCoverage.linesTotal,
+        });
+      }
+    }
+  }
+
   const updatePayload: Record<string, unknown> = {};
   for (const key of [
     "vendor_id",
@@ -1132,6 +1196,7 @@ export async function PATCH(
     "payment_terms_days",
     "payment_terms_name",
     "due_date",
+    "freight_allocation_basis",
     "commission_mode",
     "commission_rate_bps",
     "commission_amount_cents",

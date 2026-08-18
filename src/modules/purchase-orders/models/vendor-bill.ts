@@ -124,4 +124,12 @@ export const VendorBill = model.define("vendor_bill", {
   payment_terms_days: model.number().nullable(),
   payment_terms_name: model.text().nullable(),
   due_date: model.dateTime().nullable(),
+
+  // Freight allocation basis: which weight vector `computeLandedLines` uses to
+  // spread the freight pool across product lines. NULL = legacy policy — the
+  // freight amount is captured as an ExpenseLine of pure expense and is NOT
+  // capitalized into item cost. A non-null value ("units" | "value" | "cbm")
+  // means freight IS capitalized into the landed cost of the items using that
+  // basis, frozen at confirm time (same freeze discipline as cbm_per_unit).
+  freight_allocation_basis: model.text().nullable(),
 });

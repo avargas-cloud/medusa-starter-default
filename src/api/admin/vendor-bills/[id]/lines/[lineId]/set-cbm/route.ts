@@ -53,17 +53,23 @@ export async function PATCH(
     product_variant_id: string;
   }>;
 
+  const bills = (await service.listVendorBills(
+    { id: billId },
+    { take: 1 }
+  )) as unknown as Array<{
+    id: string;
+    status: string;
+    service_vendor_bill_id: string | null;
+    freight_vendor_bill_id: string | null;
+    tariff_vendor_bill_id: string | null;
+  }>;
+
   const line = lines[0];
   if (!line) {
     return res
       .status(404)
       .json({ error: "Vendor bill line not found", code: "not_found" });
   }
-
-  const bills = (await service.listVendorBills(
-    { id: billId },
-    { take: 1 }
-  )) as unknown as Array<{ id: string; status: string }>;
 
   const bill = bills[0];
   if (!bill) {
@@ -82,13 +88,15 @@ export async function PATCH(
     });
   }
 
-  // Update product_variant.metadata.cbm
-  await knex.raw(
-    `UPDATE product_variant
-     SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('cbm', ?::float),
-         updated_at = NOW()
-     WHERE id = ?`,
-    [cbm, line.product_variant_id]
+  // China vs local is a property of the DOCUMENT, not the vendor: a bill is
+  // China-agent if it points at any sibling (service/freight/tariff); all
+  // three NULL means local/USA. Never use `qb_clearing_lines` for this — that
+  // column is only written once the bill has already shipped to QuickBooks,
+  // so a China draft would read as local.
+  const isChinaBill = Boolean(
+    bill.service_vendor_bill_id ||
+      bill.freight_vendor_bill_id ||
+      bill.tariff_vendor_bill_id
   );
 
   // Update vendor_bill_line.cbm_per_unit directly (service layer silently ignores float nullables)
@@ -99,10 +107,29 @@ export async function PATCH(
     [cbm, lineId]
   );
 
+  // Update product_variant.metadata.cbm ONLY for China bills. A China product
+  // is repurchased and its CBM is a real catalog fact, so it is meant to be
+  // reused on the next bill. A local/USA purchase is typically one-off — its
+  // CBM is estimated by eyeballing the box for THIS shipment — so writing it
+  // to the product would leak that one-off estimate into unrelated future
+  // purchases that happen to reuse the same SKU.
+  if (isChinaBill) {
+    await knex.raw(
+      `UPDATE product_variant
+       SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('cbm', ?::float),
+           updated_at = NOW()
+       WHERE id = ?`,
+      [cbm, line.product_variant_id]
+    );
+  }
+
   const result = await knex.raw(
     `SELECT * FROM vendor_bill_line WHERE id = ?`,
     [lineId]
   );
 
-  return res.json({ vendor_bill_line: result.rows[0] ?? null });
+  return res.json({
+    vendor_bill_line: result.rows[0] ?? null,
+    scope: isChinaBill ? "bill_line_and_product" : "bill_line",
+  });
 }

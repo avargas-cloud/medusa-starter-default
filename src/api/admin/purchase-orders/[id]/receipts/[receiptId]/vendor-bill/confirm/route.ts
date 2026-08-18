@@ -39,6 +39,10 @@ import {
 } from "../../../../../../../../lib/cost/restatement/run-restatement";
 import { writeConfirmedVendorBillRevision } from "../../../../../../../../lib/cost/vendor-bill-revision";
 import { computeLandedLines } from "../../../../../../../../lib/purchase-orders/landed-allocation";
+import {
+  resolveFreightPolicy,
+  type FreightPolicy,
+} from "../../../../../../../../lib/purchase-orders/freight-policy";
 import { enqueueQbVendorBillAdd } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-enqueue";
 import { enqueueChinaAgencyVendorBillModGroup } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import {
@@ -71,6 +75,8 @@ interface VendorBillRow {
   qb_txn_id: string | null;
   document_date: string | null;
   updated_at_token: string;
+  /** See lib/purchase-orders/freight-policy.ts. NULL = legacy (pure expense). */
+  freight_allocation_basis: string | null;
 }
 
 interface VendorBillLineRow {
@@ -502,6 +508,42 @@ export async function POST(
     );
   }
 
+  // 5b. Resolve the freight allocation policy (freight-policy.ts). `NULL` =
+  //     legacy — the bill's `freight_charge` line(s) stay a pure ExpenseLine,
+  //     untouched here. A non-null basis capitalizes their pool into the
+  //     landed cost of the product lines below, same engine as commission/
+  //     tariff/tax, and the line itself gets zeroed out post-persist (7b).
+  const freightChargeLinesResult = await knex.raw(
+    `SELECT id, amount_cents::int AS amount_cents
+       FROM vendor_bill_line
+      WHERE vendor_bill_id = ? AND deleted_at IS NULL AND line_kind = 'freight_charge'`,
+    [bill.id]
+  );
+  const freightChargeLines = freightChargeLinesResult.rows as Array<{
+    id: string;
+    amount_cents: number | null;
+  }>;
+  let freightPolicy: FreightPolicy;
+  try {
+    freightPolicy = resolveFreightPolicy({
+      freightAllocationBasis: bill.freight_allocation_basis,
+      freightChargeLineAmountsCents: freightChargeLines.map((l) =>
+        Number(l.amount_cents ?? 0)
+      ),
+      headerFreightAmountCents: bill.freight_included
+        ? Number(bill.freight_amount_cents)
+        : 0,
+    });
+  } catch (error) {
+    return res.status(422).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Invalid freight allocation policy",
+      code: "freight_policy_invalid",
+    });
+  }
+
   // 6. Calculate per-unit cost components
   type LineUpdate = {
     id: string;
@@ -520,6 +562,10 @@ export async function POST(
   // rounding drift, no manual "plug" line on the QuickBooks bill. Pools are
   // gated exactly as before: commission only when a service bill is linked
   // (serviceBillTotalCents=0 otherwise), freight/tariff only when included.
+  // Under a capitalized freight policy, the `freight_charge` line pool joins
+  // the SAME freightCents pool as the header-linked freight (fail-closed in
+  // resolveFreightPolicy guarantees at most one of the two is non-zero), and
+  // the basis switches from the default "cbm" to the bill's chosen basis.
   const cbmPerLine = productLines.map(
     (line) => cbmByVariantId.get(line.product_variant_id) ?? null
   );
@@ -531,13 +577,35 @@ export async function POST(
     })),
     {
       commissionCents: serviceBillTotalCents,
-      freightCents: bill.freight_included ? bill.freight_amount_cents : 0,
+      freightCents:
+        (bill.freight_included ? bill.freight_amount_cents : 0) +
+        (freightPolicy.mode === "capitalized" ? freightPolicy.poolCents : 0),
       tariffCents: bill.tariff_included ? bill.tariff_amount_cents : 0,
       // No `_included` gate: the tax lives on this same vendor document, so a
       // non-zero amount IS the inclusion signal.
       taxCents: bill.tax_amount_cents,
-    }
+    },
+    freightPolicy.mode === "capitalized"
+      ? { freightBasis: freightPolicy.basis }
+      : undefined
   );
+
+  // Fail-closed: capitalized freight that could not be placed on any product
+  // line (e.g. basis 'cbm' with a line missing CBM slipping past the PATCH
+  // guard via a race) must never vanish silently — it is real money owed on
+  // the vendor's invoice.
+  if (
+    freightPolicy.mode === "capitalized" &&
+    landed.unplaceableCents.freight > 0
+  ) {
+    return res.status(422).json({
+      error:
+        `$${(landed.unplaceableCents.freight / 100).toFixed(2)} of freight could not be ` +
+        `placed on any product line under basis '${freightPolicy.basis}'. Check the product ` +
+        `data that basis depends on before confirming.`,
+      code: "freight_unplaceable",
+    });
+  }
 
   const lineUpdates: LineUpdate[] = productLines.map((line, i) => {
     const r = landed.lines[i]!;
@@ -688,6 +756,21 @@ export async function POST(
         )
       )
     );
+
+    // 7b. Capitalized freight: the `freight_charge` line's money now lives in
+    // the product lines' `landed_unit_cost_cents` above, so this line's own
+    // landed figure is zeroed to avoid double-counting it in
+    // `total_landed_cents`. `unit_cost_cents`/`amount_cents` stay untouched —
+    // `recomputeBillFinanceLinks` still needs them to make the bill's payable
+    // equal the vendor invoice total (same reasoning as tax_charge).
+    if (freightPolicy.mode === "capitalized" && freightChargeLines.length > 0) {
+      await knex.raw(
+        `UPDATE vendor_bill_line
+            SET landed_unit_cost_cents = 0, updated_at = NOW()
+          WHERE vendor_bill_id = ? AND deleted_at IS NULL AND line_kind = 'freight_charge'`,
+        [bill.id]
+      );
+    }
 
     // 8. Keep the draft's VB-XXXX number; backfill only legacy unnumbered drafts.
     let vbNumber = bill.number;

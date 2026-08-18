@@ -3,7 +3,12 @@ import {
   enqueuePurchaseQbOperation,
   purchaseOperationKey,
 } from "./qb-purchase-dependency-chain";
-import { allocateLineTotalsCents } from "./landed-allocation";
+import {
+  allocateLineTotalsCents,
+  freightWeights,
+  computeLandedLines,
+} from "./landed-allocation";
+import { resolveFreightPolicy, type FreightPolicy } from "./freight-policy";
 
 export type VendorBillModKnex = {
   raw: (
@@ -37,6 +42,8 @@ interface BillRow {
   freight_amount_cents: number;
   tariff_amount_cents: number;
   tax_amount_cents: number | string | null;
+  freight_included: boolean;
+  freight_allocation_basis: string | null;
 }
 
 interface ClearingLine {
@@ -62,7 +69,8 @@ async function loadBill(
             document_date, due_date, qb_txn_id, qb_edit_sequence, qb_source,
             qb_clearing_lines, service_vendor_bill_id, freight_vendor_bill_id,
             tariff_vendor_bill_id, commission_amount_cents,
-            freight_amount_cents, tariff_amount_cents, tax_amount_cents
+            freight_amount_cents, tariff_amount_cents, tax_amount_cents,
+            freight_included, freight_allocation_basis
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL`,
     [id]
@@ -136,6 +144,7 @@ async function buildPayload(
             COALESCE(l.freight_account_list_id, l.qb_account_list_id)
               AS account_list_id,
             pv.metadata ->> 'quickbooks_id' AS qb_item_list_id,
+            (pv.metadata ->> 'cbm') AS cbm_per_unit,
             l.description
        FROM vendor_bill_line l
        LEFT JOIN product_variant pv
@@ -187,6 +196,157 @@ async function buildPayload(
     productRows.map((l) => Number(l.unit_cost_cents) * Number(l.qty))
   );
 
+  // Capitalized freight (lib/purchase-orders/freight-policy.ts) — same policy
+  // read the Add already uses, so a Mod on a bill under a capitalized basis
+  // reproduces exactly the same item cost split, and the `freight_charge`
+  // line's exclusion from `expenseLines` below stays consistent. Read from
+  // `regular` (never `bill`): the policy is a property of the regular bill's
+  // document even when a sibling service/freight/tariff bill is the one
+  // being Mod'd.
+  let freightPolicy: FreightPolicy;
+  try {
+    freightPolicy = resolveFreightPolicy({
+      freightAllocationBasis: regular.freight_allocation_basis,
+      freightChargeLineAmountsCents: lineRows
+        .filter((l) => l.line_kind === "freight_charge")
+        .map((l) => Number(l.amount_cents ?? l.unit_cost_cents ?? 0)),
+      headerFreightAmountCents: regular.freight_included
+        ? Number(regular.freight_amount_cents ?? 0)
+        : 0,
+    });
+  } catch (error) {
+    throw new Error(
+      `${bill.number ?? bill.id}: ${error instanceof Error ? error.message : "invalid freight allocation policy"}`
+    );
+  }
+  const freightByLine =
+    freightPolicy.mode === "capitalized" && !usesClearingStructure
+      ? allocateLineTotalsCents(
+          Math.max(0, Math.round(freightPolicy.poolCents)),
+          freightWeights(
+            productRows.map((l) => {
+              const rawCbm = l.cbm_per_unit;
+              const parsedCbm =
+                typeof rawCbm === "string" ? parseFloat(rawCbm) : NaN;
+              return {
+                qty: Number(l.qty),
+                unit_cost_cents: Number(l.unit_cost_cents),
+                cbm_per_unit: Number.isFinite(parsedCbm) ? parsedCbm : null,
+              };
+            }),
+            freightPolicy.basis
+          )
+        )
+      : productRows.map(() => 0);
+
+  // Fail-closed: sales tax and capitalized freight must land ENTIRELY on the
+  // item lines, and the combined per-unit cost must round-trip through
+  // QuickBooks' 5-decimal <Cost> truncation (QBXML PRICETYPE; more triggers
+  // error 3045) — same two checks the Add already runs
+  // (qb-vendor-bill-enqueue.ts ~lines 385-430), ported here because the Mod
+  // builds this exact same <Cost> and was posting whatever it computed
+  // without verifying it survives the bridge's formatting. Both checks are
+  // scoped to the local/USA shape (`capitalizesFreightHere`) — same as the
+  // Add: a China-agent bill's item lines carry the full LANDED cost, already
+  // folded in at confirm time, so nothing here applies to it. Under the
+  // legacy (NULL basis) freight policy the freight half is skipped, same as
+  // the Add — freight there is a plain ExpenseLine, never in <Cost>, so
+  // there is nothing to round-trip and the 2 already-`synced` legacy bills
+  // must see this path unchanged.
+  const capitalizesFreightHere =
+    freightPolicy.mode === "capitalized" && !usesClearingStructure;
+  if (
+    taxCents > 0 ||
+    (capitalizesFreightHere &&
+      freightPolicy.mode === "capitalized" &&
+      freightPolicy.poolCents > 0)
+  ) {
+    const placedTax = taxByLine.reduce((s, c) => s + c, 0);
+    if (taxCents > 0 && placedTax !== Math.round(taxCents)) {
+      throw new Error(
+        `${bill.number ?? bill.id}: sales tax ${taxCents}c could not be placed on the item lines (placed ${placedTax}c)`
+      );
+    }
+    if (capitalizesFreightHere && freightPolicy.mode === "capitalized") {
+      const placedFreight = freightByLine.reduce((s, c) => s + c, 0);
+      if (placedFreight !== Math.round(freightPolicy.poolCents)) {
+        throw new Error(
+          `${bill.number ?? bill.id}: freight ${freightPolicy.poolCents}c could not be placed on the item lines (placed ${placedFreight}c)`
+        );
+      }
+    }
+    const drift = productRows.reduce((worst, line, i) => {
+      const qty = Number(line.qty);
+      if (qty <= 0) return worst;
+      const raw = Number(line.unit_cost_cents);
+      const exact = raw * qty + (taxByLine[i] ?? 0) + (freightByLine[i] ?? 0);
+      const sentCost = Number((exact / qty / 100).toFixed(5));
+      return Math.max(
+        worst,
+        Math.abs(Math.round(sentCost * qty * 100) - exact)
+      );
+    }, 0);
+    if (drift > 0) {
+      throw new Error(
+        `${bill.number ?? bill.id}: sales tax/freight cannot be expressed within QuickBooks' 5-decimal unit cost on these quantities (off by ${drift}c) — split the bill or enter the amount on a smaller line`
+      );
+    }
+  }
+
+  // Same money the retained clearing lines below cancel — CURRENT sibling
+  // totals, not what was true at the last Add/Mod. Hoisted here (instead of
+  // inside `retainedClearing`) so the item lines' `amount_cents` and the
+  // negative clearing lines are built from the identical figures; a Mod is
+  // exactly the moment those totals can have drifted since the Add.
+  const clearingAmounts =
+    bill.bill_type === "regular"
+      ? {
+          commission: await loadBillTotal(
+            db,
+            regular.service_vendor_bill_id,
+            Number(regular.commission_amount_cents ?? 0)
+          ),
+          freight: await loadBillTotal(
+            db,
+            regular.freight_vendor_bill_id,
+            Number(regular.freight_amount_cents ?? 0)
+          ),
+          tariff: await loadBillTotal(
+            db,
+            regular.tariff_vendor_bill_id,
+            Number(regular.tariff_amount_cents ?? 0)
+          ),
+        }
+      : null;
+
+  // EXACT per-line totals for the China/clearing shape — mirrors the Add
+  // (qb-vendor-bill-enqueue.ts): fed through `computeLandedLines` /
+  // `allocateLineTotalsCents`, NEVER `landed_unit_cost_cents × qty` (that
+  // per-unit figure is an INTEGER from `allocatePerUnitCents` and strands up
+  // to `qty − 1` cents per pool — see landed-allocation.ts §THE FIX). No
+  // sales tax pool: it never applies to the China shape.
+  const clearingLanded =
+    usesClearingStructure && clearingAmounts
+      ? computeLandedLines(
+          productRows.map((l) => {
+            const rawCbm = l.cbm_per_unit;
+            const parsedCbm =
+              typeof rawCbm === "string" ? parseFloat(rawCbm) : NaN;
+            return {
+              qty: Number(l.qty),
+              unit_cost_cents: Number(l.unit_cost_cents),
+              cbm_per_unit: Number.isFinite(parsedCbm) ? parsedCbm : null,
+            };
+          }),
+          {
+            commissionCents: clearingAmounts.commission,
+            freightCents: clearingAmounts.freight,
+            tariffCents: clearingAmounts.tariff,
+            taxCents: 0,
+          }
+        )
+      : null;
+
   const itemLines = productRows.map((line, i) => {
     if (!line.qb_txn_line_id) {
       throw new Error(
@@ -196,13 +356,21 @@ async function buildPayload(
     const qty = Number(line.qty);
     const raw = Number(line.unit_cost_cents);
     let cost: number;
+    let amount: number;
     if (bill.bill_type !== "regular") {
       cost = raw;
+      amount = raw * qty;
     } else if (usesClearingStructure) {
       cost = Number(line.landed_unit_cost_cents || line.unit_cost_cents);
+      amount = clearingLanded!.lines[i]!.landed_total_cents;
     } else {
-      const share = taxByLine[i] ?? 0;
-      cost = qty > 0 && share > 0 ? (raw * qty + share) / qty : raw;
+      const taxShare = taxByLine[i] ?? 0;
+      const freightShare = freightByLine[i] ?? 0;
+      cost =
+        qty > 0 && (taxShare > 0 || freightShare > 0)
+          ? (raw * qty + taxShare + freightShare) / qty
+          : raw;
+      amount = raw * qty + taxShare + freightShare;
     }
     return {
       vendor_bill_line_id: String(line.id),
@@ -212,6 +380,7 @@ async function buildPayload(
         : null,
       quantity: qty,
       unit_cost_cents: cost,
+      amount_cents: amount,
     };
   });
 
@@ -221,7 +390,16 @@ async function buildPayload(
         String(line.line_type ?? "") === "qb_account" &&
         // Local-only bookkeeping row; its money is already inside the item
         // cost above. Same exclusion as the Add path.
-        String(line.line_kind ?? "") !== "tax_charge"
+        String(line.line_kind ?? "") !== "tax_charge" &&
+        // freight_charge is excluded ONLY under a capitalized freight policy
+        // — MUST stay the exact same condition as the Add
+        // (qb-vendor-bill-enqueue.ts): BillMod deletes by omission, so a
+        // divergent condition adds or drops this line on the bill's first
+        // edit.
+        !(
+          String(line.line_kind ?? "") === "freight_charge" &&
+          freightPolicy.mode === "capitalized"
+        )
     )
     .map((line) => {
       if (!line.account_list_id) {
@@ -254,35 +432,16 @@ async function buildPayload(
     });
 
   const retainedClearing =
-    bill.bill_type === "regular"
-      ? await (async () => {
-          const amounts = {
-            commission: await loadBillTotal(
-              db,
-              regular.service_vendor_bill_id,
-              Number(regular.commission_amount_cents ?? 0)
-            ),
-            freight: await loadBillTotal(
-              db,
-              regular.freight_vendor_bill_id,
-              Number(regular.freight_amount_cents ?? 0)
-            ),
-            tariff: await loadBillTotal(
-              db,
-              regular.tariff_vendor_bill_id,
-              Number(regular.tariff_amount_cents ?? 0)
-            ),
-          };
-          return (bill.qb_clearing_lines ?? []).map((line) => ({
-            qb_txn_line_id: line.qb_txn_line_id,
-            account_list_id: line.account_list_id,
-            amount_cents:
-              line.kind === "other"
-                ? Number(line.amount_cents)
-                : -amounts[line.kind],
-            memo: line.account_full_name,
-          }));
-        })()
+    bill.bill_type === "regular" && clearingAmounts
+      ? (bill.qb_clearing_lines ?? []).map((line) => ({
+          qb_txn_line_id: line.qb_txn_line_id,
+          account_list_id: line.account_list_id,
+          amount_cents:
+            line.kind === "other"
+              ? Number(line.amount_cents)
+              : -clearingAmounts[line.kind],
+          memo: line.account_full_name,
+        }))
       : [];
 
   // BillMod DELETES BY OMISSION (quickbooks-bridge/src/qbxml/builders/bill.ts

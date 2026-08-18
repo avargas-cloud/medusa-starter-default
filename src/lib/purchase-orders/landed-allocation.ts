@@ -209,6 +209,48 @@ export interface LandedInput {
   cbm_per_unit: number | null;
 }
 
+/** Basis used to spread the freight pool across lines. */
+export type FreightBasis = "cbm" | "units" | "value";
+
+export interface LandedOptions {
+  /**
+   * Base de reparto del pool de freight. Default "cbm" — preserva byte a byte
+   * el comportamiento de todo caller existente (bills China). Cambiarla
+   * requiere pasarla explícitamente.
+   */
+  freightBasis?: FreightBasis;
+}
+
+/**
+ * The freight weight for a single line under a given basis. Shared by both
+ * `allocatePerUnitCents` and `allocateLineTotalsCents` call sites so the two
+ * can never diverge.
+ */
+function freightWeight(l: LandedInput, basis: FreightBasis): number {
+  switch (basis) {
+    case "units":
+      return l.qty;
+    case "value":
+      return l.unit_cost_cents * l.qty;
+    case "cbm":
+    default:
+      return l.cbm_per_unit != null ? l.cbm_per_unit * l.qty : 0;
+  }
+}
+
+/**
+ * The freight weight VECTOR for a set of lines under a given basis — exported
+ * so every caller that needs to allocate a freight pool independently (the QB
+ * payload builders, which recompute an exact-line-total allocation rather than
+ * trusting the confirm's rounded per-unit figures) reuses the exact same
+ * per-line formula `computeLandedLines` uses internally. A caller that
+ * hand-rolls this instead of importing it is how the confirm and the QB
+ * payload diverge on which line absorbs which cent.
+ */
+export function freightWeights(lines: LandedInput[], basis: FreightBasis): number[] {
+  return lines.map((l) => freightWeight(l, basis));
+}
+
 export interface LandedPools {
   /** total commission / service cents to spread (0 to skip) */
   commissionCents: number;
@@ -258,14 +300,17 @@ export interface LandedLineResult {
  *
  * Weight bases:
  *   commission → qty (flat per unit)
- *   freight    → cbm_per_unit × qty (by volume; lines without CBM get none)
+ *   freight    → opts.freightBasis, default "cbm" (cbm_per_unit × qty; lines
+ *                without CBM get none). Passing "units" or "value" spreads it
+ *                by quantity or by cost instead — see `freightWeight()`.
  *   tariff     → unit_cost_cents × qty (by value)
  *   tax        → unit_cost_cents × qty (by value — sales tax is levied on the
  *                taxable value of the goods, so value is the faithful basis)
  */
 export function computeLandedLines(
   lines: LandedInput[],
-  pools: LandedPools
+  pools: LandedPools,
+  opts?: LandedOptions
 ): {
   lines: LandedLineResult[];
   residualCents: {
@@ -274,17 +319,42 @@ export function computeLandedLines(
     tariff: number;
     tax: number;
   };
+  /**
+   * Cents of a pool that could not be placed on ANY line (pool > 0 but the
+   * sum of its weights is <= 0 — e.g. every line lacks CBM under the "cbm"
+   * basis). Behavior is unchanged (the pool still allocates zero cents to
+   * every line, same as before this field existed) — this is purely a
+   * signal so the caller can surface it instead of the pool silently
+   * vanishing.
+   */
+  unplaceableCents: {
+    commission: number;
+    freight: number;
+    tariff: number;
+    tax: number;
+  };
+  /**
+   * Informative only — does NOT change the allocation and does NOT throw.
+   * `complete` is true when every line with qty > 0 has a usable
+   * (non-null, > 0) cbm_per_unit.
+   */
+  freightCoverage: {
+    linesWithCbm: number;
+    linesTotal: number;
+    complete: boolean;
+  };
 } {
+  const freightBasis: FreightBasis = opts?.freightBasis ?? "cbm";
+
+  const freightWeights = lines.map((l) => freightWeight(l, freightBasis));
+
   const comm = allocatePerUnitCents(
     Math.max(0, Math.round(pools.commissionCents)),
     lines.map((l) => ({ qty: l.qty, weight: l.qty }))
   );
   const freight = allocatePerUnitCents(
     Math.max(0, Math.round(pools.freightCents)),
-    lines.map((l) => ({
-      qty: l.qty,
-      weight: l.cbm_per_unit != null ? l.cbm_per_unit * l.qty : 0,
-    }))
+    lines.map((l, i) => ({ qty: l.qty, weight: freightWeights[i] ?? 0 }))
   );
   const tariff = allocatePerUnitCents(
     Math.max(0, Math.round(pools.tariffCents)),
@@ -301,9 +371,6 @@ export function computeLandedLines(
   // already-confirmed bills still recompute to the same stored per-unit values
   // and the drift engine sees no phantom change.
   const weightsQty = lines.map((l) => l.qty);
-  const weightsCbm = lines.map((l) =>
-    l.cbm_per_unit != null ? l.cbm_per_unit * l.qty : 0
-  );
   const weightsValue = lines.map((l) => l.unit_cost_cents * l.qty);
   const commTotals = allocateLineTotalsCents(
     Math.max(0, Math.round(pools.commissionCents)),
@@ -311,7 +378,7 @@ export function computeLandedLines(
   );
   const freightTotals = allocateLineTotalsCents(
     Math.max(0, Math.round(pools.freightCents)),
-    weightsCbm
+    freightWeights
   );
   const tariffTotals = allocateLineTotalsCents(
     Math.max(0, Math.round(pools.tariffCents)),
@@ -347,6 +414,29 @@ export function computeLandedLines(
     };
   });
 
+  // A pool is "unplaceable" when it has money to spread (> 0) but nowhere
+  // legal to put it (sum of weights <= 0). Same condition
+  // `allocatePerUnitCents`/`allocateLineTotalsCents` already use internally
+  // to bail out to all-zeros — this just names it for the caller.
+  const commWeightTotal = lines.reduce((s, l) => s + Math.max(0, l.qty), 0);
+  const freightWeightTotal = freightWeights.reduce(
+    (s, w) => s + Math.max(0, w),
+    0
+  );
+  const tariffValueWeightTotal = weightsValue.reduce(
+    (s, w) => s + Math.max(0, w),
+    0
+  );
+  const commissionCentsRounded = Math.max(0, Math.round(pools.commissionCents));
+  const freightCentsRounded = Math.max(0, Math.round(pools.freightCents));
+  const tariffCentsRounded = Math.max(0, Math.round(pools.tariffCents));
+  const taxCentsRounded = Math.max(0, Math.round(pools.taxCents));
+
+  const linesTotal = lines.filter((l) => l.qty > 0).length;
+  const linesWithCbm = lines.filter(
+    (l) => l.qty > 0 && l.cbm_per_unit != null && l.cbm_per_unit > 0
+  ).length;
+
   return {
     lines: out,
     residualCents: {
@@ -354,6 +444,29 @@ export function computeLandedLines(
       freight: freight.residualCents,
       tariff: tariff.residualCents,
       tax: tax.residualCents,
+    },
+    unplaceableCents: {
+      commission:
+        commissionCentsRounded > 0 && commWeightTotal <= 0
+          ? commissionCentsRounded
+          : 0,
+      freight:
+        freightCentsRounded > 0 && freightWeightTotal <= 0
+          ? freightCentsRounded
+          : 0,
+      tariff:
+        tariffCentsRounded > 0 && tariffValueWeightTotal <= 0
+          ? tariffCentsRounded
+          : 0,
+      tax:
+        taxCentsRounded > 0 && tariffValueWeightTotal <= 0
+          ? taxCentsRounded
+          : 0,
+    },
+    freightCoverage: {
+      linesWithCbm,
+      linesTotal,
+      complete: linesWithCbm === linesTotal,
     },
   };
 }
