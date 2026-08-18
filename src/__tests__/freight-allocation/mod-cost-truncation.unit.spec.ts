@@ -2,7 +2,7 @@
  * BillMod fail-closed guard: capitalized freight/tax must round-trip through
  * QuickBooks' 5-decimal `<Cost>` truncation (QBXML PRICETYPE; more decimals
  * triggers error 3045), same guard the Add already runs
- * (qb-vendor-bill-enqueue.ts) and now the Mod ports (qb-vendor-bill-mod-enqueue.ts).
+ * (qb-vendor-bill-enqueue.ts) and the Mod ports (qb-vendor-bill-mod-enqueue.ts).
  *
  * Fixture: ONE product line, qty 2000 @ $10.00, with a $0.33 capitalized
  * freight pool riding entirely on that line. Exact item total is
@@ -11,10 +11,23 @@
  * not survive that truncation: round-tripped back through
  * quantity × truncated cost lands on 2,000,032c, one cent short.
  *
- * Under a CAPITALIZED freight policy this must reject. Under LEGACY the
- * freight never enters `<Cost>` at all (it stays its own ExpenseLine), so
- * the identical fixture must NOT reject — that is the 2-already-`synced`-
- * bills invariant the legacy path is not allowed to break.
+ * 2026-08-18 (owner): the guard that used to reject this fixture unconditionally
+ * is now CONDITIONAL (qb-vendor-bill-cost-truncation-guard.ts) — it only fires
+ * when a line's payload lacks a finite `amount_cents`. Every product line built
+ * by this Mod carries one (the exact total, `raw*qty + taxShare + freightShare`),
+ * so the bridge now ships `<Amount>` for this line instead of a divided-out
+ * `<Cost>`: nothing is left to round-trip, and this SAME fixture must now be
+ * ACCEPTED. That inversion is the point of this file surviving: it keeps
+ * proving the Add and the Mod agree, just on the opposite verdict. The guard
+ * itself still exists and still rejects — see
+ * qb-vendor-bill-cost-truncation-guard.unit.spec.ts for the case where a line's
+ * payload genuinely lacks `amount_cents`.
+ *
+ * Under a CAPITALIZED freight policy this now accepts (Amount carries the
+ * total exactly). Under LEGACY the freight never enters `<Cost>` at all (it
+ * stays its own ExpenseLine) and was never affected by this guard — the
+ * identical fixture must still NOT reject, the 2-already-`synced`-bills
+ * invariant the legacy path is not allowed to break.
  */
 
 import {
@@ -126,11 +139,10 @@ describe("BillMod — <Cost> 5-decimal truncation guard (capitalized freight)", 
     freightAmountCents: 33,
   };
 
-  it("capitalized policy: a <Cost> that does not round-trip to 5 decimals is REJECTED", async () => {
+  it("capitalized policy: a <Cost> that does not round-trip to 5 decimals is ACCEPTED — the line carries a finite amount_cents, so <Amount> ships instead", async () => {
     const { knex } = fakeModKnex(nonRoundTrippingFixture);
-    await expect(
-      enqueueChinaAgencyVendorBillModGroup(knex, "vb_1")
-    ).rejects.toThrow(/5-decimal/i);
+    const result = await enqueueChinaAgencyVendorBillModGroup(knex, "vb_1");
+    expect(result.queued).toBe(true);
   });
 
   it("capitalized policy: a <Cost> that DOES round-trip passes", async () => {

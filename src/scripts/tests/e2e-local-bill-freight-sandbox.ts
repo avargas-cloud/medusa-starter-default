@@ -25,6 +25,20 @@
  *  D. Fail-closed — capitalized basis 'cbm' where NO product line has a CBM
  *     at confirm time (simulating the race the PATCH-time coverage guard
  *     cannot close): confirm refuses rather than dropping real money.
+ *  E. The 5-decimal <Cost> truncation guard — INVERTED 2026-08-18. Qty 1167 @
+ *     $1.37 + $0.03 sales tax used to 422 (the per-unit <Cost> does not
+ *     round-trip through QBXML's 5-decimal truncation). Now that every
+ *     product line's payload carries a finite `amount_cents` (the bridge
+ *     derives `<Amount>` directly for it — verified live against production —
+ *     sidestepping the truncation entirely), the guard is conditional
+ *     (`qb-vendor-bill-cost-truncation-guard.ts`) and skips: this exact
+ *     non-round-tripping quantity now CONFIRMS, and the enqueued payload's
+ *     item line carries the exact `amount_cents` total. The guard itself
+ *     still exists and still rejects when a line genuinely lacks
+ *     `amount_cents` — that branch is not reachable through this live HTTP
+ *     flow (every product line the enqueue functions build always computes
+ *     one), so it is proven as a unit test instead:
+ *     `src/__tests__/freight-allocation/qb-vendor-bill-cost-truncation-guard.unit.spec.ts`.
  *
  *   ./node_modules/.bin/tsx src/scripts/tests/e2e-local-bill-freight-sandbox.ts
  *
@@ -582,22 +596,30 @@ async function main(): Promise<void> {
     const billDAfter = await db.query<{ status: string }>(`SELECT status FROM vendor_bill WHERE id = $1`, [billD]);
     check("el bill queda intacto en draft — nada se confirmó a medias", billDAfter.rows[0]?.status === "draft", String(billDAfter.rows[0]?.status));
 
-    // ── E · El guard de 5 decimales — SIGUE rechazando (bridge sin desplegar) ─
+    // ── E · El guard de 5 decimales — INVERTIDO 2026-08-18 (Amount ships) ────
     //
-    // ESTE ASSERT SE INVIERTE EL DÍA QUE EL BRIDGE ESTÉ DESPLEGADO Y EL GUARD
-    // SE RELAJE. Hoy `unit_cost_cents` todavía viaja SIN condición (compat con
-    // un bridge viejo que solo sabe leer <Cost>), así que una cantidad grande
-    // cuyo <Cost> a 5 decimales no round-trippea SIGUE debiendo ser rechazada
-    // — aceptarla hoy postearía un total que no cierra contra un bridge viejo.
-    console.log("\nE. El guard de 5 decimales — SIGUE vigente (bridge no deployado)");
+    // Este assert SE INVIRTIÓ hoy: el bridge (ya desplegado, verificado en
+    // producción) ahora emite `<Amount>` para cualquier item line cuyo
+    // payload lleve `amount_cents`, y la deriva directo — sin pasar por la
+    // división a 5 decimales de `<Cost>` que este guard simulaba. Como el
+    // enqueue SIEMPRE computa `amount_cents` para cada línea de producto, el
+    // guard (`qb-vendor-bill-cost-truncation-guard.ts`) se saltea y esta
+    // misma cantidad, que antes 422eaba, ahora CONFIRMA — con el total exacto
+    // viajando en `amount_cents`, no en un `<Cost>` truncado.
+    console.log("\nE. El guard de 5 decimales — INVERTIDO: ahora CONFIRMA vía <Amount>");
     const specsE: LineSpec[] = [{ qty: 1167, unitCostCents: 137 }];
     const fE = await plantPoWithReceipt(db, "e", specsE);
     cleanupTasks.push(() => cleanupPo(db, fE, [billE]));
     const refE = `REF-FRT-E-${randomUUID().slice(0, 8)}`;
-    // 1167 × $1.37 = $15,987.99 + $0.03 of sales tax = $15,988.02 exactly, but
-    // 15988.02 ÷ 1167 ÷ 100, rounded to QBXML's 5-decimal <Cost>, does NOT
+    // 1167 × $1.37 = $1,598.79 + $0.03 of sales tax = $1,598.82 exactly, but
+    // 159882 ÷ 1167 ÷ 100, rounded to QBXML's 5-decimal <Cost>, does NOT
     // round-trip back to the exact cent total (drift = 1c) — verified with the
     // same formula the backend runs (`Number((exact/qty/100).toFixed(5))`).
+    // That drift is exactly why this used to 422; it is now irrelevant
+    // because `<Amount>` carries the total, not the divided-out `<Cost>`.
+    const goodsE = 1167 * 137;
+    const taxE = 3;
+    const exactTotalE = goodsE + taxE;
 
     const createResE = await fetch(`${BASE}/admin/vendor-bills/from-receipts`, {
       method: "POST",
@@ -611,7 +633,7 @@ async function main(): Promise<void> {
     const patchResE = await fetch(`${BASE}/admin/vendor-bills/${billE}`, {
       method: "PATCH",
       headers,
-      body: JSON.stringify({ tax_amount_cents: 3 }),
+      body: JSON.stringify({ tax_amount_cents: taxE }),
     });
     const patchBodyE = (await patchResE.json().catch(() => ({}))) as { error?: string };
     check("Save: agrega $0.03 de sales tax", patchResE.status === 200, `HTTP ${patchResE.status} ${patchBodyE.error ?? ""}`);
@@ -623,13 +645,45 @@ async function main(): Promise<void> {
     });
     const confirmBodyE = (await confirmResE.json().catch(() => ({}))) as { error?: string };
     check(
-      "el confirm SIGUE rechazando 422 — qty 1167 no round-trippea en 5 decimales de <Cost> ($0.03 de tax)",
-      confirmResE.status === 422 && /5-decimal/.test(confirmBodyE.error ?? ""),
+      `el confirm AHORA ACEPTA — qty 1167 no round-trippea en <Cost>, pero <Amount> lleva el total exacto (${money(exactTotalE)})`,
+      confirmResE.status === 200,
       `HTTP ${confirmResE.status} ${confirmBodyE.error ?? ""}`
     );
 
     const billEAfter = await db.query<{ status: string }>(`SELECT status FROM vendor_bill WHERE id = $1`, [billE]);
-    check("el bill queda intacto en draft — el guard no dejó nada a medias", billEAfter.rows[0]?.status === "draft", String(billEAfter.rows[0]?.status));
+    check("el bill queda confirmed", billEAfter.rows[0]?.status === "confirmed", String(billEAfter.rows[0]?.status));
+
+    const payloadRowE = await db.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM qb_order_pipeline WHERE order_id = $1 AND step = 'vendor_bill_add'`,
+      [fE.poId]
+    );
+    const payloadE = payloadRowE.rows[0]?.payload as {
+      item_lines: Array<{ unit_cost_cents: number; quantity: number; amount_cents: number }>;
+    };
+    const lineE = (payloadE?.item_lines ?? [])[0];
+    check(
+      `el payload QB encolado lleva amount_cents = mercadería + tax = ${money(exactTotalE)} al centavo, EXACTO (no el <Cost> truncado)`,
+      typeof lineE?.amount_cents === "number" && lineE.amount_cents === exactTotalE,
+      `${JSON.stringify(lineE)} vs esperado amount_cents=${exactTotalE}`
+    );
+    check(
+      "el payload QB SIGUE llevando unit_cost_cents (compat bridge viejo)",
+      typeof lineE?.unit_cost_cents === "number" && lineE.unit_cost_cents > 0,
+      JSON.stringify(lineE)
+    );
+
+    // ── F · El guard TODAVÍA muerde — probado a nivel unit, no HTTP ─────────
+    //
+    // El enqueue SIEMPRE computa `amount_cents` para cada línea de producto
+    // (misma aritmética que el propio guard usaría para medir el drift), así
+    // que no existe un fixture de DB real que llegue a este flujo HTTP con
+    // una línea sin `amount_cents` — construirlo exigiría corromper el dato
+    // que el propio backend genera. La prueba de que el guard SIGUE
+    // rechazando cuando una línea genuinamente no lo lleva vive como unit
+    // test, decoupleado de la pipeline DB→HTTP:
+    // `src/__tests__/freight-allocation/qb-vendor-bill-cost-truncation-guard.unit.spec.ts`
+    // (`allLinesCarryAmount` da `false` y `costTruncationDriftCents` sigue
+    // siendo > 0 sobre el mismo escenario 1167×$1.37+$0.03 de este bloque).
   } finally {
     for (const task of cleanupTasks.reverse()) {
       await task().catch((err) => console.error("cleanup error:", err));

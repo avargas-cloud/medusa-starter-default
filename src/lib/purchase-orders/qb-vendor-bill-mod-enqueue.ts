@@ -9,6 +9,11 @@ import {
   computeLandedLines,
 } from "./landed-allocation";
 import { resolveFreightPolicy, type FreightPolicy } from "./freight-policy";
+import {
+  allLinesCarryAmount,
+  costTruncationDriftCents,
+  type CostTruncationLine,
+} from "./qb-vendor-bill-cost-truncation-guard";
 
 export type VendorBillModKnex = {
   raw: (
@@ -275,21 +280,36 @@ async function buildPayload(
         );
       }
     }
-    const drift = productRows.reduce((worst, line, i) => {
-      const qty = Number(line.qty);
-      if (qty <= 0) return worst;
-      const raw = Number(line.unit_cost_cents);
-      const exact = raw * qty + (taxByLine[i] ?? 0) + (freightByLine[i] ?? 0);
-      const sentCost = Number((exact / qty / 100).toFixed(5));
-      return Math.max(
-        worst,
-        Math.abs(Math.round(sentCost * qty * 100) - exact)
-      );
-    }, 0);
-    if (drift > 0) {
-      throw new Error(
-        `${bill.number ?? bill.id}: sales tax/freight cannot be expressed within QuickBooks' 5-decimal unit cost on these quantities (off by ${drift}c) — split the bill or enter the amount on a smaller line`
-      );
+    // CONDITIONAL, not deleted (2026-08-18) — see
+    // qb-vendor-bill-cost-truncation-guard.ts for the full reasoning, and
+    // mirrors the Add (qb-vendor-bill-enqueue.ts, same date, same shared
+    // module — the two MUST reach the same verdict on the same bill or the
+    // ADD accepts a bill the first MOD then can't reproduce. Computed from
+    // the SAME figures `itemLines` below uses in this branch
+    // (`raw * qty + taxShare + freightShare`) — `itemLines` itself is built
+    // further down, after this guard runs.
+    const costTruncationLines: CostTruncationLine[] = productRows.map(
+      (line, i) => {
+        const qty = Number(line.qty);
+        const raw = Number(line.unit_cost_cents);
+        const taxShare = taxByLine[i] ?? 0;
+        const freightShare = freightByLine[i] ?? 0;
+        return {
+          qty,
+          unit_cost_cents: raw,
+          tax_share_cents: taxShare,
+          freight_share_cents: freightShare,
+          amount_cents: raw * qty + taxShare + freightShare,
+        };
+      }
+    );
+    if (!allLinesCarryAmount(costTruncationLines)) {
+      const drift = costTruncationDriftCents(costTruncationLines);
+      if (drift > 0) {
+        throw new Error(
+          `${bill.number ?? bill.id}: sales tax/freight cannot be expressed within QuickBooks' 5-decimal unit cost on these quantities (off by ${drift}c) — split the bill or enter the amount on a smaller line`
+        );
+      }
     }
   }
 

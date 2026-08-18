@@ -63,6 +63,11 @@ import {
 } from "./qb-vendor-bill-clearing-lines";
 import { loadClearingSiblings } from "./load-clearing-siblings";
 import { resolveFreightPolicy } from "./freight-policy";
+import {
+  allLinesCarryAmount,
+  costTruncationDriftCents,
+  type CostTruncationLine,
+} from "./qb-vendor-bill-cost-truncation-guard";
 
 export type EnqueueKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
@@ -453,22 +458,34 @@ export async function enqueueQbVendorBillAdd(
     // clears. Simulate the bridge's own formatting and refuse rather than post
     // a total we know is wrong. Covers goods + tax + capitalized freight
     // together — they all land in the same `<Cost>`.
-    const drift = productLines.reduce((worst, l, i) => {
-      const qty = Number(l.qty);
-      if (qty <= 0) return worst;
-      const exact =
-        l.unit_cost_cents * qty + (taxByLine[i] ?? 0) + (freightByLine[i] ?? 0);
-      const sentCost = Number((exact / qty / 100).toFixed(5));
-      return Math.max(worst, Math.abs(Math.round(sentCost * qty * 100) - exact));
-    }, 0);
-    if (drift > 0) {
-      return {
-        queued: false,
-        reason:
-          `sales tax/freight cannot be expressed within QuickBooks' 5-decimal unit cost ` +
-          `on these quantities (off by ${drift}c) — split the bill or enter the ` +
-          `amount on a smaller line`,
-      };
+    //
+    // CONDITIONAL, not deleted (2026-08-18) — see
+    // qb-vendor-bill-cost-truncation-guard.ts for the full reasoning: skipped
+    // only when every item line's payload will carry a finite `amount_cents`
+    // (the bridge then derives `<Amount>` directly, nothing to round-trip).
+    const costTruncationLines: CostTruncationLine[] = productLines.map(
+      (l, i) => ({
+        qty: Number(l.qty),
+        unit_cost_cents: l.unit_cost_cents,
+        tax_share_cents: taxByLine[i] ?? 0,
+        freight_share_cents: freightByLine[i] ?? 0,
+        amount_cents:
+          l.unit_cost_cents * Number(l.qty) +
+          (taxByLine[i] ?? 0) +
+          (freightByLine[i] ?? 0),
+      })
+    );
+    if (!allLinesCarryAmount(costTruncationLines)) {
+      const drift = costTruncationDriftCents(costTruncationLines);
+      if (drift > 0) {
+        return {
+          queued: false,
+          reason:
+            `sales tax/freight cannot be expressed within QuickBooks' 5-decimal unit cost ` +
+            `on these quantities (off by ${drift}c) — split the bill or enter the ` +
+            `amount on a smaller line`,
+        };
+      }
     }
   }
 
