@@ -8,7 +8,10 @@
  * MISMA transacción.
  */
 
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework/http";
 
 import { getDbPool } from "../../../../utils/db-pool";
 import {
@@ -30,7 +33,7 @@ import {
   type RecipientRow,
 } from "../../../../../lib/commissions/writer";
 import { canReSaveAssignment } from "../../../../../lib/commissions/transitions";
-import { requireSupervisorPin } from "../../_lib/guard";
+import { assertAccounting, requireSupervisorPin } from "../../_lib/guard";
 
 interface RecipientBody {
   customer_id?: unknown;
@@ -41,7 +44,7 @@ interface RecipientBody {
   fixed_amount_cents?: unknown;
 }
 
-function requireOrderId(req: MedusaRequest, res: MedusaResponse): string | null {
+function requireOrderId(req: AuthenticatedMedusaRequest, res: MedusaResponse): string | null {
   const orderId = req.params.orderId;
   if (!orderId) {
     res.status(400).json({ error: "orderId is required." });
@@ -52,7 +55,11 @@ function requireOrderId(req: MedusaRequest, res: MedusaResponse): string | null 
 
 function commissionErrorResponse(res: MedusaResponse, err: CommissionError): void {
   const status =
-    err.code === "not_found" ? 404 : err.code === "assignment_locked" ? 409 : 400;
+    err.code === "not_found"
+      ? 404
+      : err.code === "assignment_locked" || err.code === "order_not_commissionable"
+        ? 409
+        : 400;
   res.status(status).json({ error: err.message, code: err.code, details: err.details });
 }
 
@@ -84,7 +91,8 @@ function serializeRecipient(r: RecipientRow, baseCents: number) {
   };
 }
 
-export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse): Promise<void> {
+  if (!(await assertAccounting(req, res))) return;
   const orderId = requireOrderId(req, res);
   if (!orderId) return;
   const pool = getDbPool();
@@ -93,9 +101,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
     const result = await withOrderCommissionLock(pool, orderId, async (client) => {
       const money = await readOrderMoneySnapshot(client, orderId);
       if (!money) return { missingOrder: true as const };
-      await refreshCommission(client, orderId, money);
+      const { cap } = await refreshCommission(client, orderId, money);
       const existing = await fetchCommission(client, orderId);
-      return { missingOrder: false as const, money, existing };
+      return { missingOrder: false as const, money, existing, cap };
     });
 
     if (result.missingOrder) {
@@ -103,7 +111,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
       return;
     }
 
-    const { existing, money } = result;
+    const { existing, money, cap } = result;
     res.json({
       config: { cap_bps: config.capBps, wait_days: config.waitDays },
       money: {
@@ -128,6 +136,18 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             recipients: existing.recipients.map((r) =>
               serializeRecipient(r, asInt(existing.commission.base_cents))
             ),
+            // Cap combinado VIVO. `cap` es null sólo si no hay comisión (caso
+            // ya cubierto por `existing ? … : null` de más arriba) — se omiten
+            // las 4 claves en vez de mandar ceros: un cero diría "está bien" y
+            // no es lo mismo que "no sé".
+            ...(cap
+              ? {
+                  combined_bps: cap.combinedBps,
+                  total_commission_bps: cap.totalCommissionBps,
+                  cap_exceeded: !cap.ok && !cap.undeterminedFixed,
+                  cap_undetermined: cap.undeterminedFixed,
+                }
+              : {}),
           }
         : null,
     });
@@ -137,7 +157,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
   }
 }
 
-export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse): Promise<void> {
+  if (!(await assertAccounting(req, res))) return;
   const orderId = requireOrderId(req, res);
   if (!orderId) return;
   const pin = await requireSupervisorPin(req, res);
@@ -204,6 +225,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       const result = await saveAssignment(client, {
         orderId,
         orderCustomerId: money.orderCustomerId,
+        orderStatus: money.orderStatus,
         currencyCode: money.currencyCode,
         money,
         recipients,
@@ -225,7 +247,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   }
 }
 
-export async function DELETE(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+export async function DELETE(req: AuthenticatedMedusaRequest, res: MedusaResponse): Promise<void> {
+  if (!(await assertAccounting(req, res))) return;
   const orderId = requireOrderId(req, res);
   if (!orderId) return;
   const pin = await requireSupervisorPin(req, res);

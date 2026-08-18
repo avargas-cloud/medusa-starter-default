@@ -25,6 +25,7 @@ import {
   effectiveBps,
   eligibleAt as computeEligibleAt,
   validateRecipients,
+  type CapCheckResult,
   type CommissionAmountMode,
   type RecipientInput,
 } from "./calculator";
@@ -37,6 +38,12 @@ export interface OrderMoneySnapshot {
   lastInvoiceAt: Date | null;
 }
 
+/**
+ * Estados de `"order".status` que NO comisionan. Sólo `canceled`: `completed`,
+ * `archived`, `pending` y `draft` siguen comisionando normal.
+ */
+const NON_COMMISSIONABLE_ORDER_STATUSES = new Set(["canceled"]);
+
 export class CommissionError extends Error {
   constructor(
     public readonly code:
@@ -46,7 +53,8 @@ export class CommissionError extends Error {
       | "not_found"
       | "invalid_state"
       | "beneficiary_is_order_customer"
-      | "fixed_amount_without_base",
+      | "fixed_amount_without_base"
+      | "order_not_commissionable",
     message: string,
     public readonly details?: Record<string, unknown>
   ) {
@@ -136,6 +144,7 @@ export async function fetchCommission(
 export interface SaveAssignmentInput {
   orderId: string;
   orderCustomerId: string | null;
+  orderStatus: string | null;
   currencyCode: string;
   money: OrderMoneySnapshot;
   recipients: Array<RecipientInput & { displayName: string }>;
@@ -171,6 +180,16 @@ export async function saveAssignment(
   client: PoolClient,
   input: SaveAssignmentInput
 ): Promise<{ commissionId: string; recipientIds: string[] }> {
+  // Primer chequeo, antes incluso de validar recipients: una orden cancelada
+  // no comisiona, sin importar qué se le intente asignar.
+  if (input.orderStatus != null && NON_COMMISSIONABLE_ORDER_STATUSES.has(input.orderStatus)) {
+    throw new CommissionError(
+      "order_not_commissionable",
+      `This order is '${input.orderStatus}' — it cannot be assigned a commission.`,
+      { orderStatus: input.orderStatus }
+    );
+  }
+
   const validation = validateRecipients(input.recipients);
   if (!validation.ok) {
     throw new CommissionError("invalid_recipients", `Invalid recipients: ${validation.reason}`, {
@@ -317,13 +336,34 @@ export async function refreshCommission(
   orderId: string,
   money: OrderMoneySnapshot,
   now: Date = new Date()
-): Promise<{ refreshed: boolean }> {
+): Promise<{ refreshed: boolean; cap: CapCheckResult | null }> {
   const existing = await fetchCommission(client, orderId);
-  if (!existing) return { refreshed: false };
+  if (!existing) return { refreshed: false, cap: null };
 
   const base = commissionBaseCents(money);
   const discountBps = discountBpsOf(money);
   const eligible = computeEligibleAt(money.fullyPaidAt, money.lastInvoiceAt, existing.commission.wait_days);
+
+  // Cap combinado VIVO: se mide contra el `cap_bps` CONGELADO en la comisión
+  // (cambiar el setting global no debe mover comisiones ya asignadas), y sólo
+  // contra los recipients que van a cobrar (state !== 'void'). Se usa
+  // `effectiveBps` (vía checkCombinedCap) para TODOS por igual, incluidos los
+  // que ya tienen `amount_cents` congelado — el cap mide lo PACTADO contra el
+  // descuento vigente, y usar una fórmula distinta para los congelados sería
+  // una tercera fórmula del mismo dato. Los void no cobran, así que no
+  // consumen cap.
+  const cap = checkCombinedCap({
+    itemSubtotalCents: money.itemSubtotalCents,
+    discountCents: money.discountCents,
+    capBps: existing.commission.cap_bps,
+    recipients: existing.recipients
+      .filter((r) => r.state !== "void")
+      .map((r) => ({
+        mode: r.amount_mode,
+        percentBps: r.percent_bps,
+        fixedAmountCents: r.fixed_amount_cents == null ? null : asInt(r.fixed_amount_cents),
+      })),
+  });
 
   const hasMovable = existing.recipients.some((r) => r.state === "draft" || r.state === "eligible");
   if (hasMovable) {
@@ -348,7 +388,7 @@ export async function refreshCommission(
     }
   }
 
-  return { refreshed: true };
+  return { refreshed: true, cap };
 }
 
 export async function approveRecipient(

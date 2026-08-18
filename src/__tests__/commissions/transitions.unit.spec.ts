@@ -70,6 +70,15 @@ describe("guardas de transición", () => {
     expect(canReSaveAssignment([])).toBe(true);
   });
 
+  it("re-guardar la asignación también acepta voideados (historia, no reclamo vivo)", () => {
+    expect(canReSaveAssignment(["void"])).toBe(true);
+    expect(canReSaveAssignment(["draft", "void"])).toBe(true);
+    expect(canReSaveAssignment(["void", "void"])).toBe(true);
+    expect(canReSaveAssignment(["void", "eligible"])).toBe(false);
+    expect(canReSaveAssignment(["void", "approved"])).toBe(false);
+    expect(canReSaveAssignment(["void", "closed"])).toBe(false);
+  });
+
   it("OPEN agrupa todo lo no terminal", () => {
     expect(isOpen("draft")).toBe(true);
     expect(isOpen("settling")).toBe(true);

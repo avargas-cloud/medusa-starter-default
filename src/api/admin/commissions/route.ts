@@ -15,8 +15,10 @@ import { getDbPool } from "../../utils/db-pool";
 import { readOrderMoneySnapshot } from "../../../lib/commissions/order-money";
 import { refreshCommission, withOrderCommissionLock, asInt } from "../../../lib/commissions/writer";
 import {
+  checkCombinedCap,
   effectiveAmountCents,
   effectiveBps,
+  type CapCheckResult,
   type CommissionAmountMode,
 } from "../../../lib/commissions/calculator";
 import { reconcileVendorBillSettlements } from "../../../lib/commissions/settle";
@@ -184,64 +186,142 @@ export async function GET(
         ORDER BY r.assigned_at DESC, r.id DESC`
     );
 
+    // 4 · Cap combinado por comisión. El listado es UNA FILA POR BENEFICIARIO
+    // y filtra por tab (open/closed): sumar los bps de las filas TRAÍDAS
+    // subestimaría el combinado en el tab 'open' (faltarían los 'closed' de
+    // la misma comisión) — subestimar un cap es el peor error posible acá.
+    // Por eso se trae TODOS los recipients no-void de cada comisión referida,
+    // sin filtro de tab, y se calcula UNA VEZ por comisión con la MISMA
+    // función que usa el resto del feature (nunca SQL que replique la fórmula).
+    const commissionIds = Array.from(new Set(rows.map((r) => r.commission_id)));
+    const capByCommission = new Map<string, CapCheckResult>();
+    if (commissionIds.length > 0) {
+      const { rows: capRows } = await pool.query<{
+        commission_id: string;
+        item_subtotal_cents: string | number;
+        discount_cents: string | number;
+        cap_bps: number;
+        amount_mode: CommissionAmountMode;
+        percent_bps: number;
+        fixed_amount_cents: string | number | null;
+      }>(
+        `SELECT c.id AS commission_id, c.item_subtotal_cents, c.discount_cents, c.cap_bps,
+                r.amount_mode, r.percent_bps, r.fixed_amount_cents
+           FROM order_commission c
+           JOIN order_commission_recipient r
+             ON r.order_commission_id = c.id AND r.deleted_at IS NULL AND r.state != 'void'
+          WHERE c.id = ANY($1::text[])`,
+        [commissionIds]
+      );
+      const grouped = new Map<
+        string,
+        { itemSubtotalCents: number; discountCents: number; capBps: number; recipients: Array<{
+          mode: CommissionAmountMode;
+          percentBps: number;
+          fixedAmountCents: number | null;
+        }> }
+      >();
+      for (const cr of capRows) {
+        let entry = grouped.get(cr.commission_id);
+        if (!entry) {
+          entry = {
+            itemSubtotalCents: asInt(cr.item_subtotal_cents),
+            discountCents: asInt(cr.discount_cents),
+            capBps: cr.cap_bps,
+            recipients: [],
+          };
+          grouped.set(cr.commission_id, entry);
+        }
+        entry.recipients.push({
+          mode: cr.amount_mode,
+          percentBps: cr.percent_bps,
+          fixedAmountCents: cr.fixed_amount_cents == null ? null : asInt(cr.fixed_amount_cents),
+        });
+      }
+      for (const [commissionId, entry] of grouped) {
+        capByCommission.set(
+          commissionId,
+          checkCombinedCap({
+            itemSubtotalCents: entry.itemSubtotalCents,
+            discountCents: entry.discountCents,
+            capBps: entry.capBps,
+            recipients: entry.recipients,
+          })
+        );
+      }
+    }
+
     res.json({
       tab,
       count: rows.length,
-      rows: rows.map((r) => ({
-        recipient_id: r.id,
-        commission_number:
-          r.commission_display_number == null
-            ? null
-            : `COM-${r.commission_display_number}`,
-        state: r.state,
-        is_open: isOpen(r.state),
-        order_id: r.order_id,
-        order_display_id: r.order_display_id == null ? null : String(r.order_display_id),
-        order_document_number: r.order_document_number,
-        display_name: r.display_name,
-        customer_id: r.customer_id,
-        qb_vendor_id: r.qb_vendor_id,
-        percent_bps:
-          r.amount_cents != null
-            ? r.percent_bps
-            : effectiveBps(asInt(r.base_cents), toRecipientAmount(r)) ?? r.percent_bps,
-        amount_mode: r.amount_mode,
-        amount_cents:
-          r.amount_cents == null
-            ? effectiveAmountCents(asInt(r.base_cents), toRecipientAmount(r))
-            : asInt(r.amount_cents),
-        amount_is_frozen: r.amount_cents != null,
-        base_cents: asInt(r.base_cents),
-        discount_bps: r.discount_bps,
-        cap_bps: r.cap_bps,
-        currency_code: r.currency_code,
-        eligible_at: r.eligible_at,
-        order_fully_paid: r.order_fully_paid,
-        last_invoice_at: r.last_invoice_at,
-        approval_ready_at: r.approval_ready_at,
-        wait_days: r.wait_days,
-        payout_method: r.payout_method,
-        assigned_by: r.assigned_by_email ?? r.assigned_by,
-        assigned_at: r.assigned_at,
-        approved_by: r.approved_by_email ?? r.approved_by,
-        approved_at: r.approved_at,
-        settled_by: r.settled_by_email ?? r.settled_by,
-        settled_at: r.settled_at,
-        void_reason: r.void_reason,
-        settlement: r.settlement_id
-          ? {
-              id: r.settlement_id,
-              method: r.settlement_method,
-              status: r.settlement_status,
-              vendor_bill_id: r.vendor_bill_id,
-              vendor_bill_number: r.vendor_bill_number,
-              customer_payment_id: r.customer_payment_id,
-              qb_check_txn_id: r.qb_check_txn_id,
-              qb_payment_txn_id: r.qb_payment_txn_id,
-              failure_reason: r.failure_reason,
-            }
-          : null,
-      })),
+      rows: rows.map((r) => {
+        const cap = capByCommission.get(r.commission_id) ?? null;
+        return {
+          recipient_id: r.id,
+          commission_number:
+            r.commission_display_number == null
+              ? null
+              : `COM-${r.commission_display_number}`,
+          state: r.state,
+          is_open: isOpen(r.state),
+          order_id: r.order_id,
+          order_display_id: r.order_display_id == null ? null : String(r.order_display_id),
+          order_document_number: r.order_document_number,
+          display_name: r.display_name,
+          customer_id: r.customer_id,
+          qb_vendor_id: r.qb_vendor_id,
+          percent_bps:
+            r.amount_cents != null
+              ? r.percent_bps
+              : effectiveBps(asInt(r.base_cents), toRecipientAmount(r)) ?? r.percent_bps,
+          amount_mode: r.amount_mode,
+          amount_cents:
+            r.amount_cents == null
+              ? effectiveAmountCents(asInt(r.base_cents), toRecipientAmount(r))
+              : asInt(r.amount_cents),
+          amount_is_frozen: r.amount_cents != null,
+          base_cents: asInt(r.base_cents),
+          discount_bps: r.discount_bps,
+          cap_bps: r.cap_bps,
+          currency_code: r.currency_code,
+          eligible_at: r.eligible_at,
+          order_fully_paid: r.order_fully_paid,
+          last_invoice_at: r.last_invoice_at,
+          approval_ready_at: r.approval_ready_at,
+          wait_days: r.wait_days,
+          payout_method: r.payout_method,
+          assigned_by: r.assigned_by_email ?? r.assigned_by,
+          assigned_at: r.assigned_at,
+          approved_by: r.approved_by_email ?? r.approved_by,
+          approved_at: r.approved_at,
+          settled_by: r.settled_by_email ?? r.settled_by,
+          settled_at: r.settled_at,
+          void_reason: r.void_reason,
+          settlement: r.settlement_id
+            ? {
+                id: r.settlement_id,
+                method: r.settlement_method,
+                status: r.settlement_status,
+                vendor_bill_id: r.vendor_bill_id,
+                vendor_bill_number: r.vendor_bill_number,
+                customer_payment_id: r.customer_payment_id,
+                qb_check_txn_id: r.qb_check_txn_id,
+                qb_payment_txn_id: r.qb_payment_txn_id,
+                failure_reason: r.failure_reason,
+              }
+            : null,
+          // Cap combinado de la comisión ENTERA (todas sus filas, sin filtro de
+          // tab) — misma semántica que el GET de la orden. `cap` null se omite
+          // en vez de mandar ceros: un cero diría "está bien".
+          ...(cap
+            ? {
+                combined_bps: cap.combinedBps,
+                cap_exceeded: !cap.ok && !cap.undeterminedFixed,
+                cap_undetermined: cap.undeterminedFixed,
+              }
+            : {}),
+        };
+      }),
     });
   } catch (err) {
     console.error("[commissions] list failed:", err);

@@ -202,6 +202,252 @@ console.log("verify-order-commissions — registro del Commissions Pipeline\n");
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Fase 2/3/4 — un bill vivo un settlement, void re-guardable, cap post-void,
+// cap congelado, canceled no comisiona, 1099 por vendor efectivo, guards de
+// ruta, y orden del guard commission_retry_needs_qb_check vs el claim.
+//
+// Helper: cortar el cuerpo de una función exportada hasta la PRÓXIMA
+// declaración `export` de nivel superior — nunca ventana fija de caracteres
+// (la lección de sales-pipeline-scope y del switch de 400 chars).
+// ─────────────────────────────────────────────────────────────────────────
+const funcBody = (src: string, marker: string): string => {
+  const start = src.indexOf(marker);
+  if (start < 0) return "";
+  const next = src.indexOf("\nexport ", start + marker.length);
+  return next < 0 ? src.slice(start) : src.slice(start, next);
+};
+
+// 10 (Fase 2 · check 1) · migración de unicidad bill↔settlement vivo
+{
+  let migration: string | null = null;
+  try {
+    migration = read("src/migrations/1783000000000-AddCommissionSettlementBillUniqueness.ts");
+  } catch {
+    migration = null;
+  }
+  if (migration === null) {
+    check("migración AddCommissionSettlementBillUniqueness1783000000000 existe", false);
+  } else {
+    const upStart = migration.indexOf("public async up");
+    const downStart = migration.indexOf("public async down");
+    const upBody = upStart >= 0 && downStart > upStart ? migration.slice(upStart, downStart) : "";
+    check(
+      "migración crea uq_cset_live_per_bill sobre commission_settlement(vendor_bill_id)",
+      upBody.includes("CREATE UNIQUE INDEX IF NOT EXISTS uq_cset_live_per_bill") &&
+        upBody.includes("ON commission_settlement (vendor_bill_id)")
+    );
+    check(
+      "el índice cubre pending/qb_waiting/confirmed y NO failed/reversed (libres para reintento)",
+      upBody.includes("status IN ('pending','qb_waiting','confirmed')") &&
+        !upBody.includes("'failed'") &&
+        !upBody.includes("'reversed'")
+    );
+  }
+}
+
+// 11 (Fase 2 · check 2) · validateVendorBillForSettlement detecta reuso del bill
+{
+  const src = read("src/lib/commissions/settle.ts");
+  const body = funcBody(src, "export async function validateVendorBillForSettlement");
+  check(
+    "validateVendorBillForSettlement consulta s.vendor_bill_id = $1 y nombra bill_already_settled",
+    !!body && body.includes("s.vendor_bill_id = $1") && body.includes("bill_already_settled")
+  );
+}
+
+// 12 (Fase 2 · check 3) · insertSettlement discrimina el 23505 por constraint
+{
+  const src = read("src/lib/commissions/settle.ts");
+  const body = funcBody(src, "export async function insertSettlement");
+  check(
+    "insertSettlement discrimina 23505 por constraint (uq_cset_live_per_bill + uq_cset_idempotency)",
+    !!body &&
+      body.includes(`pgErr.code === "23505"`) &&
+      body.includes("uq_cset_live_per_bill") &&
+      body.includes("uq_cset_idempotency")
+  );
+}
+
+// 13 (Fase 2 · check 4) · reconcileVendorBillSettlements filtra bills borrados
+{
+  const src = read("src/lib/commissions/settle.ts");
+  const body = funcBody(src, "export async function reconcileVendorBillSettlements");
+  check(
+    "reconcileVendorBillSettlements joinea vendor_bill con deleted_at IS NULL",
+    !!body && body.includes("JOIN vendor_bill vb ON vb.id = s.vendor_bill_id AND vb.deleted_at IS NULL")
+  );
+}
+
+// 14 (Fase 2 · check 5) · canReSaveAssignment acepta void además de draft
+{
+  const src = read("src/lib/commissions/transitions.ts");
+  const body = funcBody(src, "export function canReSaveAssignment");
+  check(
+    "canReSaveAssignment acepta 'draft' Y 'void' (voidear a un beneficiario no traba el re-guardado)",
+    !!body && body.includes(`s === "draft"`) && body.includes(`s === "void"`)
+  );
+}
+
+// 15 (Fase 3 · check 6, EL MÁS IMPORTANTE) · refreshCommission filtra los
+// voideados ANTES de pasarlos a checkCombinedCap. Sin unit test posible (pide
+// PoolClient vivo): este check estático es la única red.
+{
+  const src = read("src/lib/commissions/writer.ts");
+  const body = funcBody(src, "export async function refreshCommission");
+  const capCallStart = body.indexOf("checkCombinedCap(");
+  const capCallEnd = capCallStart >= 0 ? body.indexOf("});", capCallStart) : -1;
+  const capCallSlice = capCallStart >= 0 && capCallEnd >= 0 ? body.slice(capCallStart, capCallEnd) : "";
+  const liveVoidFilter = capCallSlice
+    .split("\n")
+    .some((line) => line.trim().startsWith(`.filter((r) => r.state !== "void")`));
+  const filterBeforeMap =
+    liveVoidFilter && capCallSlice.indexOf(".filter(") < capCallSlice.indexOf(".map(");
+  check(
+    "refreshCommission filtra recipients state !== 'void' ANTES de pasarlos a checkCombinedCap",
+    !!capCallSlice && liveVoidFilter && filterBeforeMap
+  );
+}
+
+// 16 (Fase 3 · check 7) · el cap mide contra el cap_bps CONGELADO, no el global
+{
+  const src = read("src/lib/commissions/writer.ts");
+  const body = funcBody(src, "export async function refreshCommission");
+  const capCallStart = body.indexOf("checkCombinedCap(");
+  const capCallEnd = capCallStart >= 0 ? body.indexOf("});", capCallStart) : -1;
+  const capCallSlice = capCallStart >= 0 && capCallEnd >= 0 ? body.slice(capCallStart, capCallEnd) : "";
+  check(
+    "refreshCommission pasa existing.commission.cap_bps (congelado) a checkCombinedCap, NO config.capBps",
+    !!capCallSlice &&
+      capCallSlice.includes("capBps: existing.commission.cap_bps") &&
+      !capCallSlice.includes("config.capBps")
+  );
+}
+
+// 17 (Fase 3 · check 8) · el GET de la orden sirve cap_exceeded/cap_undetermined
+{
+  const src = read("src/api/admin/commissions/orders/[orderId]/route.ts");
+  check(
+    "GET orders/:orderId sirve cap_exceeded y cap_undetermined",
+    src.includes("cap_exceeded:") && src.includes("cap_undetermined:")
+  );
+}
+
+// 18 (Fase 3 · check 9) · el listado calcula el cap con checkCombinedCap, NUNCA
+// replicando la suma en SQL — dos fórmulas del mismo dato es la clase de bug
+// que ya costó caro en este feature (comentario del check 9 viejo, más arriba).
+{
+  const src = read("src/api/admin/commissions/route.ts");
+  check(
+    "listado importa y LLAMA checkCombinedCap (no replica la suma)",
+    src.includes("checkCombinedCap") &&
+      /\bcheckCombinedCap\(\{/.test(src)
+  );
+  check(
+    "el SQL del listado NO suma percent_bps a mano (SUM(r.percent_bps) ausente)",
+    !src.includes("SUM(r.percent_bps)")
+  );
+}
+
+// 19 (Fase 3 · check 10) · saveAssignment rechaza una orden 'canceled'
+{
+  const src = read("src/lib/commissions/writer.ts");
+  const body = funcBody(src, "export async function saveAssignment");
+  check(
+    "saveAssignment rechaza orderStatus==='canceled' con code order_not_commissionable",
+    !!body &&
+      body.includes("NON_COMMISSIONABLE_ORDER_STATUSES.has(input.orderStatus)") &&
+      body.includes(`"order_not_commissionable"`)
+  );
+}
+
+// 20 (Fase 3 · check 11) · approve y settle rechazan canceled; void NO.
+// Criterio robusto: contar SÓLO las líneas donde el string es el ARGUMENTO
+// de un `new CommissionError(` (línea propia terminada en coma) — eso son
+// los DOS sitios que TIRAN el error (approve, handleSettle). Las líneas que
+// sólo MAPEAN err.code a un status HTTP (`err.code === "order_not_commissionable"`)
+// no cuentan: esas no deciden si canceled bloquea, solo el status de la respuesta.
+{
+  const src = read(
+    "src/api/admin/commissions/orders/[orderId]/recipients/[recipientId]/route.ts"
+  );
+  const throwSites = src
+    .split("\n")
+    .filter((line) => /^\s*"order_not_commissionable",\s*$/.test(line));
+  check(
+    "sólo DOS sitios TIRAN order_not_commissionable (approve + handleSettle) — el void no tira ninguno",
+    throwSites.length === 2
+  );
+}
+
+// 21 (Fase 3 · check 12) · summary-1099 agrupa por vendor EFECTIVO + zona horaria
+{
+  const src = read("src/api/admin/commissions/summary-1099/route.ts");
+  check(
+    "summary-1099 agrupa por vendor efectivo vía customer_vendor_link LATERAL",
+    src.includes("COALESCE(r.qb_vendor_id, cvl.qb_vendor_id)") &&
+      src.includes("LEFT JOIN LATERAL") &&
+      src.includes("customer_vendor_link")
+  );
+  check(
+    "summary-1099 convierte a zona horaria ANTES de extraer el año (AT TIME ZONE anidado dentro de EXTRACT(YEAR)",
+    src.includes("EXTRACT(YEAR FROM (COALESCE(r.settled_at, s.updated_at) AT TIME ZONE $2)) = $1")
+  );
+}
+
+// 22 (Fase 4 · check 13) · assertAccounting en los TRES handlers de la orden
+{
+  const src = read("src/api/admin/commissions/orders/[orderId]/route.ts");
+  const calls = src.split("assertAccounting(req, res)").length - 1;
+  check(
+    "GET+POST+DELETE de orders/:orderId llaman assertAccounting(req,res) — 3 veces",
+    calls === 3
+  );
+}
+
+// 23 (Fase 4 · check 14) · el guard commission_retry_needs_qb_check corre
+// ANTES del UPDATE que reclama la fila (limpia bridge_op_id a NULL) — después
+// sería inútil, el valor que necesita ya sería NULL. Orden por POSICIÓN en
+// el string, no sólo presencia.
+{
+  const src = read(
+    "src/api/admin/quickbooks/pipeline/handlers/post-pipeline.ts"
+  );
+  const guardIdx = src.indexOf(`"commission_retry_needs_qb_check"`);
+  const claimIdx = src.indexOf("bridge_op_id = NULL,");
+  check(
+    "guard commission_retry_needs_qb_check aparece ANTES del UPDATE que limpia bridge_op_id (el claim)",
+    guardIdx >= 0 && claimIdx >= 0 && guardIdx < claimIdx
+  );
+}
+
+// 24 (Fase 4 · check 15) · el botón/modal de Commissions del POS está
+// gateado por showCommissions. El verificador vive en backend; resolvemos
+// el path relativo al workspace y FALLAMOS con mensaje claro si no existe
+// (nunca saltear en silencio).
+{
+  const rel = "../store-pos/app/(pos)/orders/[id]/page.tsx";
+  let src: string | null = null;
+  try {
+    src = read(rel);
+  } catch {
+    src = null;
+  }
+  if (src === null) {
+    check(`store-pos orders/[id]/page.tsx existe en ${rel} (resuelto desde ${ROOT})`, false);
+  } else {
+    const buttonGated = /\{order\.doc\.medusaId\s*&&\s*showCommissions\s*&&[\s\S]{0,60}Commissions/.test(
+      src
+    );
+    const modalGated =
+      /\{order\.doc\.medusaId\s*&&\s*showCommissions\s*&&[\s\S]{0,80}<CommissionsModal/.test(src);
+    check(
+      "store-pos: botón Y modal de Commissions gateados por showCommissions",
+      src.includes("const showCommissions =") && buttonGated && modalGated
+    );
+  }
+}
+
 console.log("");
 if (failures.length > 0) {
   console.error(`❌ ${failures.length} chequeo(s) fallaron:`);

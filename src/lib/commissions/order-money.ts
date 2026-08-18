@@ -22,6 +22,7 @@ export interface OrderMoneyContext extends OrderMoneySnapshot {
   orderCustomerId: string | null;
   currencyCode: string;
   orderDisplayId: string | null;
+  orderStatus: string | null;
 }
 
 export async function readOrderMoneySnapshot(
@@ -32,8 +33,9 @@ export async function readOrderMoneySnapshot(
     customer_id: string | null;
     currency_code: string | null;
     display_id: string | number | null;
+    status: string | null;
   }>(
-    `SELECT customer_id, currency_code, display_id
+    `SELECT customer_id, currency_code, display_id, status
        FROM "order" WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
     [orderId]
   );
@@ -83,5 +85,6 @@ export async function readOrderMoneySnapshot(
     orderCustomerId: order.customer_id,
     currencyCode: order.currency_code ?? "usd",
     orderDisplayId: order.display_id == null ? null : String(order.display_id),
+    orderStatus: order.status,
   };
 }

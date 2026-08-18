@@ -206,6 +206,10 @@ async function main(): Promise<void> {
   // único sobre esa columna, así que la segunda corrida explota con 23505 antes
   // de llegar a ninguna aserción.
   await pool.query(`UPDATE vendor_bill SET qb_txn_id = NULL WHERE qb_txn_id = 'E2E-QB-TXN'`);
+  // Sección 13 usa un centinela PROPIO ('E2E-QB-TXN-S13') y su "control
+  // positivo" final RESTAURA `deleted_at = NULL` dejando el marcador vivo —
+  // la segunda corrida choca contra ÉL, no contra el de la sección 6.
+  await pool.query(`UPDATE vendor_bill SET qb_txn_id = NULL WHERE qb_txn_id = 'E2E-QB-TXN-S13'`);
   // La sección 4 afirma que SIN cuentas configuradas el settle está apagado,
   // pero después las configura y nunca las saca: en la segunda corrida esa
   // afirmación no se puede ejercer. Se quitan las 4 claves (sólo esas — borrar
@@ -277,14 +281,30 @@ async function main(): Promise<void> {
       const bps = Math.round((cents / baseNow) * 10_000);
       return Math.round((baseNow * bps) / 10_000) !== cents;
     };
+    // Búsqueda ACOTADA a un rango razonable (5%–15% de la base, bien bajo el
+    // cap): si la base viva no admite ningún monto no representable ahí
+    // dentro, el fixture no aplica y el check de precisión SKIPEA en vez de
+    // pasar en falso (adoptando un monto que sí sería representable) o
+    // fallar (culpando a una regresión que no existe).
+    const searchCeiling = Math.max(2, Math.round(baseNow * 0.15));
     let candidate = Math.round(baseNow * 0.05); // 5% de la base: bien bajo el cap
-    for (let i = 0; i < 200 && !notBpsRepresentable(candidate); i++) candidate += 1;
+    let foundImprecise = notBpsRepresentable(candidate);
+    while (!foundImprecise && candidate < searchCeiling) {
+      candidate += 1;
+      foundImprecise = notBpsRepresentable(candidate);
+    }
     const FIXED_CENTS = candidate;
-    check(
-      "el fixture permite probar la pérdida de precisión (monto no representable en bps)",
-      notBpsRepresentable(FIXED_CENTS),
-      `base=${baseNow} monto=${FIXED_CENTS}`
-    );
+    if (foundImprecise) {
+      check(
+        "el fixture permite probar la pérdida de precisión (monto no representable en bps)",
+        true,
+        `base=${baseNow} monto=${FIXED_CENTS}`
+      );
+    } else {
+      console.log(
+        `  ⚠️  SKIP: base=${baseNow} no admite un monto no representable en [5%,15%] — fixture no aplicable`
+      );
+    }
 
     const savedFixed = await api(
       token, "POST", orderPath,
@@ -340,11 +360,17 @@ async function main(): Promise<void> {
     // convirtiéndolo a bps (la vía vieja), volvería redondeado a la resolución
     // del bp. Este assert falla si alguien reintroduce esa conversión.
     const roundTrippedViaBps = Math.round((base * expectedBps) / 10_000);
-    check(
-      "guardar por bps HABRÍA perdido centavos (prueba de que el modo sirve)",
-      roundTrippedViaBps !== FIXED_CENTS,
-      `via_bps=${roundTrippedViaBps} vs exacto=${FIXED_CENTS}`
-    );
+    if (foundImprecise) {
+      check(
+        "guardar por bps HABRÍA perdido centavos (prueba de que el modo sirve)",
+        roundTrippedViaBps !== FIXED_CENTS,
+        `via_bps=${roundTrippedViaBps} vs exacto=${FIXED_CENTS}`
+      );
+    } else {
+      console.log(
+        `  ⚠️  SKIP: base=${base} no admite un monto no representable — fixture no aplicable`
+      );
+    }
 
     // ── El monto fijo NO puede saltear el cap ────────────────────────────────
     // Un monto que supera el cap se convierte a su % efectivo y se rechaza,
@@ -943,6 +969,479 @@ async function main(): Promise<void> {
       );
       await pool.query(`UPDATE order_commission SET deleted_at = NOW() WHERE order_id = $1`, [other.order_id]);
     }
+  }
+
+  // ── 9 · Un bill, un settlement (fix A) ─────────────────────────────────────
+  //
+  // Todas las secciones que siguen reusan el fixture principal (`resetCommission`
+  // deja la orden limpia al arrancar cada una) — la invoice ya quedó backdateada
+  // 31 días desde el arranque del script, así que un beneficiario nuevo pasa a
+  // 'eligible' apenas se lee.
+  console.log("── 9 · Un bill, un settlement (fix A) ──");
+  {
+    const { rows: idxRows } = await pool.query(
+      `SELECT 1 FROM pg_indexes WHERE indexname = 'uq_cset_live_per_bill'`
+    );
+    const indexExists = idxRows.length === 1;
+    check(
+      "precondición: el índice uq_cset_live_per_bill existe",
+      indexExists,
+      indexExists ? "OK" : "AUSENTE — el resto de la sección 9 se saltea"
+    );
+
+    if (!indexExists) {
+      console.log("  ⚠️  SKIP resto de la sección 9: sin el índice, el test pasaría en vacío.");
+    } else {
+      await resetCommission(fixture.order_id);
+      const PCT_BPS_9 = 400;
+      const assigned9 = await api(
+        token, "POST", orderPath,
+        {
+          recipients: [
+            { qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: PCT_BPS_9 },
+            { customer_id: beneficiaryCustomer.id, display_name: "E2E S9 Benef", percent_bps: PCT_BPS_9 },
+          ],
+        },
+        E2E_PIN
+      );
+      check("sección 9: asignación de 2 beneficiarios al mismo % guarda", assigned9.status === 200, `status=${assigned9.status}`);
+
+      const got9 = await api(token, "GET", orderPath);
+      const commission9 = got9.body.commission as {
+        recipients: Array<{ id: string; qb_vendor_id: string | null; customer_id: string | null; state: string; amount_cents: number }>;
+      } | null;
+      const r1 = commission9?.recipients.find((r) => r.qb_vendor_id === vendor.id);
+      const r2 = commission9?.recipients.find((r) => r.customer_id === beneficiaryCustomer.id);
+      check(
+        "sección 9: ambos elegibles y con el MISMO monto aprobable",
+        r1?.state === "eligible" && r2?.state === "eligible" && r1?.amount_cents === r2?.amount_cents,
+        `r1=${r1?.state}/${r1?.amount_cents} r2=${r2?.state}/${r2?.amount_cents}`
+      );
+
+      const approve1 = await api(token, "POST", `${orderPath}/recipients/${r1?.id}`, { action: "approve" }, E2E_PIN);
+      const approve2 = await api(token, "POST", `${orderPath}/recipients/${r2?.id}`, { action: "approve" }, E2E_PIN);
+      check("sección 9: approve de los dos beneficiarios OK", approve1.status === 200 && approve2.status === 200);
+
+      const { rows: frozenAmounts } = await pool.query<{ id: string; amount_cents: string }>(
+        `SELECT id, amount_cents::text FROM order_commission_recipient WHERE id = ANY($1)`,
+        [[r1?.id, r2?.id]]
+      );
+      const amountCents9 = parseInt(String(frozenAmounts[0]?.amount_cents ?? "0"), 10);
+      check(
+        "sección 9: los dos montos aprobados quedaron idénticos en DB",
+        frozenAmounts.length === 2 && frozenAmounts[0]?.amount_cents === frozenAmounts[1]?.amount_cents,
+        JSON.stringify(frozenAmounts)
+      );
+
+      const bill9 = await api(token, "POST", "/admin/vendor-bills", {
+        vendor_id: vendor.id,
+        bill_type: "service",
+        reference_id: `E2E-COMM-S9-${Date.now().toString(36)}`,
+        initial_account_line: { qb_account_list_id: EXPENSE_LIST_ID, amount_cents: amountCents9 },
+      });
+      const billId9 = String((bill9.body as { vendor_bill?: { id?: string } }).vendor_bill?.id ?? bill9.body.id ?? "");
+      check("sección 9: bill service por el monto exacto se crea", bill9.status === 201 || bill9.status === 200, `status=${bill9.status}`);
+
+      const settle1 = await api(
+        token, "POST", `${orderPath}/recipients/${r1?.id}`,
+        { action: "settle", method: "vendor_bill", vendor_bill_id: billId9 }, E2E_PIN
+      );
+      check("sección 9: settle del beneficiario 1 contra el bill OK", settle1.status === 200, `status=${settle1.status}`);
+
+      const settle2 = await api(
+        token, "POST", `${orderPath}/recipients/${r2?.id}`,
+        { action: "settle", method: "vendor_bill", vendor_bill_id: billId9 }, E2E_PIN
+      );
+      check(
+        "sección 9: settle del beneficiario 2 contra el MISMO bill → 409 bill_already_settled",
+        settle2.status === 409 &&
+          (settle2.body.details as { reason?: string } | undefined)?.reason === "bill_already_settled",
+        `status=${settle2.status} details=${JSON.stringify(settle2.body.details ?? settle2.body).slice(0, 140)}`
+      );
+
+      const { rows: noDamage } = await pool.query<{ id: string; state: string }>(
+        `SELECT id, state FROM order_commission_recipient WHERE id = ANY($1)`,
+        [[r1?.id, r2?.id]]
+      );
+      const state1 = noDamage.find((r) => r.id === r1?.id)?.state;
+      const state2 = noDamage.find((r) => r.id === r2?.id)?.state;
+      check(
+        "sección 9: sin daño — beneficiario 1 sigue 'settling' y beneficiario 2 sigue 'approved'",
+        state1 === "settling" && state2 === "approved",
+        `state1=${state1} state2=${state2}`
+      );
+    }
+  }
+
+  // ── 10 · Un beneficiario voideado no clava la asignación (fix I) ───────────
+  console.log("── 10 · Void no clava la asignación (fix I) ──");
+  {
+    await resetCommission(fixture.order_id);
+    const assigned10 = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 100 }] },
+      E2E_PIN
+    );
+    check("sección 10: asignación inicial (1 beneficiario) guarda", assigned10.status === 200);
+
+    const got10a = await api(token, "GET", orderPath);
+    const firstRecipientId = (got10a.body.commission as { recipients: Array<{ id: string }> } | null)
+      ?.recipients[0]?.id;
+
+    const voided10 = await api(
+      token, "POST", `${orderPath}/recipients/${firstRecipientId}`,
+      { action: "void", reason: "e2e sección 10" }, E2E_PIN
+    );
+    check("sección 10: void del único beneficiario OK", voided10.status === 200, `status=${voided10.status}`);
+
+    const got10b = await api(token, "GET", orderPath);
+    const commission10b = got10b.body.commission as { editable: boolean } | null;
+    check(
+      "sección 10: editable=true aunque haya un recipient en 'void'",
+      commission10b?.editable === true,
+      `editable=${commission10b?.editable}`
+    );
+
+    const resaved10 = await api(
+      token, "POST", orderPath,
+      { recipients: [{ customer_id: beneficiaryCustomer.id, display_name: "E2E S10 Nuevo Benef", percent_bps: 150 }] },
+      E2E_PIN
+    );
+    check("sección 10: re-guardar con OTRO beneficiario → 200", resaved10.status === 200, `status=${resaved10.status}`);
+
+    const { rows: oldRow } = await pool.query<{
+      deleted_at: string | null; state: string; void_reason: string | null;
+    }>(`SELECT deleted_at, state, void_reason FROM order_commission_recipient WHERE id = $1`, [firstRecipientId]);
+    check(
+      "sección 10: el voideado quedó deleted_at NOT NULL, state='void' y conserva su void_reason",
+      oldRow[0]?.deleted_at != null && oldRow[0]?.state === "void" && oldRow[0]?.void_reason === "e2e sección 10",
+      JSON.stringify(oldRow[0])
+    );
+
+    const got10c = await api(token, "GET", orderPath);
+    const newRow = (got10c.body.commission as { recipients: Array<{ id: string; state: string; customer_id: string | null }> } | null)
+      ?.recipients.find((r) => r.customer_id === beneficiaryCustomer.id);
+    check(
+      "sección 10: el nuevo beneficiario está vivo en draft/eligible",
+      newRow != null && (newRow.state === "draft" || newRow.state === "eligible"),
+      `state=${newRow?.state}`
+    );
+
+    // Assert extra: el DELETE de la asignación también funciona con un void presente.
+    await resetCommission(fixture.order_id);
+    const assigned10d = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 100 }] },
+      E2E_PIN
+    );
+    const got10d = await api(token, "GET", orderPath);
+    const rId10d = (got10d.body.commission as { recipients: Array<{ id: string }> } | null)?.recipients[0]?.id;
+    await api(token, "POST", `${orderPath}/recipients/${rId10d}`, { action: "void", reason: "e2e sección 10 delete" }, E2E_PIN);
+    const del10 = await api(token, "DELETE", orderPath, undefined, E2E_PIN);
+    check(
+      "sección 10: DELETE de la asignación funciona con un void presente",
+      assigned10d.status === 200 && del10.status === 200,
+      `assign=${assigned10d.status} delete=${del10.status}`
+    );
+    const got10e = await api(token, "GET", orderPath);
+    check("sección 10: tras el DELETE la comisión desaparece", got10e.body.commission === null);
+  }
+
+  // ── 11 · El cap se re-evalúa en vivo (fix C) — LA MÁS IMPORTANTE ──────────
+  console.log("── 11 · Cap dinámico: descuento vivo + void no consume cap (fix C) ──");
+  {
+    // Defensivo: por si una corrida anterior murió a mitad de sección.
+    await pool.query(`DELETE FROM order_line_item_adjustment WHERE id = 'ordliadj_e2e_cap_11'`);
+    await resetCommission(fixture.order_id);
+
+    const money11a = await api(token, "GET", orderPath);
+    const m11a = money11a.body.money as { item_subtotal_cents: number; discount_cents: number };
+    const config11 = money11a.body.config as { cap_bps: number };
+    const itemSubtotalCents11 = Number(m11a.item_subtotal_cents);
+    const discountCents11 = Number(m11a.discount_cents);
+    const capBps11 = Number(config11.cap_bps);
+
+    const PCT_R1 = 300;
+    const PCT_R2 = 200;
+    const assigned11 = await api(
+      token, "POST", orderPath,
+      {
+        recipients: [
+          { qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: PCT_R1 },
+          { customer_id: beneficiaryCustomer.id, display_name: "E2E S11 Benef", percent_bps: PCT_R2 },
+        ],
+      },
+      E2E_PIN
+    );
+    check("sección 11: asignación DENTRO del cap guarda", assigned11.status === 200, `status=${assigned11.status}`);
+
+    const got11a = await api(token, "GET", orderPath);
+    const cap11a = got11a.body.commission as { cap_exceeded: boolean; combined_bps: number } | null;
+    check(
+      "sección 11: arranque dentro del cap → cap_exceeded=false",
+      cap11a?.cap_exceeded === false,
+      `combined_bps=${cap11a?.combined_bps} cap_bps=${capBps11}`
+    );
+    const combinedBpsBefore = cap11a?.combined_bps ?? 0;
+
+    // Palanca: subir el descuento por SQL hasta pasar el cap congelado.
+    const { rows: liRows11 } = await pool.query<{ item_id: string; version: number }>(
+      `SELECT oi.item_id, oi.version
+         FROM order_item oi
+         JOIN "order" o ON o.id = oi.order_id
+        WHERE oi.order_id = $1 AND oi.version = o.version
+        LIMIT 1`,
+      [fixture.order_id]
+    );
+    const li11 = liRows11[0];
+    if (!li11) {
+      check("sección 11: SALTEADA — la orden no tiene líneas vigentes", false, "sin order_item");
+    } else {
+      const commissionBpsTotal11 = PCT_R1 + PCT_R2;
+      const targetDiscountBps = capBps11 - commissionBpsTotal11 + 500; // margen de 5 puntos
+      const targetDiscountCents = Math.max(
+        discountCents11 + 1,
+        Math.ceil((Math.max(0, targetDiscountBps) / 10_000) * itemSubtotalCents11)
+      );
+      const extraDiscountCents = Math.max(1, targetDiscountCents - discountCents11);
+      const extraDiscountDollars = (extraDiscountCents / 100).toFixed(2);
+
+      await pool.query(
+        `INSERT INTO order_line_item_adjustment
+           (id, item_id, amount, raw_amount, code, version, is_tax_inclusive)
+         VALUES ('ordliadj_e2e_cap_11', $1, $2::numeric, jsonb_build_object('value', $2::text, 'precision', 20), 'E2E-CAP-TEST', $3, false)`,
+        [li11.item_id, extraDiscountDollars, li11.version]
+      );
+
+      const got11b = await api(token, "GET", orderPath);
+      const cap11b = got11b.body.commission as { cap_exceeded: boolean; combined_bps: number } | null;
+      check(
+        "sección 11: tras inflar el descuento → cap_exceeded=true y combined_bps > cap_bps",
+        cap11b?.cap_exceeded === true && (cap11b?.combined_bps ?? 0) > capBps11,
+        `combined_bps=${cap11b?.combined_bps} cap_bps=${capBps11}`
+      );
+      const combinedBpsAfterInflate = cap11b?.combined_bps ?? 0;
+
+      // Tercer beneficiario insertado DIRECTO (bypassea el guard de cap del
+      // POST de asignación, que a esta altura rechazaría cualquier re-guardado
+      // por estar ya sobre el cap) — lo que se mide es el filtro dinámico de
+      // `refreshCommission`, no la ruta de guardado.
+      const { rows: commRow11 } = await pool.query<{ id: string }>(
+        `SELECT id FROM order_commission WHERE order_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [fixture.order_id]
+      );
+      const commissionId11 = commRow11[0]?.id;
+      // Identidad DISTINTA de R1/R2: `uq_ocr_vendor_live` prohíbe dos
+      // recipients LIVE del mismo vendor en la misma comisión.
+      const { rows: secondVendorRows } = await pool.query<{ id: string }>(
+        `SELECT id FROM qb_vendor
+          WHERE deleted_at IS NULL AND is_active = true AND qb_list_id NOT LIKE 'pending_%'
+            AND id <> $1
+          ORDER BY full_name LIMIT 1`,
+        [vendor.id]
+      );
+      const secondVendorId = secondVendorRows[0]?.id;
+      if (!secondVendorId) {
+        check("sección 11: SALTEADA — no hay un segundo vendor sincronizado en el sandbox", false, "sin fixture");
+      } else {
+        await pool.query(
+          `INSERT INTO order_commission_recipient
+             (id, order_commission_id, qb_vendor_id, display_name, percent_bps, amount_mode, state)
+           VALUES ('ocre_e2e_cap_void_r3', $1, $2, 'E2E S11 Void Recipient', 150, 'percent', 'draft')`,
+          [commissionId11, secondVendorId]
+        );
+
+        const got11c = await api(token, "GET", orderPath);
+        const cap11c = got11c.body.commission as { combined_bps: number } | null;
+        check(
+          "sección 11: el tercer beneficiario LIVE sí consume cap (combined_bps sube)",
+          (cap11c?.combined_bps ?? 0) > combinedBpsAfterInflate,
+          `before=${combinedBpsAfterInflate} conR3vivo=${cap11c?.combined_bps}`
+        );
+
+        const void11 = await api(
+          token, "POST", `${orderPath}/recipients/ocre_e2e_cap_void_r3`,
+          { action: "void", reason: "e2e sección 11" }, E2E_PIN
+        );
+        check("sección 11: void del tercer beneficiario OK", void11.status === 200, `status=${void11.status}`);
+
+        const got11d = await api(token, "GET", orderPath);
+        const cap11d = got11d.body.commission as { combined_bps: number } | null;
+        check(
+          "sección 11 · CHECK CRÍTICO: voideado, combined_bps vuelve EXACTO al valor sin el 3º beneficiario",
+          cap11d?.combined_bps === combinedBpsAfterInflate,
+          `esperado=${combinedBpsAfterInflate} obtenido=${cap11d?.combined_bps}`
+        );
+      }
+
+      // Restaurar el descuento original.
+      await pool.query(`DELETE FROM order_line_item_adjustment WHERE id = 'ordliadj_e2e_cap_11'`);
+      const got11e = await api(token, "GET", orderPath);
+      const cap11e = got11e.body.commission as { combined_bps: number } | null;
+      check(
+        "sección 11: descuento restaurado → combined_bps vuelve al valor de arranque",
+        cap11e?.combined_bps === combinedBpsBefore,
+        `esperado=${combinedBpsBefore} obtenido=${cap11e?.combined_bps}`
+      );
+    }
+  }
+
+  // ── 12 · Una orden cancelada no comisiona, pero SÍ se puede voidear (fix D) ─
+  console.log("── 12 · Orden cancelada: no comisiona, void sigue permitido (fix D) ──");
+  {
+    await resetCommission(fixture.order_id);
+    const { rows: statusRows } = await pool.query<{ status: string }>(
+      `SELECT status FROM "order" WHERE id = $1`,
+      [fixture.order_id]
+    );
+    const originalStatus = statusRows[0]?.status ?? "completed";
+
+    const assigned12 = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 300 }] },
+      E2E_PIN
+    );
+    check("sección 12: asignación inicial (orden todavía normal) guarda", assigned12.status === 200);
+    const got12a = await api(token, "GET", orderPath);
+    const recipientId12 = (got12a.body.commission as { recipients: Array<{ id: string }> } | null)
+      ?.recipients[0]?.id;
+
+    await pool.query(`UPDATE "order" SET status = 'canceled' WHERE id = $1`, [fixture.order_id]);
+
+    const assignCanceled = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 100 }] },
+      E2E_PIN
+    );
+    check(
+      "sección 12: Asignar sobre orden cancelada → 409 order_not_commissionable",
+      assignCanceled.status === 409 && assignCanceled.body.code === "order_not_commissionable",
+      `status=${assignCanceled.status} code=${String(assignCanceled.body.code)}`
+    );
+
+    const approveCanceled = await api(
+      token, "POST", `${orderPath}/recipients/${recipientId12}`, { action: "approve" }, E2E_PIN
+    );
+    check(
+      "sección 12: Approve sobre orden cancelada → 409 order_not_commissionable",
+      approveCanceled.status === 409 && approveCanceled.body.code === "order_not_commissionable",
+      `status=${approveCanceled.status} code=${String(approveCanceled.body.code)}`
+    );
+
+    const settleCanceled = await api(
+      token, "POST", `${orderPath}/recipients/${recipientId12}`,
+      { action: "settle", method: "store_credit" }, E2E_PIN
+    );
+    check(
+      "sección 12: Settle sobre orden cancelada → 409 order_not_commissionable",
+      settleCanceled.status === 409 && settleCanceled.body.code === "order_not_commissionable",
+      `status=${settleCanceled.status} code=${String(settleCanceled.body.code)}`
+    );
+
+    const voidCanceled = await api(
+      token, "POST", `${orderPath}/recipients/${recipientId12}`,
+      { action: "void", reason: "e2e sección 12 — orden cancelada" }, E2E_PIN
+    );
+    check(
+      "sección 12: Void sobre orden cancelada → 200 (SIGUE PERMITIDO)",
+      voidCanceled.status === 200,
+      `status=${voidCanceled.status}`
+    );
+
+    await pool.query(`UPDATE "order" SET status = $2 WHERE id = $1`, [fixture.order_id, originalStatus]);
+
+    const assignedRestored = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 150 }] },
+      E2E_PIN
+    );
+    check(
+      "sección 12: CONTROL POSITIVO — restaurado el status, la asignación vuelve a funcionar",
+      assignedRestored.status === 200,
+      `status=${assignedRestored.status} orderStatusRestaurado=${originalStatus}`
+    );
+  }
+
+  // ── 13 · Un bill soft-borrado no cierra el settlement (fix E) ──────────────
+  console.log("── 13 · Bill soft-borrado no cierra el settlement (fix E) ──");
+  {
+    await resetCommission(fixture.order_id);
+    const assigned13 = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 350 }] },
+      E2E_PIN
+    );
+    check("sección 13: asignación guarda", assigned13.status === 200);
+    const got13a = await api(token, "GET", orderPath);
+    const recipientId13 = (got13a.body.commission as { recipients: Array<{ id: string }> } | null)
+      ?.recipients[0]?.id;
+
+    const approve13 = await api(token, "POST", `${orderPath}/recipients/${recipientId13}`, { action: "approve" }, E2E_PIN);
+    check("sección 13: approve OK", approve13.status === 200);
+
+    const { rows: amt13 } = await pool.query<{ amount_cents: string }>(
+      `SELECT amount_cents::text FROM order_commission_recipient WHERE id = $1`,
+      [recipientId13]
+    );
+    const amountCents13 = parseInt(String(amt13[0]?.amount_cents ?? "0"), 10);
+
+    const bill13 = await api(token, "POST", "/admin/vendor-bills", {
+      vendor_id: vendor.id,
+      bill_type: "service",
+      reference_id: `E2E-COMM-S13-${Date.now().toString(36)}`,
+      initial_account_line: { qb_account_list_id: EXPENSE_LIST_ID, amount_cents: amountCents13 },
+    });
+    const billId13 = String((bill13.body as { vendor_bill?: { id?: string } }).vendor_bill?.id ?? bill13.body.id ?? "");
+    check("sección 13: bill service se crea", bill13.status === 201 || bill13.status === 200, `status=${bill13.status}`);
+
+    const settle13 = await api(
+      token, "POST", `${orderPath}/recipients/${recipientId13}`,
+      { action: "settle", method: "vendor_bill", vendor_bill_id: billId13 }, E2E_PIN
+    );
+    check("sección 13: settle vendor_bill → settling", settle13.status === 200, `status=${settle13.status}`);
+
+    // Soft-borrar el bill Y darle un qb_txn_id (simula: confirmó en QB y
+    // alguien lo borró después). El índice único es parcial
+    // (`WHERE deleted_at IS NULL`), así que setear las dos columnas en la
+    // MISMA sentencia no colisiona con nada.
+    await pool.query(
+      `UPDATE vendor_bill SET deleted_at = NOW(), qb_txn_id = 'E2E-QB-TXN-S13' WHERE id = $1`,
+      [billId13]
+    );
+
+    await api(token, "GET", "/admin/commissions?tab=open"); // dispara reconcile-on-read
+
+    const readState13 = async (): Promise<{ state: string | null; settlementStatus: string | null }> => {
+      const { rows } = await pool.query<{ state: string; status: string }>(
+        `SELECT r.state, s.status
+           FROM order_commission_recipient r
+           JOIN commission_settlement s ON s.recipient_id = r.id
+          WHERE r.id = $1
+          ORDER BY s.created_at DESC, s.id DESC
+          LIMIT 1`,
+        [recipientId13]
+      );
+      return { state: rows[0]?.state ?? null, settlementStatus: rows[0]?.status ?? null };
+    };
+
+    const afterSoftDelete = await readState13();
+    check(
+      "sección 13: bill soft-borrado → el settlement NO cierra (sigue 'settling'/no confirmado)",
+      afterSoftDelete.state === "settling" && afterSoftDelete.settlementStatus !== "confirmed",
+      JSON.stringify(afterSoftDelete)
+    );
+
+    // CONTROL POSITIVO: restaurar el bill y disparar el reconcile de nuevo —
+    // ahora SÍ tiene que cerrar. Sin esto, "no cerró" es compatible con "el
+    // reconcile no corrió".
+    await pool.query(`UPDATE vendor_bill SET deleted_at = NULL WHERE id = $1`, [billId13]);
+    await api(token, "GET", "/admin/commissions?tab=open");
+    const afterRestore = await readState13();
+    check(
+      "sección 13: CONTROL POSITIVO — restaurado el bill, el reconcile SÍ cierra",
+      afterRestore.state === "closed" && afterRestore.settlementStatus === "confirmed",
+      JSON.stringify(afterRestore)
+    );
   }
 
   await pool.end();

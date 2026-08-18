@@ -13,9 +13,19 @@
 
 export type RecipientState = "draft" | "eligible" | "approved" | "settling" | "closed" | "void";
 
-/** Mientras TODOS los beneficiarios estén en draft, el modal puede re-guardar. */
+/**
+ * Mientras TODOS los beneficiarios estén en draft o void, el modal puede
+ * re-guardar. `voidRecipient` pone `state='void'` pero NO setea `deleted_at`,
+ * así que los voideados siguen viniendo en `fetchCommission`; con el
+ * predicado viejo (`=== "draft"`), voidear a UN beneficiario dejaba la
+ * asignación imposible de re-guardar y de borrar PARA SIEMPRE (y
+ * `uq_order_commission_live` impide crear otra comisión para esa orden). Un
+ * beneficiario voideado es historia, no un reclamo vivo. El re-guardado los
+ * soft-borra igual que a los drafts previos, así que la traza sobrevive vía
+ * `deleted_at` + `void_reason` + `state='void'`.
+ */
 export function canReSaveAssignment(states: RecipientState[]): boolean {
-  return states.every((s) => s === "draft");
+  return states.every((s) => s === "draft" || s === "void");
 }
 
 /** draft→eligible es automático cuando el devengo venció. eligible→draft si dejó de valer (p.ej. refund que reabrió). */

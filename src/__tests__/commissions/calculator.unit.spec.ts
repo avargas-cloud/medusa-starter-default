@@ -161,6 +161,67 @@ describe("checkCombinedCap", () => {
     expect(r.totalCommissionBps).toBe(0);
     expect(r.ok).toBe(false);
   });
+
+  // ── Fix C: el cap vivo se mide sólo contra los recipients que van a cobrar ──
+  // (writer.ts refreshCommission filtra `state !== 'void'` ANTES de llamar
+  // acá — checkCombinedCap no sabe de estados, así que el filtro importa en
+  // el CALLER, y estos tests prueban que importa: la misma orden con y sin
+  // la fila void da un combinado distinto).
+
+  it("un recipient void NO debe estar en la lista pasada — 3 filas vs 2 dan combinados distintos", () => {
+    // 3 recipients (uno de ellos sería 'void' y NO debería llegar acá).
+    const withVoidRow = checkCombinedCap({
+      itemSubtotalCents: 100_000,
+      discountCents: 10_000,
+      recipients: [pct(500), pct(500), pct(100)],
+      capBps: 2000,
+    });
+    // La misma orden, filtrando la fila void ANTES de llamar (lo que hace
+    // refreshCommission).
+    const withoutVoidRow = checkCombinedCap({
+      itemSubtotalCents: 100_000,
+      discountCents: 10_000,
+      recipients: [pct(500), pct(500)],
+      capBps: 2000,
+    });
+    expect(withVoidRow.combinedBps).not.toBe(withoutVoidRow.combinedBps);
+    expect(withVoidRow.combinedBps).toBe(2100);
+    expect(withoutVoidRow.combinedBps).toBe(2000);
+  });
+
+  it("una fila fixed sobre base 0 marca undeterminedFixed:true y ok:false", () => {
+    const r = checkCombinedCap({
+      itemSubtotalCents: 5_000,
+      discountCents: 5_000, // base = max(0, 5000-5000) = 0
+      recipients: [fixed(1_000)],
+      capBps: 2000,
+    });
+    expect(r.undeterminedFixed).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
+  it("descuento que sube tras asignar empuja combinedBps por encima del cap (5% comisión + 10%→18% descuento, cap 20%)", () => {
+    // Al asignar: descuento 10% + comisión 5% = 15% ≤ cap 20% → ok.
+    const atAssignment = checkCombinedCap({
+      itemSubtotalCents: 100_000,
+      discountCents: 10_000,
+      recipients: [pct(500)],
+      capBps: 2000,
+    });
+    expect(atAssignment.ok).toBe(true);
+    expect(atAssignment.combinedBps).toBe(1500);
+
+    // El descuento sube a 18% sin tocar la comisión: 18% + 5% = 23% > 20%.
+    const afterDiscountIncrease = checkCombinedCap({
+      itemSubtotalCents: 100_000,
+      discountCents: 18_000,
+      recipients: [pct(500)],
+      capBps: 2000,
+    });
+    expect(afterDiscountIncrease.ok).toBe(false);
+    expect(afterDiscountIncrease.discountBps).toBe(1800);
+    expect(afterDiscountIncrease.combinedBps).toBe(2300);
+  });
 });
 
 describe("effectiveAmountCents / effectiveBps", () => {

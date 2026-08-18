@@ -105,6 +105,15 @@ export async function POST(
         const money = await readOrderMoneySnapshot(client, orderId);
         if (money) await refreshCommission(client, orderId, money);
         if (action === "approve") {
+          // Una orden cancelada no comisiona — void SIGUE permitido (es
+          // exactamente lo que el operador necesita hacer sobre una comisión
+          // de una orden que se canceló).
+          if (money?.orderStatus === "canceled") {
+            throw new CommissionError(
+              "order_not_commissionable",
+              "This order is 'canceled' — its commission cannot be approved."
+            );
+          }
           return await approveRecipient(client, recipientId, pin.actorId);
         }
         await voidRecipient(client, recipientId, pin.actorId, reason);
@@ -115,7 +124,11 @@ export async function POST(
   } catch (err) {
     if (err instanceof CommissionError) {
       const status =
-        err.code === "not_found" ? 404 : err.code === "invalid_state" ? 409 : 400;
+        err.code === "not_found"
+          ? 404
+          : err.code === "invalid_state" || err.code === "order_not_commissionable"
+            ? 409
+            : 400;
       res.status(status).json({ error: err.message, code: err.code, details: err.details });
       return;
     }
@@ -163,6 +176,12 @@ async function handleSettle(
     const staged = await withOrderCommissionLock(pool, ctx.orderId, async (client) => {
       const money = await readOrderMoneySnapshot(client, ctx.orderId);
       if (money) await refreshCommission(client, ctx.orderId, money);
+      if (money?.orderStatus === "canceled") {
+        throw new CommissionError(
+          "order_not_commissionable",
+          "This order is 'canceled' — its commission cannot be settled."
+        );
+      }
 
       const existing = await fetchCommission(client, ctx.orderId);
       if (!existing) throw new CommissionError("not_found", "This order has no commission.");
@@ -351,7 +370,11 @@ async function handleSettle(
   } catch (err) {
     if (err instanceof CommissionError) {
       const status =
-        err.code === "not_found" ? 404 : err.code === "invalid_state" ? 409 : 400;
+        err.code === "not_found"
+          ? 404
+          : err.code === "invalid_state" || err.code === "order_not_commissionable"
+            ? 409
+            : 400;
       res.status(status).json({ error: err.message, code: err.code, details: err.details });
       return;
     }

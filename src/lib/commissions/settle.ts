@@ -178,8 +178,20 @@ export async function insertSettlement(
       ]
     );
   } catch (err) {
-    const pgErr = err as { code?: string };
+    const pgErr = err as { code?: string; constraint?: string };
     if (pgErr.code === "23505") {
+      if (pgErr.constraint === "uq_cset_live_per_bill") {
+        throw new CommissionError(
+          "invalid_state",
+          "This bill is already settling another beneficiary's commission — one bill pays one beneficiary.",
+          { reason: "bill_already_settled" }
+        );
+      }
+      if (pgErr.constraint === "uq_cset_idempotency") {
+        throw new CommissionError("invalid_state", "This settlement was already submitted.", {
+          reason: "duplicate_idempotency_key",
+        });
+      }
       throw new CommissionError(
         "invalid_state",
         "This recipient already has a live settlement — one balance goes through ONE path.",
@@ -224,6 +236,27 @@ export async function validateVendorBillForSettlement(
     });
   }
 
+  // El índice `uq_cset_live_per_bill` es el candado bajo concurrencia; este
+  // chequeo existe para dar el mensaje bueno (el índice sólo puede dar un
+  // 23505) nombrando al OTRO beneficiario que ya está liquidando este bill.
+  const { rows: reuseRows } = await client.query<{ id: string; display_name: string }>(
+    `SELECT s.id, r.display_name
+       FROM commission_settlement s
+       JOIN order_commission_recipient r ON r.id = s.recipient_id
+      WHERE s.vendor_bill_id = $1
+        AND s.status IN ('pending','qb_waiting','confirmed')
+      LIMIT 1`,
+    [vendorBillId]
+  );
+  const reuse = reuseRows[0];
+  if (reuse) {
+    throw new CommissionError(
+      "invalid_state",
+      `This bill is already settling the commission of "${reuse.display_name}" — one bill pays one beneficiary.`,
+      { reason: "bill_already_settled", otherSettlementId: reuse.id, otherBeneficiary: reuse.display_name }
+    );
+  }
+
   const { rows: lineRows } = await client.query<{
     total_cents: string | number | null;
     off_account: string | number | null;
@@ -258,10 +291,14 @@ export async function validateVendorBillForSettlement(
  * payment-check: QuickBooks es el dueño del estado, el POS lo refleja.
  */
 export async function reconcileVendorBillSettlements(client: PoolClient): Promise<number> {
+  // `AND vb.deleted_at IS NULL`: el listado ya lo filtraba
+  // (`api/admin/commissions/route.ts:182`) y este lector no — un bill
+  // soft-borrado que conservara su `qb_txn_id` cerraba el settlement y
+  // dejaba al beneficiario en `closed`, estado del que no hay vuelta.
   const { rows } = await client.query<{ id: string; recipient_id: string; qb_txn_id: string }>(
     `SELECT s.id, s.recipient_id, vb.qb_txn_id
        FROM commission_settlement s
-       JOIN vendor_bill vb ON vb.id = s.vendor_bill_id
+       JOIN vendor_bill vb ON vb.id = s.vendor_bill_id AND vb.deleted_at IS NULL
       WHERE s.method = 'vendor_bill'
         AND s.status IN ('pending', 'qb_waiting')
         AND vb.qb_txn_id IS NOT NULL`
