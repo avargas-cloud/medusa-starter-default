@@ -9,6 +9,7 @@ import {
   SALES_DATE_FILTER_SQL,
   fetchCmRefundsCentsForPeriod,
 } from "../../_lib/sales-revenue"
+import { fetchSettledCommissionCentsForPeriod } from "../../_lib/commission-expr"
 
 const ACTIVE = SALES_ACTIVE_STATUSES_SQL
 
@@ -94,7 +95,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
-    const [curr, prev, topCustomer, adjCogs, prevAdjCogs, currRefundCents, prevRefundCents, currUnitsRet, prevUnitsRet] = await Promise.all([
+    const [
+      curr,
+      prev,
+      topCustomer,
+      adjCogs,
+      prevAdjCogs,
+      currRefundCents,
+      prevRefundCents,
+      currUnitsRet,
+      prevUnitsRet,
+      currCommissionCents,
+      prevCommissionCents,
+    ] = await Promise.all([
       fetchPeriodStats(pg, range.from, range.to),
       fetchPeriodStats(pg, prior.from, prior.to),
       fetchTopCustomer(pg, range.from, range.to),
@@ -104,6 +117,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       fetchCmRefundsCentsForPeriod(pg, prior.from, prior.to),
       fetchUnitsReturnedForPeriod(pg, range.from, range.to),
       fetchUnitsReturnedForPeriod(pg, prior.from, prior.to),
+      fetchSettledCommissionCentsForPeriod(pg, range.from, range.to),
+      fetchSettledCommissionCentsForPeriod(pg, prior.from, prior.to),
     ])
 
     // GAAP-correct definitions:
@@ -119,11 +134,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const margin_pct    = net_revenue > 0 ? (gross_profit / net_revenue) * 100 : 0
     const refund_pct    = gross_revenue > 0 ? (refunded / gross_revenue) * 100 : 0
 
+    // Comisión LIQUIDADA (settlements confirmed), en DÓLARES — mismo tratamiento
+    // que revenue (cents → dollars), NUNCA el de cogs (que ya está en dólares).
+    // gross_profit NO cambia de definición: la comisión es una línea nueva.
+    const commission              = currCommissionCents / 100
+    const profit_after_commissions = gross_profit - commission
+
     const prevGrossRevenue = Number(prev.revenue) / 100
     const prevRefunded     = prevRefundCents / 100
     const prevNetRevenue   = prevGrossRevenue - prevRefunded
     const prevCogs         = Number(prev.cogs) + prevAdjCogs
     const prevGrossProfit  = prevNetRevenue - prevCogs
+    const prevCommission              = prevCommissionCents / 100
+    const prevProfitAfterCommissions  = prevGrossProfit - prevCommission
 
     const units_sold      = Number(curr.units_sold ?? 0)
     const units_returned  = Number(currUnitsRet ?? 0)
@@ -141,6 +164,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       net_revenue,
       refund_pct:  Math.round(refund_pct  * 10) / 10,
       gross_profit,
+      commission,
+      profit_after_commissions,
       margin_pct:  Math.round(margin_pct  * 10) / 10,
       aov: curr.invoice_count > 0 ? gross_revenue / Number(curr.invoice_count) : 0,
       units_sold,
@@ -156,6 +181,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         refunded: prevRefunded,
         net_revenue: prevNetRevenue,
         gross_profit: prevGrossProfit,
+        commission: prevCommission,
+        profit_after_commissions: prevProfitAfterCommissions,
         aov: prev.invoice_count > 0 ? prevGrossRevenue / Number(prev.invoice_count) : 0,
         units_sold: prevUnitsSold,
         units_returned: prevUnitsReturned,

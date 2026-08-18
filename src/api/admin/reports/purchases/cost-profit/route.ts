@@ -8,6 +8,7 @@ import {
 } from "../../_lib/sales-revenue"
 import { TIER1_CTE } from "../../_lib/category-tier1"
 import { vendorFullNameSql } from "../../../../../lib/vendor-metadata/keys"
+import { fetchAccruedCommissionCentsForPeriod } from "../../_lib/commission-expr"
 
 // pos_invoice.discount already includes ALL discounts (inline item % + promo codes).
 // NET_ITEM_REVENUE distributes that total proportionally — do NOT subtract adjustments again.
@@ -49,7 +50,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
-    const [totalsResult, byCatResult, byVendorResult, refundCents] = await Promise.all([
+    const [totalsResult, byCatResult, byVendorResult, refundCents, commissionCents] = await Promise.all([
       pg.raw(
         `WITH RECURSIVE ${TIER1_CTE}
          SELECT
@@ -83,16 +84,24 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         [range.from, range.to]
       ),
       fetchCmRefundsCentsForPeriod(pg, range.from, range.to),
+      fetchAccruedCommissionCentsForPeriod(pg, range.from, range.to),
     ])
 
     const t = totalsResult.rows[0]
-    const grossRevenueCents = Number(t?.revenue_cents ?? 0)
-    const refundCentsNum    = Number(refundCents ?? 0)
-    const revenueCents      = grossRevenueCents - refundCentsNum  // net sales
-    const costCents         = Number(t?.cost_cents ?? 0)
-    const profitCents       = revenueCents - costCents
-    const totalItems        = Number(t?.total_items ?? 0)
-    const costedItems       = Number(t?.costed_items ?? 0)
+    const grossRevenueCents    = Number(t?.revenue_cents ?? 0)
+    const refundCentsNum       = Number(refundCents ?? 0)
+    const revenueCents         = grossRevenueCents - refundCentsNum  // net sales
+    const costCents            = Number(t?.cost_cents ?? 0)
+    const profitCents          = revenueCents - costCents
+    const totalItems           = Number(t?.total_items ?? 0)
+    const costedItems          = Number(t?.costed_items ?? 0)
+    // Accrued commission (dated by invoice, prorated across multi-invoice orders).
+    // Order-level figure only — deliberately NOT broken out by category/vendor:
+    // the commission is agreed on the ORDER, not the item, so allocating it by
+    // category or vendor would invent an attribution nobody agreed to and that
+    // would shift depending on how the order happens to be grouped.
+    const commissionCentsNum   = Number(commissionCents ?? 0)
+    const profitAfterCommCents = profitCents - commissionCentsNum
 
     const mapRows = (rows: any[]) =>
       rows.map(r => {
@@ -117,6 +126,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         profit:         profitCents / 100,
         margin_pct:     revenueCents > 0 ? Math.round((profitCents / revenueCents) * 1000) / 10 : 0,
         coverage_pct:   totalItems > 0 ? Math.round((costedItems / totalItems) * 1000) / 10 : 0,
+        commission:                commissionCentsNum / 100,
+        profit_after_commissions:  profitAfterCommCents / 100,
       },
       by_category: mapRows(byCatResult.rows),
       by_vendor:   mapRows(byVendorResult.rows),
