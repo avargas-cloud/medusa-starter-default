@@ -5,6 +5,7 @@ import { Client } from "pg";
 import { pollOperationResult } from "../../../../../lib/quickbooks/client/core";
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { evaluateRetryGate } from "../../../../../lib/quickbooks/pipeline/retry-gate";
 
 export async function POST(
   req: MedusaRequest,
@@ -71,40 +72,59 @@ export async function POST(
   try {
     await client.connect();
 
-    // Commission steps are ADD-only ops (CheckAdd / ReceivePaymentAdd) — NOT
-    // idempotent. The bridge's own dedup only protects while the operation is
-    // still in its ledger (RAM, purged after 6h). This read happens BEFORE the
-    // UPDATE below clears `bridge_op_id` to NULL — after that UPDATE runs, the
-    // real value is gone from the row (the UPDATE's own RETURNING gives back
-    // the NEW value, i.e. always NULL, which is a separate known bug tracked
-    // elsewhere and NOT fixed here) — so this is the only point where we can
-    // still see whether an op was actually submitted to the bridge.
-    const { rows: guardRows } = await client.query(
-      `SELECT step, bridge_op_id, status, submitted_at, updated_at
+    // ── Retry gate ────────────────────────────────────────────────────────────
+    //
+    // Read BEFORE the claim below, and that ordering is the whole point: the
+    // claim sets `bridge_op_id = NULL`, and a `RETURNING` on an UPDATE hands back
+    // the NEW value — so after it runs, the only evidence that this row ever
+    // reached the bridge is gone. (That is also why the `if (row.bridge_op_id)`
+    // re-poll branch further down has never once executed. Verified against
+    // Postgres 17. It is a separate defect, tracked, and deliberately NOT fixed
+    // here — it spans all 44 steps and changing it changes behaviour for each.)
+    //
+    // Reading here means we still see the real value, which is what lets the gate
+    // tell "this ADD may already exist in QuickBooks" apart from "this never left
+    // the building". Not preserving the column is fine BECAUSE of the gate: when
+    // the verdict is deny the row is left untouched, so the id survives; when it
+    // is allow, re-dispatching is safe by definition and a fresh op will be made.
+    //
+    // Decision table lives in `lib/quickbooks/pipeline/retry-gate.ts`, unit
+    // tested, and shared with the static verifier — never duplicated here.
+    const { rows: guardRows } = await client.query<{
+      step: string;
+      status: string;
+      error: string | null;
+      bridge_op_id: string | null;
+      qb_txn_id: string | null;
+      submitted_at: Date | null;
+    }>(
+      `SELECT step, status, error, bridge_op_id, qb_txn_id, submitted_at
          FROM qb_order_pipeline WHERE id = $1`,
       [rowId]
     );
     const guardRow = guardRows[0];
-    if (
-      guardRow &&
-      (guardRow.step === "commission_check" ||
-        guardRow.step === "commission_payment") &&
-      guardRow.bridge_op_id
-    ) {
-      res.status(409).json({
-        code: "commission_retry_needs_qb_check",
-        bridge_op_id: guardRow.bridge_op_id,
-        submitted_at: guardRow.submitted_at,
-        error:
-          "This step is a non-idempotent QB ADD (CheckAdd / ReceivePaymentAdd). " +
-          "The bridge's dedup only protects while the operation is still in its " +
-          "in-memory ledger, which is purged after 6 hours. Before retrying, " +
-          "confirm in QuickBooks whether the check already exists — query by " +
-          "EntityFilter with the vendor's ListID, NOT by RefNumber: QuickBooks " +
-          "never assigns a RefNumber to a check with IsToBePrinted=true, so a " +
-          "RefNumber search returns a false negative.",
+    if (guardRow) {
+      const verdict = evaluateRetryGate({
+        step: guardRow.step,
+        status: guardRow.status,
+        error: guardRow.error,
+        bridgeOpId: guardRow.bridge_op_id,
+        qbTxnId: guardRow.qb_txn_id,
       });
-      return;
+      if (!verdict.allow) {
+        logger.warn(
+          `${LOG_PREFIX} 🛑 Retry blocked for ${guardRow.step} ${rowId}: ${verdict.reason}`
+        );
+        res.status(409).json({
+          code: verdict.code,
+          error: verdict.reason,
+          instructions: verdict.instructions,
+          step: guardRow.step,
+          bridge_op_id: guardRow.bridge_op_id,
+          submitted_at: guardRow.submitted_at,
+        });
+        return;
+      }
     }
 
     // 1. Atomically claim the row — only 'failed' and 'waiting' are retryable.

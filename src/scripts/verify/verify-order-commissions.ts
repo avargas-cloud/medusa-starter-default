@@ -24,6 +24,8 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
+import { evaluateRetryGate } from "../../lib/quickbooks/pipeline/retry-gate";
+
 const ROOT = resolve(__dirname, "../../..");
 const read = (rel: string): string => readFileSync(resolve(ROOT, rel), "utf8");
 
@@ -405,20 +407,46 @@ const funcBody = (src: string, marker: string): string => {
   );
 }
 
-// 23 (Fase 4 · check 14) · el guard commission_retry_needs_qb_check corre
-// ANTES del UPDATE que reclama la fila (limpia bridge_op_id a NULL) — después
-// sería inútil, el valor que necesita ya sería NULL. Orden por POSICIÓN en
-// el string, no sólo presencia.
+// 23 (Fase 4 · check 14) · el retry de los dos steps de comisión sigue
+// protegido ANTES del UPDATE que reclama la fila (limpia bridge_op_id a NULL) —
+// después sería inútil, el valor que necesita ya sería NULL.
+//
+// SUPERSEDED el 2026-08-18: la protección era un guard propio con el código
+// `commission_retry_needs_qb_check`; ahora la provee el gate genérico
+// `evaluateRetryGate` (lib/quickbooks/pipeline/retry-gate.ts), que cubre esos
+// dos steps y ocho más. Este check pasó de buscar un STRING a comprobar el
+// COMPORTAMIENTO: que el gate se consulte antes del claim, y que ejercitado con
+// una fila de comisión ambigua efectivamente DENIEGUE. Un check atado al nombre
+// de una implementación se rompe cuando la implementación mejora — y eso es
+// exactamente lo que pasó acá.
 {
   const src = read(
     "src/api/admin/quickbooks/pipeline/handlers/post-pipeline.ts"
   );
-  const guardIdx = src.indexOf(`"commission_retry_needs_qb_check"`);
+  const gateIdx = src.indexOf("evaluateRetryGate({");
   const claimIdx = src.indexOf("bridge_op_id = NULL,");
   check(
-    "guard commission_retry_needs_qb_check aparece ANTES del UPDATE que limpia bridge_op_id (el claim)",
-    guardIdx >= 0 && claimIdx >= 0 && guardIdx < claimIdx
+    "el retry gate se consulta ANTES del UPDATE que limpia bridge_op_id (el claim)",
+    gateIdx >= 0 && claimIdx >= 0 && gateIdx < claimIdx
   );
+
+  // Ejercitamos el gate REAL con las dos formas de fila de comisión que antes
+  // cubría el guard propio: ADD en vuelo (bridge_op_id presente) con outcome
+  // desconocido ⇒ tiene que denegar.
+  for (const step of ["commission_check", "commission_payment"]) {
+    const verdict = evaluateRetryGate({
+      step,
+      status: "failed",
+      error:
+        "Timed out before submitted state (>20 min) — no response from QB bridge",
+      bridgeOpId: "op-verify",
+      qbTxnId: null,
+    });
+    check(
+      `el gate DENIEGA el retry de un ${step} con op en vuelo y outcome desconocido`,
+      verdict.allow === false
+    );
+  }
 }
 
 // 24 (Fase 4 · check 15) · el botón/modal de Commissions del POS está
