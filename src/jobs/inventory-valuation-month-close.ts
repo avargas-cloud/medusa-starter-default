@@ -87,6 +87,9 @@ export default async function inventoryValuationMonthClose(
 
 export const config = {
   name: "inventory-valuation-month-close",
-  // 00:20 on the 1st of every month, after midnight settles.
-  schedule: "20 0 1 * *",
+  // 05:20 UTC on the 1st = 00:20 EST / 01:20 EDT — the ET calendar has already
+  // rolled to the new month. At the old 00:20 UTC it was still 20:20 ET of the
+  // PRIOR month's last day, so the ET-anchored month derivation above computed
+  // the previous close, found it captured, and skipped — no close ever minted.
+  schedule: "20 5 1 * *",
 };
