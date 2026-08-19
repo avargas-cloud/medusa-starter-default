@@ -78,11 +78,6 @@ export interface ApplyPriceRowsCoreResult {
   qbCandidates: QbModCandidate[];
 }
 
-export interface ApplyPriceRowsResult {
-  results: ApplyPriceRowResult[];
-  skippedQb: ApplyPriceRowsSkip[];
-}
-
 const priceSetIdOf = (v: ApplyPriceVariant): string | undefined => {
   const raw = v.price_set;
   return Array.isArray(raw) ? raw[0]?.id : raw?.id;
@@ -246,31 +241,19 @@ export async function runPriceRowsPostCommit(
   }
 }
 
-/**
- * Applies a set of already-validated price/cost rows: opens ITS OWN
- * transaction, runs the write core, then runs post-commit. This is the shape
- * the bulk route uses (it has no other write to fold into the same
- * transaction). `variants` must already contain every `row.variant_id`
- * (callers resolve + 404-check missing ids before calling this — same
- * ordering as the original bulk route).
+/*
+ * Acá vivía `applyPriceRows`, el envoltorio que abría su PROPIA transacción
+ * para el único caller que no tenía ninguna otra escritura que meter adentro:
+ * `POST /admin/pos/prices/bulk`. Esa ruta se borró el 2026-08-19 y con ella el
+ * envoltorio (ver el commit para recuperarlo si hace falta).
+ *
+ * El motivo no fue que estuviera mal: era código muerto —ninguna pantalla la
+ * llamaba desde que el editor masivo pasó al flujo de batches— y era una
+ * segunda forma de repreciar hasta 500 ítems que, a diferencia del approve, no
+ * dejaba fila `price_change_batch`, o sea ningún PA-#### que auditar después.
+ * Las dos pedían PIN por igual; lo que se unificó fue el RASTRO, no el permiso.
+ *
+ * Quien vuelva a necesitar aplicar filas fuera de un batch: componer
+ * `applyPriceRowsInTransaction` + `runPriceRowsPostCommit` como hace el approve,
+ * y dejar registro de quién y cuándo en la misma transacción.
  */
-export async function applyPriceRows(input: {
-  knex: PinConn & {
-    transaction: <T>(fn: (trx: PinConn) => Promise<T>) => Promise<T>;
-  };
-  scope: { resolve: (k: string) => unknown };
-  logger: LoggerLike;
-  variants: Map<string, ApplyPriceVariant>;
-  rows: ApplyPriceRow[];
-}): Promise<ApplyPriceRowsResult> {
-  const { knex, scope, logger, variants, rows } = input;
-
-  let core: ApplyPriceRowsCoreResult | undefined;
-  await knex.transaction(async (trx: PinConn) => {
-    core = await applyPriceRowsInTransaction(trx, logger, variants, rows);
-  });
-
-  await runPriceRowsPostCommit(scope, logger, core!);
-
-  return { results: core!.results, skippedQb: core!.skippedQb };
-}

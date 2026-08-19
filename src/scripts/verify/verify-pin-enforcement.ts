@@ -285,14 +285,11 @@ const MUST_GATE_ROUTES: {
       "página de vendor bill, que NO piden PIN. Exigirle el PIN a todo callsite " +
       "rompería esos tres flujos",
   },
-  {
-    rel: "api/admin/pos/prices/bulk/route.ts",
-    what: "bulk price/cost editor",
-    noFrontendCaller:
-      "el editor masivo pasó al flujo de price-batches (draft → submit → " +
-      "approve) y esta ruta quedó sin pantalla; su motor vive en " +
-      "lib/pos/apply-price-rows.ts, que sí usa el flujo nuevo",
-  },
+  // `api/admin/pos/prices/bulk/route.ts` se BORRÓ el 2026-08-19. Estaba gateada
+  // igual que las demás, pero no la llamaba ninguna pantalla desde que el editor
+  // masivo pasó al flujo de price-batches, y era una segunda forma de repreciar
+  // 500 ítems sin dejar el PA-#### que el approve sí registra. Su `_lib/` sigue
+  // vivo: lo importan cuatro rutas de price-batches.
   {
     rel: "api/admin/pos/price-batches/[id]/approve/route.ts",
     what: "applies an approved price-change batch's cost/retail/wholesale changes",
