@@ -23,6 +23,9 @@
  *     precio REALMENTE cambió en la DB (después se restaura).
  *  2. Las 3 rutas de QB: PIN equivocado → 403 · PIN correcto → NO 403 (avanza y
  *     muere más adelante por datos inexistentes, que es lo que se busca).
+ *  2b. products/[id], donde el gate es POR CAMPO: los 3 campos sensibles piden
+ *     PIN, y —igual de importante— título, costo y MPN NO, porque por esa misma
+ *     ruta pasa la propagación de costo del editor de PO y del vendor bill.
  *  3. Límite de intentos: 8 fallos → 403 con `attempts_left` decreciente; el 9º
  *     → 429 SUPERVISOR_PIN_LOCKED.
  *  4. Ninguna respuesta filtra el PIN ni su longitud.
@@ -284,6 +287,78 @@ async function main(): Promise<void> {
       ok.status !== 403,
       `siguió dando 403 con el PIN correcto → la conexión del helper no sirve ` +
         `y el gate rechaza siempre: ${ok.raw.slice(0, 200)}`
+    );
+  }
+
+  // ═══ 2b · pos/products/[id] — gate POR CAMPO ══════════════════════════════
+  /**
+   * Esta ruta no se gatea entera: por acá pasan el Save normal del modal
+   * (título, SKU, peso) y la propagación de costo del editor de PO y de la
+   * página de vendor bill, que NO piden PIN. Así que hay DOS propiedades que
+   * probar, y omitir la segunda dejaría pasar un gate que rompe compras:
+   *
+   *   · un campo sensible sin PIN → 403
+   *   · un campo NO sensible sin PIN → pasa (aserción NEGATIVA)
+   *
+   * Todos los cuerpos llevan un `variant_id` inexistente a propósito: el guard
+   * corre ANTES de resolver la variante, así que un 404 significa "atravesó el
+   * gate" y el test no escribe ni una fila. Un 200 exigiría que el bridge de QB
+   * esté vivo, y en sandbox está apagado (un edit QB-relevante 500ea y revierte).
+   */
+  console.log("\n2b · pos/products/[id] (gate por campo)");
+  const productPath = `/admin/pos/products/${item.product_id}`;
+  const GHOST_VARIANT = "variant_e2e_inexistente";
+
+  const gatedBodies: { name: string; body: Record<string, unknown> }[] = [
+    { name: "discontinued", body: { discontinued: true } },
+    { name: "is_sourced_via_agent", body: { is_sourced_via_agent: true } },
+    { name: "retail_price", body: { retail_price: 99.99 } },
+  ];
+  for (const g of gatedBodies) {
+    const body = { ...g.body, variant_id: GHOST_VARIANT };
+    const noPinRes = await call(productPath, { token, body });
+    check(
+      `${g.name} sin PIN → 403`,
+      noPinRes.status === 403 &&
+        noPinRes.body.code === "INVALID_SUPERVISOR_PIN",
+      `dio ${noPinRes.status} ${noPinRes.raw.slice(0, 160)}`
+    );
+
+    const wrongRes = await call(productPath, { token, body, pin: badPin });
+    check(
+      `${g.name} con PIN equivocado → 403`,
+      wrongRes.status === 403,
+      `dio ${wrongRes.status} ${wrongRes.raw.slice(0, 160)}`
+    );
+
+    // La aserción que importa: con el cast de knex mal, esto seguiría en 403 y
+    // el campo quedaría imposible de editar en producción — el mismo modo de
+    // falla que este plan vino a arreglar, con el signo cambiado.
+    const okRes = await call(productPath, { token, body, pin: realPin });
+    check(
+      `${g.name} con PIN correcto ATRAVIESA el guard`,
+      okRes.status !== 403,
+      `siguió dando 403 con el PIN correcto → el gate rechaza siempre: ` +
+        `${okRes.raw.slice(0, 200)}`
+    );
+  }
+
+  // Aserciones NEGATIVAS: lo que NO debe pedir PIN.
+  const ungatedBodies: { name: string; body: Record<string, unknown> }[] = [
+    { name: "title (Save normal del modal)", body: { title: "E2E ghost" } },
+    { name: "cost (propagate de PO / vendor bill)", body: { cost: 1.23 } },
+    { name: "mpn (propagate de PO)", body: { mpn: "E2E-GHOST" } },
+  ];
+  for (const u of ungatedBodies) {
+    const res = await call(productPath, {
+      token,
+      body: { ...u.body, variant_id: GHOST_VARIANT },
+    });
+    check(
+      `${u.name} sin PIN NO se bloquea`,
+      res.status !== 403,
+      `dio 403: el gate por campo se comió un flujo que no pide PIN — el ` +
+        `propagate de costo de compras dejaría de funcionar. ${res.raw.slice(0, 160)}`
     );
   }
 

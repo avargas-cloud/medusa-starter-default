@@ -7,6 +7,14 @@ import {
 } from "../../../../../lib/vendor-metadata/keys";
 
 import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+
+import {
   updatePosProductWorkflow,
   type UpdatePosProductInput,
 } from "../../../../../workflows/pos/update-pos-product";
@@ -27,6 +35,32 @@ import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows
  * Relying on the product-variant.updated subscriber alone left the inventory
  * index stale (e.g. a renamed SKU kept showing the old value on the list).
  */
+/**
+ * Campos de este endpoint que exigen PIN de supervisor.
+ *
+ * El gate es POR CAMPO y no por ruta a propósito: acá también entra el Save
+ * normal del modal (título, descripción, SKU, peso) y la propagación de costo
+ * que disparan el editor de PO y la página de vendor bill. Un guard de ruta
+ * entera rompería esos tres flujos — que es este mismo defecto al revés.
+ *
+ * `cost` (purchase_cost) queda AFUERA por decisión del operador (2026-08-19):
+ * es costo de fábrica, no precio de venta, y llega propagado desde documentos
+ * que son autoridad de precio (la factura del proveedor manda sobre el PO,
+ * regla del 2026-08-04). Meterlo obligaría a pedir PIN en el trabajo diario de
+ * compras. Si eso cambia, hay que agregar recolección de PIN a esos dos flujos
+ * ANTES de sumar la clave acá, o el propagate empieza a morir en 403.
+ *
+ * `retail_price` sí entra aunque hoy ningún caller lo mande: el workflow lo
+ * envía a QuickBooks como SalesPrice, así que sin el gate un POST directo
+ * reprecia el ítem en QB esquivando el PIN que sí exige POST /admin/pos/prices.
+ */
+const PIN_GATED_FIELDS = [
+  "discontinued",
+  "is_sourced_via_agent",
+  "is_sourced_via_agent_manual",
+  "retail_price",
+] as const;
+
 function reindexProductMeili(
   scope: MedusaRequest["scope"],
   productId: string,
@@ -58,6 +92,30 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const id = req.params.id as string;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const bodyVariantId = body.variant_id as string | undefined;
+
+    // ── Supervisor PIN, sólo si el body toca un campo sensible ───────────────
+    // Cubre las DOS ramas (single-variant y product mode) porque las claves
+    // gateadas son todas top-level: `restBody` se spreadea entero al workflow,
+    // así que un chequeo posterior a la rama dejaría un camino sin cubrir.
+    //
+    // Hasta hoy esta ruta no pedía nada y los recuadros "Unlock with PIN" del
+    // modal (Product Source, Discontinued) eran decoración: `SensitiveSection`
+    // ni siquiera propagaba el PIN. Como todo cajero es usuario admin, cualquier
+    // token descontinuaba un ítem o lo pasaba a CHINA con un POST directo.
+    const gatedKeys = PIN_GATED_FIELDS.filter((k) => k in body);
+    if (gatedKeys.length > 0) {
+      const knex = (req.scope as any).resolve("__pg_connection__");
+      const guard = await guardSupervisorPin({
+        scope: req.scope as unknown as { resolve: (k: string) => unknown },
+        db: knex as PinConn,
+        pin: extractSupervisorPin(req),
+        actorId: resolveActorId(req),
+      });
+      if (!guard.ok) {
+        const { status, body: guardBody } = pinGuardResponse(guard);
+        return res.status(status).json(guardBody);
+      }
+    }
 
     // ── Product mode: body carries a variants[] array ──────────────────────
     // Triggered by the EditItemModal "Producto" toggle. Dispatches to the

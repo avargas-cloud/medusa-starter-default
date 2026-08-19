@@ -20,6 +20,8 @@
  *   3. toda ruta del backend que hable de PIN usa el helper compartido, no una
  *      comparación a mano
  *   4. las 9 rutas de edición de orden llaman al guard de orden web
+ *   4b. las rutas de escritura de dinero llaman al guard, se nombren o no al PIN
+ *   4c. el frontend le MANDA el PIN a esas rutas (la falla inversa de 4b)
  *   5. la ruta nativa de stores sigue protegida por su middleware
  *   6. ninguna ruta loguea el PIN
  *
@@ -255,16 +257,64 @@ if (!failures.some((f) => WEB_MONEY_ROUTES.some(([rel]) => f.includes(rel)))) {
  * orden: son escrituras de dinero cuyo gate no puede depender de que el archivo
  * se acuerde de nombrar la clave.
  */
-const MUST_GATE_ROUTES = [
-  ["api/admin/pos/prices/[productId]/route.ts", "escribe el precio retail y el wholesale de un ítem"],
-  ["api/admin/pos/prices/bulk/route.ts", "bulk price/cost editor"],
-  ["api/admin/pos/price-batches/[id]/approve/route.ts", "applies an approved price-change batch's cost/retail/wholesale changes"],
-  ["api/admin/quickbooks/bill-match/adopt/route.ts", "registra un bill de QuickBooks contra un PO"],
-  ["api/admin/quickbooks/bill-match/undo/route.ts", "revierte un bill-match adoptado"],
-  ["api/admin/quickbooks/customer-credits/import/route.ts", "importa un crédito de QB como saldo redimible"],
-  ["api/admin/purchase-orders/[id]/factory-order-mirror/route.ts", "crea o sincroniza el Factory Order espejo de un PO"],
+/**
+ * `noFrontendCaller` documenta, por ruta, que NINGUNA pantalla la llama. Existe
+ * porque el chequeo 4c exige encontrar al menos un callsite —si no, un regex
+ * roto pasaría en vacío— y una ruta sin caller haría fallar esa exigencia por el
+ * motivo equivocado. El texto tiene que decir POR QUÉ no lo tiene: una ruta que
+ * se quedó sin pantalla es deuda, no una propiedad del diseño.
+ */
+const MUST_GATE_ROUTES: {
+  rel: string;
+  what: string;
+  noFrontendCaller?: string;
+  fieldGated?: string;
+}[] = [
+  {
+    rel: "api/admin/pos/prices/[productId]/route.ts",
+    what: "escribe el precio retail y el wholesale de un ítem",
+  },
+  {
+    rel: "api/admin/pos/products/[id]/route.ts",
+    what:
+      "escribe discontinued, el Product Source (USA/CHINA) y el retail_price " +
+      "que viaja a QuickBooks como SalesPrice",
+    fieldGated:
+      "el gate es POR CAMPO: por esta misma ruta pasan el Save normal del modal " +
+      "(título, SKU, peso) y la propagación de costo del editor de PO y de la " +
+      "página de vendor bill, que NO piden PIN. Exigirle el PIN a todo callsite " +
+      "rompería esos tres flujos",
+  },
+  {
+    rel: "api/admin/pos/prices/bulk/route.ts",
+    what: "bulk price/cost editor",
+    noFrontendCaller:
+      "el editor masivo pasó al flujo de price-batches (draft → submit → " +
+      "approve) y esta ruta quedó sin pantalla; su motor vive en " +
+      "lib/pos/apply-price-rows.ts, que sí usa el flujo nuevo",
+  },
+  {
+    rel: "api/admin/pos/price-batches/[id]/approve/route.ts",
+    what: "applies an approved price-change batch's cost/retail/wholesale changes",
+  },
+  {
+    rel: "api/admin/quickbooks/bill-match/adopt/route.ts",
+    what: "registra un bill de QuickBooks contra un PO",
+  },
+  {
+    rel: "api/admin/quickbooks/bill-match/undo/route.ts",
+    what: "revierte un bill-match adoptado",
+  },
+  {
+    rel: "api/admin/quickbooks/customer-credits/import/route.ts",
+    what: "importa un crédito de QB como saldo redimible",
+  },
+  {
+    rel: "api/admin/purchase-orders/[id]/factory-order-mirror/route.ts",
+    what: "crea o sincroniza el Factory Order espejo de un PO",
+  },
 ];
-for (const [rel, what] of MUST_GATE_ROUTES) {
+for (const { rel, what } of MUST_GATE_ROUTES) {
   const p = path.join(BACKEND_SRC, rel);
   if (!fs.existsSync(p)) {
     failures.push(
@@ -274,7 +324,16 @@ for (const [rel, what] of MUST_GATE_ROUTES) {
     );
     continue;
   }
-  if (!SHARED.test(stripComments(fs.readFileSync(p, "utf8")))) {
+  // La LLAMADA, no la mención. Este chequeo probaba `SHARED` contra el archivo
+  // entero, así que el IMPORT del guard ya lo daba por cumplido: al
+  // mutation-testear el gate nuevo de products/:id —reemplazando la llamada y
+  // dejando el import— el verificador siguió en verde. Mismo defecto que 4a ya
+  // tenía documentado y arreglado; acá había quedado sin aplicar.
+  const bodyNoImports = stripComments(fs.readFileSync(p, "utf8"))
+    .split("\n")
+    .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
+    .join("\n");
+  if (!/(verifySupervisorPin|guardSupervisorPin|assertWebOrderAuthorized)\s*\(/.test(bodyNoImports)) {
     failures.push(
       `${rel} ${what} y no llama a guardSupervisorPin(). Como todo cajero es un ` +
         `usuario admin, sin el gate cualquier token válido ejecuta la operación ` +
@@ -282,8 +341,161 @@ for (const [rel, what] of MUST_GATE_ROUTES) {
     );
   }
 }
-if (!failures.some((f) => MUST_GATE_ROUTES.some(([rel]) => f.startsWith(rel)))) {
+if (!failures.some((f) => MUST_GATE_ROUTES.some(({ rel }) => f.startsWith(rel)))) {
   notes.push(`✓ las ${MUST_GATE_ROUTES.length} rutas de escritura de dinero llaman al guard`);
+}
+
+// ── 4c · el frontend le MANDA el PIN a esas rutas ────────────────────────────
+/**
+ * La falla inversa del chequeo 4b, y la que este archivo no podía ver.
+ *
+ * 4b garantiza que la ruta PIDA el PIN. Nada garantizaba que la pantalla lo
+ * MANDE — y una ruta gateada cuyo frontend nunca manda nada no es insegura: es
+ * una función rota que nadie puede usar, con el agravante de que cada intento
+ * quema un intento del throttle (8 / 15 min por USUARIO) y termina bloqueando al
+ * operador para todas las demás operaciones con PIN.
+ *
+ * Pasó exactamente eso: `EditItemModalAdmin` dejaba Retail y Wholesale editables
+ * sin candado y posteaba a `pos/prices/:id` sin el header, así que TODO cambio de
+ * precio desde el modal de admin moría en 403 — meses, en producción, con el
+ * type-check, el lint y los seis chequeos de este verificador en verde. El modal
+ * de la rama `pos_user` sí lo mandaba, así que el defecto sólo lo veían los
+ * admins, que son todos los cajeros.
+ *
+ * Cómo se afirma: se deriva la ruta HTTP del path del archivo (los segmentos
+ * dinámicos `[x]` se buscan como interpolación `${…}`, que es como los escribe
+ * todo callsite), se ubica la llamada a `medusaFetch` que la contiene y se exige
+ * `supervisorPin` DENTRO de esa llamada — no en el archivo, que volvería a pasar
+ * por vecindad como pasaba con el import huérfano del chequeo 4a.
+ *
+ * Límite conocido: un callsite que arme la URL en una variable no se ve. Por eso
+ * el chequeo también EXIGE encontrar al menos un callsite por ruta: sin eso, un
+ * regex que dejara de matchear pasaría en vacío, que es la forma en que un gate
+ * se apaga sin que nadie se entere.
+ */
+if (posExists) {
+  /** `api/admin/pos/prices/[productId]/route.ts` → /\/admin\/pos\/prices\/\$\{[^}]+\}/ */
+  function routeToPathRegex(rel: string): RegExp {
+    const httpPath = rel.replace(/^api/, "").replace(/\/route\.ts$/, "");
+    const source = httpPath
+      .split("/")
+      .map((seg) =>
+        /^\[.+\]$/.test(seg)
+          ? "\\$\\{[^}]+\\}"
+          : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      )
+      .join("/");
+    return new RegExp(source, "g");
+  }
+
+  /**
+   * Devuelve el texto de la llamada a `medusaFetch` que contiene `idx`.
+   *
+   * Cuenta paréntesis salteando strings, que es lo mínimo para no cortar la
+   * llamada en un `)` que vive adentro de un template literal.
+   */
+  function enclosingFetchCall(src: string, idx: number): string | null {
+    const before = src.lastIndexOf("medusaFetch", idx);
+    if (before === -1 || idx - before > 400) return null;
+    const open = src.indexOf("(", before);
+    if (open === -1) return null;
+    let depth = 0;
+    let quote: string | null = null;
+    for (let i = open; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === "`") {
+        quote = c;
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) return src.slice(open, i + 1);
+      }
+    }
+    return null;
+  }
+
+  const posSources = walk(POS_ROOT).map((f) => ({
+    file: f,
+    src: stripComments(fs.readFileSync(f, "utf8")),
+  }));
+
+  for (const { rel, what, noFrontendCaller, fieldGated } of MUST_GATE_ROUTES) {
+    if (fieldGated) {
+      notes.push(`⏭️  ${rel}: gate por campo, no por ruta — ${fieldGated}`);
+      continue;
+    }
+    const re = routeToPathRegex(rel);
+    let callsites = 0;
+    let missing = 0;
+    let viaBody = 0;
+    for (const { file, src } of posSources) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(src)) !== null) {
+        const call = enclosingFetchCall(src, m.index);
+        if (!call) {
+          failures.push(
+            `${path.relative(POS_ROOT, file)} le pega a ${rel} fuera de ` +
+              `medusaFetch(): el PIN viaja en el header y este wrapper es el ` +
+              `único lugar que lo pone.`
+          );
+          continue;
+        }
+        // El guard vive en el handler que MUTA. `medusaFetch` sin `method` es un
+        // GET, y varias de estas rutas exponen un GET de lectura al lado del POST
+        // gateado (el mirror PO→FO, sin ir más lejos): exigirle PIN a esa lectura
+        // sería el verificador inventando una regla que el backend no tiene.
+        const method = /method\s*:\s*['"`](\w+)['"`]/.exec(call)?.[1] ?? "GET";
+        if (method.toUpperCase() === "GET") continue;
+
+        callsites++;
+        // Dos formas válidas, porque el guard del backend acepta las dos:
+        //   · header  → `supervisorPin` en las opciones de medusaFetch (fuerte:
+        //     se ve en la llamada misma). Se busca el identificador pelado, no
+        //     `supervisorPin:` — el shorthand de ES6 es la forma más común y
+        //     exigir los dos puntos daba un falso positivo en el mirror PO→FO.
+        //   · body    → `supervisor_pin` como campo del payload (más débil: el
+        //     payload se arma en otro lado, así que lo único que se puede
+        //     afirmar es que el ARCHIVO lo maneja)
+        if (/\bsupervisorPin\b/.test(call)) continue;
+        if (/supervisor_pin/.test(src)) {
+          viaBody++;
+          continue;
+        }
+        missing++;
+        failures.push(
+          `${path.relative(POS_ROOT, file)} llama a ${rel} (${what}) sin ` +
+            `mandar el PIN por ninguna de las dos vías (header supervisorPin ` +
+            `ni campo supervisor_pin en el body). Esa ruta exige PIN, así que ` +
+            `el llamado contesta 403 SIEMPRE y encima quema un intento del ` +
+            `throttle — la operación queda imposible de hacer desde la pantalla.`
+        );
+      }
+    }
+    if (callsites === 0 && !noFrontendCaller) {
+      failures.push(
+        `no se encontró ningún callsite de ${rel} en store-pos. O la pantalla ` +
+          `que la usa dejó de existir, o la URL se arma de una forma que este ` +
+          `chequeo no ve — en los dos casos el chequeo estaría pasando en vacío. ` +
+          `Si de verdad no tiene pantalla, declararlo con noFrontendCaller y su ` +
+          `motivo.`
+      );
+    } else if (callsites === 0) {
+      notes.push(`⏭️  ${rel}: sin pantalla que la llame — ${noFrontendCaller}`);
+    } else if (missing === 0) {
+      notes.push(
+        `✓ ${rel}: ${callsites} callsite(s) mandan el PIN` +
+          (viaBody ? ` (${viaBody} por body, no por header)` : "")
+      );
+    }
+  }
 }
 
 // ── 5 · la ruta nativa de stores sigue protegida ─────────────────────────────
