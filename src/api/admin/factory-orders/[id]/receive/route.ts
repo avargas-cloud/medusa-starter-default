@@ -23,6 +23,10 @@ interface FoHeader {
   number: string | null;
   stock_location_id: string;
   vendor_name_snapshot: string | null;
+  /** Set only on FOs mirrored from a PO (the SKYDANCE button). */
+  linked_purchase_order_id: string | null;
+  /** Copied from the PO's `ordered_at` when the mirror created it. */
+  ordered_at: string | Date | null;
 }
 
 interface FoLine {
@@ -198,7 +202,25 @@ export async function POST(
     });
   }
 
-  const receivedAt = body.received_at ? new Date(body.received_at) : new Date();
+  // A mirrored FO (the SKYDANCE button) documents goods the factory already
+  // supplied for a PO that was placed weeks ago, so dating its receipt "today"
+  // puts the INFLOW after the transfers that already carried those units to
+  // Miami. The China History ledger orders receipts by `received_at` and
+  // transfers by `shipped_at`, so the chain then dips negative in the middle and
+  // recovers at the bottom — a shortfall the warehouse never had.
+  //
+  // The FO already carries the PO's date (`factory-order-mirror/route.ts` copies
+  // `po.ordered_at` at creation), so it is read from the FO and not from the PO
+  // again: a second lookup is a second source that can drift from the first.
+  //
+  // Only mirrored FOs. A standalone FO is its own document with its own timing,
+  // and an explicit `body.received_at` still wins over everything — this is a
+  // default, not a lock, so a genuine correction stays possible.
+  const mirroredFoDate =
+    fo.linked_purchase_order_id && fo.ordered_at ? new Date(fo.ordered_at) : null;
+  const receivedAt = body.received_at
+    ? new Date(body.received_at)
+    : (mirroredFoDate ?? new Date());
 
   try {
     const { result } = await receiveFactoryOrderWorkflow(req.scope).run({
