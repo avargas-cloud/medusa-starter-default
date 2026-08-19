@@ -1273,15 +1273,20 @@ export async function PATCH(
             bindings?: unknown[]
           ) => Promise<{ rows: unknown[]; rowCount?: number }>;
         };
-        // Only mirror onto a transfer whose stock story is still open. A
-        // 'received' IT is a historical fact (its units already moved
-        // China→USA) and a 'voided' one is dead — editing either rewrites
-        // history. Note the status filter also keeps LIMIT 1 from picking a
-        // voided IT over the live replacement convert-to-transfer allows.
+        // 'received' is mirrored too. Excluding it read as "a closed IT is
+        // frozen history", but the PO edit ALREADY changed history: skipping
+        // the mirror does not preserve the past, it just makes the transfer
+        // disagree with the order it belongs to — and, because
+        // onPoReceiveApplied keys off the IT, it also strands the China
+        // deduction for whatever arrives next. PO-1129 lost a 10→20 qty raise
+        // AND a whole new 30-unit line this way, silently. 'voided' stays
+        // excluded: that doc is dead, and the filter is also what keeps
+        // LIMIT 1 from picking it over the live replacement that
+        // convert-to-transfer allows.
         const transferResult = await knex.raw(
           `SELECT id FROM inventory_transfer
             WHERE linked_purchase_order_id = ?
-              AND status IN ('draft', 'confirmed', 'shipped')
+              AND status IN ('draft', 'confirmed', 'shipped', 'received')
               AND deleted_at IS NULL
             LIMIT 1`,
           [id]
@@ -1398,6 +1403,29 @@ export async function PATCH(
                ) AS agg
               WHERE it.id = ?`,
             [transferId, transferId]
+          );
+
+          // A PO edit can REOPEN a closed transfer: raising a qty or adding a
+          // line leaves units that never moved China→USA. Leaving the IT at
+          // 'received' is precisely what stops onPoReceiveApplied from ever
+          // debiting China for them, so the status has to follow the lines.
+          // Mirrors onPoReceiveReversed; never touches an IT that is still
+          // fully received.
+          await knex.raw(
+            `UPDATE inventory_transfer AS it
+                SET status      = 'shipped',
+                    received_at = NULL,
+                    updated_at  = NOW()
+              WHERE it.id = ?
+                AND it.status = 'received'
+                AND EXISTS (
+                  SELECT 1
+                    FROM inventory_transfer_line l
+                   WHERE l.transfer_id = it.id
+                     AND l.deleted_at IS NULL
+                     AND l.qty_received < l.qty
+                )`,
+            [transferId]
           );
 
           const touchedInventoryItemIds =

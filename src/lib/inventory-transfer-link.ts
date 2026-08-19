@@ -42,7 +42,7 @@ interface VariantQty {
  * allowed (goods can leave before their replenishing Factory Order is received).
  * Returns the number of rows affected (0 = China level missing).
  */
-async function moveChinaStock(
+export async function moveChinaStock(
   knex: KnexRaw,
   inventoryItemId: string,
   delta: number,
@@ -100,7 +100,14 @@ export async function onPoReceiveApplied(
   po_id: string,
   lines: VariantQty[]
 ): Promise<void> {
-  const transfer = await findLinkedTransfer(knex, po_id, ["shipped"]);
+  // 'received' is accepted, not just 'shipped'. A PO keeps receiving after its
+  // transfer closed — a second delivery, a qty raised on the PO, a line added
+  // late — and gating on 'shipped' made those receipts return here silently:
+  // China was never debited, the reservation never released, qty_received never
+  // bumped. Measured in production 2026-08-19: 56 units of phantom China stock
+  // across RCP-1106, RCP-1142 and RCP-1198. 'voided' stays excluded (dead doc),
+  // and so do 'draft'/'confirmed': goods cannot arrive before they ship.
+  const transfer = await findLinkedTransfer(knex, po_id, ["shipped", "received"]);
   if (!transfer) return;
 
   const now = new Date().toISOString();
@@ -150,13 +157,30 @@ export async function onPoReceiveApplied(
   );
   const unreceivedCount = (unreceivedResult.rows[0] as { cnt: number }).cnt;
   if (unreceivedCount === 0) {
+    // Only stamp on the transition. Re-stamping an already-received IT would
+    // rewrite when the goods actually arrived — the date the aging report and
+    // the China↔USA transit measurement both read.
+    if (transfer.status !== "received") {
+      await knex.raw(
+        `UPDATE inventory_transfer
+            SET status      = 'received',
+                received_at = ?,
+                updated_at  = ?
+          WHERE id = ?`,
+        [now, now, transfer.id]
+      );
+    }
+  } else if (transfer.status === "received") {
+    // Units are still outstanding on a transfer we had closed: a PO edit
+    // reopened it. Leaving it 'received' is the state that produced this bug in
+    // the first place. Mirrors onPoReceiveReversed.
     await knex.raw(
       `UPDATE inventory_transfer
-          SET status      = 'received',
-              received_at = ?,
+          SET status      = 'shipped',
+              received_at = NULL,
               updated_at  = ?
         WHERE id = ?`,
-      [now, now, transfer.id]
+      [now, transfer.id]
     );
   }
 }

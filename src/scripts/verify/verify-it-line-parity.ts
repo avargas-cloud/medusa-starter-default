@@ -174,14 +174,24 @@ async function main(): Promise<void> {
       console.log("✓ No unclaimed lines on linked transfers");
     }
 
-    // ── 4. WARN: qty drift on OPEN transfers ──────────────────────────────
+    // ── 4. FAIL: qty drift between a PO line and its IT line ──────────────
+    //
+    // This was a WARN scoped to draft/confirmed/shipped, on the reasoning that
+    // "received ITs are frozen history". That is the same premise the mirror's
+    // status filter encoded, and it is what let PO-1129 through: its transfer
+    // had closed, so a 10→20 raise never reached the IT and this check was not
+    // even looking. A received transfer is not frozen — the PO can still change
+    // under it, and the mirror now follows. Scope is every live, non-voided
+    // linked transfer, and drift is a failure, not a note.
     const drift = await client.query(
-      `SELECT it.number AS it_number, itl.id AS itl_id, itl.qty AS it_qty,
+      `SELECT it.number AS it_number, it.status AS it_status, itl.id AS itl_id,
+              itl.sku, itl.qty AS it_qty,
               (pol.qty_ordered - pol.qty_cancelled) AS po_qty
          FROM inventory_transfer_line itl
          JOIN inventory_transfer it
            ON it.id = itl.transfer_id AND it.deleted_at IS NULL
-          AND it.status IN ('draft', 'confirmed', 'shipped')
+          AND it.voided_at IS NULL
+          AND it.status IN ('draft', 'confirmed', 'shipped', 'received')
          JOIN purchase_order_line pol
            ON pol.id = itl.purchase_order_line_id AND pol.deleted_at IS NULL
         WHERE itl.deleted_at IS NULL
@@ -189,12 +199,55 @@ async function main(): Promise<void> {
         ORDER BY it.number`
     );
     if (drift.rows.length > 0) {
-      console.warn(`⚠ Qty drift on open ITs (${drift.rows.length}):`);
+      failures += drift.rows.length;
+      console.error(`✗ Qty drift between PO lines and their IT lines (${drift.rows.length}):`);
       for (const r of drift.rows) {
-        console.warn(`  ${r.it_number} ${r.itl_id}: IT qty ${r.it_qty} vs PO ${r.po_qty}`);
+        console.error(
+          `  ${r.it_number} [${r.it_status}] ${r.sku} ${r.itl_id}: IT qty ${r.it_qty} vs PO ${r.po_qty}`
+        );
       }
     } else {
-      console.log("✓ No qty drift on open transfers");
+      console.log("✓ No qty drift between PO lines and their IT lines");
+    }
+
+    // ── 5. FAIL: a live PO line with no line on the linked transfer ───────
+    //
+    // The other half of the same mirror. A line ADDED to a PO whose IT had
+    // closed produced no IT line at all, so the units carry no China
+    // reservation and no transfer record — PO-1129's ECTSK-RFRC1C5A, 30 units,
+    // invisible to every check that only compared lines that exist.
+    const missing = await client.query(
+      `SELECT it.number AS it_number, it.status AS it_status,
+              po.number AS po_number, pol.sku_snapshot AS sku,
+              (pol.qty_ordered - pol.qty_cancelled) AS po_qty
+         FROM purchase_order po
+         JOIN inventory_transfer it
+           ON it.linked_purchase_order_id = po.id
+          AND it.deleted_at IS NULL AND it.voided_at IS NULL
+         JOIN purchase_order_line pol
+           ON pol.purchase_order_id = po.id AND pol.deleted_at IS NULL
+        WHERE NOT EXISTS (
+          SELECT 1 FROM inventory_transfer_line itl
+           WHERE itl.transfer_id = it.id
+             AND itl.deleted_at IS NULL
+             AND (
+               itl.purchase_order_line_id = pol.id
+               OR (itl.purchase_order_line_id IS NULL
+                   AND itl.product_variant_id = pol.product_variant_id)
+             )
+        )
+        ORDER BY it.number, pol.sku_snapshot`
+    );
+    if (missing.rows.length > 0) {
+      failures += missing.rows.length;
+      console.error(`✗ PO lines with no line on the linked transfer (${missing.rows.length}):`);
+      for (const r of missing.rows) {
+        console.error(
+          `  ${r.it_number} [${r.it_status}] ${r.po_number} ${r.sku}: ${r.po_qty} units unmirrored`
+        );
+      }
+    } else {
+      console.log("✓ Every live PO line has a line on its linked transfer");
     }
   } finally {
     await client.end();

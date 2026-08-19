@@ -26,6 +26,8 @@ function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
 interface TransferRow {
   id: string;
   status: string;
+  linked_purchase_order_id: string | null;
+  po_number: string | null;
 }
 
 export async function POST(
@@ -48,7 +50,10 @@ export async function POST(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, status FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT it.id, it.status, it.linked_purchase_order_id, po.number AS po_number
+       FROM inventory_transfer it
+       LEFT JOIN purchase_order po ON po.id = it.linked_purchase_order_id
+      WHERE it.id = ? AND it.deleted_at IS NULL`,
     [id]
   );
   const transfer = (lookup.rows[0] ?? null) as TransferRow | null;
@@ -57,6 +62,30 @@ export async function POST(
       .status(404)
       .json({ error: "Inventory transfer not found", code: "not_found" });
   }
+
+  // This route only flips a status: it does not debit China stock, release the
+  // transfer's China reservations, or bump qty_received. For a standalone IT
+  // that is the whole job. For an IT backed by a PO it is a trapdoor — the item
+  // receipt is the sole authority on what arrived, and closing the transfer
+  // here would make onPoReceiveApplied treat every later receipt as a no-op,
+  // stranding China stock exactly like the 'shipped'-only gate did.
+  //
+  // Latent, not historical: audited 2026-08-19, all 20 received transfers in
+  // production carry received_by_user_id = NULL, which only the PO receipt path
+  // leaves — this route has never actually run against a linked IT, and the POS
+  // already deep-links its "Receive via PO" button to the order. The guard shuts
+  // the door before someone finds it, and costs nothing today.
+  if (transfer.linked_purchase_order_id) {
+    return res.status(409).json({
+      error: transfer.po_number
+        ? `This transfer is received by receiving ${transfer.po_number}, not from here — that is what moves the goods out of China.`
+        : "This transfer is received by receiving its linked purchase order, not from here — that is what moves the goods out of China.",
+      code: "linked_po_receive_required",
+      purchase_order_id: transfer.linked_purchase_order_id,
+      purchase_order_number: transfer.po_number,
+    });
+  }
+
   if (transfer.status !== "shipped") {
     return res.status(409).json({
       error: `Only shipped transfers can be received (current status: ${transfer.status})`,
