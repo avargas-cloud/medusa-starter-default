@@ -1307,6 +1307,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           buildShippingQbItem,
         } = require("../../../../lib/quickbooks/order-flow-core");
         const {
+          getBusinessDateString,
+        } = require("../../../../lib/date/et");
+        const {
           resolveTaxListid,
         } = require("../../../../lib/quickbooks/resolve-tax-listid");
         const {
@@ -1451,11 +1454,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         );
         const cmPayload = {
           customerId: customerCheck.qbListId,
-          date: (creditMemo as any).completed_at
-            ? new Date((creditMemo as any).completed_at)
-                .toISOString()
-                .split("T")[0]
-            : new Date().toISOString().split("T")[0],
+          date: getBusinessDateString((creditMemo as any).completed_at),
           memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
           items: qbItems,
           salesTaxCode: cmSalesTaxCode,

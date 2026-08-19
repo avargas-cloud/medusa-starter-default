@@ -17,6 +17,7 @@
 import { randomUUID } from "crypto";
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { getDbPool } from "../../../api/utils/db-pool";
+import { getBusinessDateString } from "../../../lib/date/et";
 
 import type { AppliedDelta } from "./apply-stock-deltas-step";
 import type { ClassifiedLine } from "./classify-lines-step";
@@ -74,7 +75,7 @@ export const enqueueQbAdjustmentsStep = createStep(
         count_number: input.count_number,
         count_memo: input.count_memo,
         qb_account_list_id: accountListId,
-        txn_date: new Date().toISOString().slice(0, 10),
+        txn_date: getBusinessDateString(),
         lines: lines.map((l) => {
           const a = appliedByLineId.get(l.line_id);
           return {

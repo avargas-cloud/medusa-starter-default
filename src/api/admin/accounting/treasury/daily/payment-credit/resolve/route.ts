@@ -60,7 +60,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       `SELECT COALESCE(
          (SELECT ld.effective_treasury_date FROM treasury_payment_defer ld
            WHERE ld.payment_id = cp.id ORDER BY ld.created_at DESC LIMIT 1),
-         cp.received_at::date
+         cp.batch_day::date,
+         (cp.received_at AT TIME ZONE 'America/New_York')::date
        )::text AS day
        FROM customer_payment cp
        WHERE cp.id = ? AND cp.deleted_at IS NULL AND cp.type = 'payment'

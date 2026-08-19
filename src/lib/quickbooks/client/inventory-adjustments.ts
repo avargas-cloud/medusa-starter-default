@@ -1,5 +1,6 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+import { getBusinessDateString } from "../../date/et";
 import { bridgeFetch } from "./core";
 import { damageModIsNoop } from "../damage/refresh-damage-snapshot";
 
@@ -112,7 +113,7 @@ export async function postInventoryAdjustmentToQb(
       external_id: pipelineRowId,
       ref_number: buildRefNumber(payload),
       memo: buildMemo(payload),
-      txn_date: payload.txn_date ?? new Date().toISOString().slice(0, 10),
+      txn_date: payload.txn_date ?? getBusinessDateString(),
       account_list_id: payload.qb_account_list_id,
       inventory_site_list_id:
         payload.qb_inventory_site_list_id ?? DEFAULT_INVENTORY_SITE_LIST_ID,

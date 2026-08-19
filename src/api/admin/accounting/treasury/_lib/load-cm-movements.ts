@@ -361,7 +361,7 @@ export async function loadCreditMemoMovements(
     SELECT
       ad.app_id AS payment_application_id,
       ad.payment_id, ad.reference, ad.customer_id, ad.invoice_id, ad.order_id,
-      ad.applied_at::date::text AS redeemed_on,
+      (ad.applied_at AT TIME ZONE 'America/New_York')::date::text AS redeemed_on,
       ad.amount_applied::bigint AS amount_applied_cents,
       cons.china_cents AS consumption_china_cents,
       cons.local_cents AS consumption_local_cents,

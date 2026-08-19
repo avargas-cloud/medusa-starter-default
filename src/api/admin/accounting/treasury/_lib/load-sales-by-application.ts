@@ -172,7 +172,7 @@ export async function loadCreditMemoCogsGaps(
       cp.customer_id,
       ad.invoice_id,
       ad.order_id,
-      ad.applied_at::date::text AS redeemed_on,
+      (ad.applied_at AT TIME ZONE 'America/New_York')::date::text AS redeemed_on,
       pa2.cogs_china_cents,
       pa2.cogs_local_cents
     FROM apps_day ad

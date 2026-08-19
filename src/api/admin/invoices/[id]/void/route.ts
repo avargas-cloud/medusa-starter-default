@@ -6,6 +6,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
+import { getBusinessDateString } from "../../../../../lib/date/et";
 import { USA_LOC } from "../../../../../lib/locations";
 import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
 import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
@@ -908,7 +909,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
               setTimeout(async () => {
                 try {
-                  const todayDate = new Date().toISOString().split("T")[0]!;
+                  const todayDate = getBusinessDateString();
                   const soRes = await createSalesOrderInQb({
                     customerId: qbListId,
                     date: todayDate,

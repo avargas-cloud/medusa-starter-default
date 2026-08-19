@@ -1,4 +1,5 @@
 import { avgCostDollars } from "../cost/cost-sql";
+import { etMidnightUtc } from "../date/et";
 import {
   COGS_JOIN,
   COST_DOLLARS,
@@ -59,14 +60,23 @@ export function parseMonth(value: unknown): MonthRange | null {
   const [yearText, monthText] = value.split("-");
   const year = Number(yearText);
   const monthIndex = Number(monthText) - 1;
-  const start = new Date(Date.UTC(year, monthIndex, 1));
-  const end = new Date(Date.UTC(year, monthIndex + 1, 1));
+  const start = etMidnightUtc(year, monthIndex);
+  const end = etMidnightUtc(year, monthIndex + 1);
+  // Calendar day of the ET period boundary — derived directly from
+  // year/monthIndex, NOT from start/end.toISOString() (which would give the
+  // UTC calendar date, off by one near month boundaries in ET).
+  const periodStartMonthIndex = monthIndex;
+  const periodStartYear = year;
+  const periodEndMonthIndex = monthIndex + 1 > 11 ? 0 : monthIndex + 1;
+  const periodEndYear = monthIndex + 1 > 11 ? year + 1 : year;
+  const periodStart = `${periodStartYear}-${String(periodStartMonthIndex + 1).padStart(2, "0")}-01`;
+  const periodEnd = `${periodEndYear}-${String(periodEndMonthIndex + 1).padStart(2, "0")}-01`;
   return {
     month: value,
     from: start.toISOString(),
     to: end.toISOString(),
-    periodStart: start.toISOString().slice(0, 10),
-    periodEnd: end.toISOString().slice(0, 10),
+    periodStart,
+    periodEnd,
   };
 }
 

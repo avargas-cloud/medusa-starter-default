@@ -32,6 +32,7 @@ import { Modules } from "@medusajs/utils";
 import { randomUUID } from "crypto";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { getBusinessDateString } from "../../lib/date/et";
 import { INVENTORY_COUNT_MODULE } from "../../modules/inventory-count";
 
 const DRY_RUN = process.env.DRY_RUN === "true";
@@ -159,7 +160,7 @@ export default async function repairDroppedDeltas({
       count_number: r.count_number,
       count_memo: r.count_memo ?? "",
       qb_account_list_id: account,
-      txn_date: new Date().toISOString().slice(0, 10),
+      txn_date: getBusinessDateString(),
       lines: [
         {
           line_id: r.line_id,

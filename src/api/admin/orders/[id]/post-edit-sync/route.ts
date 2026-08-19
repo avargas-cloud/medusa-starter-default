@@ -415,6 +415,9 @@ export async function POST(
         buildQbItems,
       } = require("../../../../../lib/quickbooks/order-flow-core");
       const {
+        getBusinessDateString,
+      } = require("../../../../../lib/date/et");
+      const {
         writePipelineRow,
       } = require("../../../../../lib/quickbooks/qb-pipeline");
       const { getDbPool } = require("../../../../utils/db-pool");
@@ -659,7 +662,7 @@ export async function POST(
                         status: "pending",
                         payload: {
                           customerId: qbListId,
-                          date: new Date().toISOString().split("T")[0],
+                          date: getBusinessDateString(),
                           items: createItems,
                           ...(salesRep ? { salesRep } : {}),
                         },

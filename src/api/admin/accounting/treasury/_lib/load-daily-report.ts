@@ -180,7 +180,7 @@ async function computeLiveRangeReport(
          CASE WHEN cp.status <> 'voided'
            THEN GREATEST(cp.amount - COALESCE(a.applied, 0), 0)
            ELSE 0 END AS unapplied_cents,
-         COALESCE(ld.effective_treasury_date, cp.received_at::date) AS unapplied_effective_date
+         COALESCE(ld.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) AS unapplied_effective_date
        FROM customer_payment cp
        LEFT JOIN applied a ON a.payment_id = cp.id
        LEFT JOIN latest_defer ld ON ld.payment_id = cp.id

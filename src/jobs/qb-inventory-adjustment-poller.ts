@@ -7,6 +7,7 @@
  * be deleted once that row is confirmed as no longer needed.
  */
 import { MedusaContainer } from "@medusajs/framework/types";
+import { getBusinessDateString } from "../lib/date/et";
 import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
 import {
   markStaleRowsAsFailed,
@@ -155,7 +156,7 @@ async function postAdjustmentToBridge(args: {
     external_id,
     ref_number: buildRefNumber(payload),
     memo: buildMemo(payload),
-    txn_date: new Date().toISOString().slice(0, 10),
+    txn_date: getBusinessDateString(),
     account_list_id: payload.qb_account_list_id,
     inventory_site_list_id:
       payload.qb_inventory_site_list_id ?? DEFAULT_QB_INVENTORY_SITE_LIST_ID,

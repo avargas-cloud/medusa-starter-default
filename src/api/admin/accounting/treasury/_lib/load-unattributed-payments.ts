@@ -9,12 +9,14 @@
  * lists them so staff can act, and blocks that day's "Confirm Transfers"
  * until each one is either linked or explicitly deferred.
  *
- * Anchored on the payment's EFFECTIVE treasury date: `received_at::date`,
- * unless the payment has an entry in `treasury_payment_defer` (the "Exception
- * — defer to next day" action), in which case its most recent
- * `effective_treasury_date` wins. This ONLY moves the UNAPPLIED remainder for
- * Treasury purposes — it never touches `customer_payment.received_at` itself
- * (that still feeds the unrelated QB batch_day/TxnDate mechanism).
+ * Anchored on the payment's EFFECTIVE treasury date: `batch_day` (the ET
+ * merchant batch day already computed at payment-creation time — see
+ * `lib/finance/batch-day.ts`), falling back to `received_at` converted to
+ * ET when `batch_day` is unset. Unless the payment has an entry in
+ * `treasury_payment_defer` (the "Exception — defer to next day" action), in
+ * which case its most recent `effective_treasury_date` wins. This ONLY moves
+ * the UNAPPLIED remainder for Treasury purposes — it never touches
+ * `customer_payment.received_at` itself.
  *
  * Credit-memo redemptions are excluded (not new cash). Refunds are excluded
  * (type <> 'payment').
@@ -153,7 +155,7 @@ export async function loadUnattributedPayments(
       cp.status                                      AS status,
       (cp.locked_order_id IS NOT NULL)              AS has_locked_order,
       cp.received_at                                 AS original_received_at,
-      COALESCE(ld.effective_treasury_date, cp.received_at::date) AS effective_treasury_date,
+      COALESCE(ld.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) AS effective_treasury_date,
       COALESCE(dc.defer_count, 0)                    AS defer_count,
       -- Estimate-deposit guidance: the referenced order is still a draft (an
       -- approved estimate not yet converted → payment can't be linked yet).
@@ -173,8 +175,8 @@ export async function loadUnattributedPayments(
       AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
       AND cp.status <> 'voided'
       AND COALESCE(cp.method, '') <> 'credit_memo'
-      AND COALESCE(ld.effective_treasury_date, cp.received_at::date) >= ?::date
-      AND COALESCE(ld.effective_treasury_date, cp.received_at::date) <= ?::date
+      AND COALESCE(ld.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) >= ?::date
+      AND COALESCE(ld.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) <= ?::date
       AND GREATEST(cp.amount - COALESCE(a.applied, 0) - COALESCE(rf.refunded_cents, 0), 0) > 0
     ORDER BY GREATEST(cp.amount - COALESCE(a.applied, 0) - COALESCE(rf.refunded_cents, 0), 0) DESC
     `,

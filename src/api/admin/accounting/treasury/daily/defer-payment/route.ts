@@ -64,8 +64,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       `SELECT
          src_locked.distribution_date IS NOT NULL AS source_locked,
          dst_locked.distribution_date IS NOT NULL AS destination_locked,
-         COALESCE(l.effective_treasury_date, cp.received_at::date)::text AS source_date,
-         (COALESCE(l.effective_treasury_date, cp.received_at::date) + INTERVAL '1 day')::text AS destination_date
+         COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date)::text AS source_date,
+         (COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) + INTERVAL '1 day')::text AS destination_date
        FROM customer_payment cp
        LEFT JOIN LATERAL (
          SELECT effective_treasury_date
@@ -75,10 +75,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
          LIMIT 1
        ) l ON TRUE
        LEFT JOIN treasury_distribution_log src_locked
-         ON src_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.received_at::date)
+         ON src_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date)
         AND src_locked.executed_at IS NOT NULL
        LEFT JOIN treasury_distribution_log dst_locked
-         ON dst_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.received_at::date) + INTERVAL '1 day'
+         ON dst_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) + INTERVAL '1 day'
         AND dst_locked.executed_at IS NOT NULL
        WHERE cp.id = ? AND cp.deleted_at IS NULL AND cp.type = 'payment' AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'`,
       [body.payment_id]
@@ -105,8 +105,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
        SELECT
          ?,
          cp.id,
-         COALESCE(l.effective_treasury_date, cp.received_at::date),
-         COALESCE(l.effective_treasury_date, cp.received_at::date) + INTERVAL '1 day',
+         COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date),
+         COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) + INTERVAL '1 day',
          GREATEST(cp.amount - COALESCE(a.applied, 0), 0),
          ?,
          ?
@@ -124,10 +124,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
          LIMIT 1
        ) l ON TRUE
        LEFT JOIN treasury_distribution_log src_locked
-         ON src_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.received_at::date)
+         ON src_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date)
         AND src_locked.executed_at IS NOT NULL
        LEFT JOIN treasury_distribution_log dst_locked
-         ON dst_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.received_at::date) + INTERVAL '1 day'
+         ON dst_locked.distribution_date = COALESCE(l.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) + INTERVAL '1 day'
         AND dst_locked.executed_at IS NOT NULL
        WHERE cp.id = ?
          AND cp.deleted_at IS NULL

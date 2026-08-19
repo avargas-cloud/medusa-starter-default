@@ -83,7 +83,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // no day's wires get executed out of sequence. Floor at the earliest
     // confirmed day (the Confirm & Lock grandfather start); days before the
     // feature existed are out of scope. A day "has cash" if a non-voided
-    // customer payment landed on it (received_at::date). If the log is empty
+    // customer payment landed on it (batch_day, ET). If the log is empty
     // (no era established yet) the floor is NULL and this gate is skipped.
     const earlierPending = (await db.raw(
       `WITH floor AS (
@@ -92,12 +92,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
        )
        SELECT d.day::text AS day
          FROM (
-           SELECT DISTINCT cp.received_at::date AS day
+           SELECT DISTINCT COALESCE(cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) AS day
              FROM customer_payment cp
             WHERE cp.type = 'payment' AND cp.deleted_at IS NULL AND COALESCE(cp.metadata->>'is_commission_credit', '') <> 'true'
               AND cp.status <> 'voided'
               AND COALESCE(cp.method, '') <> 'credit_memo'
-              AND cp.received_at::date < ?::date
+              AND COALESCE(cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) < ?::date
          ) d, floor
         WHERE floor.d IS NOT NULL
           AND d.day >= floor.d

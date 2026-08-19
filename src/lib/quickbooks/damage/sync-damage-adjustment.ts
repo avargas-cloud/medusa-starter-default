@@ -53,6 +53,7 @@
  */
 
 import { getDbPool } from "../../../api/utils/db-pool";
+import { getBusinessDateString } from "../../date/et";
 import { writePipelineRow } from "../pipeline/row-mutations";
 
 export const CM_DAMAGE_ADD_STEP = "cm_damage_adjustment" as const;
@@ -339,7 +340,7 @@ export async function syncCreditMemoDamageAdjustment(input: {
 
     const refNumber = buildDamageRefNumber(cm.credit_memo_number);
     const memo = buildDamageMemo(cm.credit_memo_number);
-    const txnDate = new Date().toISOString().slice(0, 10);
+    const txnDate = getBusinessDateString();
 
     // ── Los defectuosos desaparecieron → el ajuste se retira ───────────────
     // QuickBooks rechaza un ajuste sin líneas, así que "ya no hay defectuosos"

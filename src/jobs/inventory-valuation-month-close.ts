@@ -2,6 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { captureInventoryValuationSnapshot } from "../lib/cost/inventory-snapshot";
+import { etMidnightUtc, getBusinessDateString } from "../lib/date/et";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 
 /**
@@ -31,13 +32,16 @@ export default async function inventoryValuationMonthClose(
     transaction?: () => Promise<any>;
   };
 
-  // Last instant of the prior month, in UTC. The report's period boundaries use
-  // UTC ISO strings, so a month-close anchored here lines up with them.
-  const now = new Date();
-  const firstOfThisMonth = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0)
-  );
-  const asOf = new Date(firstOfThisMonth.getTime() - 1).toISOString(); // 23:59:59.999 prior month
+  // Last instant of the prior month, in the store's ET business calendar —
+  // aligned with month-close-data.ts, which anchors its period boundaries to
+  // ET midnight, not UTC midnight. "What month is it" is read off the ET
+  // calendar date (getBusinessDateString), not getUTCMonth(): near a month
+  // boundary those two disagree (e.g. Feb 28 11pm ET is still Feb in UTC).
+  const [todayYearText, todayMonthText] = getBusinessDateString().split("-");
+  const todayYear = Number(todayYearText);
+  const todayMonthIndex = Number(todayMonthText) - 1;
+  const firstOfThisMonth = etMidnightUtc(todayYear, todayMonthIndex);
+  const asOf = new Date(firstOfThisMonth.getTime() - 1).toISOString(); // 23:59:59.999 prior month, ET
 
   for (const warehouse of ["miami", "china"] as const) {
     const locationId =

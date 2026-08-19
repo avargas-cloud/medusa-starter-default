@@ -61,7 +61,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   try {
     // Resolve the redemption's day (movements are dated by applied_at).
     const dayRes = await knex.raw(
-      `SELECT applied_at::date::text AS day
+      `SELECT (applied_at AT TIME ZONE 'America/New_York')::date::text AS day
        FROM payment_application WHERE id = ? AND voided_at IS NULL AND deleted_at IS NULL`,
       [body.payment_application_id]
     );
