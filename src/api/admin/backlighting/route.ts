@@ -1,7 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
-export const AUTHENTICATE = false;
+// Authenticated like every /admin route (JWT or secret-key Basic auth — the
+// Backlighting sync sends the latter). This route exposes wholesale prices:
+// it opted out of auth for months and served them to anyone unauthenticated.
 
 const DB = () => new Client({ connectionString: process.env.DATABASE_URL });
 
