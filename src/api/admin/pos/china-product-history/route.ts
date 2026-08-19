@@ -203,8 +203,18 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   const reserved = toInt(stateRow.reserved_quantity);
   // Units already SHIPPED out of China but not yet received in Miami — they've
   // physically LEFT the warehouse though `stocked` still carries them until receive.
+  //
+  // A transfer that HAS a received_at is done, and its unreceived remainder is
+  // never in transit no matter what the line counters say. Deriving this from
+  // `qty - qty_received` alone made the endpoint contradict its own output: on
+  // ECTSK-TWRC1C5A, IT-1033 is rendered "received Jun 24, 2026" in the ledger
+  // and was simultaneously counted as 5 units at sea, pushing In Transit to 19
+  // against a warehouse that only had 14 shipped — and dragging In China to −5
+  // when the true figure is 0. Legacy rows make that gap real: an IT line
+  // backfilled onto an already-received transfer keeps `qty_received = 0`
+  // forever, because the receive that would have bumped it happened first.
   const in_transit = transfers_out.reduce(
-    (s, t) => s + Math.max(0, t.qty - t.qty_received),
+    (s, t) => s + (t.received_at ? 0 : Math.max(0, t.qty - t.qty_received)),
     0
   );
   // Physical-in-China = what's actually sitting in the warehouse (matches the
