@@ -6,7 +6,6 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
-import { CHINA_LOC, USA_LOC } from "../lib/locations";
 
 import {
   buildInventoryDocsForVariants,
@@ -14,6 +13,7 @@ import {
 } from "../lib/meilisearch/build-inventory-docs";
 import { loadVendorNamesByVariantId } from "../lib/meilisearch/load-vendor-names";
 import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
+import { loadWarehouseLevelMaps } from "../lib/meilisearch/warehouse-levels";
 
 export const syncInventoryToMeiliStep = createStep(
   "sync-to-meili-step",
@@ -30,37 +30,16 @@ export const syncInventoryToMeiliStep = createStep(
     // ─── BULK: Load China + Miami stock levels into RAM once ────────────────
     // totalStock / totalReserved in Meili reflect ONLY Miami (USA_LOC).
     // Orders ship from Miami; China stock surfaces separately as `chinaStock`.
-    const chinaStockMap = new Map<string, number>();
-    const miamiStockMap = new Map<string, number>();
-    const miamiReservedMap = new Map<string, number>();
+    // Shared with the per-item writer (`sync-inventory-item-meilisearch.ts`).
+    // These were two copies and they had already drifted — see the header of
+    // `warehouse-levels.ts`.
+    let chinaStockMap = new Map<string, number>();
+    let miamiStockMap = new Map<string, number>();
+    let miamiReservedMap = new Map<string, number>();
     try {
       const inventoryService: any = container.resolve(Modules.INVENTORY);
-      const chinaLevels = await inventoryService.listInventoryLevels(
-        { location_id: CHINA_LOC },
-        { take: 100000 }
-      );
-      for (const level of chinaLevels) {
-        if (level.inventory_item_id && level.stocked_quantity != null) {
-          const available = (level.stocked_quantity ?? 0) - (level.reserved_quantity ?? 0);
-          chinaStockMap.set(level.inventory_item_id, available);
-        }
-      }
-      const miamiLevels = await inventoryService.listInventoryLevels(
-        { location_id: USA_LOC },
-        { take: 100000 }
-      );
-      for (const level of miamiLevels) {
-        if (level.inventory_item_id) {
-          miamiStockMap.set(
-            level.inventory_item_id,
-            level.stocked_quantity ?? 0
-          );
-          miamiReservedMap.set(
-            level.inventory_item_id,
-            level.reserved_quantity ?? 0
-          );
-        }
-      }
+      ({ chinaStockMap, miamiStockMap, miamiReservedMap } =
+        await loadWarehouseLevelMaps(inventoryService));
       console.log(
         `📦 [sync-inventory] Loaded ${chinaStockMap.size} China + ${miamiStockMap.size} Miami warehouse levels`
       );

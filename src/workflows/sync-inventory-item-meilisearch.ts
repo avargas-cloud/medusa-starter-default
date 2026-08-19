@@ -11,7 +11,7 @@ import {
   INVENTORY_DOC_FIELDS,
 } from "../lib/meilisearch/build-inventory-docs";
 import { loadVendorNamesByVariantId } from "../lib/meilisearch/load-vendor-names";
-import { CHINA_LOC, USA_LOC } from "../lib/locations";
+import { loadWarehouseLevelMaps } from "../lib/meilisearch/warehouse-levels";
 
 /**
  * Incremental single-target sync to the MeiliSearch `inventory` index.
@@ -176,38 +176,19 @@ const syncInventoryItemToMeiliStep = createStep(
       }
     }
 
-    const miamiStockMap = new Map<string, number>();
-    const miamiReservedMap = new Map<string, number>();
-    const chinaStockMap = new Map<string, number>();
+    // Shared with the full reindex (`sync-inventory.ts`). This block used to be
+    // a second copy and it had DRIFTED: it floored China availability at 0 while
+    // the bulk path kept the sign, so which number an operator saw depended on
+    // which writer touched the row last. See the header of `warehouse-levels.ts`.
+    let miamiStockMap = new Map<string, number>();
+    let miamiReservedMap = new Map<string, number>();
+    let chinaStockMap = new Map<string, number>();
     if (inventoryItemIds.size > 0) {
       try {
         const inventoryService: any = container.resolve(Modules.INVENTORY);
         const ids = Array.from(inventoryItemIds);
-        const miamiLevels = await inventoryService.listInventoryLevels(
-          { location_id: USA_LOC, inventory_item_id: ids },
-          { take: 100000 }
-        );
-        for (const lev of miamiLevels) {
-          miamiStockMap.set(
-            lev.inventory_item_id,
-            lev.stocked_quantity ?? 0
-          );
-          miamiReservedMap.set(
-            lev.inventory_item_id,
-            lev.reserved_quantity ?? 0
-          );
-        }
-        const chinaLevels = await inventoryService.listInventoryLevels(
-          { location_id: CHINA_LOC, inventory_item_id: ids },
-          { take: 100000 }
-        );
-        for (const lev of chinaLevels) {
-          const available = Math.max(
-            0,
-            (lev.stocked_quantity ?? 0) - (lev.reserved_quantity ?? 0)
-          );
-          chinaStockMap.set(lev.inventory_item_id, available);
-        }
+        ({ chinaStockMap, miamiStockMap, miamiReservedMap } =
+          await loadWarehouseLevelMaps(inventoryService, ids));
       } catch (e: any) {
         logger.warn(
           `[syncInventoryItemToMeili] level fetch failed: ${e.message}`
