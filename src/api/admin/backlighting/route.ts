@@ -21,8 +21,18 @@ const VALID_CATEGORIES = new Set([
  * Returns variants tagged with metadata.backlighting.category === <category>.
  * If no category is provided, returns all tagged variants grouped by category.
  */
+const parseBoundedInt = (value: unknown, fallback: number, min: number, max: number): number => {
+    const parsed = typeof value === "string" ? Number.parseInt(value, 10) : NaN;
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+};
+
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { category } = req.query as { category?: string };
+    // Real pagination (the route used to hard-cap at 500 rows with no way to
+    // ask for the rest). Callers that omit the params keep the old behavior.
+    const limit = parseBoundedInt((req.query as { limit?: string }).limit, 500, 1, 500);
+    const offset = parseBoundedInt((req.query as { offset?: string }).offset, 0, 0, 1_000_000);
     const client = DB();
     await client.connect();
     try {
@@ -76,11 +86,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             sql += ` AND v.metadata->'backlighting'->>'category' = $1`;
             params.push(category);
         }
-        // DISTINCT ON requires the dedup key as the leading ORDER BY column.
-        sql += ` ORDER BY v.id, p.title, v.title LIMIT 500`;
+        // DISTINCT ON requires the dedup key as the leading ORDER BY column;
+        // v.id leading also makes LIMIT/OFFSET pages stable between requests.
+        sql += ` ORDER BY v.id, p.title, v.title LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        params.push(limit, offset);
 
         const rows = (await client.query(sql, params)).rows;
-        res.json({ variants: rows });
+        res.json({ variants: rows, limit, offset });
     } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[Backlighting GET]", msg);
