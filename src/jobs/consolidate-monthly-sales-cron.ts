@@ -21,7 +21,13 @@ import {
 
 export const config = {
   name: "consolidate-monthly-sales-from-medusa",
-  schedule: "0 3 2 * *", // 03:00 on day-of-month 2
+  // 03:00 UTC on the 2nd = 22:00 EST / 23:00 EDT on ET day 1 — still safely
+  // inside the new ET month, so todayET → previousCalendarMonth() closes the
+  // right month. Do NOT "fix" this to day-of-month 1 to match a wall-clock
+  // reading: 03:00 UTC on the 1st is the LAST day of the prior ET month, and
+  // the job would consolidate two months back forever (the exact bug the
+  // inventory-valuation cron shipped and hotfixed on 2026-08-19).
+  schedule: "0 3 2 * *",
 };
 
 export default async function consolidateMonthlySalesCron(

@@ -42,6 +42,11 @@ export default async function inventoryValuationMonthClose(
   const todayMonthIndex = Number(todayMonthText) - 1;
   const firstOfThisMonth = etMidnightUtc(todayYear, todayMonthIndex);
   const asOf = new Date(firstOfThisMonth.getTime() - 1).toISOString(); // 23:59:59.999 prior month, ET
+  // Label of the month being CLOSED (the prior ET month). Never asOf.slice(0,7):
+  // asOf is a UTC instant like 2026-08-01T03:59:59Z for the JULY close, so its
+  // UTC prefix names the month AFTER the one this snapshot freezes.
+  const closedYear = todayMonthIndex === 0 ? todayYear - 1 : todayYear;
+  const closedMonthLabel = `${closedYear}-${String(todayMonthIndex === 0 ? 12 : todayMonthIndex).padStart(2, "0")}`;
 
   for (const warehouse of ["miami", "china"] as const) {
     const locationId =
@@ -69,16 +74,16 @@ export default async function inventoryValuationMonthClose(
         warehouse,
         asOf,
         snapshotType: "month_close",
-        note: `automatic month close ${asOf.slice(0, 7)}`,
+        note: `automatic month close ${closedMonthLabel}`,
       });
       logger.info(
-        `[inventory-valuation-month-close] ${warehouse} ${asOf.slice(0, 7)} → ${r.snapshotId}: ` +
+        `[inventory-valuation-month-close] ${warehouse} ${closedMonthLabel} → ${r.snapshotId}: ` +
           `${r.variantCount} lines, $${(r.totalValueCents / 100).toFixed(2)}`
       );
     } catch (error) {
       // Non-fatal per warehouse — a China failure must not stop Miami's close.
       logger.error(
-        `[inventory-valuation-month-close] ${warehouse} ${asOf.slice(0, 7)} failed: ` +
+        `[inventory-valuation-month-close] ${warehouse} ${closedMonthLabel} failed: ` +
           `${error instanceof Error ? error.message : String(error)}`
       );
     }
