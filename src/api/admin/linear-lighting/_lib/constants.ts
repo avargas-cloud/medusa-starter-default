@@ -1,11 +1,16 @@
+// Claves ESTABLES — espejo de linear-lighting/shared/src/catalog-types.ts
+// (PRODUCT_CATEGORIES). Los labels de UI viven en la página admin.
 export const LL_CATEGORIES = [
-    "strip",
-    "driver",
+    "led_strip",
+    "led_neon",
+    "led_driver",
     "sensor",
-    "switch",
-    "cable",
-    "connector",
-    "accessory",
+    "controller",
+    "amplifier",
+    "remote",
+    "led_strip_accessory",
+    "led_driver_accessory",
+    "led_neon_accessory",
 ] as const;
 
 export type LlCategory = (typeof LL_CATEGORIES)[number];

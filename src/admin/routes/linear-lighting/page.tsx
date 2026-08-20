@@ -2,31 +2,60 @@ import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { Sparkles } from "@medusajs/icons";
 import { Badge, Button, Container, Heading, Input, Text, toast } from "@medusajs/ui";
 import { useCallback, useEffect, useState } from "react";
-import { LL_CATEGORIES, type LlCategoryKey } from "./fields";
-import { ProductFormDrawer, type LlProductRow } from "./product-form";
 
-type SystemFilter = "all" | "easyled" | "essential";
+/**
+ * Página de SELECCIÓN pura (split 2026-08-20): acá sólo se taggea qué
+ * productos participan y en qué sistema(s). Toda la configuración técnica
+ * (specs) vive en el Admin del app Linear Lighting, no en Medusa.
+ * Claves estables espejo de shared/catalog-types.ts — el label es sólo UI.
+ */
+const LL_CATEGORIES = [
+    { key: "led_strip", label: "LED Strips" },
+    { key: "led_neon", label: "LED Neons" },
+    { key: "led_driver", label: "LED Drivers" },
+    { key: "sensor", label: "Sensors" },
+    { key: "controller", label: "Controllers" },
+    { key: "amplifier", label: "Amplifiers" },
+    { key: "remote", label: "Remotes" },
+    { key: "led_strip_accessory", label: "LED Strip Accessories" },
+    { key: "led_driver_accessory", label: "LED Driver Accessories" },
+    { key: "led_neon_accessory", label: "LED Neon Accessories" },
+] as const;
 
-const SYSTEM_FILTERS: { key: SystemFilter; label: string }[] = [
-    { key: "all", label: "All systems" },
-    { key: "easyled", label: "EASYLED" },
-    { key: "essential", label: "Essential" },
-];
+type LlCategoryKey = (typeof LL_CATEGORIES)[number]["key"];
+type LlSystem = "easyled" | "essential";
+
+interface LlVariantRow {
+    id: string;
+    sku: string | null;
+    title: string | null;
+}
+
+interface LlProductRow {
+    id: string;
+    title: string;
+    thumbnail: string | null;
+    linear_lighting: { category?: string; systems?: unknown } | null;
+    variants: LlVariantRow[];
+}
+
+const systemsOf = (p: LlProductRow): LlSystem[] => {
+    const s = p.linear_lighting?.systems;
+    return Array.isArray(s) ? (s as LlSystem[]) : [];
+};
 
 const LinearLightingAdminPage = () => {
-    const [activeTab, setActiveTab] = useState<LlCategoryKey>("strip");
-    const [systemFilter, setSystemFilter] = useState<SystemFilter>("all");
+    const [activeTab, setActiveTab] = useState<LlCategoryKey>("led_strip");
     const [products, setProducts] = useState<LlProductRow[]>([]);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<LlProductRow[]>([]);
     const [loading, setLoading] = useState(false);
-    const [editing, setEditing] = useState<LlProductRow | null>(null);
+    const [saving, setSaving] = useState<string | null>(null);
 
     const fetchProducts = useCallback(async () => {
         setLoading(true);
         try {
             const params = new URLSearchParams({ category: activeTab });
-            if (systemFilter !== "all") params.set("system", systemFilter);
             const r = await fetch(`/admin/linear-lighting?${params}`, { credentials: "include" });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             const data = (await r.json()) as { products: LlProductRow[] };
@@ -36,7 +65,7 @@ const LinearLightingAdminPage = () => {
         } finally {
             setLoading(false);
         }
-    }, [activeTab, systemFilter]);
+    }, [activeTab]);
 
     useEffect(() => {
         fetchProducts();
@@ -64,8 +93,41 @@ const LinearLightingAdminPage = () => {
         return () => clearTimeout(t);
     }, [searchQuery, search]);
 
+    const saveTag = async (productId: string, category: string, systems: LlSystem[]) => {
+        setSaving(productId);
+        try {
+            const r = await fetch(`/admin/linear-lighting/${productId}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ category, systems }),
+            });
+            if (!r.ok) throw new Error(await r.text());
+            fetchProducts();
+        } catch {
+            toast.error("Failed to save tag");
+        } finally {
+            setSaving(null);
+        }
+    };
+
+    const addProduct = async (p: LlProductRow) => {
+        setSearchQuery("");
+        setSearchResults([]);
+        await saveTag(p.id, activeTab, ["easyled", "essential"]);
+        toast.success(`Added to ${categoryLabel}`);
+    };
+
+    const toggleSystem = async (p: LlProductRow, system: LlSystem) => {
+        const current = systemsOf(p);
+        const next = current.includes(system)
+            ? current.filter((s) => s !== system)
+            : [...current, system];
+        await saveTag(p.id, (p.linear_lighting?.category as string) || activeTab, next);
+    };
+
     const removeProduct = async (product: LlProductRow) => {
-        if (!window.confirm(`Remove “${product.title}” from the Linear Lighting calculator?`)) return;
+        if (!window.confirm(`Remove “${product.title}” from the Linear Lighting catalog?`)) return;
         try {
             const r = await fetch(`/admin/linear-lighting/${product.id}`, {
                 method: "DELETE",
@@ -79,28 +141,23 @@ const LinearLightingAdminPage = () => {
         }
     };
 
-    const systemsOf = (p: LlProductRow): string[] => {
-        const s = p.linear_lighting?.systems;
-        return Array.isArray(s) ? (s as string[]) : [];
-    };
-
     const categoryLabel = LL_CATEGORIES.find((c) => c.key === activeTab)?.label ?? activeTab;
 
     return (
         <Container className="p-6">
             <Heading level="h1" className="mb-1">Linear Lighting Catalog</Heading>
             <Text className="text-ui-fg-muted mb-6">
-                Configure which products participate in the Linear Lighting Designer (EASYLED / Essential),
-                their calculator metadata and customer-facing friendly names. The designer syncs this data
-                into an immutable catalog snapshot.
+                Tag Medusa products for the Linear Lighting Designer and choose which system(s) each one
+                belongs to (a product can be in both). Technical specs (roll length, watts per roll,
+                connections…) are configured in the Linear Lighting app admin — not here.
             </Text>
 
-            <div className="flex gap-2 mb-4 border-b border-ui-border-base">
+            <div className="flex gap-1 mb-4 border-b border-ui-border-base flex-wrap">
                 {LL_CATEGORIES.map((c) => (
                     <button
                         key={c.key}
                         onClick={() => setActiveTab(c.key)}
-                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
                             activeTab === c.key
                                 ? "border-ui-fg-interactive text-ui-fg-interactive"
                                 : "border-transparent text-ui-fg-muted hover:text-ui-fg-base"
@@ -111,22 +168,9 @@ const LinearLightingAdminPage = () => {
                 ))}
             </div>
 
-            <div className="flex gap-2 mb-4">
-                {SYSTEM_FILTERS.map((f) => (
-                    <Button
-                        key={f.key}
-                        size="small"
-                        variant={systemFilter === f.key ? "primary" : "secondary"}
-                        onClick={() => setSystemFilter(f.key)}
-                    >
-                        {f.label}
-                    </Button>
-                ))}
-            </div>
-
             <div className="mb-4">
                 <Input
-                    placeholder={`Search any product/SKU to add as ${categoryLabel}…`}
+                    placeholder={`Search any product/SKU to add to ${categoryLabel}…`}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -146,20 +190,17 @@ const LinearLightingAdminPage = () => {
                                         </Text>
                                         {taggedCategory && (
                                             <Badge size="2xsmall" color="orange" className="mt-1 self-start">
-                                                Already configured: {taggedCategory}
+                                                Already tagged: {taggedCategory}
                                             </Badge>
                                         )}
                                     </div>
                                     <Button
                                         size="small"
                                         variant="secondary"
-                                        onClick={() => {
-                                            setSearchQuery("");
-                                            setSearchResults([]);
-                                            setEditing(p);
-                                        }}
+                                        disabled={saving === p.id}
+                                        onClick={() => addProduct(p)}
                                     >
-                                        {taggedCategory ? "Edit config" : `+ Add as ${categoryLabel}`}
+                                        {taggedCategory ? `Move to ${categoryLabel}` : `+ Add to ${categoryLabel}`}
                                     </Button>
                                 </div>
                             );
@@ -180,61 +221,52 @@ const LinearLightingAdminPage = () => {
             ) : products.length === 0 ? (
                 <div className="border border-dashed border-ui-border-base rounded p-8 text-center">
                     <Text className="text-ui-fg-muted">
-                        No {categoryLabel.toLowerCase()} configured yet. Use the search above to add products.
+                        No {categoryLabel.toLowerCase()} tagged yet. Use the search above to add products.
                     </Text>
                 </div>
             ) : (
                 <div className="border border-ui-border-base rounded bg-ui-bg-base divide-y divide-ui-border-base">
-                    {products.map((p) => (
-                        <div key={p.id} className="p-3 flex items-center justify-between gap-3">
-                            <div className="flex flex-col gap-0.5 min-w-0">
-                                <div className="flex items-center gap-2">
+                    {products.map((p) => {
+                        const systems = systemsOf(p);
+                        return (
+                            <div key={p.id} className="p-3 flex items-center justify-between gap-3">
+                                <div className="flex flex-col gap-0.5 min-w-0">
                                     <Text size="small" weight="plus">{p.title}</Text>
-                                    {typeof p.linear_lighting?.friendly_name === "string" && (
-                                        <Badge size="2xsmall" color="blue">
-                                            “{p.linear_lighting.friendly_name}”
+                                    <Text size="xsmall" className="text-ui-fg-muted font-mono truncate">
+                                        {p.variants.map((v) => v.sku).filter(Boolean).join(" · ") || "no SKU"}
+                                    </Text>
+                                    {systems.length === 0 && (
+                                        <Badge size="2xsmall" color="grey" className="mt-1 self-start">
+                                            no system — inactive
                                         </Badge>
                                     )}
                                 </div>
-                                <Text size="xsmall" className="text-ui-fg-muted font-mono truncate">
-                                    {p.variants.map((v) => v.sku).filter(Boolean).join(" · ") || "no SKU"}
-                                </Text>
-                                <div className="flex gap-1 mt-1">
-                                    {systemsOf(p).length === 0 && (
-                                        <Badge size="2xsmall" color="grey">no system — inactive</Badge>
-                                    )}
-                                    {systemsOf(p).includes("easyled") && (
-                                        <Badge size="2xsmall" color="green">EASYLED</Badge>
-                                    )}
-                                    {systemsOf(p).includes("essential") && (
-                                        <Badge size="2xsmall" color="purple">Essential</Badge>
-                                    )}
+                                <div className="flex gap-2 shrink-0 items-center">
+                                    <Button
+                                        size="small"
+                                        variant={systems.includes("easyled") ? "primary" : "secondary"}
+                                        disabled={saving === p.id}
+                                        onClick={() => toggleSystem(p, "easyled")}
+                                    >
+                                        EASYLED
+                                    </Button>
+                                    <Button
+                                        size="small"
+                                        variant={systems.includes("essential") ? "primary" : "secondary"}
+                                        disabled={saving === p.id}
+                                        onClick={() => toggleSystem(p, "essential")}
+                                    >
+                                        Essential
+                                    </Button>
+                                    <Button size="small" variant="danger" onClick={() => removeProduct(p)}>
+                                        Remove
+                                    </Button>
                                 </div>
                             </div>
-                            <div className="flex gap-2 shrink-0">
-                                <Button size="small" variant="secondary" onClick={() => setEditing(p)}>
-                                    Edit
-                                </Button>
-                                <Button size="small" variant="danger" onClick={() => removeProduct(p)}>
-                                    Remove
-                                </Button>
-                            </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
-
-            <ProductFormDrawer
-                product={editing}
-                category={(editing?.linear_lighting?.category as LlCategoryKey) || activeTab}
-                open={editing !== null}
-                onClose={() => setEditing(null)}
-                onSaved={() => {
-                    setEditing(null);
-                    toast.success("Saved");
-                    fetchProducts();
-                }}
-            />
         </Container>
     );
 };

@@ -16,13 +16,13 @@ const actorEmail = (req: MedusaRequest): string => {
 
 /**
  * POST /admin/linear-lighting/:product_id
- * Body: la config completa `linear_lighting` del producto (category, systems,
- * friendly_name, campos eléctricos por categoría). Se escribe con jsonb_set
- * sobre LA clave — nunca reemplaza el metadata entero (gotcha conocido de
- * Medusa: update de metadata pisa/mergea según la entidad; SQL dirigido es
- * inmune a ambos).
- * La validación ESTRICTA del shape vive en el sync del backend Linear Lighting
- * (zod de shared/catalog-types) — acá se valida lo mínimo para no persistir basura.
+ * Body: SOLO el tag `{ category, systems }` (split 2026-08-20: Medusa es dueño
+ * de la selección; los specs técnicos viven en lld_product_spec del backend LL).
+ * Cualquier otro campo del body se DESCARTA — re-guardar un tag limpia la
+ * metadata técnica vieja que hubiera quedado bajo la clave. Se escribe con
+ * jsonb_set sobre LA clave — nunca reemplaza el metadata entero (gotcha
+ * conocido de Medusa: update de metadata pisa/mergea según la entidad; SQL
+ * dirigido es inmune a ambos).
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { product_id } = req.params as { product_id: string };
@@ -57,7 +57,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
         const prev = existing.rows[0] as { added_at: string | null; added_by: string | null };
         const meta = {
-            ...body,
+            category,
+            systems,
             added_at: prev.added_at ?? new Date().toISOString(),
             added_by: prev.added_by ?? actorEmail(req),
             updated_at: new Date().toISOString(),
