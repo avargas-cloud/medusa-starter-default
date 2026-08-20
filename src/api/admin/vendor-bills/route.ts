@@ -64,6 +64,19 @@ const createVendorBillSchema = z.object({
       amount_cents: z.number().int().positive().max(1_000_000_000),
     })
     .optional(),
+  // The staged expense-bill editor builds the whole document in the browser
+  // and persists it in ONE create — bill plus every line — so an empty bill
+  // never exists in the database, not even as a draft.
+  initial_account_lines: z
+    .array(
+      z.object({
+        qb_account_list_id: z.string().min(1),
+        description: z.string().max(500).optional(),
+        amount_cents: z.number().int().positive().max(1_000_000_000),
+      })
+    )
+    .max(100)
+    .optional(),
 });
 
 // ── Knex type ────────────────────────────────────────────────────────────────
@@ -361,12 +374,14 @@ export async function POST(
       code: "regular_bill_requires_source",
     });
   }
-  // An EXPENSE bill opens empty on purpose: the operator picks the vendor in
-  // the modal and adds its expense lines inside the document. It cannot reach
-  // QuickBooks empty — confirm refuses zero-line bills (`no_lines`) and the
-  // enqueue refuses "bill has no lines to send" — so the empty state is a
-  // draft workspace, not a document.
-  if (!body.initial_account_line && body.bill_type !== "expense") {
+  // EVERY type requires at least one line at create — expense included. The
+  // expense editor stages the whole document in the browser and only its Save
+  // reaches this route, so an empty bill never exists in the database (owner
+  // decision 2026-08-20: an empty draft in the list is dirt, not a workspace).
+  const initialLines =
+    body.initial_account_lines ??
+    (body.initial_account_line ? [body.initial_account_line] : []);
+  if (initialLines.length === 0) {
     return res.status(422).json({
       error: "A Vendor Bill cannot be saved without at least one line",
       code: "vendor_bill_line_required",
@@ -408,16 +423,18 @@ export async function POST(
     full_name: string;
     account_type: string;
   };
-  let account: QbAccountRow | null = null;
-  if (body.initial_account_line) {
-    const accountResult = await knex.raw(
-      `SELECT qb_list_id, full_name, account_type
-         FROM qb_account
-        WHERE qb_list_id = ? AND is_active = true AND deleted_at IS NULL
-        LIMIT 1`,
-      [body.initial_account_line.qb_account_list_id]
-    );
-    account = (accountResult.rows[0] ?? null) as QbAccountRow | null;
+  const accountIds = [...new Set(initialLines.map((l) => l.qb_account_list_id))];
+  const accountResult = await knex.raw(
+    `SELECT qb_list_id, full_name, account_type
+       FROM qb_account
+      WHERE qb_list_id = ANY(?) AND is_active = true AND deleted_at IS NULL`,
+    [accountIds]
+  );
+  const accountsById = new Map(
+    (accountResult.rows as QbAccountRow[]).map((a) => [a.qb_list_id, a])
+  );
+  for (const line of initialLines) {
+    const account = accountsById.get(line.qb_account_list_id);
     if (!account) {
       return res.status(404).json({
         error: "QuickBooks account not found",
@@ -505,40 +522,42 @@ export async function POST(
         body.notes ?? null,
       ]
     );
-    const lineResult =
-      body.initial_account_line && account
-        ? await db.raw(
-            `INSERT INTO vendor_bill_line (
-               id, vendor_bill_id, receipt_line_id, line_type,
-               qb_account_list_id, qb_account_full_name, qb_account_type,
-               product_variant_id, sku, mpn, description, qty, unit_cost_cents,
-               cbm_per_unit, commission_per_unit_cents, freight_per_unit_cents,
-               tariff_per_unit_cents, landed_unit_cost_cents, created_at, updated_at
-             ) VALUES (
-               ?, ?, NULL, 'qb_account', ?, ?, ?, NULL, ?, NULL, ?, 1, ?,
-               NULL, 0, 0, 0, ?, NOW(), NOW()
-             )
-             RETURNING *`,
-            [
-              `vbl_${randomUUID().replace(/-/g, "")}`,
-              billId,
-              account.qb_list_id,
-              account.full_name,
-              account.account_type,
-              account.full_name,
-              body.initial_account_line.description || account.full_name,
-              body.initial_account_line.amount_cents,
-              body.initial_account_line.amount_cents,
-            ]
-          )
-        : { rows: [] };
+    const insertedLines: Record<string, unknown>[] = [];
+    for (const line of initialLines) {
+      const account = accountsById.get(line.qb_account_list_id)!;
+      const lineResult = await db.raw(
+        `INSERT INTO vendor_bill_line (
+           id, vendor_bill_id, receipt_line_id, line_type,
+           qb_account_list_id, qb_account_full_name, qb_account_type,
+           product_variant_id, sku, mpn, description, qty, unit_cost_cents,
+           cbm_per_unit, commission_per_unit_cents, freight_per_unit_cents,
+           tariff_per_unit_cents, landed_unit_cost_cents, created_at, updated_at
+         ) VALUES (
+           ?, ?, NULL, 'qb_account', ?, ?, ?, NULL, ?, NULL, ?, 1, ?,
+           NULL, 0, 0, 0, ?, NOW(), NOW()
+         )
+         RETURNING *`,
+        [
+          `vbl_${randomUUID().replace(/-/g, "")}`,
+          billId,
+          account.qb_list_id,
+          account.full_name,
+          account.account_type,
+          account.full_name,
+          line.description || account.full_name,
+          line.amount_cents,
+          line.amount_cents,
+        ]
+      );
+      insertedLines.push(lineResult.rows[0] as Record<string, unknown>);
+    }
     if (trx) await trx.commit();
     return res.status(201).json({
       vendor_bill: {
         ...(result.rows[0] as Record<string, unknown>),
-        lines: lineResult.rows,
-        line_count: lineResult.rows.length,
-        total_landed_cents: body.initial_account_line?.amount_cents ?? 0,
+        lines: insertedLines,
+        line_count: insertedLines.length,
+        total_landed_cents: initialLines.reduce((s, l) => s + l.amount_cents, 0),
         billed_receipt_ids: [],
       },
     });

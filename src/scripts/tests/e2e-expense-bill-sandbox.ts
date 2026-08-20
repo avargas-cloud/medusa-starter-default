@@ -12,15 +12,16 @@
  * unset, so the pipeline shape is asserted in-process like
  * e2e-china-bill-add-sandbox does):
  *
- *  1. POST /admin/vendor-bills with bill_type 'expense' and NO
- *     initial_account_line → 201 draft with zero lines.
- *  2. The other standalone types KEEP their guard: 'service' without a line
- *     is still 422 vendor_bill_line_required.
- *  3. Confirm of the empty expense bill → 422 no_lines (empty is a draft
- *     workspace, never a document).
- *  4. Account rules: an Expense-type account is accepted as a line; a
- *     CostOfGoodsSold account is 422 account_not_allowed.
- *  5. Confirm with a line succeeds.
+ *  1. POST /admin/vendor-bills with bill_type 'expense' and NO lines →
+ *     422 vendor_bill_line_required: the editor stages the document in the
+ *     browser and only its Save reaches this route, so an empty expense bill
+ *     never exists in the database (owner decision 2026-08-20).
+ *  2. The other standalone types keep the same guard: 'service' without a
+ *     line is 422 vendor_bill_line_required.
+ *  3. Account rules at create: `initial_account_lines` with a
+ *     CostOfGoodsSold account → 422 account_not_allowed.
+ *  4. Create with TWO Expense lines → 201 draft with both lines and no PO.
+ *  5. Confirm succeeds.
  *  6. ADD enqueue: queued with purchase_order_id NULL, po_txn_id null,
  *     item_lines empty, one expense line — and the dependency chain keyed by
  *     the BILL's own id.
@@ -179,7 +180,55 @@ async function main(): Promise<void> {
   const n = randomUUID().slice(0, 6);
 
   try {
-    // 1 — expense bill opens EMPTY
+    // 1 — un expense bill VACÍO no puede existir: el create sin líneas es 422
+    const emptyCreate = await fetch(`${BASE}/admin/vendor-bills`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        vendor_id: f.vendorId,
+        bill_type: "expense",
+        commission_mode: "percent",
+        reference_id: `EXP-EMPTY-${n}`,
+      }),
+    });
+    const emptyCreateBody = (await emptyCreate.json().catch(() => ({}))) as {
+      code?: string;
+      vendor_bill?: { id: string };
+    };
+    if (emptyCreateBody.vendor_bill?.id) billIds.push(emptyCreateBody.vendor_bill.id);
+    check(
+      "expense sin líneas → 422 vendor_bill_line_required (jamás nace vacío)",
+      emptyCreate.status === 422 &&
+        emptyCreateBody.code === "vendor_bill_line_required",
+      `HTTP ${emptyCreate.status} code=${emptyCreateBody.code}`
+    );
+
+    // 1b — cuenta COGS dentro de initial_account_lines → rechazado entero
+    const cogsCreate = await fetch(`${BASE}/admin/vendor-bills`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        vendor_id: f.vendorId,
+        bill_type: "expense",
+        commission_mode: "percent",
+        reference_id: `EXP-COGS-${n}`,
+        initial_account_lines: [
+          { qb_account_list_id: f.cogsAccountId, amount_cents: 5000 },
+        ],
+      }),
+    });
+    const cogsCreateBody = (await cogsCreate.json().catch(() => ({}))) as {
+      code?: string;
+      vendor_bill?: { id: string };
+    };
+    if (cogsCreateBody.vendor_bill?.id) billIds.push(cogsCreateBody.vendor_bill.id);
+    check(
+      "create con cuenta COGS → 422 account_not_allowed",
+      cogsCreate.status === 422 && cogsCreateBody.code === "account_not_allowed",
+      `HTTP ${cogsCreate.status} code=${cogsCreateBody.code}`
+    );
+
+    // 2 — el Save real del editor: bill + 2 líneas Expense en UN create
     const createRes = await fetch(`${BASE}/admin/vendor-bills`, {
       method: "POST",
       headers,
@@ -188,6 +237,14 @@ async function main(): Promise<void> {
         bill_type: "expense",
         commission_mode: "percent",
         reference_id: `EXP-E2E-${n}`,
+        initial_account_lines: [
+          {
+            qb_account_list_id: f.expenseAccountId,
+            amount_cents: 12345,
+            description: "Office supplies run",
+          },
+          { qb_account_list_id: f.expenseAccountId, amount_cents: 6700 },
+        ],
       }),
     });
     const created = (await createRes.json().catch(() => ({}))) as {
@@ -197,19 +254,19 @@ async function main(): Promise<void> {
         bill_type: string;
         purchase_order_id: string | null;
         lines: unknown[];
+        total_landed_cents?: number;
       };
     };
     const bill = created.vendor_bill;
     if (bill?.id) billIds.push(bill.id);
     check(
-      "POST bill_type=expense sin línea inicial → 201 draft",
-      createRes.status === 201 && bill?.status === "draft",
-      `HTTP ${createRes.status}`
-    );
-    check(
-      "el bill nace VACÍO (0 líneas) y sin PO",
-      (bill?.lines ?? []).length === 0 && !bill?.purchase_order_id,
-      `lines=${(bill?.lines ?? []).length}`
+      "create con 2 líneas Expense → 201 draft con ambas y sin PO",
+      createRes.status === 201 &&
+        bill?.status === "draft" &&
+        (bill?.lines ?? []).length === 2 &&
+        !bill?.purchase_order_id &&
+        bill?.total_landed_cents === 19045,
+      `HTTP ${createRes.status} lines=${(bill?.lines ?? []).length} total=${bill?.total_landed_cents}`
     );
 
     // 2 — control negativo: service SIN línea sigue rechazado
@@ -236,21 +293,7 @@ async function main(): Promise<void> {
 
     if (!bill?.id) throw new Error("no expense bill to continue with");
 
-    // 3 — confirmar VACÍO se rechaza
-    const emptyConfirm = await fetch(
-      `${BASE}/admin/vendor-bills/${bill.id}/confirm`,
-      { method: "POST", headers, body: JSON.stringify({}) }
-    );
-    const emptyBody = (await emptyConfirm.json().catch(() => ({}))) as {
-      code?: string;
-    };
-    check(
-      "confirm de bill vacío → 422 no_lines",
-      emptyConfirm.status === 422 && emptyBody.code === "no_lines",
-      `HTTP ${emptyConfirm.status} code=${emptyBody.code}`
-    );
-
-    // 4a — línea contra cuenta COGS se rechaza
+    // 3 — el add-line del documento sigue filtrando: cuenta COGS rechazada
     const cogsLine = await fetch(
       `${BASE}/admin/vendor-bills/${bill.id}/account-lines`,
       {
@@ -267,36 +310,17 @@ async function main(): Promise<void> {
       code?: string;
     };
     check(
-      "cuenta CostOfGoodsSold → 422 account_not_allowed",
+      "account-lines con CostOfGoodsSold → 422 account_not_allowed",
       cogsLine.status === 422 && cogsBody.code === "account_not_allowed",
       `HTTP ${cogsLine.status} code=${cogsBody.code}`
     );
 
-    // 4b — línea contra cuenta Expense entra
-    const expLine = await fetch(
-      `${BASE}/admin/vendor-bills/${bill.id}/account-lines`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          qb_account_list_id: f.expenseAccountId,
-          amount_cents: 12345,
-          description: "Office supplies run",
-        }),
-      }
-    );
-    check(
-      "cuenta Expense aceptada como línea",
-      expLine.ok,
-      `HTTP ${expLine.status}`
-    );
-
-    // 5 — confirm con línea
+    // 4 — confirm
     const confirmRes = await fetch(
       `${BASE}/admin/vendor-bills/${bill.id}/confirm`,
       { method: "POST", headers, body: JSON.stringify({}) }
     );
-    check("confirm con línea → success", confirmRes.ok, `HTTP ${confirmRes.status}`);
+    check("confirm con líneas → success", confirmRes.ok, `HTTP ${confirmRes.status}`);
     const statusRow = await db.query(
       `SELECT status FROM vendor_bill WHERE id = $1`,
       [bill.id]
@@ -340,11 +364,11 @@ async function main(): Promise<void> {
         pipeRow.rows[0].intent === "add"
     );
     check(
-      "payload: po_id/po_txn_id null · 0 item lines · 1 expense line · memo sin PO",
+      "payload: po_id/po_txn_id null · 0 item lines · 2 expense lines · memo sin PO",
       payload.po_id === null &&
         payload.po_txn_id === null &&
         (payload.item_lines ?? []).length === 0 &&
-        (payload.expense_lines ?? []).length === 1 &&
+        (payload.expense_lines ?? []).length === 2 &&
         typeof payload.memo === "string" &&
         !payload.memo.includes(" / "),
       JSON.stringify({
