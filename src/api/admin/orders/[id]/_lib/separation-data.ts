@@ -26,6 +26,7 @@ import type { Pool } from "pg";
 
 import { USA_LOC } from "../../../../../lib/locations";
 import { allocateInvoicedToLines } from "../../../../../lib/invoices/per-line-invoiced";
+import { liveFulfilledSql, netSeparatedSql } from "../../_lib/separation-sql";
 import type {
   InventorySnapshot,
   SeparationLineInput,
@@ -75,36 +76,6 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/**
- * Units of ANOTHER order's separated line that a live fulfillment already
- * covers — the amount its shelf claim has released.
- *
- * This one is easy to miss and expensive to get wrong: the per-line query
- * above only decides what THIS order sees as pending, while the number below
- * decides how much stock every OTHER order is allowed to take. Left on
- * `order_item.fulfilled_quantity`, an order whose aggregate is inflated reads
- * as already shipped, its claim drops out of `separatedElsewhere`, and the
- * pool hands its shelved units to whoever asks next.
- *
- * Correlates on `sep.order_id` / `oli.id`, the aliases in scope where it is
- * interpolated. Uses $-style placeholders nowhere — it is spliced into a pool
- * query whose bindings are positional and must stay $1/$2.
- */
-const LIVE_FULFILLED_ELSEWHERE = `COALESCE((
-                SELECT SUM(ffi2.quantity)
-                  FROM order_fulfillment ofl2
-                  JOIN fulfillment f2
-                    ON f2.id = ofl2.fulfillment_id
-                   AND f2.canceled_at IS NULL
-                   AND f2.deleted_at IS NULL
-                  JOIN fulfillment_item ffi2
-                    ON ffi2.fulfillment_id = f2.id
-                   AND ffi2.deleted_at IS NULL
-                 WHERE ofl2.order_id = sep.order_id
-                   AND ofl2.deleted_at IS NULL
-                   AND ffi2.line_item_id = oli.id
-              ), 0)`;
-
 interface LineRow {
   line_id: string;
   sku: string | null;
@@ -152,7 +123,7 @@ export async function loadSeparationData(
             inv.qty                   AS invoiced,
             pvii.inventory_item_id    AS inventory_item_id,
             resv.qty                  AS reserved,
-            sep.qty                   AS separated
+            ${netSeparatedSql("sep.qty", "oi.order_id", "oli.id")} AS separated
        FROM order_item oi
        JOIN "order" o
          ON o.id = oi.order_id
@@ -276,16 +247,11 @@ export async function loadSeparationData(
       invoiced,
       reserved: num(r.reserved),
       inventoryItemId: r.inventory_item_id,
-      // NET of what left the building (owner decision 2026-08-20). The stored
-      // column is a running mark nobody decrements on dispatch, so a line whose
-      // separated units were handed over kept announcing them for ever — the
-      // shelf said 1000 set aside with zero on it.
-      //
-      // This is the same netting the cross-order pool has always applied
-      // (`GREATEST(0, sep.qty - fulfilled)` in the elsewhere query): one rule,
-      // now visible to every reader instead of only to the arbiter. It also
-      // self-heals — the next Save writes the netted total back.
-      separated: Math.max(0, num(r.separated) - fulfilled),
+      // Ya viene NETEADO de lo entregado: la query lo calcula con
+      // `netSeparatedSql`, el mismo fragmento que usa la lista. Ese es el punto
+      // — cuando el netting vivía suelto en cada archivo entró en uno solo y
+      // S11320 mostró ámbar en el modal y ningún `To Separate` en la fila.
+      separated: num(r.separated),
     };
   });
 
@@ -340,7 +306,7 @@ export async function loadSeparationData(
               )                         AS customer_name,
               oli.variant_sku           AS sku,
               oi.quantity               AS ordered,
-              GREATEST(0, sep.qty - ${LIVE_FULFILLED_ELSEWHERE})
+              ${netSeparatedSql("sep.qty", "sep.order_id", "oli.id")}
                                         AS separated_live
          FROM order_line_separation sep
          JOIN "order" o
@@ -363,7 +329,7 @@ export async function loadSeparationData(
           AND c.deleted_at IS NULL
         WHERE pvii.inventory_item_id = ANY($2::text[])
           AND sep.order_id <> $1
-          AND sep.qty > ${LIVE_FULFILLED_ELSEWHERE}
+          AND sep.qty > ${liveFulfilledSql("sep.order_id", "oli.id")}
         ORDER BY o.display_id ASC, oli.id ASC`,
       [orderId, itemIds]
     );

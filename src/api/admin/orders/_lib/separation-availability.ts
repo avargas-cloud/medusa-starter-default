@@ -1,5 +1,6 @@
 import { USA_LOC } from "../../../../lib/locations";
 import { allocateInvoicedToLines } from "../../../../lib/invoices/per-line-invoiced";
+import { liveFulfilledSql, netSeparatedSql } from "./separation-sql";
 import {
   computeSeparationCaps,
   type InventorySnapshot,
@@ -118,37 +119,6 @@ function num(v: unknown): number {
  * treats every one of them as a positional binding.
  */
 
-/**
- * Units of one order line covered by a LIVE fulfillment.
- *
- * `order_item.fulfilled_quantity` is NOT usable here, for the same reason
- * separation-data.ts stopped using it: Medusa writes that aggregate forward and
- * never reverts it, so a canceled and deleted fulfillment leaves its units
- * counted forever. On production 2026-08-20 it was wrong on 25 lines across 6
- * orders — and here the damage is worse than a wrong number on a screen: an
- * inflated `fulfilled` makes a live separation look already shipped, so its
- * units go back into the cross-order pool while they sit on the shelf, and
- * another order is offered them.
- *
- * Written once and interpolated into both CTEs so the two can never drift.
- * Carries no question mark, by the rule above.
- */
-const liveFulfilledSql = (orderCol: string, lineCol: string): string => `
-  COALESCE((
-    SELECT SUM(ffi.quantity)
-      FROM order_fulfillment ofl
-      JOIN fulfillment f
-        ON f.id = ofl.fulfillment_id
-       AND f.canceled_at IS NULL
-       AND f.deleted_at IS NULL
-      JOIN fulfillment_item ffi
-        ON ffi.fulfillment_id = f.id
-       AND ffi.deleted_at IS NULL
-     WHERE ofl.order_id = ${orderCol}
-       AND ofl.deleted_at IS NULL
-       AND ffi.line_item_id = ${lineCol}
-  ), 0)`;
-
 const AVAILABILITY_SQL = `
   WITH ord AS (
     SELECT o.id,
@@ -165,10 +135,7 @@ const AVAILABILITY_SQL = `
            oli.variant_sku                    AS sku,
            oi.quantity                        AS quantity,
            ${liveFulfilledSql("oi.order_id", "oli.id")} AS fulfilled,
-           GREATEST(0, COALESCE(sep.qty, 0) - ${liveFulfilledSql(
-             "oi.order_id",
-             "oli.id"
-           )})                                 AS separated,
+           ${netSeparatedSql("sep.qty", "oi.order_id", "oli.id")} AS separated,
            COALESCE(inv.qty, 0)               AS invoiced_direct,
            pvii.inventory_item_id             AS inventory_item_id
       FROM ord o
