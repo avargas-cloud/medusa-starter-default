@@ -1,6 +1,7 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { FACTORY_ORDERS_MODULE } from "../../../modules/factory-orders";
+import { resolveVendorDisplayName } from "../../../lib/vendors/vendor-display-name";
 import type FactoryOrdersModuleService from "../../../modules/factory-orders/service";
 
 export interface ValidateFoForSubmitStepInput {
@@ -124,7 +125,7 @@ export const validateFoForSubmitStep = createStep(
 
     const vendorId = foRow.vendor_id as string;
     const vendor = await qbCatalog.retrieveQbVendor(vendorId).catch(() => null);
-    const vendorName = vendor?.full_name ?? vendor?.name ?? vendorId;
+    const vendorName = resolveVendorDisplayName(vendor ?? {}, vendorId) ?? vendorId;
     const vendorListId = vendor?.qb_list_id ?? null;
 
     return new StepResponse(

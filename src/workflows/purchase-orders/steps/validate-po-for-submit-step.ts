@@ -18,6 +18,7 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { PURCHASE_ORDERS_MODULE } from "../../../modules/purchase-orders";
+import { resolveVendorDisplayName } from "../../../lib/vendors/vendor-display-name";
 import type PurchaseOrdersModuleService from "../../../modules/purchase-orders/service";
 
 export interface ValidatePoForSubmitStepInput {
@@ -177,7 +178,7 @@ export const validatePoForSubmitStep = createStep(
 
     const vendorId = poRow.vendor_id as string;
     const vendor = await qbCatalog.retrieveQbVendor(vendorId).catch(() => null);
-    const vendorName = vendor?.full_name ?? vendor?.name ?? vendorId;
+    const vendorName = resolveVendorDisplayName(vendor ?? {}, vendorId) ?? vendorId;
     const vendorQbListId = vendor?.qb_list_id ?? null;
 
     return new StepResponse(

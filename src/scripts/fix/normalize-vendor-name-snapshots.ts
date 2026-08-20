@@ -1,6 +1,6 @@
 /**
- * Normalizes active FO, PO, and Vendor Bill snapshots to the canonical vendor
- * display name: company_name -> full_name -> name -> vendor id.
+ * Normalizes active FO, PO, Vendor Bill, and Inventory Transfer snapshots to
+ * the canonical vendor display name: company_name -> full_name -> name -> id.
  *
  * Dry-run by default:
  *   yarn medusa exec src/scripts/fix/normalize-vendor-name-snapshots.ts
@@ -19,7 +19,12 @@ interface KnexLike {
   >;
 }
 
-const TABLES = ["factory_order", "purchase_order", "vendor_bill"] as const;
+const TABLES = [
+  "factory_order",
+  "purchase_order",
+  "vendor_bill",
+  "inventory_transfer",
+] as const;
 const APPLY = process.argv.includes("apply") || process.env.APPLY === "1";
 
 function canonicalSql(alias: string): string {

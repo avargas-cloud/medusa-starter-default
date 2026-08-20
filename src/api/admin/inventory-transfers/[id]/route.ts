@@ -12,6 +12,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { generateEntityId } from "@medusajs/utils";
+import { resolveVendorDisplayName } from "../../../../lib/vendors/vendor-display-name";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
 import {
   extractSupervisorPin,
@@ -173,6 +174,14 @@ export async function PATCH(
     });
   }
 
+  const existingVendorLookup = await knex.raw(
+    `SELECT vendor_id FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
+    [id]
+  );
+  const existingVendorId =
+    (existingVendorLookup.rows[0] as { vendor_id: string | null } | undefined)
+      ?.vendor_id ?? null;
+
   const body = req.body as {
     destination_location_id?: string;
     vendor_id?: string | null;
@@ -194,6 +203,31 @@ export async function PATCH(
   if (body.vendor_id !== undefined) updates.vendor_id = body.vendor_id;
   if (body.vendor_name_snapshot !== undefined)
     updates.vendor_name_snapshot = body.vendor_name_snapshot;
+  // The display name is resolved server-side from qb_vendor whenever the
+  // vendor is (re)identified — the client-sent snapshot is only a fallback.
+  {
+    const effectiveVendorId =
+      body.vendor_id !== undefined ? body.vendor_id : existingVendorId;
+    if (
+      effectiveVendorId &&
+      (body.vendor_id !== undefined || body.vendor_name_snapshot !== undefined)
+    ) {
+      const vendorRows = await knex.raw(
+        `SELECT id, full_name, name, company_name FROM qb_vendor
+          WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+        [effectiveVendorId]
+      );
+      const vendorRow = vendorRows.rows[0] as
+        | { id: string; full_name: string | null; name: string | null; company_name: string | null }
+        | undefined;
+      if (vendorRow) {
+        updates.vendor_name_snapshot =
+          resolveVendorDisplayName(vendorRow, body.vendor_name_snapshot ?? null) ??
+          body.vendor_name_snapshot ??
+          null;
+      }
+    }
+  }
   if (body.reference_number !== undefined)
     updates.reference_number = body.reference_number;
   if (body.tracking_number !== undefined)

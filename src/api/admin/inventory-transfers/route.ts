@@ -11,6 +11,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { generateEntityId } from "@medusajs/utils";
+import { resolveVendorDisplayName } from "../../../lib/vendors/vendor-display-name";
 import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/auth";
 
 // ── Knex type ─────────────────────────────────────────────────────────────────
@@ -191,6 +192,24 @@ export async function POST(
 
   const knex = resolveKnex(req);
 
+  // The vendor display name is resolved server-side from qb_vendor — the
+  // client-sent snapshot is only a fallback when there is no vendor_id.
+  let vendorNameSnapshot = body.vendor_name_snapshot ?? null;
+  if (body.vendor_id) {
+    const vendorRows = await knex.raw(
+      `SELECT id, full_name, name, company_name FROM qb_vendor
+        WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      [body.vendor_id]
+    );
+    const vendorRow = vendorRows.rows[0] as
+      | { id: string; full_name: string | null; name: string | null; company_name: string | null }
+      | undefined;
+    if (vendorRow) {
+      vendorNameSnapshot =
+        resolveVendorDisplayName(vendorRow, vendorNameSnapshot) ?? vendorNameSnapshot;
+    }
+  }
+
   // Allocate sequence number
   const seqResult = await knex.raw(
     `SELECT nextval('custom_inventory_transfer_seq') AS seq`
@@ -218,7 +237,7 @@ export async function POST(
     )`,
     [
       id, number, seq, destinationLocationId,
-      body.vendor_id ?? null, body.vendor_name_snapshot ?? null,
+      body.vendor_id ?? null, vendorNameSnapshot,
       body.reference_number ?? null, body.tracking_number ?? null,
       body.shipper ?? null, body.notes ?? null,
       body.expected_arrival_at ?? null,
