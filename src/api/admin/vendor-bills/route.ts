@@ -57,6 +57,13 @@ const createVendorBillSchema = z.object({
   document_date: z.string().datetime().nullish(),
   commission_mode: z.enum(["percent", "fixed"]).default("percent"),
   notes: z.string().max(2000).nullish(),
+  // Staged editor overrides. Absent = derive from the vendor's default term
+  // (resolveVendorBillPaymentTerms), same as always. Present = the operator
+  // changed Terms/Due in the editor BEFORE the first save, so the create is
+  // the only write that can carry them.
+  payment_terms_days: z.number().int().min(0).max(365).nullish(),
+  payment_terms_name: z.string().max(100).nullish(),
+  due_date: z.string().datetime().nullish(),
   initial_account_line: z
     .object({
       qb_account_list_id: z.string().min(1),
@@ -415,8 +422,19 @@ export async function POST(
   }
   const vendorName =
     vendor.company_name ?? vendor.full_name ?? vendor.name ?? vendor.id;
-  const { days: paymentTermsDays, name: paymentTermsName } =
-    await resolveVendorBillPaymentTerms(knex, vendor.id);
+  const resolvedTerms = await resolveVendorBillPaymentTerms(knex, vendor.id);
+  // An editor override replaces BOTH halves of the term together — taking the
+  // operator's name with the vendor's days (or vice versa) is exactly the
+  // three-fields-that-disagree failure the terms catalog exists to prevent.
+  const hasTermsOverride =
+    body.payment_terms_days !== undefined ||
+    body.payment_terms_name !== undefined;
+  const paymentTermsDays = hasTermsOverride
+    ? (body.payment_terms_days ?? null)
+    : resolvedTerms.days;
+  const paymentTermsName = hasTermsOverride
+    ? (body.payment_terms_name ?? null)
+    : resolvedTerms.name;
 
   type QbAccountRow = {
     qb_list_id: string;
@@ -501,7 +519,7 @@ export async function POST(
        ?,
        ?, NULL, NULL, ?, ?, ?, ?, 'draft', ?,
        COALESCE(?::timestamptz, NOW()), ?, ?,
-       COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
+       COALESCE(?::timestamptz, COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day')),
        ?, 0, 0, false, 0, false, 0, ?, NOW(), NOW()
      )
      RETURNING *`,
@@ -516,6 +534,7 @@ export async function POST(
         body.document_date ?? null,
         paymentTermsDays,
         paymentTermsName,
+        body.due_date ?? null,
         body.document_date ?? null,
         paymentTermsDays,
         body.commission_mode,
