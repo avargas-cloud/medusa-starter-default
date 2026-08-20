@@ -268,6 +268,17 @@ export default defineMiddlewares({
         idempotency("admin.draft-orders.create"),
       ],
     },
+    // The POS estimate save (create branch) orchestrates draft creation + N
+    // add-item-force calls from the browser. Without a key here, a double-submit
+    // creates a SECOND estimate outright — the native /admin/draft-orders guard
+    // above never sees it, because sync-pos calls that route server-side and
+    // does NOT forward the client's Idempotency-Key. The POS sends a key only on
+    // action:"create"; an update save is a legitimate repeat and must not dedup.
+    {
+      matcher: "/admin/draft-orders/sync-pos",
+      method: ["POST"],
+      middlewares: [idempotency("admin.draft-orders.sync-pos")],
+    },
     // ── Idempotency-Key dedup (Phase 3a) — blocks same-key double-submit on
     // these create routes. No-op unless the client sends an Idempotency-Key.
     {
