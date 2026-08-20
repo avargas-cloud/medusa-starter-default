@@ -33,6 +33,10 @@ import { purchaseCostDollars } from "../../../../lib/cost/cost-sql";
 
 const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
 
+// Placeholder variants (PO/FO line placeholders, not sellable inventory) —
+// owner's rule 2026-08-20: they never appear in this report.
+const EXCLUDED_SKUS = "('Sample-Product', 'Samples')";
+
 type RawConnection = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
 };
@@ -85,6 +89,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
           AND fore.status = 'applied' AND fore.voided_at IS NULL
           AND fore.stock_location_id = ?
           AND COALESCE(forl.qty_received_now, 0) <> 0
+          AND COALESCE(pv.sku, forl.sku_snapshot) NOT IN ${EXCLUDED_SKUS}
         ORDER BY fore.received_at ASC, fo.number ASC, forl.id ASC`,
       [CHINA_LOCATION_ID]
     ),
@@ -98,6 +103,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
         WHERE itl.deleted_at IS NULL AND it.deleted_at IS NULL
           AND it.origin_country = 'CN' AND it.voided_at IS NULL
           AND it.shipped_at IS NOT NULL
+          AND itl.sku NOT IN ${EXCLUDED_SKUS}
         GROUP BY it.id, it.number, it.shipped_at, itl.product_variant_id
         ORDER BY it.shipped_at ASC, it.number ASC`,
       []
@@ -131,7 +137,8 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
          JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
          LEFT JOIN in_transit itr ON itr.variant_id = pvii.variant_id
         WHERE il.location_id = ? AND il.deleted_at IS NULL
-          AND (il.stocked_quantity <> 0 OR itr.in_transit_qty IS NOT NULL)`,
+          AND (il.stocked_quantity <> 0 OR itr.in_transit_qty IS NOT NULL)
+          AND pv.sku NOT IN ${EXCLUDED_SKUS}`,
       [CHINA_LOCATION_ID]
     ),
     // Operator-assigned manual lots over unattributed legacy stock.
