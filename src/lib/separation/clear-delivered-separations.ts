@@ -32,6 +32,9 @@
 
 import type { Pool } from "pg";
 
+import { loadSeparationData } from "../../api/admin/orders/[id]/_lib/separation-data";
+import { deriveSeparationStatus } from "../../api/admin/orders/_lib/separation-status";
+
 /** Returns the order_line_item ids whose separation this call zeroed. */
 export async function clearDeliveredSeparations(
   pool: Pool,
@@ -76,6 +79,48 @@ export async function clearDeliveredSeparations(
        RETURNING sep.order_line_item_id`,
       [orderId]
     );
+
+    // Y RE-DERIVAR EL ESTADO. Sacar unidades del deposito cambia el pendiente,
+    // asi que el `separation_status` guardado deja de ser cierto — pero nadie lo
+    // recalcula: se escribe solo cuando alguien guarda el modal. S11320 quedo
+    // con el badge `Separated` (full) mientras la derivacion viva decia partial
+    // (8 pendientes, 7 apartadas), al lado de un `To Separate 1` correcto. Los
+    // dos slots de esa columna son estado + trabajo, y pueden convivir; lo que
+    // no puede es que el estado sea de antes de la entrega.
+    //
+    // El UPDATE sobre "order" dispara el trigger de Meili, que es como el badge
+    // llega a la lista. Merge con `||` — nunca reemplazo: `store.metadata` y
+    // `order.metadata` pierden claves si se escriben enteros.
+    const data = await loadSeparationData(pool, orderId);
+    if (data) {
+      const status = deriveSeparationStatus(
+        data.lines.map((l) => ({
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          separated: l.separated,
+        })),
+        // legacy = false A PROPOSITO. Ese flag existe para ordenes anteriores al
+        // tracking por linea, donde `is_separated=true` sin filas se honra como
+        // `full`. Aca acabamos de escribir filas, asi que la orden TIENE
+        // tracking por linea — y si todas quedaron en 0 la respuesta honesta es
+        // `none`, no heredar el `full` de antes de la entrega, que es
+        // exactamente el valor viejo que vinimos a corregir.
+        false
+      );
+      await pool.query(
+        `UPDATE "order"
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+          WHERE id = $1`,
+        [
+          orderId,
+          JSON.stringify({
+            separation_status: status,
+            is_separated: status === "full",
+          }),
+        ]
+      );
+    }
+
     return res.rows.map((r) => r.order_line_item_id);
   } catch (err) {
     console.warn(
