@@ -101,6 +101,14 @@ function num(v: unknown): number {
  * Closed order's shelf claim stops being subtracted, availability inflates, and
  * the list offers `To Separate` over units that are already spoken for.
  *
+ * `separated` is NETTED by what left the building, exactly as separation-data.ts
+ * nets what it hands the modal. It has to be netted in BOTH or the list and the
+ * screen the operator opens next disagree — which is what happened on S11320 the
+ * day the netting shipped: the modal saw 8 separated minus 1 delivered = 7
+ * against 8 pending and offered the last unit, while this query still read the
+ * raw 8, computed nothing left, and the row showed no `To Separate`. The netting
+ * went into one file and not the other.
+ *
  * The claim itself is `separated qty − fulfilled`, matching separation-data.ts
  * exactly — the SEPARATED amount minus what already left, not the line's whole
  * unfulfilled remainder. Delivered units released their claim; invoiced but
@@ -157,7 +165,10 @@ const AVAILABILITY_SQL = `
            oli.variant_sku                    AS sku,
            oi.quantity                        AS quantity,
            ${liveFulfilledSql("oi.order_id", "oli.id")} AS fulfilled,
-           COALESCE(sep.qty, 0)               AS separated,
+           GREATEST(0, COALESCE(sep.qty, 0) - ${liveFulfilledSql(
+             "oi.order_id",
+             "oli.id"
+           )})                                 AS separated,
            COALESCE(inv.qty, 0)               AS invoiced_direct,
            pvii.inventory_item_id             AS inventory_item_id
       FROM ord o
