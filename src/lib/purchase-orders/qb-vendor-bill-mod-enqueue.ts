@@ -26,7 +26,7 @@ export type VendorBillModEnqueueResult =
   | { queued: true; groupId: string; billIds: string[] }
   | { queued: false; reason: string };
 
-type BillType = "regular" | "service" | "freight" | "tariff";
+type BillType = "regular" | "service" | "freight" | "tariff" | "expense";
 
 interface BillRow {
   id: string;
@@ -610,7 +610,7 @@ async function enqueueOneBillMod(
       );
     }
 
-    if (!regular.purchase_order_id) {
+    if (!regular.purchase_order_id && regular.bill_type !== "expense") {
       throw new Error(`${regular.number ?? regular.id}: missing purchase order`);
     }
     const orderPayload = {
@@ -618,7 +618,9 @@ async function enqueueOneBillMod(
       qb_vendor_bill_pipeline_id: vendorBillPipelineId,
     };
     const operation = await enqueuePurchaseQbOperation(db, {
-      purchaseOrderId: regular.purchase_order_id,
+      // Expense bills chain by their own bill id — same key their Add used,
+      // so Add → Mod on the same document stays serial.
+      purchaseOrderId: regular.purchase_order_id ?? regular.id,
       referenceId: bill.id,
       referenceType: "vendor_bill",
       step: "vendor_bill_mod",
@@ -682,13 +684,16 @@ export async function enqueueVendorBillModSingle(
   if (!bill.qb_txn_id) {
     return { queued: false, reason: "bill is not linked to QuickBooks" };
   }
-  if (!bill.purchase_order_id) {
+  // An expense bill never has a purchase order — that is its shape, and its
+  // Mod chains off its own bill id (same key its Add used). For every other
+  // type a missing PO is data damage and stays a refusal.
+  if (!bill.purchase_order_id && bill.bill_type !== "expense") {
     return { queued: false, reason: "bill has no purchase order" };
   }
 
   const groupId = randomUUID();
   // `bill` is its own context: buildPayload reads `regular.purchase_order_id`
-  // only, and this bill has one.
+  // only, and this bill either has one or (expense) chains by its own id.
   await enqueueOneBillMod(db, bill, bill, groupId);
   return { queued: true, groupId, billIds: [bill.id] };
 }

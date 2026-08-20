@@ -30,5 +30,16 @@ export function accountAllowedForVendorBillType(
         fullName !== "duties payable")
     );
   }
+  if (billType === "expense") {
+    // Operating expenses (supplies, installs, office costs). Broad on purpose:
+    // unlike service/freight/tariff, an expense bill never pools into a
+    // regular bill's landed cost, so there is no account to protect — but it
+    // stays out of COGS/Income/Balance-Sheet accounts, which would misstate
+    // margins or the balance sheet if a bill posted against them.
+    return (
+      account.account_type === "Expense" ||
+      account.account_type === "OtherExpense"
+    );
+  }
   return false;
 }

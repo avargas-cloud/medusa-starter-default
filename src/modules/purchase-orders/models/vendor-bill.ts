@@ -37,7 +37,7 @@ export const VendorBill = model.define("vendor_bill", {
   vendor_name_snapshot: model.text().nullable(),
   vendor_qb_list_id_snapshot: model.text().nullable(),
 
-  bill_type: model.text().default("regular"), // regular | service | freight | tariff
+  bill_type: model.text().default("regular"), // regular | service | freight | tariff | expense
 
   // Lifecycle
   status: model.text().default("draft"), // draft | confirmed | synced

@@ -80,6 +80,7 @@ export type EnqueueResult =
 interface BillRow {
   id: string;
   number: string | null;
+  bill_type: string;
   reference_id: string | null;
   document_date: string | null;
   due_date: string | null;
@@ -130,7 +131,7 @@ export async function enqueueQbVendorBillAdd(
   }
 
   const billResult = await knex.raw(
-    `SELECT vb.id, vb.number, vb.reference_id, vb.document_date, vb.due_date,
+    `SELECT vb.id, vb.number, vb.bill_type, vb.reference_id, vb.document_date, vb.due_date,
             vb.purchase_order_id, vb.vendor_qb_list_id_snapshot,
             vb.vendor_name_snapshot, vb.qb_source,
             vb.tax_amount_cents, vb.tax_account_list_id,
@@ -151,7 +152,7 @@ export async function enqueueQbVendorBillAdd(
       -- and an account-only bill yields itemLines: [] with expenseLines: [n].
       -- (2026-08-04)
       WHERE vb.id = ? AND vb.deleted_at IS NULL
-        AND vb.bill_type IN ('regular', 'service', 'freight', 'tariff')`,
+        AND vb.bill_type IN ('regular', 'service', 'freight', 'tariff', 'expense')`,
     [vendorBillId]
   );
   const bill = (billResult.rows[0] ?? null) as BillRow | null;
@@ -165,18 +166,25 @@ export async function enqueueQbVendorBillAdd(
   if (bill.qb_source === "adopted") {
     return { queued: false, reason: "adopted_bill_readonly" };
   }
-  if (!bill.purchase_order_id) {
+  // An EXPENSE bill (operating expenses — supplies, installs, office costs)
+  // never has a purchase order: that is its defining structure. Every other
+  // type still requires one — for them a missing PO is data damage, not a
+  // document shape.
+  if (!bill.purchase_order_id && bill.bill_type !== "expense") {
     return { queued: false, reason: "bill has no purchase order" };
   }
 
-  const poResult = await knex.raw(
-    `SELECT number, qb_purchase_order_list_id, vendor_id
-       FROM purchase_order
-      WHERE id = ? AND deleted_at IS NULL`,
-    [bill.purchase_order_id]
-  );
-  const po = (poResult.rows[0] ?? null) as PoRow | null;
-  if (!po) return { queued: false, reason: "purchase order not found" };
+  let po: PoRow | null = null;
+  if (bill.purchase_order_id) {
+    const poResult = await knex.raw(
+      `SELECT number, qb_purchase_order_list_id, vendor_id
+         FROM purchase_order
+        WHERE id = ? AND deleted_at IS NULL`,
+      [bill.purchase_order_id]
+    );
+    po = (poResult.rows[0] ?? null) as PoRow | null;
+    if (!po) return { queued: false, reason: "purchase order not found" };
+  }
 
   // WHICH DOCUMENT SHAPE — decided by the bill's STRUCTURE, not by its vendor.
   //
@@ -506,15 +514,17 @@ export async function enqueueQbVendorBillAdd(
   const payload = {
     vendor_bill_id: bill.id,
     po_id: bill.purchase_order_id,
-    po_number: po.number,
+    po_number: po?.number ?? null,
     ref_number: bill.reference_id,
-    memo: `EcoPowerTech ${bill.number ?? bill.id} / ${po.number ?? bill.purchase_order_id}`,
+    memo: po
+      ? `EcoPowerTech ${bill.number ?? bill.id} / ${po.number ?? bill.purchase_order_id}`
+      : `EcoPowerTech ${bill.number ?? bill.id}`,
     vendor_qb_list_id: bill.vendor_qb_list_id_snapshot,
     vendor_name: bill.vendor_name_snapshot,
     txn_date: toDateOnly(bill.document_date),
     due_date: toDateOnly(bill.due_date),
     rebuild_generation: bill.rebuild_generation,
-    po_txn_id: po.qb_purchase_order_list_id,
+    po_txn_id: po?.qb_purchase_order_list_id ?? null,
     item_lines: itemLines,
     // The clearing lines ride with the positive charges: to QuickBooks they are
     // all ExpenseLines, and only their sign differs.
@@ -614,7 +624,11 @@ export async function enqueueQbVendorBillAdd(
     qb_vendor_bill_pipeline_id: pipelineRowId,
   };
   const operation = await enqueuePurchaseQbOperation(knex, {
-    purchaseOrderId: bill.purchase_order_id,
+    // The dependency chain serializes operations per PURCHASE ORDER (PO Add →
+    // Receipt Add → Bill Add must land in order). An expense bill has no PO
+    // and nothing to order against — except its own future Mods, so it keys
+    // its OWN chain by bill id: Add → Mod on the same document stays serial.
+    purchaseOrderId: bill.purchase_order_id ?? bill.id,
     referenceId: vendorBillId,
     referenceType: "vendor_bill",
     step: "vendor_bill_add",

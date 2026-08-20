@@ -106,6 +106,7 @@ export const VENDOR_BILL_TYPES = [
   "service",
   "freight",
   "tariff",
+  "expense",
 ] as const;
 
 export type VendorBillType = (typeof VENDOR_BILL_TYPES)[number];

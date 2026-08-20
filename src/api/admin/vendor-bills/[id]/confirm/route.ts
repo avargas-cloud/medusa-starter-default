@@ -101,7 +101,7 @@ export async function POST(
   }
   if (lineStats.count !== lineStats.account_count) {
     return res.status(422).json({
-      error: "Service, freight, and tariff bills can only contain account lines",
+      error: "Service, freight, tariff, and expense bills can only contain account lines",
       code: "invalid_line_type",
     });
   }

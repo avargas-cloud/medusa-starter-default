@@ -171,7 +171,7 @@ interface VendorBillLineRow {
 
 const vendorBillPatchSchema = z.object({
   vendor_id: z.string().min(1).nullish(),
-  bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
+  bill_type: z.enum(["regular", "service", "freight", "tariff", "expense"]).optional(),
   reference_id: z.string().max(200).nullish(),
   document_date: z.string().datetime().nullish(),
   // Payment Terms + Due Date. The term is chosen from the shared catalog
