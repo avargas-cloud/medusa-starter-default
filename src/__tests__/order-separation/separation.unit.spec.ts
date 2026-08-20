@@ -136,7 +136,12 @@ describe("validateSeparationRequest", () => {
       new Map([["l1", 5]])
     );
     expect(rejections).toEqual([
-      { lineId: "l1", requested: 5, cap: 3, reason: "exceeds_physical_stock" },
+      {
+        lineId: "l1",
+        requested: 5,
+        cap: 3,
+        reason: "exceeds_claimed_elsewhere",
+      },
     ]);
   });
 
@@ -151,7 +156,9 @@ describe("validateSeparationRequest", () => {
     ).toEqual([]);
   });
 
-  it("two lines of the same item compete for one pool", () => {
+  it("two lines of the same item compete with each other", () => {
+    // 6 pending each; each asks for 4, so each one's ceiling is 6 − the other's
+    // 4 = 2. They cannot both spend the same units even inside one request.
     const lines = [
       line({ lineId: "l1", quantity: 6 }),
       line({ lineId: "l2", quantity: 6 }),
@@ -165,7 +172,10 @@ describe("validateSeparationRequest", () => {
       ])
     );
     expect(rejections.map((r) => r.lineId).sort()).toEqual(["l1", "l2"]);
-    expect(rejections.every((r) => r.reason === "exceeds_physical_stock")).toBe(true);
+    expect(
+      rejections.every((r) => r.reason === "exceeds_claimed_elsewhere")
+    ).toBe(true);
+    expect(rejections.every((r) => r.cap === 2)).toBe(true);
   });
 
   it("an unmentioned sibling's stored separation still counts as demand", () => {
@@ -178,20 +188,37 @@ describe("validateSeparationRequest", () => {
       new Map([["iitem_a", inv(10)]]),
       new Map([["l2", 5]])
     );
+    // l2's ceiling is its own 8 pending minus the 6 its sibling holds.
     expect(rejections).toEqual([
-      { lineId: "l2", requested: 5, cap: 4, reason: "exceeds_physical_stock" },
+      {
+        lineId: "l2",
+        requested: 5,
+        cap: 2,
+        reason: "exceeds_claimed_elsewhere",
+      },
     ]);
   });
 
-  it("no inventory item means no physical stock can back a raise", () => {
-    const rejections = validateSeparationRequest(
-      [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
-      new Map(),
-      new Map([["l1", 2]])
-    );
-    expect(rejections).toEqual([
-      { lineId: "l1", requested: 2, cap: 0, reason: "exceeds_physical_stock" },
-    ]);
+  it("a line with no inventory item can still be separated", () => {
+    // Since 2026-08-20 stock is not the arbiter, so "there is no stock record"
+    // stopped being a reason to refuse. Nothing competes for a line with no
+    // inventory item, so its ceiling is simply its pending quantity — and a
+    // service line that gets invoiced would otherwise be pinned under a floor
+    // it could never reach.
+    expect(
+      validateSeparationRequest(
+        [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
+        new Map(),
+        new Map([["l1", 2]])
+      )
+    ).toEqual([]);
+    expect(
+      validateSeparationRequest(
+        [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
+        new Map(),
+        new Map([["l1", 4]])
+      )[0]?.reason
+    ).toBe("exceeds_open_qty");
   });
 });
 

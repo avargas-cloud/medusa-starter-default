@@ -4,6 +4,7 @@ import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../../utils/db-pool";
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
+import { clearDeliveredSeparations } from "../../../../../lib/separation/clear-delivered-separations";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 import { consumeReservationsForFulfillment } from "../_lib/consume-reservations-for-fulfillment";
 
@@ -20,6 +21,13 @@ async function tryCompleteOrder(
   scope: MedusaRequest["scope"],
   orderId: string
 ): Promise<void> {
+  // The goods just walked out, so any line now fully out of the building has
+  // no business still claiming shelf stock — a stale separation shrinks the
+  // `separable_cap` of every OTHER order wanting that SKU. Idempotent (sets to
+  // zero, never subtracts), non-fatal, and deliberately after the COMMIT that
+  // recorded the pickup: tidying a mark must never be able to undo the handover.
+  await clearDeliveredSeparations(getDbPool(), orderId);
+
   try {
     await maybeCompleteOrder(scope, orderId);
   } catch (completeErr: any) {

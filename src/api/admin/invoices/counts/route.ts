@@ -4,6 +4,10 @@ import {
   parseRepSelection,
   repSqlPredicate,
 } from "../../../../lib/sales-rep/sql-filter";
+import {
+  linkedToOrderSql,
+  unfulfilledSql,
+} from "../_lib/unfulfilled-predicate";
 
 /**
  * GET /admin/invoices/counts?from=<isoOrMs>&to=<isoOrMs>&showVoided=true|false
@@ -92,6 +96,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           f.shipped_at,
           f.delivered_at,
           f.canceled_at,
+          ${linkedToOrderSql("i")}                                AS linked_to_order,
           EXISTS (
             SELECT 1 FROM fulfillment_label l
             WHERE l.fulfillment_id = i.fulfillment_id
@@ -116,11 +121,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           WHERE status != '${VOIDED_STATUS}' AND balance_due > 0
         )                                                                     AS unpaid,
         COUNT(*) FILTER (
-          WHERE status != '${VOIDED_STATUS}' AND (
-            fulfillment_id IS NULL
-            OR canceled_at IS NOT NULL
-            OR (shipped_at IS NULL AND delivered_at IS NULL AND NOT has_tracking)
-          )
+          WHERE status != '${VOIDED_STATUS}' AND ${unfulfilledSql({
+            fulfillmentId: "fulfillment_id",
+            canceledAt: "canceled_at",
+            shippedAt: "shipped_at",
+            deliveredAt: "delivered_at",
+            hasTracking: "has_tracking",
+            linkedToOrder: "linked_to_order",
+          })}
         )                                                                     AS unfulfilled,
         COUNT(*) FILTER (
           WHERE status != '${VOIDED_STATUS}' AND has_delivery

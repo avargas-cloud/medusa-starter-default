@@ -14,20 +14,38 @@
  * and never more than its open order quantity (qty − fulfilled).
  *
  * A separation is LIVE while its work is pending: max(0, qty − fulfilled) in a
- * non-canceled, non-archived order. Delivered units left the building and
- * release their claim; invoiced-but-undelivered ones still hold it.
+ * non-canceled, non-archived order. Fulfilled units left the building and
+ * release their claim; invoiced-but-unfulfilled ones still hold it.
+ *
+ * `fulfilled` here means UNITS COVERED BY A LIVE FULFILLMENT — never
+ * `order_item.fulfilled_quantity`, which is an aggregate Medusa does not
+ * revert when a fulfillment is canceled and deleted (see separation-data.ts).
+ * Invoicing does NOT cover anything: a paid invoice whose goods are still
+ * waiting on the shelf for pickup is exactly the case separation exists for
+ * (owner decision 2026-08-20, replacing the 2026-08-11 one that folded
+ * invoiced units into "done").
  *
  * A stored value the stock no longer backs is never forced down (the units are
  * already on the shelf) — the cap only limits RAISING: any request at or below
  * the line's stored separation always passes.
+ *
+ * The mirror rule is the FLOOR: units already invoiced and not yet fulfilled
+ * are promised to a customer who has been billed for them, so they may never
+ * be un-separated. That floor is independent of stock — it states demand, not
+ * availability, and a line whose floor exceeds its physical cap is a real
+ * fact the warehouse needs to see, not an error to hide.
  */
 
 export interface SeparationLineInput {
   lineId: string;
   /** Order quantity of the line. */
   quantity: number;
-  /** Fulfilled quantity (already out the door — not separable). */
+  /** Units covered by a LIVE fulfillment — already out the door, not
+   *  separable. Never `order_item.fulfilled_quantity`. */
   fulfilled: number;
+  /** Units on active (non-voided, non-draft) POS invoices. Does NOT cover the
+   *  line — it only sets the floor below which the separation cannot drop. */
+  invoiced: number;
   /** Active reservation quantity for this line — display fact only; plays no
    *  role in the cap since 2026-08-12. */
   reserved: number;
@@ -50,18 +68,87 @@ export interface InventorySnapshot {
 export interface SeparationCap {
   lineId: string;
   openQty: number;
-  /** Max separable for this line assuming no sibling requests raise theirs. */
+  /** What STOCK backs right now: Miami stock net of every other claim, capped
+   *  at the pending quantity. A warning and a list badge — NOT the ceiling. */
   cap: number;
+  /** Minimum the separation may never drop below: invoiced units still in the
+   *  warehouse. Zero when nothing is invoiced or everything was fulfilled. */
+  invoicedFloor: number;
+  /** The ceiling the operator may actually type: pending units net of what
+   *  other orders and sibling lines already claim. Never below the floor. */
+  maxSeparable: number;
 }
 
 function nz(v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+/** Pending units of a line: what still needs warehouse work. */
+export function openQtyOf(line: SeparationLineInput): number {
+  return Math.max(0, nz(line.quantity) - nz(line.fulfilled));
+}
+
+/**
+ * Invoiced units of the line that have NOT left the warehouse — the floor the
+ * separation may never go under. Clamped to the pending quantity so an
+ * over-invoiced line can never demand more than the order asks for.
+ */
+export function invoicedFloorOf(line: SeparationLineInput): number {
+  const invoicedInOrder = Math.min(nz(line.invoiced), nz(line.quantity));
+  return Math.min(
+    openQtyOf(line),
+    Math.max(0, invoicedInOrder - nz(line.fulfilled))
+  );
+}
+
 /** Stock left for this ORDER to separate: what other orders' live separations
  *  have not already claimed. */
 function orderPool(inv: InventorySnapshot): number {
   return Math.max(0, nz(inv.stocked) - nz(inv.separatedElsewhere));
+}
+
+/** Σ stored separations of OTHER lines of THIS order on the same item. Hard
+ *  demand on the same units; the line's own stored value is not demand against
+ *  itself (its qty is a total, not a delta). */
+function siblingStoredOf(
+  line: SeparationLineInput,
+  lines: SeparationLineInput[]
+): number {
+  return lines.reduce(
+    (acc, l) =>
+      l.lineId !== line.lineId && l.inventoryItemId === line.inventoryItemId
+        ? acc + nz(l.separated)
+        : acc,
+    0
+  );
+}
+
+/**
+ * The ceiling the operator may type (owner decision 2026-08-20).
+ *
+ * NOT stock-backed. `stocked_quantity` is the system's belief about the shelf,
+ * and the operator marking a separation is LOOKING at the shelf — when the two
+ * disagree the count is the thing that is wrong, and a screen that refuses the
+ * real number just makes the discrepancy invisible. S11432 is the case:
+ * `stocked_quantity` said 1 while 18 units sat invoiced and waiting for pickup,
+ * so a stock ceiling pinned the row at a value it could not leave.
+ *
+ * What still binds is other people's claims — the cross-order arbiter of
+ * 2026-08-12 is intact: units another order has separated, and units a sibling
+ * line of this order has separated, are not available to take. Stock survives
+ * as `cap` below: a WARNING the row paints amber, never a refusal.
+ */
+function maxSeparableOf(
+  line: SeparationLineInput,
+  lines: SeparationLineInput[],
+  inv: InventorySnapshot | undefined
+): number {
+  const openQty = openQtyOf(line);
+  const claimedElsewhere = inv ? nz(inv.separatedElsewhere) : 0;
+  return Math.max(
+    invoicedFloorOf(line),
+    Math.max(0, openQty - claimedElsewhere - siblingStoredOf(line, lines))
+  );
 }
 
 /** Per-line separation ceilings (display + single-line validation). */
@@ -73,21 +160,27 @@ export function computeSeparationCaps(
     const inv = line.inventoryItemId
       ? inventory.get(line.inventoryItemId)
       : undefined;
-    const openQty = Math.max(0, nz(line.quantity) - nz(line.fulfilled));
-    if (!inv) return { lineId: line.lineId, openQty, cap: 0 };
-    // Sibling lines' STORED separations are hard demand on the same pool; the
-    // line's own stored value is not demand against itself (qty is a total).
-    const siblingStored = lines.reduce(
-      (acc, l) =>
-        l.lineId !== line.lineId && l.inventoryItemId === line.inventoryItemId
-          ? acc + nz(l.separated)
-          : acc,
-      0
-    );
+    const openQty = openQtyOf(line);
+    const floor = invoicedFloorOf(line);
+    const maxSeparable = maxSeparableOf(line, lines, inv);
+    if (!inv)
+      return {
+        lineId: line.lineId,
+        openQty,
+        cap: 0,
+        invoicedFloor: floor,
+        maxSeparable,
+      };
+    const siblingStored = siblingStoredOf(line, lines);
     return {
       lineId: line.lineId,
       openQty,
+      // Stock-backed: what the warehouse could set aside RIGHT NOW without
+      // contradicting the count. Drives the list's "available" badge and the
+      // amber warning — no longer the input's ceiling.
       cap: Math.min(openQty, Math.max(0, orderPool(inv) - siblingStored)),
+      invoicedFloor: floor,
+      maxSeparable,
     };
   });
 }
@@ -96,14 +189,22 @@ export interface SeparationRejection {
   lineId: string;
   requested: number;
   cap: number;
-  reason: "exceeds_open_qty" | "exceeds_physical_stock";
+  reason:
+    | "exceeds_open_qty"
+    | "exceeds_claimed_elsewhere"
+    | "below_invoiced_floor";
 }
 
 /**
- * Validate a full requested set. Lines sharing an inventory item compete for
- * its pool with their TOTAL requested value; lines the request does not
- * mention still occupy the pool with their stored separation. Lowering or
- * keeping a stored value is always allowed — only raises are gated.
+ * Validate a full requested set.
+ *
+ * RAISES are gated by other people's claims, not by the stock count (owner
+ * decision 2026-08-20 — see maxSeparableOf). DROPS are gated by the invoiced
+ * floor. The screen clamps both, but a POST is not a screen and re-validates
+ * here.
+ *
+ * Lines sharing an inventory item compete with their TOTAL requested value;
+ * lines the request does not mention still hold their stored separation.
  */
 export function validateSeparationRequest(
   lines: SeparationLineInput[],
@@ -116,29 +217,34 @@ export function validateSeparationRequest(
   const effective = (l: SeparationLineInput): number =>
     requested.has(l.lineId) ? nz(requested.get(l.lineId) ?? 0) : nz(l.separated);
 
-  const overdrawnItems = new Set<string>();
-  const demandByItem = new Map<string, number>();
-  for (const l of lines) {
-    if (!l.inventoryItemId) continue;
-    demandByItem.set(
-      l.inventoryItemId,
-      (demandByItem.get(l.inventoryItemId) ?? 0) + effective(l)
-    );
-  }
-  for (const [itemId, demand] of demandByItem) {
-    const inv = inventory.get(itemId);
-    if (demand > (inv ? orderPool(inv) : 0)) overdrawnItems.add(itemId);
-  }
-
   for (const line of lines) {
     if (!requested.has(line.lineId)) continue;
     const req = nz(requested.get(line.lineId) ?? 0);
     const stored = nz(line.separated);
-    // Never force lowering: at or below the stored value there is nothing to
-    // authorize — those units are already on the shelf.
-    if (req <= stored) continue;
 
-    const openQty = Math.max(0, nz(line.quantity) - nz(line.fulfilled));
+    // Invoiced units still in the warehouse can never be un-separated: the
+    // customer was billed for them and they are waiting to be picked up.
+    const floor = invoicedFloorOf(line);
+    if (req < floor) {
+      rejections.push({
+        lineId: line.lineId,
+        requested: req,
+        cap: floor,
+        reason: "below_invoiced_floor",
+      });
+      continue;
+    }
+
+    // Nothing to authorize at or below what the line ALREADY holds — the
+    // stored separation (those units are on the shelf) or the invoiced floor
+    // (those units are billed and cannot leave it). The floor has to clear the
+    // stock check too, or a line demanding 18 and backed by 1 unit of stock is
+    // refused for being under the floor at 0 AND over the stock at 18: an
+    // unsaveable row. When the two disagree the discrepancy is in the
+    // warehouse, and the modal's job is to show it, not to arbitrate it.
+    if (req <= Math.max(stored, floor)) continue;
+
+    const openQty = openQtyOf(line);
     if (req > openQty) {
       rejections.push({
         lineId: line.lineId,
@@ -149,33 +255,31 @@ export function validateSeparationRequest(
       continue;
     }
 
-    if (!line.inventoryItemId) {
-      // No inventory item → no physical stock can back a raise.
+    // What is left after everyone else's claim. Sibling lines of THIS order
+    // count with their EFFECTIVE value (a request that raises two lines of the
+    // same item at once must not let both spend the same units), other orders
+    // with their live separation.
+    const inv = line.inventoryItemId
+      ? inventory.get(line.inventoryItemId)
+      : undefined;
+    const claimedElsewhere = inv ? nz(inv.separatedElsewhere) : 0;
+    const siblingsClaim = lines.reduce(
+      (acc, l) =>
+        l.lineId !== line.lineId && l.inventoryItemId === line.inventoryItemId
+          ? acc + effective(l)
+          : acc,
+      0
+    );
+    const ceiling = Math.max(
+      floor,
+      Math.max(0, openQty - claimedElsewhere - siblingsClaim)
+    );
+    if (req > ceiling) {
       rejections.push({
         lineId: line.lineId,
         requested: req,
-        cap: Math.min(openQty, stored),
-        reason: "exceeds_physical_stock",
-      });
-      continue;
-    }
-
-    if (overdrawnItems.has(line.inventoryItemId)) {
-      const inv = inventory.get(line.inventoryItemId);
-      const pool = inv ? orderPool(inv) : 0;
-      const othersClaim = lines.reduce(
-        (acc, l) =>
-          l.lineId !== line.lineId &&
-          l.inventoryItemId === line.inventoryItemId
-            ? acc + effective(l)
-            : acc,
-        0
-      );
-      rejections.push({
-        lineId: line.lineId,
-        requested: req,
-        cap: Math.min(openQty, Math.max(0, pool - othersClaim)),
-        reason: "exceeds_physical_stock",
+        cap: ceiling,
+        reason: "exceeds_claimed_elsewhere",
       });
     }
   }

@@ -109,6 +109,38 @@ function num(v: unknown): number {
  * No question marks in the comments inside the template literal below: knex
  * treats every one of them as a positional binding.
  */
+
+/**
+ * Units of one order line covered by a LIVE fulfillment.
+ *
+ * `order_item.fulfilled_quantity` is NOT usable here, for the same reason
+ * separation-data.ts stopped using it: Medusa writes that aggregate forward and
+ * never reverts it, so a canceled and deleted fulfillment leaves its units
+ * counted forever. On production 2026-08-20 it was wrong on 25 lines across 6
+ * orders — and here the damage is worse than a wrong number on a screen: an
+ * inflated `fulfilled` makes a live separation look already shipped, so its
+ * units go back into the cross-order pool while they sit on the shelf, and
+ * another order is offered them.
+ *
+ * Written once and interpolated into both CTEs so the two can never drift.
+ * Carries no question mark, by the rule above.
+ */
+const liveFulfilledSql = (orderCol: string, lineCol: string): string => `
+  COALESCE((
+    SELECT SUM(ffi.quantity)
+      FROM order_fulfillment ofl
+      JOIN fulfillment f
+        ON f.id = ofl.fulfillment_id
+       AND f.canceled_at IS NULL
+       AND f.deleted_at IS NULL
+      JOIN fulfillment_item ffi
+        ON ffi.fulfillment_id = f.id
+       AND ffi.deleted_at IS NULL
+     WHERE ofl.order_id = ${orderCol}
+       AND ofl.deleted_at IS NULL
+       AND ffi.line_item_id = ${lineCol}
+  ), 0)`;
+
 const AVAILABILITY_SQL = `
   WITH ord AS (
     SELECT o.id,
@@ -124,7 +156,7 @@ const AVAILABILITY_SQL = `
            oli.variant_id                     AS variant_id,
            oli.variant_sku                    AS sku,
            oi.quantity                        AS quantity,
-           COALESCE(oi.fulfilled_quantity, 0) AS fulfilled,
+           ${liveFulfilledSql("oi.order_id", "oli.id")} AS fulfilled,
            COALESCE(sep.qty, 0)               AS separated,
            COALESCE(inv.qty, 0)               AS invoiced_direct,
            pvii.inventory_item_id             AS inventory_item_id
@@ -151,7 +183,10 @@ const AVAILABILITY_SQL = `
   claim AS (
     SELECT pvii.inventory_item_id AS inventory_item_id,
            sep.order_id           AS order_id,
-           SUM(GREATEST(0, sep.qty - COALESCE(oi.fulfilled_quantity, 0))) AS live
+           SUM(GREATEST(0, sep.qty - ${liveFulfilledSql(
+             "sep.order_id",
+             "oli2.id"
+           )})) AS live
       FROM order_line_separation sep
       JOIN "order" o2
         ON o2.id = sep.order_id AND o2.deleted_at IS NULL
@@ -163,7 +198,7 @@ const AVAILABILITY_SQL = `
        AND oi.version = o2.version AND oi.deleted_at IS NULL
       JOIN product_variant_inventory_item pvii
         ON pvii.variant_id = oli2.variant_id AND pvii.deleted_at IS NULL
-     WHERE sep.qty > COALESCE(oi.fulfilled_quantity, 0)
+     WHERE sep.qty > ${liveFulfilledSql("sep.order_id", "oli2.id")}
      GROUP BY 1, 2
   )
   SELECT l.order_id,
@@ -231,11 +266,12 @@ export async function loadSeparationPending(
   }
 
   for (const [orderId, orderRows] of byOrder) {
-    // Invoiced units are done as far as separation goes (owner decision
-    // 2026-08-11, same rule separation-data.ts applies to the modals): a line's
-    // work-reducing quantity is COVERED = max(fulfilled, invoiced), never raw
-    // fulfilled. Without this, an order billed but not yet delivered kept
-    // announcing "To Separate" for units already spoken for on an invoice.
+    // Invoiced units no longer cover anything (owner decision 2026-08-20,
+    // superseding 2026-08-11 — the same reversal separation-data.ts applies to
+    // the modals, and it has to happen in both or the list contradicts the
+    // modal). A billed order awaiting pickup still holds its goods, so it still
+    // announces the separation work they represent. Invoiced quantities survive
+    // here only to set the FLOOR the separation may not drop below.
     const invoicedByLine = allocateInvoicedToLines(
       orderRows.map((row) => ({
         lineId: row.line_id,
@@ -254,15 +290,11 @@ export async function loadSeparationPending(
     const lines: SeparationLineInput[] = orderRows.map((row) => {
       const quantity = num(row.quantity);
       const invoiced = invoicedByLine.get(row.line_id) ?? 0;
-      // Wholesale fallback mirrors separation-data.ts: a fully_invoiced order
-      // covers everything even where legacy items defeat per-line attribution.
-      const covered = row.order_fully_invoiced
-        ? quantity
-        : Math.min(quantity, Math.max(num(row.fulfilled), invoiced));
       return {
         lineId: row.line_id,
         quantity,
-        fulfilled: covered,
+        fulfilled: Math.min(quantity, num(row.fulfilled)),
+        invoiced,
         // Display-only in the cap math since 2026-08-12; the pool arbiter is the
         // separation, not the reservation. Zero keeps this honest rather than
         // inventing a number the caps never read.
@@ -290,13 +322,20 @@ export async function loadSeparationPending(
     for (const line of lines) {
       const cap = capByLine.get(line.lineId);
       if (!cap) continue;
-      // What is left to set aside on this line, and how much of it the pool
-      // covers. `cap` is a TOTAL ceiling, so the additional room is whatever it
-      // allows beyond what is already stored.
+      // What is left to set aside on this line, and how much of it stock backs.
+      //
+      // `cap` is NOT reduced by `separated` a second time. It comes from
+      // `stocked_quantity`, which already excludes units a fulfillment took off
+      // the shelf — and separated units that were invoiced and dispatched are
+      // exactly those. Subtracting them again reported "0 available" on
+      // EMSH4V160D30WRW3, a line with 122 units sitting there and 122 still to
+      // separate (owner correction 2026-08-20). Same formula as the modal's
+      // amber, on purpose: a badge that computes availability its own way is
+      // the list contradicting the screen the operator opens next.
       pending += Math.max(0, cap.openQty - line.separated);
-      available += Math.min(
-        Math.max(0, cap.openQty - line.separated),
-        Math.max(0, cap.cap - line.separated)
+      available += Math.max(
+        0,
+        Math.min(cap.openQty - line.separated, cap.cap)
       );
     }
 

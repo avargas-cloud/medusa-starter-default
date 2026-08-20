@@ -12,14 +12,26 @@
  *    to separate (and every one carrying invoiced-but-unattributed items),
  *    `loadSeparationPending`'s `pending` equals the pending derived from
  *    `loadSeparationData`, the modal's own loader:
- *    Σ max(0, (quantity − covered) − separated). These are two independent
- *    implementations of "invoiced units are done" (SQL+allocator vs
- *    modal loader), so agreement is the check — the list contradicting the
- *    screen the operator opens next is exactly the bug class this guards.
+ *    Σ max(0, (quantity − fulfilled) − separated). These are two independent
+ *    implementations of the pending yardstick (SQL+allocator vs modal loader),
+ *    so agreement is the check — the list contradicting the screen the
+ *    operator opens next is exactly the bug class this guards.
+ *
+ * 3. NO SEPARATION SURFACE READS `order_item.fulfilled_quantity` (2026-08-20).
+ *    Sections 1 and 2 compare two implementations against each other, so they
+ *    are blind to the failure where BOTH read the same poisoned input — which
+ *    is what happened: that aggregate is written forward and never reverted, so
+ *    a canceled-and-deleted fulfillment leaves its units counted forever, and
+ *    both surfaces agreed on the wrong number. Static, because the value only
+ *    diverges on orders that went through a void: a data check would pass on
+ *    any week nobody voided anything.
  *
  * Run (medusa exec — running it with tsx executes NOTHING and exits 0):
  *   env DATABASE_URL=... npx medusa exec ./src/scripts/verify/verify-separation-invoiced.ts
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { ExecArgs } from "@medusajs/framework/types";
 
 import { getDbPool } from "../../api/utils/db-pool";
@@ -119,6 +131,47 @@ export default async function verifySeparationInvoiced({
   console.log(
     `[2] list↔modal pending parity over ${toCheck.length} order(s): ${
       pendingMismatches === 0 ? "OK" : `${pendingMismatches} mismatch(es)`
+    }`
+  );
+
+  // ── 3. no separation surface reads order_item.fulfilled_quantity ─────────
+  // Comment lines are stripped first: this file and the ones it audits DISCUSS
+  // the poisoned column at length, and a check that its own explanation trips
+  // is a check nobody can keep.
+  const SEPARATION_SOURCES = [
+    "src/api/admin/orders/[id]/_lib/separation-data.ts",
+    "src/api/admin/orders/_lib/separation-availability.ts",
+    "src/api/admin/orders/_lib/separation-caps.ts",
+    "src/api/admin/orders/_lib/separation-status.ts",
+  ];
+  let poisoned = 0;
+  for (const rel of SEPARATION_SOURCES) {
+    let src: string;
+    try {
+      src = readFileSync(join(process.cwd(), rel), "utf8");
+    } catch {
+      poisoned++;
+      console.log(`  ❌ ${rel}: NOT FOUND (did the file move?)`);
+      continue;
+    }
+    const code = src
+      .split("\n")
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith("*") && !t.startsWith("//") && !t.startsWith("/*");
+      })
+      .join("\n");
+    if (/fulfilled_quantity/.test(code)) {
+      poisoned++;
+      console.log(
+        `  ❌ ${rel}: reads order_item.fulfilled_quantity — use live fulfillments`
+      );
+    }
+  }
+  if (poisoned) failures++;
+  console.log(
+    `[3] no fulfilled_quantity in ${SEPARATION_SOURCES.length} separation source(s): ${
+      poisoned === 0 ? "OK" : `${poisoned} offender(s)`
     }`
   );
 

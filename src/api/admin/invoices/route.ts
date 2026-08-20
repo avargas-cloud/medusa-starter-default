@@ -48,6 +48,10 @@ import { FINANCE_MODULE } from "../../../modules/finance";
 import { INVOICE_MODULE } from "../../../modules/invoices";
 
 import { reconcileOrderReservations } from "../../../lib/finance/reconcile-order-reservations";
+import {
+  linkedToOrderSql,
+  unfulfilledSql,
+} from "./_lib/unfulfilled-predicate";
 import { getFiniteMoney, getNum } from "./payment-balance";
 import { registerMedusaPayment } from "./register-medusa-payment";
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
@@ -142,20 +146,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          AND f.deleted_at IS NULL
        WHERE i.deleted_at IS NULL
          AND i.status != 'voided'
-         AND (
-           i.fulfillment_id IS NULL
-           OR f.canceled_at IS NOT NULL
-           OR (
-             f.shipped_at IS NULL
-             AND f.delivered_at IS NULL
-             AND NOT EXISTS (
-               SELECT 1
-                 FROM fulfillment_label l
-                WHERE l.fulfillment_id = i.fulfillment_id
-                  AND l.deleted_at IS NULL
-             )
-           )
-         )
+         AND ${unfulfilledSql({
+           fulfillmentId: "i.fulfillment_id",
+           canceledAt: "f.canceled_at",
+           shippedAt: "f.shipped_at",
+           deliveredAt: "f.delivered_at",
+           hasTracking: `EXISTS (
+             SELECT 1
+               FROM fulfillment_label l
+              WHERE l.fulfillment_id = i.fulfillment_id
+                AND l.deleted_at IS NULL
+           )`,
+           linkedToOrder: linkedToOrderSql("i"),
+         })}
        ORDER BY i.created_at DESC
     `);
     const unfulfilledIds = (result.rows ?? []).map((row) => row.id);

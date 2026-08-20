@@ -75,11 +75,19 @@ export async function GET(
         description: l.description,
         quantity: l.quantity,
         fulfilled: l.fulfilledActual,
+        delivered: l.delivered,
         invoiced: l.invoiced,
         separated: l.separated,
         reserved: l.reserved,
         separable_cap: cap?.cap ?? 0,
         open_qty: cap?.openQty ?? 0,
+        // Invoiced units still in the building: the separation may never drop
+        // below this. The screen clamps its input, the POST re-validates.
+        invoiced_floor: cap?.invoicedFloor ?? 0,
+        // The ceiling the operator may type — pending units net of what other
+        // orders and sibling lines claim. `separable_cap` above is the STOCK
+        // number, kept as a warning; it does not bound the input.
+        max_separable: cap?.maxSeparable ?? 0,
         miami_stocked: inv?.stocked ?? 0,
         miami_reserved_all_orders: inv?.reservedAllOrders ?? 0,
         // Live separations of OTHER orders on this item (item-level facts —

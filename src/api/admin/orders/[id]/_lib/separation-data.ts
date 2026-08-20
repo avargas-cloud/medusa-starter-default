@@ -8,6 +8,18 @@
  *
  * Stock scope is Miami (USA_LOC) only — house rule; China stock never backs a
  * separation.
+ *
+ * FULFILLED IS DERIVED FROM LIVE FULFILLMENTS, NEVER FROM
+ * `order_item.fulfilled_quantity`. That aggregate is written forward and never
+ * reverted: voiding an invoice cancels and soft-deletes its fulfillment while
+ * the column keeps the units. Measured on production 2026-08-20 it was wrong
+ * on 25 lines across 6 orders — S11432 read `fulfilled_quantity = 25` for a
+ * line whose only fulfillment (18 units) had been canceled AND deleted six
+ * days earlier, so the modal showed 0 pending units on a line where 25 were
+ * still sitting on the shelf. `assign-delivery` creates the fulfillment for
+ * exactly the covered units in BOTH invoice scopes, which is why the
+ * fulfillment tables answer this and `order_delivery_line` does not: that
+ * table only has rows for item-scoped assignments.
  */
 
 import type { Pool } from "pg";
@@ -22,13 +34,13 @@ import type {
 export interface SeparationOrderLine extends SeparationLineInput {
   sku: string;
   description: string;
-  /** Real fulfilled quantity (the inherited `fulfilled` field carries COVERED —
-   *  max(fulfilled, invoiced) — because both modals show only pending work). */
+  /** Alias of `fulfilled` kept for the DTO field of the same name. Both carry
+   *  units covered by a LIVE fulfillment — see the note on `fulfilled` below. */
   fulfilledActual: number;
-  /** Quantity on active (non-voided, non-draft) POS invoices: linked per line
-   *  by order_line_item_id (Delivery v2) plus the variant/SKU FIFO allocation
-   *  of legacy items without the link (per-line-invoiced.ts). */
-  invoiced: number;
+  /** Units covered by a live fulfillment that a carrier or the counter has
+   *  already confirmed DELIVERED. Display fact only — a shipped-but-unconfirmed
+   *  unit is just as gone from the shelf, so coverage uses `fulfilled`. */
+  delivered: number;
 }
 
 /** One LIVE separation of another order holding units of an inventory item:
@@ -63,13 +75,44 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Units of ANOTHER order's separated line that a live fulfillment already
+ * covers — the amount its shelf claim has released.
+ *
+ * This one is easy to miss and expensive to get wrong: the per-line query
+ * above only decides what THIS order sees as pending, while the number below
+ * decides how much stock every OTHER order is allowed to take. Left on
+ * `order_item.fulfilled_quantity`, an order whose aggregate is inflated reads
+ * as already shipped, its claim drops out of `separatedElsewhere`, and the
+ * pool hands its shelved units to whoever asks next.
+ *
+ * Correlates on `sep.order_id` / `oli.id`, the aliases in scope where it is
+ * interpolated. Uses $-style placeholders nowhere — it is spliced into a pool
+ * query whose bindings are positional and must stay $1/$2.
+ */
+const LIVE_FULFILLED_ELSEWHERE = `COALESCE((
+                SELECT SUM(ffi2.quantity)
+                  FROM order_fulfillment ofl2
+                  JOIN fulfillment f2
+                    ON f2.id = ofl2.fulfillment_id
+                   AND f2.canceled_at IS NULL
+                   AND f2.deleted_at IS NULL
+                  JOIN fulfillment_item ffi2
+                    ON ffi2.fulfillment_id = f2.id
+                   AND ffi2.deleted_at IS NULL
+                 WHERE ofl2.order_id = sep.order_id
+                   AND ofl2.deleted_at IS NULL
+                   AND ffi2.line_item_id = oli.id
+              ), 0)`;
+
 interface LineRow {
   line_id: string;
   sku: string | null;
   variant_id: string | null;
   description: string | null;
   quantity: unknown;
-  fulfilled_quantity: unknown;
+  fulfilled_live: unknown;
+  delivered_live: unknown;
   invoiced: unknown;
   inventory_item_id: string | null;
   reserved: unknown;
@@ -104,7 +147,8 @@ export async function loadSeparationData(
               oli.title
             )                         AS description,
             oi.quantity               AS quantity,
-            oi.fulfilled_quantity     AS fulfilled_quantity,
+            ful.qty                   AS fulfilled_live,
+            ful.delivered_qty         AS delivered_live,
             inv.qty                   AS invoiced,
             pvii.inventory_item_id    AS inventory_item_id,
             resv.qty                  AS reserved,
@@ -129,6 +173,23 @@ export async function loadSeparationData(
                AND r.deleted_at IS NULL
        ) resv ON true
        LEFT JOIN LATERAL (
+            SELECT SUM(ffi.quantity) AS qty,
+                   SUM(ffi.quantity) FILTER (
+                     WHERE f.delivered_at IS NOT NULL
+                   )              AS delivered_qty
+              FROM order_fulfillment ofl
+              JOIN fulfillment f
+                ON f.id = ofl.fulfillment_id
+               AND f.canceled_at IS NULL
+               AND f.deleted_at IS NULL
+              JOIN fulfillment_item ffi
+                ON ffi.fulfillment_id = f.id
+               AND ffi.deleted_at IS NULL
+             WHERE ofl.order_id = oi.order_id
+               AND ofl.deleted_at IS NULL
+               AND ffi.line_item_id = oli.id
+       ) ful ON true
+       LEFT JOIN LATERAL (
             SELECT SUM(pii.quantity) AS qty
               FROM pos_invoice_item pii
               JOIN pos_invoice pi
@@ -148,18 +209,23 @@ export async function loadSeparationData(
   );
 
   const metadata = (order.metadata ?? {}) as Record<string, unknown>;
-  // Both modals show PENDING work only (owner decision 2026-08-11): invoiced
-  // units are done as far as separation/purchasing go. Per-line attribution
-  // prefers order_line_item_id (persisted since Delivery v2, 2026-08-08);
-  // items billed before that — or by any path that omits the link — fall back
-  // to the variant/SKU FIFO pool below, and a fully_invoiced order covers
-  // everything wholesale regardless.
-  const orderFullyInvoiced = metadata.fully_invoiced === true;
+  // Invoicing no longer covers a line (owner decision 2026-08-20, superseding
+  // 2026-08-11). A POS invoice is a billing act, not a shipping one: the goods
+  // of a paid invoice awaiting pickup are still on the shelf and still the
+  // warehouse's problem. Counting them as done is what made S11432 show 0
+  // pending units on a line with 25 units in the building — and the
+  // `fully_invoiced` shortcut did it wholesale, for every line at once.
+  // Invoiced quantities now only set the FLOOR of the separation
+  // (invoicedFloorOf in separation-caps.ts).
+  //
+  // Per-line attribution prefers order_line_item_id (persisted since Delivery
+  // v2, 2026-08-08); items billed before that — or by any path that omits the
+  // link — fall back to the variant/SKU FIFO pool below.
 
   // Invoice items with no line identity, allocated across this order's lines
   // by variant/SKU. Every affected production order (15 as of 2026-08-14) is
-  // pre-Delivery-v2, so without this pool their billed units read as pending
-  // separation work in both modals AND the list.
+  // pre-Delivery-v2, so without this pool their billed units read as
+  // un-invoiced in both modals AND the list.
   const unattributedRes = await pool.query<{
     variant_id: string | null;
     sku: string | null;
@@ -194,24 +260,32 @@ export async function loadSeparationData(
 
   const lines: SeparationOrderLine[] = lineRes.rows.map((r) => {
     const quantity = num(r.quantity);
-    const fulfilledActual = num(r.fulfilled_quantity);
     const invoiced = invoicedByLine.get(r.line_id) ?? num(r.invoiced);
-    const covered = orderFullyInvoiced
-      ? quantity
-      : Math.min(quantity, Math.max(fulfilledActual, invoiced));
+    // Units under a live fulfillment: dispatched, shipped or handed over the
+    // counter. Whatever their delivery status, they are out of the warehouse
+    // and the shelf no longer holds them.
+    const fulfilled = Math.min(quantity, num(r.fulfilled_live));
     return {
       lineId: r.line_id,
       sku: (r.sku ?? "").trim(),
       description: r.description ?? "",
       quantity,
-      // COVERED, not raw fulfilled — the caps/status math only ever needs
-      // "how much of this line no longer requires warehouse work".
-      fulfilled: covered,
-      fulfilledActual,
+      fulfilled,
+      fulfilledActual: fulfilled,
+      delivered: Math.min(quantity, num(r.delivered_live)),
       invoiced,
       reserved: num(r.reserved),
       inventoryItemId: r.inventory_item_id,
-      separated: num(r.separated),
+      // NET of what left the building (owner decision 2026-08-20). The stored
+      // column is a running mark nobody decrements on dispatch, so a line whose
+      // separated units were handed over kept announcing them for ever — the
+      // shelf said 1000 set aside with zero on it.
+      //
+      // This is the same netting the cross-order pool has always applied
+      // (`GREATEST(0, sep.qty - fulfilled)` in the elsewhere query): one rule,
+      // now visible to every reader instead of only to the arbiter. It also
+      // self-heals — the next Save writes the netted total back.
+      separated: Math.max(0, num(r.separated) - fulfilled),
     };
   });
 
@@ -266,7 +340,7 @@ export async function loadSeparationData(
               )                         AS customer_name,
               oli.variant_sku           AS sku,
               oi.quantity               AS ordered,
-              GREATEST(0, sep.qty - COALESCE(oi.fulfilled_quantity, 0))
+              GREATEST(0, sep.qty - ${LIVE_FULFILLED_ELSEWHERE})
                                         AS separated_live
          FROM order_line_separation sep
          JOIN "order" o
@@ -289,7 +363,7 @@ export async function loadSeparationData(
           AND c.deleted_at IS NULL
         WHERE pvii.inventory_item_id = ANY($2::text[])
           AND sep.order_id <> $1
-          AND sep.qty > COALESCE(oi.fulfilled_quantity, 0)
+          AND sep.qty > ${LIVE_FULFILLED_ELSEWHERE}
         ORDER BY o.display_id ASC, oli.id ASC`,
       [orderId, itemIds]
     );

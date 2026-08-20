@@ -32,6 +32,7 @@ import { USA_LOC } from "../../../../../lib/locations";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { getDbPool } from "../../../../utils/db-pool";
 import { createFulfillmentInProcess } from "../create-shipment/route";
+import { clearDeliveredSeparations } from "../../../../../lib/separation/clear-delivered-separations";
 import { getDelivery } from "../create-shipment/_lib/delivery-store";
 import type { RehostedPackage } from "../create-shipment/_lib/rehost-labels";
 
@@ -373,6 +374,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     await lockClient.query("COMMIT");
+    // Dispatch is the other way goods leave. Same reason as complete-pickup: a
+    // line fully out of the building must stop claiming shelf stock, or every
+    // other order wanting that SKU sees a smaller `separable_cap` than it has.
+    // Idempotent and non-fatal, after the COMMIT — tidying a mark can never be
+    // allowed to undo a dispatch.
+    await clearDeliveredSeparations(pool, orderId);
     const finalized = await getDelivery(pool, delivery.id);
     return res.status(200).json({ delivery: finalized, fulfillment_id: fulfillmentId });
   } catch (err) {

@@ -87,10 +87,18 @@ export async function POST(
     requested
   );
   if (rejections.length) {
+    // Two different refusals share this response, and telling the operator the
+    // wrong one sends them hunting for stock that was never the problem.
+    const belowFloor = rejections.every(
+      (r) => r.reason === "below_invoiced_floor"
+    );
     res.status(409).json({
-      error: "separation_exceeds_inventory",
-      message:
-        "Some quantities exceed what is physically in the Miami warehouse.",
+      error: belowFloor
+        ? "separation_below_invoiced_floor"
+        : "separation_exceeds_inventory",
+      message: belowFloor
+        ? "Invoiced units that have not left the warehouse cannot be un-separated."
+        : "Some quantities exceed what is left after other orders' separations.",
       rejections,
     });
     return;
