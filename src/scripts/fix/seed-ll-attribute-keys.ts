@@ -112,7 +112,8 @@ const SEED_KEYS: SeedKey[] = [
     // adopta SU vocabulario (no resucitar los viejos). La tabla de mating la
     // consumirá el motor del Designer keyeada por estos codes:
     //   jst_male↔jst_female · dc_male↔dc_female · c8_male↔c8_female ·
-    //   bare_wire↔bare_wire · direct_to_strip (sin pareja, clip/solder).
+    //   bare_wire↔bare_wire · bare_wire↔block_terminal (bornera recibe
+    //   cable pelado) · direct_to_strip (sin pareja, clip/solder).
     {
         handle: 'input-connector',
         label: 'Input Connector',
@@ -121,6 +122,7 @@ const SEED_KEYS: SeedKey[] = [
         options: [
             { label: 'Direct to LED Strip', code: 'direct_to_strip' },
             { label: 'Bare Wires', code: 'bare_wire' },
+            { label: 'Block Terminals', code: 'block_terminal' },
             { label: '5A Connector', code: 'connector_5a' },
             { label: 'JST-Male', code: 'jst_male' },
             { label: 'JST-Female', code: 'jst_female' },
@@ -138,6 +140,7 @@ const SEED_KEYS: SeedKey[] = [
         options: [
             { label: 'Direct to LED Strip', code: 'direct_to_strip' },
             { label: 'Bare Wires', code: 'bare_wire' },
+            { label: 'Block Terminals', code: 'block_terminal' },
             { label: '5A Connector', code: 'connector_5a' },
             { label: 'JST-Male', code: 'jst_male' },
             { label: 'JST-Female', code: 'jst_female' },
