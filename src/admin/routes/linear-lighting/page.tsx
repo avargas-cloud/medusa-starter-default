@@ -2,6 +2,7 @@ import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { Sparkles } from "@medusajs/icons";
 import { Badge, Button, Container, Heading, Input, Text, toast } from "@medusajs/ui";
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 /**
  * Página de SELECCIÓN pura (split 2026-08-20): acá sólo se taggea qué
@@ -234,7 +235,13 @@ const LinearLightingAdminPage = () => {
                         return (
                             <div key={p.id} className="p-3 flex items-center justify-between gap-3">
                                 <div className="flex flex-col gap-0.5 min-w-0">
-                                    <Text size="small" weight="plus">{p.title}</Text>
+                                    <Link
+                                        to={`/products/${p.id}`}
+                                        className="w-fit hover:underline"
+                                        title="Open product page"
+                                    >
+                                        <Text size="small" weight="plus">{p.title}</Text>
+                                    </Link>
                                     <Text size="xsmall" className="text-ui-fg-muted font-mono truncate">
                                         {p.variants.map((v) => v.sku).filter(Boolean).join(" · ") || "no SKU"}
                                     </Text>
