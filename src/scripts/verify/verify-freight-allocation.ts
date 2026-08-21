@@ -211,6 +211,47 @@ async function main(): Promise<void> {
       inherited.rows.map((r) => `${r.number ?? r.id}: ${money(r.freight_amount_cents)}`).join(", ")
     );
 
+    // ── 6 · No confirmed/synced product line's persisted landed cost is SHORT
+    //        of its own raw unit cost while its bill has a freight pool to
+    //        place. This is the exact symptom of the 2026-08-21 incident: the
+    //        per-unit allocator's residual (see landed-allocation.ts) can
+    //        exceed every line's qty on a high-volume/low-freight bill, and
+    //        before the fix the whole pool silently vanished instead of
+    //        landing on the highest-value line. This does NOT re-derive the
+    //        expected landed value (that would be `computeLandedLines` trusting
+    //        itself) — it only asserts landed can never be *less* than raw
+    //        goods cost when there was freight money to add, which needs no
+    //        allocation engine to know is wrong. ──────────────────────────────
+    const shortLanded = await db.query<{
+      bill_id: string;
+      number: string | null;
+      line_id: string;
+      unit_cost_cents: number;
+      landed_unit_cost_cents: number;
+    }>(
+      `SELECT vb.id AS bill_id, vb.number, vbl.id AS line_id,
+              vbl.unit_cost_cents, vbl.landed_unit_cost_cents
+         FROM vendor_bill vb
+         JOIN vendor_bill_line vbl ON vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
+        WHERE vb.deleted_at IS NULL
+          AND vb.status IN ('confirmed', 'synced')
+          AND vb.freight_allocation_basis IS NOT NULL
+          AND COALESCE(vbl.line_type, 'product') = 'product'
+          AND EXISTS (
+            SELECT 1 FROM vendor_bill_line f
+             WHERE f.vendor_bill_id = vb.id AND f.deleted_at IS NULL
+               AND f.line_kind = 'freight_charge' AND f.amount_cents > 0
+          )
+          AND vbl.landed_unit_cost_cents < vbl.unit_cost_cents`
+    );
+    check(
+      `ninguna línea de producto en un bill confirmado/synced con flete capitalizado tiene landed < unit_cost (${shortLanded.rowCount ?? 0} mal)`,
+      (shortLanded.rowCount ?? 0) === 0,
+      shortLanded.rows
+        .map((r) => `${r.number ?? r.bill_id} line ${r.line_id}: unit=${r.unit_cost_cents} landed=${r.landed_unit_cost_cents}`)
+        .join(", ")
+    );
+
     // ── Counts, for context ────────────────────────────────────────────────
     const counts = await db.query<{ total: string; capitalized: string; legacy: string }>(
       `SELECT

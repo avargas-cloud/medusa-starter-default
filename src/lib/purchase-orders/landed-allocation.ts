@@ -251,6 +251,35 @@ export function freightWeights(lines: LandedInput[], basis: FreightBasis): numbe
   return lines.map((l) => freightWeight(l, basis));
 }
 
+/**
+ * Dumps an `allocatePerUnitCents` pool's `residualCents` onto the single line
+ * with the highest `unit_cost_cents × qty`, as one lump +N¢/unit bump — see
+ * the call site in `computeLandedLines` for why this exists. A no-op when
+ * there is nothing to place or no eligible line (qty > 0) to place it on.
+ */
+function absorbResidualOnHighestValueLine(
+  alloc: AllocResult,
+  lines: LandedInput[]
+): number[] {
+  if (alloc.residualCents <= 0) return alloc.perUnit;
+  let bestIndex = -1;
+  let bestValue = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.qty <= 0) continue;
+    const value = line.unit_cost_cents * line.qty;
+    if (value > bestValue) {
+      bestValue = value;
+      bestIndex = i;
+    }
+  }
+  if (bestIndex === -1) return alloc.perUnit;
+  const bump = Math.ceil(alloc.residualCents / lines[bestIndex]!.qty);
+  const out = [...alloc.perUnit];
+  out[bestIndex] = (out[bestIndex] ?? 0) + bump;
+  return out;
+}
+
 export interface LandedPools {
   /** total commission / service cents to spread (0 to skip) */
   commissionCents: number;
@@ -389,11 +418,29 @@ export function computeLandedLines(
     weightsValue
   );
 
+  // `allocatePerUnitCents` can strand its ENTIRE pool as `residualCents` when
+  // no line's qty is small enough to receive even a single +1¢/unit bump —
+  // a bill with 500u/1000u lines and a $2.97 freight charge has no such line,
+  // so all $2.97 used to vanish from `landed_unit_cost_cents` with nothing to
+  // show for it (VB-1124 and 8 siblings, 2026-08-21 — ~$40 lost in production
+  // across freight and tax). `landed_total_cents` below was never wrong — it
+  // comes from `allocateLineTotalsCents`, which has no such constraint — so
+  // this only fixes the persisted PER-UNIT figure. The whole residual lands
+  // on the single line with the highest `unit_cost_cents × qty` (the same
+  // "value" weight tariff/tax already use): that line's per-unit value stops
+  // being a clean average, but a total that is off by a few cents on one line
+  // beats one that is provably short. If no line has qty > 0, the residual
+  // still has nowhere to go and stays lost, exactly as before this fix.
+  const commPerUnit = absorbResidualOnHighestValueLine(comm, lines);
+  const freightPerUnit = absorbResidualOnHighestValueLine(freight, lines);
+  const tariffPerUnit = absorbResidualOnHighestValueLine(tariff, lines);
+  const taxPerUnit = absorbResidualOnHighestValueLine(tax, lines);
+
   const out: LandedLineResult[] = lines.map((l, i) => {
-    const commission_per_unit_cents = comm.perUnit[i] ?? 0;
-    const freight_per_unit_cents = freight.perUnit[i] ?? 0;
-    const tariff_per_unit_cents = tariff.perUnit[i] ?? 0;
-    const tax_per_unit_cents = tax.perUnit[i] ?? 0;
+    const commission_per_unit_cents = commPerUnit[i] ?? 0;
+    const freight_per_unit_cents = freightPerUnit[i] ?? 0;
+    const tariff_per_unit_cents = tariffPerUnit[i] ?? 0;
+    const tax_per_unit_cents = taxPerUnit[i] ?? 0;
     return {
       commission_per_unit_cents,
       freight_per_unit_cents,

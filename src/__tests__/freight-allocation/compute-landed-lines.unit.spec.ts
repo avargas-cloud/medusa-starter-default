@@ -204,6 +204,59 @@ describe("computeLandedLines — freight allocation basis", () => {
     }
   });
 
+  it("7. basis 'units', pool smaller than EVERY line's qty (VB-1124, 2026-08-21): the per-unit allocator can't place a single +1¢/unit bump anywhere, so before the fix the whole pool vanished from landed_unit_cost_cents — now it lands on the highest-value line instead. landed_total_cents (the AVCO/QB numerator) was always exact and stays exact.", () => {
+    const lines: LandedInput[] = [
+      { qty: 500, unit_cost_cents: 11, cbm_per_unit: null },
+      { qty: 1000, unit_cost_cents: 24, cbm_per_unit: null },
+    ];
+    const pools: LandedPools = { ...zeroPools(), freightCents: 297 };
+
+    const result = computeLandedLines(lines, pools, { freightBasis: "units" });
+
+    // Not "unplaceable" — both lines have positive weight (qty). This is the
+    // residual case: the pool has money to place, but no line's qty (500,
+    // 1000) is small enough to receive a whole +1¢/unit bump for a 297¢ pool.
+    expect(result.unplaceableCents.freight).toBe(0);
+    expect(result.residualCents.freight).toBe(297);
+
+    // The lower-value line (500 × 11¢ = 5500) gets nothing, same as before
+    // this fix — it was never the line the residual was assigned to.
+    expect(result.lines[0]?.freight_per_unit_cents).toBe(0);
+    expect(result.lines[0]?.landed_unit_cost_cents).toBe(11);
+
+    // The higher-value line (1000 × 24¢ = 24000) absorbs the whole pool as a
+    // single lump per-unit bump: ceil(297 / 1000) = 1.
+    expect(result.lines[1]?.freight_per_unit_cents).toBe(1);
+    expect(result.lines[1]?.landed_unit_cost_cents).toBe(25);
+
+    // landed_total_cents is untouched by this fix — allocateLineTotalsCents
+    // already placed the pool exactly, with no residual, before and after.
+    expect(result.lines[0]?.landed_total_cents).toBe(500 * 11 + 99);
+    expect(result.lines[1]?.landed_total_cents).toBe(1000 * 24 + 198);
+    const landedTotal = result.lines.reduce((s, l) => s + l.landed_total_cents, 0);
+    const goodsTotal = lines.reduce((s, l) => s + l.unit_cost_cents * l.qty, 0);
+    expect(landedTotal - goodsTotal).toBe(297);
+  });
+
+  it("8. basis 'units', single product line (VB-1122, 2026-08-21): the only line absorbs its own residual — before the fix landed_unit_cost_cents floored to 15, silently dropping 9.96 of the 24.96 pool actually owed", () => {
+    const lines: LandedInput[] = [
+      { qty: 1500, unit_cost_cents: 14, cbm_per_unit: null },
+    ];
+    const pools: LandedPools = { ...zeroPools(), freightCents: 2496 };
+
+    const result = computeLandedLines(lines, pools, { freightBasis: "units" });
+
+    expect(result.unplaceableCents.freight).toBe(0);
+    // floor(2496/1500) = 1 per unit (1500¢ placed), residual = 996¢ — this is
+    // the $9.96 that used to be silently dropped from landed_unit_cost_cents.
+    expect(result.residualCents.freight).toBe(996);
+    // ceil(996/1500) = 1 extra ¢/unit on top of the 1 already placed.
+    expect(result.lines[0]?.freight_per_unit_cents).toBe(2);
+    expect(result.lines[0]?.landed_unit_cost_cents).toBe(16);
+    // landed_total_cents was exact before and after: 1500×14 + 2496.
+    expect(result.lines[0]?.landed_total_cents).toBe(1500 * 14 + 2496);
+  });
+
   it("6. basis 'units', owner's example: SKU1 qty 2, SKU2 qty 3, freight 5000 cents → exactly 2000 and 3000", () => {
     const lines: LandedInput[] = [
       { qty: 2, unit_cost_cents: 0, cbm_per_unit: null }, // SKU1

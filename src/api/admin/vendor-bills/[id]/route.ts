@@ -1574,18 +1574,27 @@ export async function PATCH(
   // comparisons to line_kind <> 'freight_charge'). Validation + reconcile live
   // in lib/purchase-orders/freight-charge-lines.ts — shared shape, kept out of
   // this already-large route file.
+  //
+  // `synced` used to be allowed here, same as `draft` — the one exception to
+  // "correcting a confirmed bill needs Reopen first" (2026-08-04). That is
+  // exactly the gap that produced a real incident: adding a freight charge to
+  // an already-synced bill resets the product lines' `landed_unit_cost_cents`
+  // to 0 (the same "awaiting reconfirm" reset every line edit does), but
+  // since this path never required Reopen, nothing ever forced the reconfirm
+  // that would recompute it — the bill stayed `synced` (already in
+  // QuickBooks) with zeroed local costs and the new freight never capitalized
+  // anywhere, in QB or locally (VB-1124, 2026-08-21). Freight edits now go
+  // through the same single door as everything else.
   const fullFreightLines = patch.freight_lines;
   const hasFreightLines = fullFreightLines !== undefined;
   let existingFreightIds = new Set<string>();
   let freightAccountByListId = new Map<string, FreightAccount>();
 
   if (hasFreightLines) {
-    if (
-      (bill.status !== "draft" && bill.status !== "synced") ||
-      effectiveBillType !== "regular"
-    ) {
+    if (bill.status !== "draft" || effectiveBillType !== "regular") {
       return res.status(409).json({
-        error: "Freight charges can only be edited on regular POS-owned bills",
+        error:
+          "Freight charges can only be edited on a draft regular bill. Reopen this bill first.",
         code: "not_draft",
       });
     }
