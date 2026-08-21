@@ -99,13 +99,15 @@ function check(name: string, pass: boolean, detail: string): void {
     fnStart >= 0 ? "encontrada" : "AUSENTE"
   );
   // Sin estos predicados un rowId equivocado emitiría un ADD contra otra fila,
-  // que es minteear un documento duplicado en QuickBooks.
+  // que es minteear un documento duplicado en QuickBooks. bridge_op_id NO va
+  // en el WHERE (2026-08-21: exigirlo IS NULL ahí dejaba sin adoptar las
+  // filas que sí llegaron a tocar el bridge en un intento previo y fallaron
+  // — el residuo se LIMPIA en el SET, no se exige ausente para calificar.
   for (const [label, re] of [
     ["order_id", /order_id\s*=\s*\$2/],
     ["reference_id", /reference_id\s*=\s*\$3/],
     ["step sales_receipt", /step\s*=\s*'sales_receipt'/],
     ["status processing", /status\s*=\s*'processing'/],
-    ["bridge_op_id IS NULL", /bridge_op_id\s+IS\s+NULL/i],
   ] as [string, RegExp][]) {
     check(
       `claim: la adopción exige ${label}`,
@@ -113,6 +115,13 @@ function check(name: string, pass: boolean, detail: string): void {
       re.test(body) ? "presente" : `AUSENTE — adopta filas que no le tocan`
     );
   }
+  check(
+    "claim: la adopción limpia el bridge_op_id residual",
+    /bridge_op_id\s*=\s*NULL/i.test(body),
+    /bridge_op_id\s*=\s*NULL/i.test(body)
+      ? "presente — un submit anterior fallado no deja operationId muerto"
+      : "AUSENTE — un retry adoptado arrastraría el bridge_op_id de un intento previo"
+  );
   check(
     "claim: no cae a un claim nuevo si la fila no matchea",
     /return\s*{\s*ok:\s*false,\s*reason:\s*"in_flight"\s*}/.test(body),

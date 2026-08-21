@@ -73,6 +73,44 @@ async function main(): Promise<void> {
         : `devolvió ${JSON.stringify(adopted)} — el ADD seguiría sin salir`
     );
 
+    // ── 2b. Regresión 2026-08-21: adopta AUNQUE la fila cargue un
+    // bridge_op_id residual de un intento anterior que sí llegó al bridge y
+    // falló ahí (ej. QB Error 3180 "item history could not be locked") — el
+    // timeout submitted→failed y el claim processing del dispatcher NUNCA
+    // limpian ese campo, así que exigirlo NULL dejaba a esas filas trabadas
+    // para siempre (INV-21522/21528/21529, prod). Y confirma que el residuo
+    // se limpia como parte de la adopción, no que quede arrastrado.
+    const { rows: ins2 } = await pool.query(
+      `INSERT INTO qb_order_pipeline
+         (order_id, reference_id, reference_type, step, status, payload, bridge_op_id)
+       VALUES ($1, $2, 'pos_invoice', 'sales_receipt', 'processing', '{}'::jsonb, 'op-stale-failed-attempt')
+       RETURNING id`,
+      [ORDER_ID, REF_ID + "_stale"]
+    );
+    const staleRowId = ins2[0].id as string;
+    const adoptedStale = await adoptSalesReceiptClaim(staleRowId, {
+      orderId: ORDER_ID,
+      referenceId: REF_ID + "_stale",
+    });
+    assert(
+      "adopta una fila 'processing' con bridge_op_id residual de un fallo previo",
+      adoptedStale.ok && adoptedStale.rowId === staleRowId,
+      adoptedStale.ok
+        ? "ok — sin esto INV-21522/21528/21529 se hubieran trabado igual"
+        : `devolvió ${JSON.stringify(adoptedStale)} — reintroduce el deadlock para filas con fallo previo`
+    );
+    const { rows: staleCheck } = await pool.query(
+      `SELECT bridge_op_id FROM qb_order_pipeline WHERE id = $1`,
+      [staleRowId]
+    );
+    assert(
+      "la adopción limpia el bridge_op_id residual",
+      staleCheck[0]?.bridge_op_id === null,
+      staleCheck[0]?.bridge_op_id === null
+        ? "limpio — el submit nuevo no arrastra el operationId muerto"
+        : `quedó "${staleCheck[0]?.bridge_op_id}" — el poll del retry pollearía la operación equivocada`
+    );
+
     // ── 3. CONTROL POSITIVO DEL BUG: el camino viejo se auto-detecta ───────
     const oldPath = await claimSalesReceiptAttempt({
       orderId: ORDER_ID,

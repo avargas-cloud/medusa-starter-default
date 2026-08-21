@@ -108,6 +108,20 @@ export async function claimSalesReceiptAttempt(input: {
  * no es la que el caller cree, NO cae a un claim nuevo — devuelve `in_flight`.
  * Emitir un ADD contra una fila equivocada mintea un documento duplicado, así
  * que ante la duda el default es no emitir.
+ *
+ * NO exige `bridge_op_id IS NULL` — el `status = 'processing'` de la fila
+ * YA lo garantiza el UPDATE atómico del dispatcher que la reclamó (SKIP
+ * LOCKED, sólo esa fila hoy la tiene en processing). Exigirlo además dejaba
+ * sin adoptar exactamente las filas que SÍ llegaron a tocar el bridge en un
+ * intento anterior y fallaron ahí (bridge_op_id queda plantado — ni el
+ * timeout de `submitted`→`failed` ni el claim de `processing` del
+ * dispatcher lo limpian): (order_id, reference_id, status=processing)
+ * matcheaba y bridge_op_id IS NULL no, así que el mismo deadlock que este
+ * archivo ya documentó reaparecía SOLO para las filas con un fallo real de
+ * QuickBooks detrás (INV-21522/21528/21529, 2026-08-21, Error 3180 "item
+ * history could not be locked" — confirmado contra el bridge, ningún
+ * documento minteado). Se limpia el residuo del intento previo como parte
+ * de la adopción para que el submit nuevo no arrastre el operationId muerto.
  */
 export async function adoptSalesReceiptClaim(
   rowId: string,
@@ -115,13 +129,16 @@ export async function adoptSalesReceiptClaim(
 ): Promise<SalesReceiptClaim> {
   const pool = getDbPool();
   const { rows } = await pool.query(
-    `SELECT id FROM qb_order_pipeline
+    `UPDATE qb_order_pipeline
+        SET bridge_op_id = NULL,
+            qb_result    = NULL,
+            updated_at   = NOW()
       WHERE id = $1
         AND step = 'sales_receipt'
         AND order_id = $2
         AND reference_id = $3
         AND status = 'processing'
-        AND bridge_op_id IS NULL`,
+      RETURNING id`,
     [rowId, input.orderId, input.referenceId]
   );
   if (rows.length === 0) return { ok: false, reason: "in_flight" };
