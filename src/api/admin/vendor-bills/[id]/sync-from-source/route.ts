@@ -341,6 +341,7 @@ export async function POST(
                     tariff_per_unit_cents = 0,
                     tax_per_unit_cents = 0,
                     landed_unit_cost_cents = 0,
+                    landed_total_cents = NULL,
                     updated_at = NOW()
               WHERE id = ? AND deleted_at IS NULL`,
             [

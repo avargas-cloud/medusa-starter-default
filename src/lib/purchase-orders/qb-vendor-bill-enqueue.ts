@@ -112,6 +112,8 @@ interface LineRow {
   unit_cost_cents: number;
   /** Full landed cost — what a China-agent bill's item lines carry. */
   landed_unit_cost_cents: number | null;
+  /** Exact landed money for the line — see the itemLines map below. */
+  landed_total_cents: number | null;
   amount_cents: number | null;
   freight_account_list_id: string | null;
   qb_account_list_id: string | null;
@@ -215,6 +217,7 @@ export async function enqueueQbVendorBillAdd(
   const linesResult = await knex.raw(
     `SELECT vbl.id, vbl.line_kind, vbl.line_type, vbl.sku, vbl.description,
             vbl.qty, vbl.unit_cost_cents, vbl.landed_unit_cost_cents,
+            vbl.landed_total_cents,
             vbl.amount_cents,
             vbl.freight_account_list_id, vbl.qb_account_list_id,
             vbl.purchase_order_line_id,
@@ -356,29 +359,46 @@ export async function enqueueQbVendorBillAdd(
     : null;
 
   const itemLines = productLines.map((l, i) => {
-    const taxShare = taxByLine[i] ?? 0;
-    const freightShare = freightByLine[i] ?? 0;
     const qty = Number(l.qty);
-    // The China shape carries the FULL landed cost — commission and freight are
-    // already inside it, which is exactly why the negative clearing lines below
-    // have to cancel their sibling bills. Sales tax does not apply here: it is a
-    // USA-vendor charge. This must match what the Mod sends
-    // (`usesClearingStructure` → `landed_unit_cost_cents`), or the first edit
-    // silently restates the bill.
-    const unitCost = usesClearingStructure
-      ? Number(l.landed_unit_cost_cents || l.unit_cost_cents)
-      : qty > 0 && (taxShare > 0 || freightShare > 0)
-        ? (l.unit_cost_cents * qty + taxShare + freightShare) / qty
-        : l.unit_cost_cents;
+    // The confirm route already computed and PERSISTED the exact landed money
+    // for this line (`landed_total_cents`, landed-allocation.ts's
+    // `allocateLineTotalsCents` — no per-unit integer constraint). Reading it
+    // here instead of recomputing an independent copy is what makes this the
+    // ONE place that money is calculated: before this, the confirm route and
+    // this enqueue each ran their own copy of the same math, and they only
+    // ever agreed because both happened to read the same bill state at the
+    // same moment — a coincidence, not a guarantee (2026-08-21 consolidation).
+    // NULL means this line predates the column and was never backfilled: fall
+    // back to the legacy recompute so an un-backfilled bill still enqueues.
+    let unitCost: number;
+    let amountCents: number;
+    if (l.landed_total_cents != null) {
+      amountCents = l.landed_total_cents;
+      unitCost = qty > 0 ? amountCents / qty : l.unit_cost_cents;
+    } else {
+      const taxShare = taxByLine[i] ?? 0;
+      const freightShare = freightByLine[i] ?? 0;
+      // The China shape carries the FULL landed cost — commission and freight
+      // are already inside it, which is exactly why the negative clearing
+      // lines below have to cancel their sibling bills. Sales tax does not
+      // apply here: it is a USA-vendor charge. This must match what the Mod
+      // sends (`usesClearingStructure` → `landed_unit_cost_cents`), or the
+      // first edit silently restates the bill.
+      unitCost = usesClearingStructure
+        ? Number(l.landed_unit_cost_cents || l.unit_cost_cents)
+        : qty > 0 && (taxShare > 0 || freightShare > 0)
+          ? (l.unit_cost_cents * qty + taxShare + freightShare) / qty
+          : l.unit_cost_cents;
+      amountCents = usesClearingStructure
+        ? (clearingLanded!.lines[i]!.landed_total_cents as number)
+        : l.unit_cost_cents * qty + taxShare + freightShare;
+    }
     // Bridge compatibility (2026-08-18): `unit_cost_cents` still ships
     // unconditionally, exactly as before — the bridge is a separate Windows
     // deploy, so a bridge that has not picked up the Amount change yet must
     // still get a working `<Cost>`. `amount_cents` is additive: an old
     // bridge ignores the field; a new one prefers it and derives Amount
     // directly, sidestepping QBXML's 5-decimal Cost truncation entirely.
-    const amountCents = usesClearingStructure
-      ? (clearingLanded!.lines[i]!.landed_total_cents as number)
-      : l.unit_cost_cents * qty + taxShare + freightShare;
     return {
       vendor_bill_line_id: l.id,
       purchase_order_line_id: l.purchase_order_line_id,

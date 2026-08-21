@@ -162,6 +162,7 @@ export async function PATCH(
                 tariff_per_unit_cents = 0,
                 tax_per_unit_cents = 0,
                 landed_unit_cost_cents = 0,
+                landed_total_cents = NULL,
                 updated_at = NOW()
           WHERE id = ? AND vendor_bill_id = ? AND deleted_at IS NULL
           RETURNING *`,
@@ -206,6 +207,8 @@ export async function PATCH(
     updates.push("unit_cost_cents = ?");
     bindings.push(parsed.data.amount_cents);
     updates.push("landed_unit_cost_cents = ?");
+    bindings.push(parsed.data.amount_cents);
+    updates.push("landed_total_cents = ?");
     bindings.push(parsed.data.amount_cents);
   }
   if (parsed.data.description !== undefined) {

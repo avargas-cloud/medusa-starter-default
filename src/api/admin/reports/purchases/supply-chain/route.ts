@@ -271,7 +271,7 @@ const BILLED_JOIN = `
   LEFT JOIN (
     SELECT vbl.purchase_order_line_id AS pol_id,
            SUM(vbl.qty) AS billed_qty,
-           SUM(vbl.qty * vbl.landed_unit_cost_cents) AS billed_cents
+           SUM(COALESCE(vbl.landed_total_cents, vbl.qty * vbl.landed_unit_cost_cents)) AS billed_cents
     FROM vendor_bill_line vbl
     JOIN vendor_bill vb ON vb.id = vbl.vendor_bill_id AND vb.deleted_at IS NULL
       AND vb.status = 'confirmed' AND vb.bill_type = 'regular'

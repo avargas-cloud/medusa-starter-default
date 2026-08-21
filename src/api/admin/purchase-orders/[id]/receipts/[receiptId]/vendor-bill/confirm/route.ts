@@ -742,6 +742,7 @@ export async function POST(
              tariff_per_unit_cents = ?,
              tax_per_unit_cents = ?,
              landed_unit_cost_cents = ?,
+             landed_total_cents = ?,
              updated_at = NOW()
          WHERE id = ? AND deleted_at IS NULL`,
           [
@@ -751,6 +752,7 @@ export async function POST(
             fields.tariff_per_unit_cents,
             fields.tax_per_unit_cents,
             fields.landed_unit_cost_cents,
+            fields.landed_total_cents,
             fields.id,
           ]
         )
@@ -758,15 +760,16 @@ export async function POST(
     );
 
     // 7b. Capitalized freight: the `freight_charge` line's money now lives in
-    // the product lines' `landed_unit_cost_cents` above, so this line's own
-    // landed figure is zeroed to avoid double-counting it in
-    // `total_landed_cents`. `unit_cost_cents`/`amount_cents` stay untouched —
-    // `recomputeBillFinanceLinks` still needs them to make the bill's payable
-    // equal the vendor invoice total (same reasoning as tax_charge).
+    // the product lines' `landed_unit_cost_cents`/`landed_total_cents` above,
+    // so this line's own landed figures are zeroed to avoid double-counting
+    // it in `total_landed_cents`. `unit_cost_cents`/`amount_cents` stay
+    // untouched — `recomputeBillFinanceLinks` still needs them to make the
+    // bill's payable equal the vendor invoice total (same reasoning as
+    // tax_charge).
     if (freightPolicy.mode === "capitalized" && freightChargeLines.length > 0) {
       await knex.raw(
         `UPDATE vendor_bill_line
-            SET landed_unit_cost_cents = 0, updated_at = NOW()
+            SET landed_unit_cost_cents = 0, landed_total_cents = 0, updated_at = NOW()
           WHERE vendor_bill_id = ? AND deleted_at IS NULL AND line_kind = 'freight_charge'`,
         [bill.id]
       );

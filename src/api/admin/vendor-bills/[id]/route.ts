@@ -165,6 +165,7 @@ interface VendorBillLineRow {
   freight_per_unit_cents: number;
   tariff_per_unit_cents: number;
   landed_unit_cost_cents: number;
+  landed_total_cents: number | null;
   freight_account_list_id: string | null;
   amount_cents: number | null;
 }
@@ -388,6 +389,7 @@ export async function GET(
        freight_per_unit_cents,
        tariff_per_unit_cents,
        landed_unit_cost_cents,
+       landed_total_cents,
        freight_account_list_id,
        amount_cents
      FROM vendor_bill_line
@@ -517,7 +519,7 @@ export async function GET(
   }
 
   const total_landed_cents = lines.reduce(
-    (s, l) => s + l.landed_unit_cost_cents * l.qty,
+    (s, l) => s + (l.landed_total_cents ?? l.landed_unit_cost_cents * l.qty),
     0
   );
 
@@ -1745,7 +1747,7 @@ export async function PATCH(
             `UPDATE vendor_bill_line
                 SET qty = ?, unit_cost_cents = ?, cbm_per_unit = ?::float, mpn = ?,
                     commission_per_unit_cents = 0, freight_per_unit_cents = 0,
-                    tariff_per_unit_cents = 0, tax_per_unit_cents = 0, landed_unit_cost_cents = 0, updated_at = NOW()
+                    tariff_per_unit_cents = 0, tax_per_unit_cents = 0, landed_unit_cost_cents = 0, landed_total_cents = NULL, updated_at = NOW()
               WHERE id = ? AND vendor_bill_id = ? AND deleted_at IS NULL`,
             [l.qty, l.unit_cost_cents, cbm, l.mpn ?? null, l.id, id]
           );
@@ -1778,7 +1780,7 @@ export async function PATCH(
         await db.raw(
           `UPDATE vendor_bill_line
               SET qty = ?, commission_per_unit_cents = 0, freight_per_unit_cents = 0,
-                  tariff_per_unit_cents = 0, tax_per_unit_cents = 0, landed_unit_cost_cents = 0, updated_at = NOW()
+                  tariff_per_unit_cents = 0, tax_per_unit_cents = 0, landed_unit_cost_cents = 0, landed_total_cents = NULL, updated_at = NOW()
             WHERE id = ? AND vendor_bill_id = ? AND deleted_at IS NULL`,
           [edit.qty, edit.id, id]
         );

@@ -55,6 +55,13 @@ export const VendorBillLine = model.define("vendor_bill_line", {
   // footer only, the way QuickBooks shows it).
   tax_per_unit_cents: model.number().default(0),
   landed_unit_cost_cents: model.number().default(0),
+  // EXACT landed money for the line (goods + its share of every pool),
+  // allocated by `allocateLineTotalsCents` — no per-unit integer constraint,
+  // so it always sums to the pool total. This is the ONE source of truth for
+  // real money (AVCO numerator, QB payload amount, list/detail totals);
+  // `landed_unit_cost_cents` above stays a lossy per-unit DISPLAY figure only.
+  // Nullable: historical rows are backfilled separately, never inferred here.
+  landed_total_cents: model.number().nullable(),
 
   // QuickBooks sync (Phase 0 — dormant). See docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.2.
   qb_txn_line_id: model.text().nullable(), // BillLineRet.TxnLineID, needed for BillMod

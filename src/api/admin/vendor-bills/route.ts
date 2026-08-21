@@ -280,17 +280,17 @@ export async function GET(
        COALESCE(agg.item_subtotal_cents, 0) AS item_subtotal_cents,
        COALESCE(agg.total_landed_cents, 0) AS total_landed_cents,
        CASE WHEN vb.service_vendor_bill_id IS NOT NULL THEN (
-         SELECT COALESCE(SUM(vbl2.landed_unit_cost_cents * vbl2.qty), 0)::bigint
+         SELECT COALESCE(SUM(COALESCE(vbl2.landed_total_cents, vbl2.landed_unit_cost_cents * vbl2.qty)), 0)::bigint
          FROM vendor_bill_line vbl2
          WHERE vbl2.vendor_bill_id = vb.service_vendor_bill_id AND vbl2.deleted_at IS NULL
        ) END AS service_bill_total_landed_cents,
        CASE WHEN vb.freight_vendor_bill_id IS NOT NULL THEN (
-         SELECT COALESCE(SUM(vbl2.landed_unit_cost_cents * vbl2.qty), 0)::bigint
+         SELECT COALESCE(SUM(COALESCE(vbl2.landed_total_cents, vbl2.landed_unit_cost_cents * vbl2.qty)), 0)::bigint
          FROM vendor_bill_line vbl2
          WHERE vbl2.vendor_bill_id = vb.freight_vendor_bill_id AND vbl2.deleted_at IS NULL
        ) END AS freight_bill_total_landed_cents,
        CASE WHEN vb.tariff_vendor_bill_id IS NOT NULL THEN (
-         SELECT COALESCE(SUM(vbl2.landed_unit_cost_cents * vbl2.qty), 0)::bigint
+         SELECT COALESCE(SUM(COALESCE(vbl2.landed_total_cents, vbl2.landed_unit_cost_cents * vbl2.qty)), 0)::bigint
          FROM vendor_bill_line vbl2
          WHERE vbl2.vendor_bill_id = vb.tariff_vendor_bill_id AND vbl2.deleted_at IS NULL
        ) END AS tariff_bill_total_landed_cents,
@@ -311,7 +311,8 @@ export async function GET(
            WHERE COALESCE(vbl.line_type, 'product') = 'product'
          )                                               AS product_qty,
          SUM(vbl.unit_cost_cents * vbl.qty)              AS item_subtotal_cents,
-         SUM(vbl.landed_unit_cost_cents * vbl.qty)       AS total_landed_cents,
+         SUM(COALESCE(vbl.landed_total_cents, vbl.landed_unit_cost_cents * vbl.qty))
+                                                          AS total_landed_cents,
          ARRAY_AGG(DISTINCT porl.purchase_order_receipt_id)
            FILTER (WHERE porl.purchase_order_receipt_id IS NOT NULL)
                                                         AS billed_receipt_ids

@@ -25,7 +25,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            SUM(vbl.commission_per_unit_cents * vbl.qty) AS commission_cents,
            SUM(vbl.freight_per_unit_cents   * vbl.qty) AS freight_cents,
            SUM(vbl.tariff_per_unit_cents    * vbl.qty) AS tariff_cents,
-           SUM(vbl.landed_unit_cost_cents   * vbl.qty) AS landed_cents,
+           SUM(COALESCE(vbl.landed_total_cents, vbl.landed_unit_cost_cents * vbl.qty)) AS landed_cents,
            true                                         AS has_bill
          FROM vendor_bill vb
          JOIN vendor_bill_line vbl ON vbl.vendor_bill_id = vb.id

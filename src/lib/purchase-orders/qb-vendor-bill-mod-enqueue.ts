@@ -144,7 +144,8 @@ async function buildPayload(
 
   const lineResult = await db.raw(
     `SELECT l.id, l.line_type, l.line_kind, l.qty,
-            l.unit_cost_cents, l.landed_unit_cost_cents, l.amount_cents,
+            l.unit_cost_cents, l.landed_unit_cost_cents, l.landed_total_cents,
+            l.amount_cents,
             l.qb_txn_line_id,
             COALESCE(l.freight_account_list_id, l.qb_account_list_id)
               AS account_list_id,
@@ -377,9 +378,19 @@ async function buildPayload(
     const raw = Number(line.unit_cost_cents);
     let cost: number;
     let amount: number;
+    // The confirm route already computed and PERSISTED the exact landed money
+    // for this line (`landed_total_cents`) — read it instead of recomputing an
+    // independent copy, same consolidation as the Add (qb-vendor-bill-enqueue.ts,
+    // 2026-08-21). NULL means this line predates the column / was never
+    // backfilled: fall back to the legacy recompute below.
+    const persistedLandedTotal =
+      line.landed_total_cents == null ? null : Number(line.landed_total_cents);
     if (bill.bill_type !== "regular") {
       cost = raw;
       amount = raw * qty;
+    } else if (persistedLandedTotal != null) {
+      amount = persistedLandedTotal;
+      cost = qty > 0 ? persistedLandedTotal / qty : raw;
     } else if (usesClearingStructure) {
       cost = Number(line.landed_unit_cost_cents || line.unit_cost_cents);
       amount = clearingLanded!.lines[i]!.landed_total_cents;

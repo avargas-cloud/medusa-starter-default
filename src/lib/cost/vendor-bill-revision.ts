@@ -58,6 +58,7 @@ function stableLine(line: Record<string, unknown>): Record<string, unknown> {
     freight_per_unit_cents: _freight,
     tariff_per_unit_cents: _tariff,
     landed_unit_cost_cents: _landed,
+    landed_total_cents: _landedTotal,
     ...stable
   } = line;
   return stable;
