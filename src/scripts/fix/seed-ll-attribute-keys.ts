@@ -62,6 +62,18 @@ const SEED_KEYS: SeedKey[] = [
         ],
     },
     {
+        // Cuántos extremos de la strip/neon traen conector — espejo del enum
+        // `ended: single|both` del spec LL (STRIP_ENDED en catalog-types.ts).
+        handle: 'connection-ends',
+        label: 'Connection Ends',
+        setHandle: 'control-compatibility',
+        unit: null,
+        options: [
+            { label: 'One End', code: 'single' },
+            { label: 'Both Ends', code: 'both' },
+        ],
+    },
+    {
         handle: 'input-compatibility',
         label: 'Input Compatibility',
         setHandle: 'control-compatibility',
