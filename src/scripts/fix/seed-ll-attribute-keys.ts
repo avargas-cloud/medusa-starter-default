@@ -58,6 +58,7 @@ const SEED_KEYS: SeedKey[] = [
             { label: '8mm', code: '8' },
             { label: '10mm', code: '10' },
             { label: '12mm', code: '12' },
+            { label: '18mm', code: '18' },
         ],
     },
     {
@@ -103,6 +104,9 @@ const SEED_KEYS: SeedKey[] = [
             { label: 'Splice', code: 'splice' },
             { label: 'Extension', code: 'extension' },
             { label: 'Cable', code: 'cable' },
+            // 2026-08-21 (user): receivers inalámbricos (EAS1-W) viven como
+            // driver accessories. El enum Zod de LL lo suma la fase B.
+            { label: 'Wireless Receiver', code: 'wireless_receiver' },
             { label: 'Other', code: 'other' },
         ],
     },
