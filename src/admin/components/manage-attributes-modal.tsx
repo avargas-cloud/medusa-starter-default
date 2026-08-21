@@ -22,6 +22,7 @@ import {
   groupAttributesByKey,
   getKeyAvailability,
 } from "./attribute-management/utils/groupAttributes";
+import { SearchableSelect } from "./attribute-management/components/SearchableSelect";
 import { shouldShowVariantToggle } from "./attribute-management/utils/validateVariants";
 
 type AttributeValue = {
@@ -207,18 +208,15 @@ export const ManageAttributesModal = ({
             <div className="flex gap-2 items-end border-b pb-4">
               <div className="flex-1">
                 <Label>Attribute</Label>
-                <Select value={newKeyId} onValueChange={setNewKeyId}>
-                  <Select.Trigger>
-                    <Select.Value placeholder="Select attribute..." />
-                  </Select.Trigger>
-                  <Select.Content>
-                    {unusedKeys.map((key) => (
-                      <Select.Item key={key.id} value={key.id}>
-                        {key.label}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select>
+                <SearchableSelect
+                  items={unusedKeys.map((key) => ({ id: key.id, label: key.label }))}
+                  value={newKeyId}
+                  onChange={(id) => {
+                    setNewKeyId(id);
+                    setNewValueId("");
+                  }}
+                  placeholder="Search attribute..."
+                />
               </div>
 
               <div className="flex-1">
