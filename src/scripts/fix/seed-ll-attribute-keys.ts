@@ -62,6 +62,23 @@ const SEED_KEYS: SeedKey[] = [
         ],
     },
     {
+        // Salidas físicas directas de un driver / splitter — espejo del campo
+        // numérico `outputs` del spec LL. Codes = el número, para derivarlo.
+        handle: 'number-of-outputs',
+        label: 'Number of Outputs',
+        setHandle: 'electrical-characteristics',
+        unit: null,
+        options: [
+            { label: '1', code: '1' },
+            { label: '2', code: '2' },
+            { label: '3', code: '3' },
+            { label: '4', code: '4' },
+            { label: '5', code: '5' },
+            { label: '6', code: '6' },
+            { label: '8', code: '8' },
+        ],
+    },
+    {
         // Cuántos extremos de la strip/neon traen conector — espejo del enum
         // `ended: single|both` del spec LL (STRIP_ENDED en catalog-types.ts).
         handle: 'connection-ends',
