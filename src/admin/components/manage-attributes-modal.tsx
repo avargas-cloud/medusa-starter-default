@@ -4,14 +4,13 @@ import {
   FocusModal,
   Heading,
   Label,
-  Select,
   Table,
   toast,
   Switch,
   Text,
   Badge,
 } from "@medusajs/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useMemo } from "react";
 
 // Import modular utilities and hooks
@@ -68,6 +67,9 @@ export const ManageAttributesModal = ({
   const [isSaving, setIsSaving] = useState(false);
   const [newKeyId, setNewKeyId] = useState<string>("");
   const [newValueId, setNewValueId] = useState<string>("");
+  const [valueQuery, setValueQuery] = useState<string>("");
+  const [createValuePrompt, setCreateValuePrompt] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   // Fetch all attribute keys
   const { data: allKeysData } = useQuery({
@@ -169,28 +171,84 @@ export const ManageAttributesModal = ({
     await handleSaveWithConfirmation(variantFlags, proceedWithSave);
   };
 
-  // Handle add new attribute
+  // Handle add new attribute. Con un value EXISTENTE seleccionado agrega
+  // directo; con texto tipeado que no matchea, pregunta antes de crear el
+  // value nuevo (nunca crea en silencio, nunca descarta en silencio).
   const handleAddNew = () => {
-    if (!newKeyId || !newValueId) return;
-
+    if (!newKeyId) return;
     const key = allKeys.find((k) => k.id === newKeyId);
-    const value = key?.values.find((v) => v.id === newValueId);
+    if (!key) return;
 
-    if (!key || !value) return;
+    if (newValueId) {
+      const value = key.values.find((v) => v.id === newValueId);
+      if (!value) {
+        toast.error("That value no longer exists — refresh and try again");
+        return;
+      }
+      addAttribute({
+        id: value.id,
+        value: value.value,
+        attribute_key: { id: key.id, label: key.label, handle: key.handle },
+      });
+      setNewKeyId("");
+      setNewValueId("");
+      setValueQuery("");
+      return;
+    }
 
-    const newAttr: AttributeValue = {
-      id: value.id,
-      value: value.value,
-      attribute_key: {
-        id: key.id,
-        label: key.label,
-        handle: key.handle,
-      },
-    };
+    const typed = valueQuery.trim();
+    if (!typed) return;
 
-    addAttribute(newAttr);
-    setNewKeyId("");
-    setNewValueId("");
+    // Si lo tipeado ES un value existente (ignorando mayúsculas), usarlo.
+    const exact = key.values.find(
+      (v) => v.value.toLowerCase() === typed.toLowerCase()
+    );
+    if (exact) {
+      if (tempAttributes.some((a) => a.id === exact.id)) {
+        toast.error(`"${exact.value}" is already added to this product`);
+        return;
+      }
+      addAttribute({
+        id: exact.id,
+        value: exact.value,
+        attribute_key: { id: key.id, label: key.label, handle: key.handle },
+      });
+      setNewKeyId("");
+      setNewValueId("");
+      setValueQuery("");
+      return;
+    }
+
+    setCreateValuePrompt(typed);
+  };
+
+  // Confirmado: crear el value nuevo en el catálogo de atributos y agregarlo.
+  const handleCreateValue = async (typed: string) => {
+    const key = allKeys.find((k) => k.id === newKeyId);
+    if (!key) return;
+    try {
+      const res = await fetch(`/admin/attributes/${key.id}/values`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: typed }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const created = data.attribute_value as { id: string; value: string };
+      addAttribute({
+        id: created.id,
+        value: created.value,
+        attribute_key: { id: key.id, label: key.label, handle: key.handle },
+      });
+      queryClient.invalidateQueries({ queryKey: ["attribute-keys"] });
+      toast.success(`Created "${created.value}" under ${key.label}`);
+      setNewKeyId("");
+      setNewValueId("");
+      setValueQuery("");
+    } catch (error) {
+      console.error("Create value failed:", error);
+      toast.error(`Could not create "${typed}"`);
+    }
   };
 
   // Get available values for selected key
@@ -251,27 +309,22 @@ export const ManageAttributesModal = ({
 
               <div className="flex-1">
                 <Label>Value</Label>
-                <Select
+                <SearchableSelect
+                  items={availableValuesForNewKey.map((val) => ({
+                    id: val.id,
+                    label: val.value,
+                  }))}
                   value={newValueId}
-                  onValueChange={setNewValueId}
+                  onChange={setNewValueId}
+                  onQueryChange={setValueQuery}
                   disabled={!newKeyId}
-                >
-                  <Select.Trigger>
-                    <Select.Value placeholder="Select value..." />
-                  </Select.Trigger>
-                  <Select.Content>
-                    {availableValuesForNewKey.map((val) => (
-                      <Select.Item key={val.id} value={val.id}>
-                        {val.value}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select>
+                  placeholder="Search or type a new value..."
+                />
               </div>
 
               <Button
                 onClick={handleAddNew}
-                disabled={!newKeyId || !newValueId}
+                disabled={!newKeyId || (!newValueId && !valueQuery.trim())}
                 variant="secondary"
               >
                 <Plus /> Add
@@ -417,6 +470,26 @@ export const ManageAttributesModal = ({
           </div>
         </FocusModal.Body>
       </FocusModal.Content>
+
+      {/* Confirmación de crear un value nuevo en el catálogo de atributos */}
+      {createValuePrompt !== null && (
+        <ConfirmationDialog
+          open={createValuePrompt !== null}
+          onOpenChange={(open) => {
+            if (!open) setCreateValuePrompt(null);
+          }}
+          title="Create new value?"
+          description={`"${createValuePrompt}" doesn't exist yet for ${
+            allKeys.find((k) => k.id === newKeyId)?.label ?? "this attribute"
+          }. It will be added to the attribute catalog and to this product.`}
+          confirmText="Create & Add"
+          onConfirm={() => {
+            const typed = createValuePrompt;
+            setCreateValuePrompt(null);
+            void handleCreateValue(typed);
+          }}
+        />
+      )}
 
       {/* Confirmation Dialog */}
       {confirmationState.onConfirm && (

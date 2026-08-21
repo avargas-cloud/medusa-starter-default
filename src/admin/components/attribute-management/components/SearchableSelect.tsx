@@ -10,6 +10,8 @@ type SearchableSelectProps = {
   onChange: (id: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Texto tipeado sin seleccionar — para flujos "crear si no existe". */
+  onQueryChange?: (query: string) => void;
 };
 
 /** Distancia de edición acotada — alcanza para typos de 1-2 letras. */
@@ -72,17 +74,24 @@ export const SearchableSelect = ({
   onChange,
   placeholder,
   disabled,
+  onQueryChange,
 }: SearchableSelectProps) => {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQueryState] = useState("");
   const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const selected = items.find((i) => i.id === value) ?? null;
 
+  const setQuery = (q: string) => {
+    setQueryState(q);
+    onQueryChange?.(q);
+  };
+
   // Si el padre limpia el valor (p.ej. tras Add), limpiar el texto también.
   useEffect(() => {
     if (!value) setQuery("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   const filtered = useMemo(() => {

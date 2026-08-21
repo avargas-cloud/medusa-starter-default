@@ -240,7 +240,12 @@ const LinearLightingAdminPage = () => {
                                         className="w-fit hover:underline"
                                         title="Open product page"
                                     >
-                                        <Text size="small" weight="plus">{p.title}</Text>
+                                        {/* Un producto sin título dejaría el link sin texto clickeable. */}
+                                        <Text size="small" weight="plus">
+                                            {p.title.trim() ||
+                                                p.variants.find((v) => v.sku)?.sku ||
+                                                "(untitled product)"}
+                                        </Text>
                                     </Link>
                                     <Text size="xsmall" className="text-ui-fg-muted font-mono truncate">
                                         {p.variants.map((v) => v.sku).filter(Boolean).join(" · ") || "no SKU"}
