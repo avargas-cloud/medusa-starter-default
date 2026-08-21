@@ -126,8 +126,8 @@ function planSensor(p: ProductInfo): PlanEntry[] {
     }
     if (!wireless) {
         // Un sensor wireless no tiene conexión física — sin compat.
-        out.push({ handle: 'input-compatibility', value: 'JST', source: 'default' });
-        out.push({ handle: 'output-compatibility', value: 'JST', source: 'default' });
+        out.push({ handle: 'input-connector', value: 'JST', source: 'default' });
+        out.push({ handle: 'output-connector', value: 'JST', source: 'default' });
     }
     return out;
 }
@@ -176,20 +176,20 @@ function planAccessory(p: ProductInfo): PlanEntry[] {
     out.push({ handle: 'accessory-type', ...type });
 
     if (sku.includes('-CR') || sku.includes('-SS')) {
-        out.push({ handle: 'input-compatibility', value: 'Direct to LED Strip', source: 'sku' });
-        out.push({ handle: 'output-compatibility', value: 'Direct to LED Strip', source: 'sku' });
+        out.push({ handle: 'input-connector', value: 'Direct to LED Strip', source: 'sku' });
+        out.push({ handle: 'output-connector', value: 'Direct to LED Strip', source: 'sku' });
     } else if (sku.includes('-WIS')) {
-        out.push({ handle: 'input-compatibility', value: 'Bare Wires', source: 'sku' });
-        out.push({ handle: 'output-compatibility', value: 'Direct to LED Strip', source: 'sku' });
+        out.push({ handle: 'input-connector', value: 'Bare Wires', source: 'sku' });
+        out.push({ handle: 'output-connector', value: 'Direct to LED Strip', source: 'sku' });
     } else if (sku.includes('DCSPL')) {
-        out.push({ handle: 'input-compatibility', value: 'DC Plug', source: 'sku' });
-        out.push({ handle: 'output-compatibility', value: 'DC Plug', source: 'sku' });
+        out.push({ handle: 'input-connector', value: 'DC Plug', source: 'sku' });
+        out.push({ handle: 'output-connector', value: 'DC Plug', source: 'sku' });
     } else if (sku.includes('3DSPL') || sku.includes('3DEXT')) {
-        out.push({ handle: 'input-compatibility', value: 'JST', source: 'sku' });
-        out.push({ handle: 'output-compatibility', value: 'JST', source: 'sku' });
+        out.push({ handle: 'input-connector', value: 'JST', source: 'sku' });
+        out.push({ handle: 'output-connector', value: 'JST', source: 'sku' });
     } else {
-        out.push({ handle: 'input-compatibility', value: 'JST', source: 'default' });
-        out.push({ handle: 'output-compatibility', value: 'JST', source: 'default' });
+        out.push({ handle: 'input-connector', value: 'JST', source: 'default' });
+        out.push({ handle: 'output-connector', value: 'JST', source: 'default' });
     }
     return out;
 }

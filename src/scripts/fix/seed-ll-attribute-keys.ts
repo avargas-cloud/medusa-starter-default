@@ -90,30 +90,45 @@ const SEED_KEYS: SeedKey[] = [
             { label: 'Both Ends', code: 'both' },
         ],
     },
+    // 2026-08-21 (user): el mating de conectores necesita GÉNERO — un output
+    // JST-Female sólo se aparea con un input JST-Male. El usuario borró los
+    // genderless "JST"/"DC Plug" y creó estos labels desde el modal; el seed
+    // adopta SU vocabulario (no resucitar los viejos). La tabla de mating la
+    // consumirá el motor del Designer keyeada por estos codes:
+    //   jst_male↔jst_female · dc_male↔dc_female · c8_male↔c8_female ·
+    //   bare_wire↔bare_wire · direct_to_strip (sin pareja, clip/solder).
     {
-        handle: 'input-compatibility',
-        label: 'Input Compatibility',
+        handle: 'input-connector',
+        label: 'Input Connector',
         setHandle: 'control-compatibility',
         unit: null,
         options: [
             { label: 'Direct to LED Strip', code: 'direct_to_strip' },
-            { label: 'JST', code: 'jst' },
             { label: 'Bare Wires', code: 'bare_wire' },
-            { label: 'DC Plug', code: 'dc_plug' },
             { label: '5A Connector', code: 'connector_5a' },
+            { label: 'JST-Male', code: 'jst_male' },
+            { label: 'JST-Female', code: 'jst_female' },
+            { label: 'DC-Male', code: 'dc_male' },
+            { label: 'DC-Female', code: 'dc_female' },
+            { label: 'C8-Male', code: 'c8_male' },
+            { label: 'C8-Female', code: 'c8_female' },
         ],
     },
     {
-        handle: 'output-compatibility',
-        label: 'Output Compatibility',
+        handle: 'output-connector',
+        label: 'Output Connector',
         setHandle: 'control-compatibility',
         unit: null,
         options: [
             { label: 'Direct to LED Strip', code: 'direct_to_strip' },
-            { label: 'JST', code: 'jst' },
             { label: 'Bare Wires', code: 'bare_wire' },
-            { label: 'DC Plug', code: 'dc_plug' },
             { label: '5A Connector', code: 'connector_5a' },
+            { label: 'JST-Male', code: 'jst_male' },
+            { label: 'JST-Female', code: 'jst_female' },
+            { label: 'DC-Male', code: 'dc_male' },
+            { label: 'DC-Female', code: 'dc_female' },
+            { label: 'C8-Male', code: 'c8_male' },
+            { label: 'C8-Female', code: 'c8_female' },
         ],
     },
     {
@@ -141,6 +156,17 @@ const SEED_KEYS: SeedKey[] = [
     },
 ];
 
+/**
+ * Renombres de handle/label (2026-08-21, user): "compatibility" describía mal
+ * — el atributo es el CONECTOR que el producto tiene en cada lado. Corren
+ * ANTES del seed de claves: sin esto, el seed no encontraría el handle nuevo
+ * y crearía una clave duplicada. Idempotente (0 filas si ya está renombrado).
+ */
+const RENAMES: { from: string; to: string; label: string }[] = [
+    { from: 'input-compatibility', to: 'input-connector', label: 'Input Connector' },
+    { from: 'output-compatibility', to: 'output-connector', label: 'Output Connector' },
+];
+
 async function main() {
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) {
@@ -155,6 +181,22 @@ async function main() {
 
     const pool = new Pool({ connectionString: dbUrl });
     try {
+        for (const rename of RENAMES) {
+            const { rows: oldKey } = await pool.query(
+                `SELECT id FROM attribute_key WHERE handle = $1 AND deleted_at IS NULL`,
+                [rename.from],
+            );
+            if (oldKey.length === 0) continue;
+            console.log(`~ rename ${rename.from} → ${rename.to} ("${rename.label}")`);
+            if (apply) {
+                await pool.query(
+                    `UPDATE attribute_key SET handle = $2, label = $3, updated_at = NOW()
+                     WHERE handle = $1 AND deleted_at IS NULL`,
+                    [rename.from, rename.to, rename.label],
+                );
+            }
+        }
+
         const { rows: sets } = await pool.query<{ id: string; handle: string }>(
             `SELECT id, handle FROM attribute_set WHERE deleted_at IS NULL`,
         );
