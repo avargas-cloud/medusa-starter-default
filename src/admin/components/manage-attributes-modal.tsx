@@ -122,10 +122,40 @@ export const ManageAttributesModal = ({
 
   // Handle save with confirmation
   const handleSave = async () => {
+    // Un par Attribute+Value elegido pero sin "+ Add" se incluye igual en el
+    // save — descartarlo en silencio hacía que "Input Compatibility: JST"
+    // pareciera guardado (toast verde) sin haberse guardado (2026-08-21).
+    let finalAttributes = tempAttributes;
+    if (newKeyId && newValueId) {
+      const pendingKey = allKeys.find((k) => k.id === newKeyId);
+      const pendingValue = pendingKey?.values.find((v) => v.id === newValueId);
+      if (
+        pendingKey &&
+        pendingValue &&
+        !tempAttributes.some((a) => a.id === pendingValue.id)
+      ) {
+        finalAttributes = [
+          ...tempAttributes,
+          {
+            id: pendingValue.id,
+            value: pendingValue.value,
+            attribute_key: {
+              id: pendingKey.id,
+              label: pendingKey.label,
+              handle: pendingKey.handle,
+            },
+          },
+        ];
+        setTempAttributes(finalAttributes);
+        setNewKeyId("");
+        setNewValueId("");
+      }
+    }
+
     const proceedWithSave = async () => {
       setIsSaving(true);
       try {
-        await onSaveAtomic(tempAttributes, variantFlags);
+        await onSaveAtomic(finalAttributes, variantFlags);
         toast.success("Attributes saved successfully");
         onOpenChange(false);
       } catch (error) {
