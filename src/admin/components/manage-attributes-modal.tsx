@@ -11,7 +11,7 @@ import {
   Badge,
 } from "@medusajs/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 
 // Import modular utilities and hooks
 import { ConfirmationDialog } from "./attribute-management/components/ConfirmationDialog";
@@ -81,9 +81,14 @@ export const ManageAttributesModal = ({
   });
   const allKeys: AttributeKey[] = allKeysData?.attribute_keys || [];
 
-  // Initialize state when modal opens
+  // Initialize state SOLO en la transición cerrado→abierto. Con
+  // [currentAttributes] en las deps, el refetch-on-focus de react-query
+  // (volver de otra pestaña) traía una lista fresca del servidor y PISABA
+  // todo lo agregado sin guardar (reportado 2026-08-21: "si me tardo mucho
+  // en el modal, desaparece lo que le di add").
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpenRef.current) {
       setTempAttributes(currentAttributes);
 
       const initialFlags: Record<string, boolean> = {};
@@ -91,7 +96,11 @@ export const ManageAttributesModal = ({
         initialVariantKeys.forEach((k) => (initialFlags[k] = true));
       }
       setVariantFlags(initialFlags);
+      setNewKeyId("");
+      setNewValueId("");
+      setValueQuery("");
     }
+    wasOpenRef.current = open;
   }, [open, currentAttributes, initialVariantKeys]);
 
   // Use extracted hooks
