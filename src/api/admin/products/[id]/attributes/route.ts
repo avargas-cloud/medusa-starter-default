@@ -221,11 +221,22 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         filters: { id: attributeIds },
       });
 
-      // Get product with options
+      // Get product with options AND each variant's option values. Sin
+      // "variants.options.option" el chequeo de duplicados de abajo queda
+      // ciego (variant.options llega undefined → nada parece duplicado) y
+      // Medusa core rechaza el create con "Variant (X) with provided options
+      // already exists" — así falló el 2026-08-21 con un producto que ya
+      // tenía sus variantes CCT creadas.
       const productWithOptions = await productService.retrieveProduct(
         productId,
         {
-          relations: ["options", "variants"],
+          relations: [
+            "options",
+            "options.values",
+            "variants",
+            "variants.options",
+            "variants.options.option",
+          ],
         }
       );
 
@@ -247,7 +258,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         }
       }
 
-      // Create options if needed
+      // Create options if needed — y si la opción YA existe, mergear los
+      // values que falten (unión). Saltearla entera dejaba imposible crear
+      // la variante de un value nuevo (ej. agregar 2700K a una opción que
+      // sólo conocía 3000K/4000K).
       for (const attr of variantAttributes) {
         const optionTitle = attr.label;
         const optionValues = attr.values.map((v) => v.value);
@@ -264,6 +278,21 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
               values: optionValues,
             },
           ]);
+        } else {
+          const existingValues = (existingOption.values ?? []).map(
+            (v: any) => v.value
+          );
+          const missingValues = optionValues.filter(
+            (v) => !existingValues.includes(v)
+          );
+          if (missingValues.length > 0) {
+            console.log(
+              `   Adding ${missingValues.length} value(s) to existing option "${optionTitle}": ${missingValues.join(", ")}`
+            );
+            await productService.updateProductOptions(existingOption.id, {
+              values: [...existingValues, ...missingValues],
+            });
+          }
         }
       }
 

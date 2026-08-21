@@ -89,8 +89,12 @@ const updateLinksStep = createStep(
         return;
       }
 
-      // Values changed - delete ALL old values of this key
-      toDelete.push(...oldValueIds);
+      // Values changed — delete ONLY the ones removed from the key. Borrar
+      // TODOS los viejos era asimétrico con toCreate (que sólo crea los
+      // netos-nuevos): los valores RETENIDOS se borraban y nunca se
+      // recreaban — agregar 5000K a una key con 4 CCTs dejaba el producto
+      // con SOLO 5000K (pérdida de datos, cazada 2026-08-21 en sandbox).
+      toDelete.push(...oldValueIds.filter((id) => !newSet.has(id)));
     });
 
     // 5. Also delete values from keys that are NO LONGER in the incoming set
