@@ -45,6 +45,22 @@ const SEED_KEYS: SeedKey[] = [
         ],
     },
     {
+        // Tipo de sensor — espejo del enum `control_type` del sensorSpecSchema
+        // de LL (door|motion|touch|dimmer|manual|other).
+        handle: 'sensor-type',
+        label: 'Sensor Type',
+        setHandle: 'control-compatibility',
+        unit: null,
+        options: [
+            { label: 'Door', code: 'door' },
+            { label: 'Motion', code: 'motion' },
+            { label: 'Touch', code: 'touch' },
+            { label: 'Dimmer', code: 'dimmer' },
+            { label: 'Manual', code: 'manual' },
+            { label: 'Other', code: 'other' },
+        ],
+    },
+    {
         handle: 'neon-width',
         label: 'Neon Width',
         setHandle: 'physical-characteristics',
