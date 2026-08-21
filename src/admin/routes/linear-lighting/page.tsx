@@ -44,6 +44,9 @@ const systemsOf = (p: LlProductRow): LlSystem[] => {
     return Array.isArray(s) ? (s as LlSystem[]) : [];
 };
 
+const SYSTEM_TOGGLE_ACTIVE_CLASS =
+    "!bg-ui-bg-interactive !text-ui-fg-on-color !border-ui-bg-interactive !shadow-none";
+
 const LinearLightingAdminPage = () => {
     const [activeTab, setActiveTab] = useState<LlCategoryKey>("led_strip");
     const [products, setProducts] = useState<LlProductRow[]>([]);
@@ -244,7 +247,8 @@ const LinearLightingAdminPage = () => {
                                 <div className="flex gap-2 shrink-0 items-center">
                                     <Button
                                         size="small"
-                                        variant={systems.includes("easyled") ? "primary" : "secondary"}
+                                        variant="secondary"
+                                        className={systems.includes("easyled") ? SYSTEM_TOGGLE_ACTIVE_CLASS : undefined}
                                         disabled={saving === p.id}
                                         onClick={() => toggleSystem(p, "easyled")}
                                     >
@@ -252,7 +256,8 @@ const LinearLightingAdminPage = () => {
                                     </Button>
                                     <Button
                                         size="small"
-                                        variant={systems.includes("essential") ? "primary" : "secondary"}
+                                        variant="secondary"
+                                        className={systems.includes("essential") ? SYSTEM_TOGGLE_ACTIVE_CLASS : undefined}
                                         disabled={saving === p.id}
                                         onClick={() => toggleSystem(p, "essential")}
                                     >
