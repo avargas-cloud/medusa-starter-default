@@ -7,6 +7,10 @@ import {
 } from "@medusajs/utils";
 
 import { getDbPool } from "../../../../utils/db-pool";
+import {
+  cancelDraftOrder,
+  supersededMetadata,
+} from "../../../../../lib/draft-orders/cancel-draft-order";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { buildOrderCostSnapshot } from "../../../../../lib/finance/build-order-cost-snapshot";
 import { upsertOrderOnlyApplication } from "../../../../../lib/finance/upsert-order-only-application";
@@ -193,6 +197,47 @@ export async function POST(
         console.warn(
           `[convert-force] ⚠️ Duplicate convert blocked for draft ${id} — returning existing order ${dup.docnum} (${dup.id})`
         );
+
+        // Este draft es el PERDEDOR de un doble submit: la venta ya existe bajo
+        // `dup.id`. Sin esta limpieza queda vivo en /estimates para siempre,
+        // pareciendo trabajo pendiente de un vendedor y disparando una alerta
+        // falsa de "Missing in QB" (así vivió E3132 desde el 2026-08-19).
+        //
+        // FALLA ABIERTA, y es la decisión central de este bloque: la venta
+        // correcta YA está hecha y su orden es lo que el POS está esperando
+        // para navegar. Un fallo de limpieza no puede convertirse en una caja
+        // trabada con un cliente enfrente. Por eso el try/catch envuelve TODO y
+        // la respuesta sale igual.
+        //
+        // El guard de identidad (`dup.id !== id`) es barato y no opcional:
+        // cancelar el draft cuando resultó ser la propia orden ganadora anularía
+        // la venta. La query ya filtra `o.id <> $1`, así que esto es la segunda
+        // llave — la clase de error que sólo se nota cuando ya pasó.
+        try {
+          if (dup.id && dup.id !== id) {
+            // Import ESTÁTICO (arriba), no `await import()`: un import dinámico
+            // relativo sin extensión compila y muere en runtime con
+            // ERR_MODULE_NOT_FOUND — ya pasó dos veces en este repo.
+            const cleanup = await cancelDraftOrder({
+              scope: req.scope,
+              orderId: id,
+              metadataPatch: supersededMetadata(
+                dup.id,
+                new Date().toISOString()
+              ),
+            });
+            if (!cleanup.ok) {
+              console.error(
+                `[convert-force] supersede cleanup failed for draft ${id} (winner ${dup.id}): ${cleanup.reason} — ${cleanup.error}`
+              );
+            }
+          }
+        } catch (cleanupErr: any) {
+          console.error(
+            `[convert-force] supersede cleanup threw for draft ${id}: ${cleanupErr?.message ?? cleanupErr}`
+          );
+        }
+
         return void res.status(200).json({
           order: {
             id: dup.id,

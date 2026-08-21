@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
+import { cancelDraftOrder } from "../../../../../lib/draft-orders/cancel-draft-order";
 import { processDeactivateEstimateInQb } from "../../../../../lib/quickbooks/order-flow-core";
 import {
   getEstimateTxnId,
@@ -53,35 +54,26 @@ export async function POST(
       return;
     }
 
-    // ── 2. Stamp order_status + qb_sync_status before canceling ─────────
+    // ── 2 & 3. Stamp + cancel ────────────────────────────────────────────
+    // El dominio (precondiciones, stamp, cancelOrderWorkflow) vive en
+    // lib/draft-orders/cancel-draft-order.ts, compartido con la rama
+    // `deduplicated` de convert-force. Lo que sigue siendo de ESTE route es la
+    // traducción a códigos HTTP y la desactivación en QB de más abajo.
     const estimateTxnId = getEstimateTxnId(order.metadata);
     const estimateRef = getEstimateRef(order.metadata);
 
-    try {
-      await orderModule.updateOrders(orderId, {
-        metadata: {
-          ...(order.metadata || {}),
-          order_status: "Voided",
-          qb_sync_status: estimateTxnId ? "voiding" : "voided",
-        },
-      });
-    } catch {
-      /* non-critical */
-    }
+    const outcome = await cancelDraftOrder({
+      scope: req.scope,
+      orderId,
+      metadataPatch: {
+        order_status: "Voided",
+        qb_sync_status: estimateTxnId ? "voiding" : "voided",
+      },
+    });
 
-    // ── 3. Cancel via workflow (same pattern as invoice void for SR) ──────
-    const { cancelOrderWorkflow } = await import("@medusajs/core-flows");
-    try {
-      await cancelOrderWorkflow(req.scope).run({
-        input: { order_id: orderId },
-      });
-    } catch (cancelErr: any) {
-      // cancelOrderWorkflow throws when active fulfillments exist.
-      // Surface a user-friendly 409 so POS shows actionable guidance.
-      if (
-        cancelErr.message?.toLowerCase().includes("fulfillment") ||
-        cancelErr.message?.includes("All fulfillments must be canceled")
-      ) {
+    if (!outcome.ok) {
+      if (outcome.reason === "has_active_fulfillments") {
+        // Mensaje accionable para el POS, igual que antes.
         res.status(409).json({
           error:
             "Cannot void estimate — it has active fulfillments. Void the invoice first, then retry.",
@@ -89,13 +81,10 @@ export async function POST(
         });
         return;
       }
-      console.error(
-        "[VoidEstimate] cancelOrderWorkflow failed:",
-        cancelErr.message
-      );
+      console.error("[VoidEstimate] cancelOrderWorkflow failed:", outcome.error);
       res
         .status(500)
-        .json({ error: `Failed to cancel estimate: ${cancelErr.message}` });
+        .json({ error: `Failed to cancel estimate: ${outcome.error}` });
       return;
     }
 
