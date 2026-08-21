@@ -95,6 +95,25 @@ const SEED_KEYS: SeedKey[] = [
         ],
     },
     {
+        // Cuántos dispositivos puede tener PAREADOS a la vez un receiver
+        // wireless (EAS1-W) o un sensor inalámbrico — espejo del futuro
+        // max_paired_receivers del spec LL (relación sensor↔receiver, fase D).
+        handle: 'max-paired-devices',
+        label: 'Max Paired Devices',
+        setHandle: 'control-compatibility',
+        unit: null,
+        options: [
+            { label: '1', code: '1' },
+            { label: '2', code: '2' },
+            { label: '3', code: '3' },
+            { label: '4', code: '4' },
+            { label: '5', code: '5' },
+            { label: '6', code: '6' },
+            { label: '8', code: '8' },
+            { label: '10', code: '10' },
+        ],
+    },
+    {
         // Cuántos extremos de la strip/neon traen conector — espejo del enum
         // `ended: single|both` del spec LL (STRIP_ENDED en catalog-types.ts).
         handle: 'connection-ends',
