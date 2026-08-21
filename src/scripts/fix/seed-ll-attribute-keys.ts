@@ -95,6 +95,24 @@ const SEED_KEYS: SeedKey[] = [
         ],
     },
     {
+        // Métodos de dimming que un driver SOPORTA — se linkean VARIOS al
+        // mismo producto (un 5-in-1 lleva Triac + 0-10V + …). Triac y 0-10V
+        // mapean al enum del spec LL; PWM/ELV/MLV son para la web (el enum
+        // los sumará cuando el engine los distinga).
+        handle: 'dimming-method',
+        label: 'Dimming Method',
+        setHandle: 'electrical-characteristics',
+        unit: null,
+        options: [
+            { label: 'Triac', code: 'triac' },
+            { label: '0-10V', code: '0-10v' },
+            { label: 'PWM', code: 'pwm' },
+            { label: 'ELV', code: 'elv' },
+            { label: 'MLV', code: 'mlv' },
+            { label: 'Non-Dim', code: 'non-dim' },
+        ],
+    },
+    {
         // Cuántos dispositivos puede tener PAREADOS a la vez un receiver
         // wireless (EAS1-W) o un sensor inalámbrico — espejo del futuro
         // max_paired_receivers del spec LL (relación sensor↔receiver, fase D).
