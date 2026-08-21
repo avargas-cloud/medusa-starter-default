@@ -167,6 +167,11 @@ const SEED_KEYS: SeedKey[] = [
             { label: 'Splice', code: 'splice' },
             { label: 'Extension', code: 'extension' },
             { label: 'Cable', code: 'cable' },
+            // 2026-08-21 (user): PIGD = pigtail strip-a-JST — convierte una
+            // strip pelada en compatible con el sistema EASYLED JST. Familia
+            // genérica de conversión de conectores; el detalle vive en
+            // input/output-connector. El enum Zod de LL lo suma la fase B.
+            { label: 'Adapter', code: 'adapter' },
             // 2026-08-21 (user): receivers inalámbricos (EAS1-W) viven como
             // driver accessories. El enum Zod de LL lo suma la fase B.
             { label: 'Wireless Receiver', code: 'wireless_receiver' },
