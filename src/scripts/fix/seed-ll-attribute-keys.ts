@@ -46,7 +46,7 @@ const SEED_KEYS: SeedKey[] = [
     },
     {
         // Tipo de sensor — espejo del enum `control_type` del sensorSpecSchema
-        // de LL (door|motion|touch|dimmer|manual|other).
+        // de LL (door|motion|touch|wave|hidden_touch|dimmer|manual|other).
         handle: 'sensor-type',
         label: 'Sensor Type',
         setHandle: 'control-compatibility',
@@ -55,6 +55,8 @@ const SEED_KEYS: SeedKey[] = [
             { label: 'Door', code: 'door' },
             { label: 'Motion', code: 'motion' },
             { label: 'Touch', code: 'touch' },
+            { label: 'Wave', code: 'wave' },
+            { label: 'Hidden Touch', code: 'hidden_touch' },
             { label: 'Dimmer', code: 'dimmer' },
             { label: 'Manual', code: 'manual' },
             { label: 'Other', code: 'other' },
@@ -167,6 +169,10 @@ const SEED_KEYS: SeedKey[] = [
             { label: 'DC-Female', code: 'dc_female' },
             { label: 'C8-Male', code: 'c8_male' },
             { label: 'C8-Female', code: 'c8_female' },
+            // 2026-08-23 (user, diagram editor): puerto propietario donde el
+            // EAS1-W se enchufa al driver EASYLED. Mismo code en ambos lados
+            // (self-mating, como bare_wire).
+            { label: 'Wireless Receiver Port', code: 'receiver_port' },
         ],
     },
     {
@@ -185,6 +191,7 @@ const SEED_KEYS: SeedKey[] = [
             { label: 'DC-Female', code: 'dc_female' },
             { label: 'C8-Male', code: 'c8_male' },
             { label: 'C8-Female', code: 'c8_female' },
+            { label: 'Wireless Receiver Port', code: 'receiver_port' },
         ],
     },
     {
@@ -213,6 +220,33 @@ const SEED_KEYS: SeedKey[] = [
             // driver accessories. El enum Zod de LL lo suma la fase B.
             { label: 'Wireless Receiver', code: 'wireless_receiver' },
             { label: 'Other', code: 'other' },
+        ],
+    },
+    {
+        // 2026-08-22 (user, led_channel): la clave YA existe con vocabulario de
+        // otras familias ("1-Gang Box", "Junction Box"…) — el seed la ADOPTA:
+        // suma las dos formas de instalar un canal y codes sólo para ellas.
+        // Un canal puede linkear AMBAS (membership, como dimming-method).
+        handle: 'mounting-type',
+        label: 'Mounting Type',
+        setHandle: 'physical-characteristics',
+        unit: null,
+        options: [
+            { label: 'Surface', code: 'surface' },
+            { label: 'Recessed', code: 'recessed' },
+        ],
+    },
+    {
+        // 2026-08-22 (user, led_channel): clave existente (Beige, Silver,
+        // Polish Chrome…) adoptada; codes para los finishes de canales.
+        handle: 'finish',
+        label: 'Finish',
+        setHandle: 'physical-characteristics',
+        unit: null,
+        options: [
+            { label: 'Black', code: 'black' },
+            { label: 'White', code: 'white' },
+            { label: 'Grey', code: 'grey' },
         ],
     },
 ];
