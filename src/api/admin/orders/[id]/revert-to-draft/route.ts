@@ -1,6 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
+import { getEstimateTxnId } from "../../../../../lib/quickbooks/qb-metadata-types";
+import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -168,6 +170,39 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         `[revert-to-draft] Failed to skip orphan sales_order pipeline rows for ${id}:`,
         cleanupErr?.message
       );
+    }
+
+    // 2c. Enqueue the estimate row the reverted draft now needs. No
+    // draft_order.created event fires on a revert, and qb-pos-sync's estimate
+    // section only wakes existing 'waiting' rows — it never inserts one — so
+    // without this the estimate never reaches QB (E3161, 2026-08-22).
+    // 'pending' (not 'waiting') because the cron's window keys off created_at
+    // (1h-24h): a revert outside it would strand a 'waiting' row forever;
+    // 'pending' is picked up by the consolidator's next tick regardless of age.
+    // Skip when the draft already carries a QB TxnID (draft→convert→revert
+    // cycle): the estimate exists in QB and an ADD would mint a duplicate.
+    // getEstimateTxnId reads the canonical nested qb_estimate.txn_id shape —
+    // the flat qb_estimate_txn_id key is legacy and often null alongside it.
+    if (
+      process.env.QB_ORDER_FLOW_ENABLED === "true" &&
+      !getEstimateTxnId(meta)
+    ) {
+      try {
+        await writePipelineRow({
+          orderId: order.id,
+          step: "estimate",
+          status: "pending",
+          medusaRefNumber: newDocNumber,
+        });
+        console.log(
+          `[revert-to-draft] 📥 Enqueued pending estimate row for ${id} (${newDocNumber})`
+        );
+      } catch (enqueueErr: any) {
+        console.warn(
+          `[revert-to-draft] Failed to enqueue estimate pipeline row for ${id}:`,
+          enqueueErr?.message
+        );
+      }
     }
 
     // 3. Clear existing inventory reservations (from Strategy 1 native fulfillment allocations)
