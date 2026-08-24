@@ -12,6 +12,10 @@
  *     en `separations_elsewhere` (tooltip); llevarla a live 0 (equivalente a
  *     entregada) o cancelar la otra orden la LIBERA; con la otra orden
  *     acaparando todo el stock, subir la separación propia da 409.
+ *  3c. ROUND-TRIP con entrega PARCIAL: la columna vive en el eje ORDENADO y el
+ *     modal habla en unidades de estante — guardar N tiene que releerse N, y la
+ *     columna tiene que quedar en N + despachado. Es el único caso donde la
+ *     conversión existe, y el fixture de abajo (fulfilled = 0) era ciego a él.
  *  4. POST completo → status `full`, is_separated=true.
  *  5. Legacy: orden con metadata.is_separated=true y CERO filas → GET la lee
  *     como `full` sin migrar nada.
@@ -399,6 +403,140 @@ async function main() {
       "cleanup 3b: cap de vuelta al baseline",
       Number(clean?.separable_cap) === capBase,
       `cap ${clean?.separable_cap}, esperado ${capBase}`
+    );
+  }
+
+  // ── 3c. ROUND-TRIP sobre una línea PARCIALMENTE despachada ────────────────
+  //
+  // La razón de ser de esta sección: el fixture de arriba exige
+  // `fulfilled_quantity = 0`, así que TODO este E2E era estructuralmente ciego
+  // al único caso donde la conversión neto↔bruto existe. Con `fulfilled = 0`
+  // las dos unidades coinciden y guardar el neto crudo pasaba en verde.
+  //
+  // Lo que se paga por esa ceguera: la columna `order_line_separation.qty` vive
+  // en el eje ORDENADO y todo lector le resta lo despachado, pero el modal
+  // muestra y manda unidades DE ESTANTE. Guardar el neto sin convertir le comía
+  // a la línea exactamente `fulfilled` unidades en cada Save — en producción
+  // S11320 quedó clavada mostrando 7 cada vez que el operador escribía 8, y la
+  // orden 3021 llegó a mostrar 0 con 122 unidades apartadas en el estante.
+  //
+  // El despacho se FABRICA acá (no se busca uno en el sandbox) para que la
+  // sección corra siempre: un caso que a veces se saltea es un caso que no
+  // cubre nada. Las tres filas se borran al final.
+  console.log("\n3c. Round-trip con entrega parcial (neto ↔ bruto)");
+  const FUL_ID = "ful_e2e_sep_roundtrip";
+  const FULITEM_ID = "fulit_e2e_sep_roundtrip";
+  const ORDFUL_ID = "ordful_e2e_sep_roundtrip";
+  const locId = (
+    await db.query(
+      `SELECT location_id FROM inventory_level
+        WHERE inventory_item_id = $1 AND deleted_at IS NULL LIMIT 1`,
+      [f.item_id]
+    )
+  ).rows[0]?.location_id;
+
+  if (!locId) {
+    console.log("  (sin inventory_level para el item fixture — sección salteada)");
+  } else {
+    await db.query(
+      `INSERT INTO fulfillment (id, location_id, provider_id, requires_shipping, created_at, updated_at)
+       VALUES ($1, $2, 'manual_manual', true, now(), now())`,
+      [FUL_ID, locId]
+    );
+    await db.query(
+      `INSERT INTO fulfillment_item
+              (id, title, sku, barcode, quantity, raw_quantity, line_item_id,
+               inventory_item_id, fulfillment_id, created_at, updated_at)
+       VALUES ($1, 'e2e round-trip', 'E2E-RT', '', 1,
+               '{"value":"1","precision":20}'::jsonb, $2, $3, $4, now(), now())`,
+      [FULITEM_ID, f.line_id, f.item_id, FUL_ID]
+    );
+    await db.query(
+      `INSERT INTO order_fulfillment (id, order_id, fulfillment_id, created_at, updated_at)
+       VALUES ($1, $2, $3, now(), now())`,
+      [ORDFUL_ID, f.order_id, FUL_ID]
+    );
+
+    const readRt = async () => {
+      const r = await api(token, "GET", `/admin/orders/${f.order_id}/product-status`);
+      return r.json?.lines?.find((l: any) => l.line_id === f.line_id);
+    };
+    const withFul = await readRt();
+    const openRt = Number(withFul?.open_qty ?? 0);
+    check(
+      "el despacho vivo baja el pendiente en 1",
+      Number(withFul?.fulfilled) === 1 && openRt === Number(f.qty) - 1,
+      `fulfilled ${withFul?.fulfilled}, open ${openRt}, qty ${f.qty}`
+    );
+
+    // SUBIR: se manda lo que el operador ve (unidades de estante).
+    const rtSave = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+      separations: [{ line_id: f.line_id, qty: openRt }],
+    });
+    check("guardar el pendiente completo responde 200", rtSave.status === 200,
+      `status ${rtSave.status}`);
+
+    const afterSave = await readRt();
+    check(
+      "ROUND-TRIP: lo que se guarda es lo que se relee",
+      Number(afterSave?.separated) === openRt,
+      `guardé ${openRt}, releí ${afterSave?.separated} — el neto se guardó como bruto`
+    );
+    const storedRt = Number(
+      (
+        await db.query(
+          `SELECT qty::numeric AS qty FROM order_line_separation
+            WHERE order_id = $1 AND order_line_item_id = $2`,
+          [f.order_id, f.line_id]
+        )
+      ).rows[0]?.qty
+    );
+    check(
+      "la COLUMNA guarda bruto (neto + despachado)",
+      storedRt === openRt + 1,
+      `columna ${storedRt}, esperado ${openRt + 1}`
+    );
+
+    // El badge y la cifra tienen que contar la MISMA historia: la ruta deriva
+    // el estado de lo que le mandaron (neto) y el modal lo relee de la columna
+    // (bruto). Con la conversión rota, la respuesta decía `full` mientras la
+    // pantalla mostraba una unidad de menos — que es como lo reportó el owner.
+    check(
+      "el estado que devuelve la ruta coincide con lo releído",
+      rtSave.json?.separation_status === "full" &&
+        Number(afterSave?.separated) === openRt,
+      `ruta ${rtSave.json?.separation_status}, releído ${afterSave?.separated}/${openRt}`
+    );
+
+    // BAJAR: el camino inverso también tiene que round-trippear.
+    const lower = Math.max(0, openRt - 1);
+    const rtDown = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+      separations: [{ line_id: f.line_id, qty: lower }],
+    });
+    check("bajar responde 200", rtDown.status === 200, `status ${rtDown.status}`);
+    const afterDown = await readRt();
+    check(
+      "ROUND-TRIP al bajar",
+      Number(afterDown?.separated) === lower,
+      `guardé ${lower}, releí ${afterDown?.separated}`
+    );
+
+    // Cleanup de la sección: la separación y el despacho sintético se van, así
+    // la sección 4 arranca del mismo estado que si esto no hubiera corrido.
+    await db.query(
+      `DELETE FROM order_line_separation
+        WHERE order_id = $1 AND order_line_item_id = $2`,
+      [f.order_id, f.line_id]
+    );
+    await db.query(`DELETE FROM order_fulfillment WHERE id = $1`, [ORDFUL_ID]);
+    await db.query(`DELETE FROM fulfillment_item WHERE id = $1`, [FULITEM_ID]);
+    await db.query(`DELETE FROM fulfillment WHERE id = $1`, [FUL_ID]);
+    const restored = await readRt();
+    check(
+      "cleanup 3c: el pendiente vuelve al total ordenado",
+      Number(restored?.open_qty) === Number(f.qty) &&
+        Number(restored?.separated) === 0,
+      `open ${restored?.open_qty}/${f.qty}, separated ${restored?.separated}`
     );
   }
 

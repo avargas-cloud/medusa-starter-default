@@ -10,6 +10,12 @@
  * separated amount (not a delta); 0 clears the mark. Lines not included keep
  * their stored value.
  *
+ * ESA `qty` ESTÁ EN UNIDADES DE ESTANTE (netas), que es lo que el modal muestra
+ * y lo que el operador cuenta: la columna, en cambio, vive en el eje ORDENADO y
+ * cada lector le resta lo despachado. La conversión ocurre en el INSERT, abajo —
+ * toda la validación de este archivo (caps, floor invoiced, reclamo cross-orden,
+ * activity log) habla en netas y no debe convertir nada.
+ *
  * Separation NEVER moves stock or reservations — it is an operational mark.
  * The row upserts and the derived order metadata (`separation_status` +
  * `is_separated`, the boolean mirror the Separated tab and Meili consume)
@@ -27,6 +33,7 @@ import {
   type KnexRawConnection,
 } from "../../../../../lib/pos/order-activity";
 import { validateSeparationRequest } from "../../_lib/separation-caps";
+import { liveFulfilledSql } from "../../_lib/separation-sql";
 import { deriveSeparationStatus } from "../../_lib/separation-status";
 import { loadSeparationData } from "../_lib/separation-data";
 
@@ -124,10 +131,24 @@ export async function POST(
   try {
     await client.query("BEGIN");
     for (const [lineId, qty] of requested) {
+      // NETO → BRUTO. `qty` llega en unidades DE ESTANTE (lo que el operador ve
+      // y tipea); la columna se guarda en el eje ORDENADO y todo lector le resta
+      // lo despachado (`netSeparatedSql`). Guardar el neto crudo hacía que la
+      // línea perdiera exactamente `fulfilled` unidades en cada Save: en S11320
+      // (9 ordenadas, 1 entregada) escribir 8 se releía como 7 para siempre, y
+      // en la orden 3021 se comió 122 unidades apartadas hasta mostrar 0 — con
+      // el agravante de que el reclamo cross-orden también se calcula neteado,
+      // así que esas unidades quedaban ofrecidas a otra orden.
+      //
+      // La conversión usa el MISMO fragmento que los lectores, adentro de la
+      // transacción, y no una variable de JS calculada antes: es la regla que
+      // `separation-sql.ts` se puso a sí mismo (un hecho, un lugar), y de paso
+      // cierra la carrera de un fulfillment que aterrice entre el read y el
+      // write — ahí `fulfilled` de `loadSeparationData` ya sería viejo.
       await client.query(
         `INSERT INTO order_line_separation
                  (order_id, order_line_item_id, qty, updated_by)
-          VALUES ($1, $2, $3, $4)
+          VALUES ($1, $2, $3::numeric + ${liveFulfilledSql("$1", "$2")}, $4)
           ON CONFLICT (order_id, order_line_item_id)
           DO UPDATE SET qty = EXCLUDED.qty,
                         updated_by = EXCLUDED.updated_by,
