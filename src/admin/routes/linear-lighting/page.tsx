@@ -23,6 +23,7 @@ const LL_CATEGORIES = [
     { key: "led_driver_accessory", label: "LED Driver Accessories" },
     { key: "led_neon_accessory", label: "LED Neon Accessories" },
     { key: "bare_wire_connector", label: "Bare Wire Connectors" },
+    { key: "cable", label: "Cables" },
 ] as const;
 
 type LlCategoryKey = (typeof LL_CATEGORIES)[number]["key"];
