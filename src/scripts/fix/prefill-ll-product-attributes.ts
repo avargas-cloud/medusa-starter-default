@@ -205,6 +205,7 @@ const PLANNERS: Record<string, (p: ProductInfo) => PlanEntry[]> = {
     led_strip_accessory: planAccessory,
     led_driver_accessory: planAccessory,
     led_neon_accessory: planAccessory,
+    bare_wire_connector: planAccessory,
 };
 
 async function main() {

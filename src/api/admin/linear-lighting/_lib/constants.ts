@@ -12,6 +12,7 @@ export const LL_CATEGORIES = [
     "led_strip_accessory",
     "led_driver_accessory",
     "led_neon_accessory",
+    "bare_wire_connector",
 ] as const;
 
 export type LlCategory = (typeof LL_CATEGORIES)[number];
