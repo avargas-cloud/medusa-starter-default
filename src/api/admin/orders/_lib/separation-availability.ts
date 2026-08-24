@@ -5,6 +5,7 @@ import {
   computeSeparationCaps,
   type InventorySnapshot,
   type SeparationLineInput,
+  isSeparableLine,
 } from "./separation-caps";
 
 /**
@@ -300,6 +301,11 @@ export async function loadSeparationPending(
     for (const line of lines) {
       const cap = capByLine.get(line.lineId);
       if (!cap) continue;
+      // Una línea sin inventario no es trabajo de depósito. Sin este salteo la
+      // fila anuncia `To Separate 1` sobre una instalación —o se queda en
+      // `Awaiting Products` para siempre— mientras el modal ya no la muestra:
+      // exactamente la divergencia lista↔modal que este dominio pagó dos veces.
+      if (!isSeparableLine(line)) continue;
       // What is left to set aside on this line, and how much of it stock backs.
       //
       // `cap` is NOT reduced by `separated` a second time. It comes from

@@ -35,6 +35,7 @@ import { join } from "node:path";
 import type { ExecArgs } from "@medusajs/framework/types";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { separationStatusLinesOf } from "../../api/admin/orders/_lib/separation-caps";
 import { loadSeparationData } from "../../api/admin/orders/[id]/_lib/separation-data";
 import { loadSeparationPending } from "../../api/admin/orders/_lib/separation-availability";
 import { loadFullyInvoicedForOrder } from "../../lib/invoices/load-fully-invoiced";
@@ -113,7 +114,13 @@ export default async function verifySeparationInvoiced({
   for (const o of toCheck) {
     const data = await loadSeparationData(pool, o.id);
     if (!data) continue;
-    const modalPending = data.lines.reduce(
+    // Las líneas sin inventario quedan afuera de LOS DOS lados. Apartar es
+    // físico y un servicio no tiene unidades que mover, así que ni la lista ni
+    // el modal lo cuentan (2026-08-24). El predicado se importa del mismo lugar
+    // que usan las dos superficies — reescribirlo acá haría que el verificador
+    // tuviera su propia opinión sobre qué es separable, que es justo la
+    // divergencia que este script existe para cazar.
+    const modalPending = separationStatusLinesOf(data.lines).reduce(
       (sum, l) =>
         sum +
         Math.max(0, Math.max(0, l.quantity - l.fulfilled) - l.separated),

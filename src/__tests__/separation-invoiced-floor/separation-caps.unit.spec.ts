@@ -133,13 +133,42 @@ describe("computeSeparationCaps", () => {
     expect(cap.maxSeparable).toBe(18);
   });
 
-  it("carries the floor and a real ceiling for a line with no inventory item", () => {
+  // [SUPERSEDED → 2026-08-24] Este caso afirmaba que una línea SIN inventory
+  // item conservaba piso y techo reales (`invoicedFloor: 18, maxSeparable: 25`).
+  // La regla que lo justificaba —desde el 2026-08-20 el stock no es el árbitro,
+  // así que "no hay registro de stock" dejó de ser motivo para rechazar— sigue
+  // VIVA y la cubre el caso de abajo. Lo que cambió es otra cosa: una línea sin
+  // inventory item es un SERVICIO (instalación, expedite, un cargo) y apartar es
+  // físico. No tiene unidades que mover, así que sale del dominio entero.
+  //
+  // La trampa que este caso evitaba —un servicio facturado clavado bajo un piso
+  // inalcanzable— desaparece porque el piso también se va a 0: la línea queda
+  // AFUERA, no clampeada en cero adentro.
+  it("una línea sin inventory item queda fuera del dominio: todo en cero", () => {
     const [cap] = computeSeparationCaps(
       [line({ inventoryItemId: null, quantity: 25, invoiced: 18 })],
       stock(40)
     );
-    // No stock record to report, but nothing competes for it either.
-    expect(cap).toMatchObject({ cap: 0, invoicedFloor: 18, maxSeparable: 25 });
+    expect(cap).toMatchObject({ cap: 0, invoicedFloor: 0, maxSeparable: 0 });
+    // `openQty` sigue siendo VERAZ: el modal de Product Status lo lee para
+    // decir cuánto falta que llegue, y ahí un servicio pendiente es un hecho.
+    expect(cap.openQty).toBe(25);
+  });
+
+  // La mitad que sobrevive de la regla del 2026-08-20, ahora afirmada sola: el
+  // stock no es el árbitro. Una línea FÍSICA cuyo inventario dice 0 se sigue
+  // pudiendo apartar — el operador mira el estante y el conteo puede estar mal.
+  // Es también la assertion que protege contra el modo de falla de este cambio:
+  // si el predicado se corriera de "sin inventory item" a "sin stock", este caso
+  // se pone rojo antes de que un ítem físico desaparezca de la pantalla.
+  it("una línea FÍSICA sin stock sigue siendo separable", () => {
+    const [cap] = computeSeparationCaps(
+      [line({ quantity: 25, invoiced: 18 })],
+      stock(0)
+    );
+    expect(cap.cap).toBe(0); // el stock no la respalda: es la advertencia ámbar
+    expect(cap.maxSeparable).toBe(25); // pero el techo NO es el stock
+    expect(cap.invoicedFloor).toBe(18);
   });
 });
 

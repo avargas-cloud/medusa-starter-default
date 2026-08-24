@@ -18,7 +18,11 @@ import type {
 
 import { getDbPool } from "../../../../utils/db-pool";
 import { loadPosForOrder } from "../../../purchase-orders/for-order/_lib/po-for-order-query";
-import { computeSeparationCaps } from "../../_lib/separation-caps";
+import {
+  computeSeparationCaps,
+  isSeparableLine,
+  separationStatusLinesOf,
+} from "../../_lib/separation-caps";
 import { deriveSeparationStatus } from "../../_lib/separation-status";
 import { loadSeparationData } from "../_lib/separation-data";
 
@@ -43,8 +47,12 @@ export async function GET(
     computeSeparationCaps(data.lines, data.inventory).map((c) => [c.lineId, c])
   );
 
+  // Mismo filtro que la ruta de escritura y que `clearDeliveredSeparations`.
+  // Es el TERCER llamador de esta derivación: sin él, el estado que LEE el modal
+  // y el que ESCRIBE el Save discreparían en toda orden con una línea de
+  // servicio — la pantalla diría `partial` y el badge de la lista `full`.
   const separation_status = deriveSeparationStatus(
-    data.lines.map((l) => ({
+    separationStatusLinesOf(data.lines).map((l) => ({
       quantity: l.quantity,
       fulfilled: l.fulfilled,
       separated: l.separated,
@@ -81,6 +89,11 @@ export async function GET(
         reserved: l.reserved,
         separable_cap: cap?.cap ?? 0,
         open_qty: cap?.openQty ?? 0,
+        // Si la línea participa de la separación. El modal filtra POR ESTE
+        // CAMPO y nunca por `miami_stocked === 0` o `separable_cap === 0`: esos
+        // dos también valen 0 en un ítem físico agotado, y esconderlo sería
+        // ocultar trabajo real del depósito.
+        is_separable: isSeparableLine(l),
         // Invoiced units still in the building: the separation may never drop
         // below this. The screen clamps its input, the POST re-validates.
         invoiced_floor: cap?.invoicedFloor ?? 0,

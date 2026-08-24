@@ -32,7 +32,10 @@ import {
   recordPosActivity,
   type KnexRawConnection,
 } from "../../../../../lib/pos/order-activity";
-import { validateSeparationRequest } from "../../_lib/separation-caps";
+import {
+  separationStatusLinesOf,
+  validateSeparationRequest,
+} from "../../_lib/separation-caps";
 import { liveFulfilledSql } from "../../_lib/separation-sql";
 import { deriveSeparationStatus } from "../../_lib/separation-status";
 import { loadSeparationData } from "../_lib/separation-data";
@@ -94,25 +97,33 @@ export async function POST(
     requested
   );
   if (rejections.length) {
-    // Two different refusals share this response, and telling the operator the
-    // wrong one sends them hunting for stock that was never the problem.
+    // Tres rechazos distintos comparten esta respuesta y piden acciones
+    // OPUESTAS — mandar el mensaje equivocado manda al depósito a buscar un
+    // problema que no tiene.
+    const notSeparable = rejections.every((r) => r.reason === "not_separable");
     const belowFloor = rejections.every(
       (r) => r.reason === "below_invoiced_floor"
     );
     res.status(409).json({
-      error: belowFloor
-        ? "separation_below_invoiced_floor"
-        : "separation_exceeds_inventory",
-      message: belowFloor
-        ? "Invoiced units that have not left the warehouse cannot be un-separated."
-        : "Some quantities exceed what is left after other orders' separations.",
+      error: notSeparable
+        ? "separation_line_not_separable"
+        : belowFloor
+          ? "separation_below_invoiced_floor"
+          : "separation_exceeds_inventory",
+      message: notSeparable
+        ? "Service and non-inventory lines have nothing to set aside."
+        : belowFloor
+          ? "Invoiced units that have not left the warehouse cannot be un-separated."
+          : "Some quantities exceed what is left after other orders' separations.",
       rejections,
     });
     return;
   }
 
   // Merge requested over stored to derive the resulting order-level status.
-  const mergedLines = data.lines.map((l) => ({
+  // Las líneas sin inventario quedan AFUERA: aportarían pendiente que nadie
+  // puede apartar, y una orden con una instalación no llegaría nunca a `full`.
+  const mergedLines = separationStatusLinesOf(data.lines).map((l) => ({
     quantity: l.quantity,
     fulfilled: l.fulfilled,
     separated: requested.has(l.lineId)

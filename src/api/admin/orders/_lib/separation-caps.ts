@@ -83,6 +83,52 @@ function nz(v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+/**
+ * Si la línea participa de la separación.
+ *
+ * Apartar es un acto FÍSICO: alguien mueve unidades a un estante. Una línea que
+ * no rastrea inventario —un servicio de instalación, un cargo de expedite, una
+ * línea freeform— no tiene unidades que mover, así que no se muestra, no se
+ * aparta y no cuenta para el estado de la orden.
+ *
+ * El predicado es la AUSENCIA DE INVENTORY ITEM, no `metadata.quickbooks_is_service`.
+ * Ese flag existe para otra cosa (no emitir `<InventorySiteRef>` en el QBXML y
+ * esquivar el error 3140), se mantiene a mano, y medido sobre las 6.505 líneas
+ * de órdenes vivas cubre 36 de las 44 no-físicas: se le escapan
+ * `Services:Assembly-Panels`, `Services:Installation-On-Site` y `Expedite`.
+ * Colgar una regla de depósito de él haría que cada servicio nuevo sin flaggear
+ * reapareciera en el modal. `manage_inventory = false` y "sin inventory item"
+ * coinciden hoy en las 6.505 sin una sola discrepancia.
+ *
+ * Va por la NEGATIVA a propósito: lo excepcional es no tener inventario, así que
+ * una línea a la que le falte el `product_variant_inventory_item` por error se
+ * escondería en vez de mostrarse con stock 0. Hoy no existe ninguna (cero líneas
+ * con `manage_inventory = true` y sin inventory item), y el E2E lo vigila con una
+ * assertion negativa: una línea física SIN STOCK sigue apareciendo y sigue siendo
+ * separable.
+ */
+export function isSeparableLine(line: SeparationLineInput): boolean {
+  return line.inventoryItemId !== null;
+}
+
+/**
+ * Las líneas que cuentan para el `separation_status` de la orden.
+ *
+ * Vive acá y no en `separation-status.ts` porque el filtro es del DOMINIO de la
+ * separación, no de la derivación: `deriveSeparationStatus` sigue siendo una
+ * función pura sobre las líneas que le den. Lo comparten la ruta de escritura y
+ * `clearDeliveredSeparations` — si cada una filtrara por su cuenta, guardar el
+ * modal y despachar podrían dejar estados distintos sobre los mismos datos.
+ *
+ * Sin esto, una orden con una línea de servicio JAMÁS llega a `full`: el
+ * servicio aporta su pendiente y nadie puede apartarlo.
+ */
+export function separationStatusLinesOf<T extends SeparationLineInput>(
+  lines: T[]
+): T[] {
+  return lines.filter(isSeparableLine);
+}
+
 /** Pending units of a line: what still needs warehouse work. */
 export function openQtyOf(line: SeparationLineInput): number {
   return Math.max(0, nz(line.quantity) - nz(line.fulfilled));
@@ -161,6 +207,18 @@ export function computeSeparationCaps(
       ? inventory.get(line.inventoryItemId)
       : undefined;
     const openQty = openQtyOf(line);
+    // Una línea que no rastrea inventario no tiene nada que apartar: todos sus
+    // topes son 0. `openQty` se deja VERAZ — el mismo campo lo lee el modal de
+    // Product Status para decir cuánto falta que llegue, y ahí un servicio
+    // pendiente sigue siendo un hecho.
+    if (!isSeparableLine(line))
+      return {
+        lineId: line.lineId,
+        openQty,
+        cap: 0,
+        invoicedFloor: 0,
+        maxSeparable: 0,
+      };
     const floor = invoicedFloorOf(line);
     const maxSeparable = maxSeparableOf(line, lines, inv);
     if (!inv)
@@ -192,7 +250,8 @@ export interface SeparationRejection {
   reason:
     | "exceeds_open_qty"
     | "exceeds_claimed_elsewhere"
-    | "below_invoiced_floor";
+    | "below_invoiced_floor"
+    | "not_separable";
 }
 
 /**
@@ -221,6 +280,20 @@ export function validateSeparationRequest(
     if (!requested.has(line.lineId)) continue;
     const req = nz(requested.get(line.lineId) ?? 0);
     const stored = nz(line.separated);
+
+    // Una línea sin inventario no se aparta ni siquiera en 0: mencionarla en el
+    // request significa que quien llamó cree que se puede, y la pantalla ya no
+    // la muestra. La ruta es la autorización, así que lo dice acá y no confía en
+    // que el modal haya filtrado.
+    if (!isSeparableLine(line)) {
+      rejections.push({
+        lineId: line.lineId,
+        requested: req,
+        cap: 0,
+        reason: "not_separable",
+      });
+      continue;
+    }
 
     // Invoiced units still in the warehouse can never be un-separated: the
     // customer was billed for them and they are waiting to be picked up.

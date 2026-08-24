@@ -33,6 +33,7 @@
 import type { Pool } from "pg";
 
 import { loadSeparationData } from "../../api/admin/orders/[id]/_lib/separation-data";
+import { separationStatusLinesOf } from "../../api/admin/orders/_lib/separation-caps";
 import { deriveSeparationStatus } from "../../api/admin/orders/_lib/separation-status";
 
 /** Returns the order_line_item ids whose separation this call zeroed. */
@@ -94,7 +95,10 @@ export async function clearDeliveredSeparations(
     const data = await loadSeparationData(pool, orderId);
     if (data) {
       const status = deriveSeparationStatus(
-        data.lines.map((l) => ({
+        // Mismo filtro que la ruta de escritura, por el mismo helper: si cada
+        // una eligiera sus líneas por su cuenta, guardar el modal y despachar
+        // dejarían estados distintos sobre los mismos datos.
+        separationStatusLinesOf(data.lines).map((l) => ({
           quantity: l.quantity,
           fulfilled: l.fulfilled,
           separated: l.separated,

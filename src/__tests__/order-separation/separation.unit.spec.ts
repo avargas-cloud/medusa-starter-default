@@ -15,6 +15,7 @@
 
 import {
   computeSeparationCaps,
+  separationStatusLinesOf,
   validateSeparationRequest,
   type InventorySnapshot,
   type SeparationLineInput,
@@ -199,26 +200,71 @@ describe("validateSeparationRequest", () => {
     ]);
   });
 
-  it("a line with no inventory item can still be separated", () => {
-    // Since 2026-08-20 stock is not the arbiter, so "there is no stock record"
-    // stopped being a reason to refuse. Nothing competes for a line with no
-    // inventory item, so its ceiling is simply its pending quantity — and a
-    // service line that gets invoiced would otherwise be pinned under a floor
-    // it could never reach.
+  // [SUPERSEDED → 2026-08-24] Afirmaba que una línea sin inventory item se podía
+  // apartar. La razón que daba era sobre el STOCK ("no hay registro" dejó de ser
+  // motivo para rechazar), no sobre los servicios — y esa mitad sigue viva en
+  // `separation-caps.unit.spec.ts`. Lo que se decidió después es que apartar es
+  // FÍSICO: un servicio no tiene unidades que mover.
+  it("una línea sin inventory item se rechaza: no hay nada que apartar", () => {
+    const rejections = validateSeparationRequest(
+      [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
+      new Map(),
+      new Map([["l1", 2]])
+    );
+    expect(rejections).toEqual([
+      { lineId: "l1", requested: 2, cap: 0, reason: "not_separable" },
+    ]);
+  });
+
+  it("se rechaza incluso pidiendo 0 — mencionarla ya es el error", () => {
+    // Un 0 parece inocuo, pero significa que quien llamó cree que la línea
+    // participa. La pantalla ya no la dibuja; la ruta lo dice explícito en vez
+    // de aceptar en silencio una escritura que no significa nada.
     expect(
       validateSeparationRequest(
         [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
         new Map(),
-        new Map([["l1", 2]])
-      )
-    ).toEqual([]);
-    expect(
-      validateSeparationRequest(
-        [line({ lineId: "l1", quantity: 3, inventoryItemId: null })],
-        new Map(),
-        new Map([["l1", 4]])
+        new Map([["l1", 0]])
       )[0]?.reason
-    ).toBe("exceeds_open_qty");
+    ).toBe("not_separable");
+  });
+
+  it("el rechazo nombra 'not_separable', nunca 'falta inventario'", () => {
+    // Los tres rechazos viajan por el mismo 409 y piden acciones OPUESTAS:
+    // decirle al depósito que busque stock de una instalación lo manda a buscar
+    // un problema que no tiene.
+    const reasons = validateSeparationRequest(
+      [
+        line({ lineId: "l1", quantity: 3, inventoryItemId: null }),
+        line({ lineId: "l2", quantity: 3 }),
+      ],
+      new Map([["iitem_a", inv(10)]]),
+      new Map([
+        ["l1", 1],
+        ["l2", 1],
+      ])
+    ).map((r) => r.reason);
+    expect(reasons).toEqual(["not_separable"]);
+  });
+
+  it("separationStatusLinesOf saca los servicios del estado de la orden", () => {
+    // Sin esto una orden con una instalación no llega a `full` ni apartando
+    // todo lo físico: el servicio aporta pendiente que nadie puede apartar.
+    const lines = [
+      line({ lineId: "l1", quantity: 3, separated: 3 }),
+      line({ lineId: "svc", quantity: 2, inventoryItemId: null }),
+    ];
+    expect(separationStatusLinesOf(lines).map((l) => l.lineId)).toEqual(["l1"]);
+    expect(
+      deriveSeparationStatus(
+        separationStatusLinesOf(lines).map((l) => ({
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          separated: l.separated,
+        })),
+        false
+      )
+    ).toBe("full");
   });
 });
 

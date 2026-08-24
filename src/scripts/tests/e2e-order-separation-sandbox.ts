@@ -620,6 +620,183 @@ async function main() {
     "¡la separación tocó reservas o stock!"
   );
 
+  // ── 7. Líneas SIN INVENTARIO (servicios) fuera del dominio ────────────────
+  //
+  // Apartar es físico. Una línea que no rastrea inventario —instalación,
+  // expedite, un cargo— no tiene unidades que mover, así que no se muestra, no
+  // se puede apartar, y NO CUENTA para el estado de la orden. Esto último es lo
+  // que no era cosmético: `deriveSeparationStatus` sumaba su pendiente, así que
+  // una orden con una instalación no podía llegar a `full` ni apartando todo lo
+  // físico (S11576: 53 unidades apartables y un `Installation-On-Site` que las
+  // dejaba en `partial` para siempre).
+  //
+  // El predicado es la AUSENCIA DE INVENTORY ITEM, no `quickbooks_is_service`:
+  // ese flag es de QBXML, se mantiene a mano, y en prod cubría 36 de las 44
+  // líneas no-físicas.
+  console.log("\n7. Líneas sin inventario (servicios)");
+  const svc = await db.query(`
+    SELECT o.id AS order_id, oli.id AS line_id, oi.quantity::numeric AS qty
+      FROM "order" o
+      JOIN order_item oi ON oi.order_id = o.id AND oi.version = o.version AND oi.deleted_at IS NULL
+      JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
+      LEFT JOIN product_variant_inventory_item pvii
+        ON pvii.variant_id = oli.variant_id AND pvii.deleted_at IS NULL
+     WHERE o.deleted_at IS NULL AND o.status NOT IN ('canceled', 'archived')
+       AND pvii.inventory_item_id IS NULL
+       AND oi.quantity::numeric > 0
+     ORDER BY o.created_at DESC
+     LIMIT 1`);
+  if (!svc.rows[0]) {
+    console.log("  (sin líneas de servicio en el sandbox — sección salteada)");
+  } else {
+    const sv = svc.rows[0];
+    const svcMetaBefore = (
+      await db.query(`SELECT metadata FROM "order" WHERE id = $1`, [sv.order_id])
+    ).rows[0].metadata;
+    const svcPs = await api(token, "GET", `/admin/orders/${sv.order_id}/product-status`);
+    const svcLine = (svcPs.json?.lines ?? []).find((l: any) => l.line_id === sv.line_id);
+    check("la línea de servicio existe en el DTO", !!svcLine);
+    check(
+      "is_separable = false",
+      svcLine?.is_separable === false,
+      `is_separable ${svcLine?.is_separable}`
+    );
+    check(
+      "todos sus topes en 0",
+      Number(svcLine?.separable_cap) === 0 &&
+        Number(svcLine?.max_separable) === 0 &&
+        Number(svcLine?.invoiced_floor) === 0,
+      `cap ${svcLine?.separable_cap}, max ${svcLine?.max_separable}, floor ${svcLine?.invoiced_floor}`
+    );
+    // `open_qty` se deja VERAZ a propósito: el modal de Product Status lo lee
+    // para decir cuánto falta que llegue, y ahí un servicio pendiente es un
+    // hecho. Quien no lo muestra es el modal de separación, por `is_separable`.
+    check(
+      "open_qty sigue siendo veraz (Product Status lo lee)",
+      Number(svcLine?.open_qty) === Number(sv.qty),
+      `open ${svcLine?.open_qty}, qty ${sv.qty}`
+    );
+
+    // La RUTA es la autorización: no confía en que la pantalla haya filtrado.
+    const svcPost = await api(token, "POST", `/admin/orders/${sv.order_id}/separations`, {
+      separations: [{ line_id: sv.line_id, qty: 1 }],
+    });
+    check("apartar un servicio → 409", svcPost.status === 409, `status ${svcPost.status}`);
+    check(
+      "el 409 nombra el motivo REAL (no 'falta inventario')",
+      svcPost.json?.error === "separation_line_not_separable" &&
+        (svcPost.json?.rejections ?? []).some((r: any) => r.reason === "not_separable"),
+      `error ${svcPost.json?.error}`
+    );
+    const svcRows = (
+      await db.query(
+        `SELECT COUNT(*)::int AS n FROM order_line_separation
+          WHERE order_id = $1 AND order_line_item_id = $2`,
+        [sv.order_id, sv.line_id]
+      )
+    ).rows[0].n;
+    check("el 409 no escribió fila", svcRows === 0, `filas ${svcRows}`);
+
+    // NEGATIVA que protege contra el modo de falla de este mismo fix: si una
+    // línea FÍSICA perdiera su `product_variant_inventory_item`, desaparecería
+    // del modal en vez de mostrarse con stock 0. Una línea física SIN STOCK
+    // tiene que seguir visible y separable.
+    const zeroStock = await db.query(`
+      SELECT oli.id AS line_id, oi.order_id
+        FROM "order" o
+        JOIN order_item oi ON oi.order_id = o.id AND oi.version = o.version AND oi.deleted_at IS NULL
+        JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
+        JOIN product_variant_inventory_item pvii
+          ON pvii.variant_id = oli.variant_id AND pvii.deleted_at IS NULL
+        JOIN inventory_level il
+          ON il.inventory_item_id = pvii.inventory_item_id AND il.deleted_at IS NULL
+         AND il.stocked_quantity <= 0
+       WHERE o.deleted_at IS NULL AND o.status NOT IN ('canceled', 'archived')
+         AND oi.quantity::numeric > 0
+       LIMIT 1`);
+    if (zeroStock.rows[0]) {
+      const zs = zeroStock.rows[0];
+      const zsPs = await api(token, "GET", `/admin/orders/${zs.order_id}/product-status`);
+      const zsLine = (zsPs.json?.lines ?? []).find((l: any) => l.line_id === zs.line_id);
+      check(
+        "NEGATIVA: una línea FÍSICA sin stock sigue siendo separable",
+        zsLine?.is_separable === true,
+        `is_separable ${zsLine?.is_separable} — el fix estaría escondiendo trabajo real`
+      );
+    } else {
+      console.log("  (sin líneas físicas en stock 0 — negativa no ejercitada)");
+    }
+
+    // ── La mitad que NO era cosmética ────────────────────────────────────────
+    // Con el servicio adentro de la derivación, su pendiente entraba al total y
+    // la orden no podía llegar a `full` ni apartando todo lo físico: el badge
+    // se quedaba en `partial` para siempre. Acá se aparta TODO lo separable y
+    // se exige `full` con las líneas de servicio todavía pendientes.
+    const svcLines = (svcPs.json?.lines ?? []) as any[];
+    const svcOpenUnits = svcLines
+      .filter((l) => l.is_separable === false)
+      .reduce((acc, l) => acc + Number(l.open_qty), 0);
+    const toSeparate = svcLines
+      .filter((l) => l.is_separable !== false && Number(l.open_qty) > 0)
+      .map((l) => ({ line_id: l.line_id, qty: Number(l.max_separable) }));
+    const allBackedSvc = svcLines
+      .filter((l) => l.is_separable !== false)
+      .every((l) => Number(l.max_separable) >= Number(l.open_qty));
+
+    if (toSeparate.length && svcOpenUnits > 0 && allBackedSvc) {
+      const svcFull = await api(token, "POST", `/admin/orders/${sv.order_id}/separations`, {
+        separations: toSeparate,
+      });
+      check(
+        `una orden con ${svcOpenUnits} unidades de servicio pendientes llega a FULL`,
+        svcFull.status === 200 && svcFull.json?.separation_status === "full",
+        `status ${svcFull.status}, separation_status ${svcFull.json?.separation_status} — el servicio está contando para el estado`
+      );
+      // Y el LECTOR tiene que decir lo mismo que el escritor: son dos llamadas
+      // distintas a la misma derivación, y si sólo una filtrara, la pantalla y
+      // el badge de la lista se contradirían.
+      const svcRead = await api(token, "GET", `/admin/orders/${sv.order_id}/product-status`);
+      check(
+        "el GET lee el MISMO estado que devolvió el POST",
+        svcRead.json?.order?.separation_status === "full",
+        `GET ${svcRead.json?.order?.separation_status}, POST ${svcFull.json?.separation_status}`
+      );
+
+    } else {
+      console.log(
+        "  (la orden de servicio no tiene todas sus líneas respaldadas — full no es alcanzable, caso no ejercitado)"
+      );
+    }
+
+    // Cleanup INCONDICIONAL. Vivía adentro del `if` de arriba y eso era un bug
+    // del test, no del código: al saltearse esa rama la fila que escribió el
+    // POST del 409 sobrevivía a la corrida y envenenaba la siguiente (un
+    // mutation test lo destapó — "el 409 no escribió fila: filas 1" salió rojo
+    // por basura de la corrida ANTERIOR). Un E2E que sólo limpia en su camino
+    // feliz miente exactamente cuando algo salió mal, que es cuando se lo lee.
+    await db.query(`DELETE FROM order_line_separation WHERE order_id = $1`, [
+      sv.order_id,
+    ]);
+    await db.query(`UPDATE "order" SET metadata = $2::jsonb WHERE id = $1`, [
+      sv.order_id,
+      JSON.stringify(svcMetaBefore ?? {}),
+    ]);
+    await db.query(
+      `DELETE FROM order_change
+        WHERE order_id = $1 AND change_type = 'pos_activity'
+          AND internal_note LIKE '__pos_activity__%separation_saved%'`,
+      [sv.order_id]
+    );
+    const svcClean = (
+      await db.query(
+        `SELECT COUNT(*)::int AS n FROM order_line_separation WHERE order_id = $1`,
+        [sv.order_id]
+      )
+    ).rows[0].n;
+    check("cleanup 7: la orden de servicio queda como estaba", svcClean === 0,
+      `quedaron ${svcClean} filas`);
+  }
+
   // ── Cleanup: volver el sandbox a como estaba ───────────────────────────────
   await db.query(
     `DELETE FROM order_line_separation WHERE order_id = $1`,
