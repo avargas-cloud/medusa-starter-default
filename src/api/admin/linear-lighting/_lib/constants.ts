@@ -2,6 +2,7 @@
 // (PRODUCT_CATEGORIES). Los labels de UI viven en la página admin.
 export const LL_CATEGORIES = [
     "led_strip",
+    "led_channel",
     "led_neon",
     "led_driver",
     "sensor",

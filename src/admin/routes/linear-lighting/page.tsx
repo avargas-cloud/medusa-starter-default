@@ -12,6 +12,7 @@ import { Link } from "react-router-dom";
  */
 const LL_CATEGORIES = [
     { key: "led_strip", label: "LED Strips" },
+    { key: "led_channel", label: "LED Channels" },
     { key: "led_neon", label: "LED Neons" },
     { key: "led_driver", label: "LED Drivers" },
     { key: "sensor", label: "Sensors" },
