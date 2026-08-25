@@ -15,6 +15,7 @@
 
 import {
   computeSeparationCaps,
+  effectiveSeparatedOf,
   separationStatusLinesOf,
   validateSeparationRequest,
   type InventorySnapshot,
@@ -37,6 +38,7 @@ const line = (
 ): SeparationLineInput => ({
   quantity: 0,
   fulfilled: 0,
+  invoiced: 0,
   reserved: 0,
   separated: 0,
   inventoryItemId: "iitem_a",
@@ -315,5 +317,108 @@ describe("deriveSeparationStatus", () => {
     expect(
       deriveSeparationStatus([{ quantity: 5, fulfilled: 2, separated: 5 }], false)
     ).toBe("full");
+  });
+});
+
+/**
+ * El piso facturado cuenta como apartado para el ESTADO de la orden, no sólo
+ * para el display del modal. Los tres llamadores de `deriveSeparationStatus`
+ * pasaban el `separated` crudo: una orden cuyas unidades restantes estaban
+ * facturadas sin fila física (3021/S11432: 122 con fila + 40 sólo facturadas
+ * sobre 162 abiertas) estampaba `partial` mientras el modal mostraba todo
+ * apartado y la lista decía full por el atajo `fully_invoiced`.
+ */
+describe("effectiveSeparatedOf", () => {
+  it("a line covered only by invoices counts its floor as separated", () => {
+    expect(
+      effectiveSeparatedOf(
+        line({ lineId: "l1", quantity: 7, fulfilled: 0, invoiced: 7 })
+      )
+    ).toBe(7);
+  });
+
+  it("the floor nets out what already left the warehouse", () => {
+    expect(
+      effectiveSeparatedOf(
+        line({ lineId: "l1", quantity: 31, fulfilled: 24, invoiced: 31 })
+      )
+    ).toBe(7);
+  });
+
+  it("the stored separation wins when it is higher than the floor", () => {
+    expect(
+      effectiveSeparatedOf(
+        line({ lineId: "l1", quantity: 10, fulfilled: 0, invoiced: 2, separated: 5 })
+      )
+    ).toBe(5);
+  });
+
+  it("the 3021 shape derives full: physical rows + invoiced-only lines", () => {
+    const lines = [
+      // EMSH: 264 ordenadas, 142 entregadas, 122 con fila física.
+      line({ lineId: "emsh", quantity: 264, fulfilled: 142, invoiced: 264, separated: 122 }),
+      // ECTSK: 31 ordenadas, 12 entregadas, sin fila — cubierta por el piso.
+      line({ lineId: "ectsk", quantity: 31, fulfilled: 12, invoiced: 31 }),
+      // ECTL: nada entregado, todo facturado, sin fila.
+      line({ lineId: "ectl", quantity: 7, fulfilled: 0, invoiced: 7 }),
+    ];
+    expect(
+      deriveSeparationStatus(
+        lines.map((l) => ({
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          separated: effectiveSeparatedOf(l),
+        })),
+        false
+      )
+    ).toBe("full");
+  });
+
+  it("a floor that covers only part of the open qty derives partial", () => {
+    const lines = [
+      line({ lineId: "l1", quantity: 10, fulfilled: 0, invoiced: 4 }),
+    ];
+    expect(
+      deriveSeparationStatus(
+        lines.map((l) => ({
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          separated: effectiveSeparatedOf(l),
+        })),
+        false
+      )
+    ).toBe("partial");
+  });
+
+  it("legacy flag survives when there is neither a row nor a floor", () => {
+    const lines = [line({ lineId: "l1", quantity: 5, fulfilled: 0 })];
+    expect(
+      deriveSeparationStatus(
+        lines.map((l) => ({
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          separated: effectiveSeparatedOf(l),
+        })),
+        true
+      )
+    ).toBe("full");
+  });
+
+  it("a floor overrides the legacy flag: the numbers win once they exist", () => {
+    // Decisión deliberada: una orden legacy (is_separated sin filas) con
+    // invoices PARCIALES pasa a `partial` — el piso es evidencia por línea,
+    // más fresca que un booleano pre-tracking. Las 4 órdenes legacy vivas de
+    // prod se enumeran en el dry-run del backfill antes de estampar nada.
+    const lines = [line({ lineId: "l1", quantity: 10, fulfilled: 0, invoiced: 4 })];
+    expect(
+      deriveSeparationStatus(
+        lines.map((l) => ({
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          separated: effectiveSeparatedOf(l),
+        })),
+        true
+      )
+    ).toBe("partial");
   });
 });

@@ -20,6 +20,11 @@
  *  5. NEGATIVAS — order_line_separation queda VACÍA para la orden (facturar
  *     jamás fabrica separación física) y reservation_item/inventory_level
  *     quedan byte-iguales (facturar no toca stock ni reservas).
+ *  2b/3b/4b. PISO EN EL ESTADO (2026-08-25) — `separation_status` derivado por
+ *     product-status sigue al piso facturado en las dos direcciones: piso
+ *     parcial ⇒ partial, piso total ⇒ full (sin una sola fila física), y tras
+ *     el void vuelve a partial. Pre-fix los tres decían `none` (el botón del
+ *     toolbar contra el modal y la lista — 3021/S11432).
  *
  * Todos los writes se revierten (invoices borrados, metadata restaurada).
  *
@@ -136,6 +141,11 @@ async function main() {
      WHERE o.deleted_at IS NULL AND o.status = 'pending' AND o.is_draft_order = false
        AND o.customer_id IS NOT NULL
        AND oli.variant_id IS NOT NULL
+       -- Una línea sin inventory item está FUERA del dominio de separación
+       -- (2026-08-24): con un servicio de fixture todo deriva none/pending=0
+       -- y los 19 checks miden la exclusión, no la feature.
+       AND EXISTS (SELECT 1 FROM product_variant_inventory_item pvii
+                    WHERE pvii.variant_id = oli.variant_id AND pvii.deleted_at IS NULL)
        AND oi.quantity::numeric >= 2
        AND COALESCE(oi.fulfilled_quantity::numeric, 0) = 0
        AND NOT EXISTS (SELECT 1 FROM pos_invoice pi
@@ -170,20 +180,30 @@ async function main() {
     await db.query(`SELECT metadata FROM "order" WHERE id = $1`, [f.order_id])
   ).rows[0].metadata;
 
-  const invSnapshot = async () =>
-    (
-      await db.query(
-        `SELECT md5(string_agg(t.row_text, '|' ORDER BY t.row_text)) AS h
-           FROM (
-             SELECT id || ':' || COALESCE(quantity::text,'') AS row_text
-               FROM reservation_item WHERE deleted_at IS NULL
-             UNION ALL
-             SELECT id || ':' || COALESCE(stocked_quantity::text,'') || ':' ||
-                    COALESCE(reserved_quantity::text,'')
-               FROM inventory_level WHERE deleted_at IS NULL
-           ) t`
-      )
-    ).rows[0].h as string;
+  // Filas completas, no sólo el hash: un byte-igual que falla sin nombrar la
+  // fila que cambió no se puede diagnosticar (pasó 2026-08-25 — el md5 global
+  // dijo "distinto" y nada decía qué ni por qué).
+  const invSnapshot = async (): Promise<Map<string, string>> => {
+    const res = await db.query(
+      `SELECT id || ':' || COALESCE(quantity::text,'') AS row_text FROM reservation_item WHERE deleted_at IS NULL
+       UNION ALL
+       SELECT id || ':' || COALESCE(stocked_quantity::text,'') || ':' ||
+              COALESCE(reserved_quantity::text,'')
+         FROM inventory_level WHERE deleted_at IS NULL`
+    );
+    const m = new Map<string, string>();
+    for (const r of res.rows as Array<{ row_text: string }>) {
+      const [id] = r.row_text.split(":", 1);
+      m.set(id, r.row_text);
+    }
+    return m;
+  };
+  const diffSnapshots = (a: Map<string, string>, b: Map<string, string>): string[] => {
+    const out: string[] = [];
+    for (const [id, v] of a) if (b.get(id) !== v) out.push(`${v} → ${b.get(id) ?? "(gone)"}`);
+    for (const [id, v] of b) if (!a.has(id)) out.push(`(new) → ${v}`);
+    return out;
+  };
   const invBefore = await invSnapshot();
 
   const e2eIds = {
@@ -231,23 +251,38 @@ async function main() {
       [e2eIds.item, e2eIds.invoice, f.variant_id, f.sku, qty - 1, raw(100)]
     );
 
+    // Facturar NO baja el pending ni el open (2026-08-20, supersede la
+    // expectativa original de este archivo): la factura es acto de cobro, no
+    // de depósito — fija el PISO de la separación. El allocator FIFO sí
+    // ATRIBUYE lo facturado a la línea (invoiced sube), que es lo que este
+    // paso existe para probar.
     const row1 = await filterRow(token, f.order_id);
     check(
-      "lista: pending=1 (el allocator FIFO descuenta lo facturado sin line id)",
-      row1?.separation_pending?.pending === 1,
+      `lista: pending=${qty} intacto (facturar no es trabajo de depósito)`,
+      row1?.separation_pending?.pending === qty,
       JSON.stringify(row1?.separation_pending)
     );
     const ps1 = await api(token, "GET", `/admin/orders/${f.order_id}/product-status`);
     const line1 = ps1.json?.lines?.find((l: any) => l.line_id === f.line_id);
     check(
-      `modal: invoiced=${qty - 1}, open_qty=1 (paridad lista↔modal)`,
-      line1?.invoiced === qty - 1 && line1?.open_qty === 1,
+      `modal: invoiced=${qty - 1} (allocator FIFO), open_qty=${qty} veraz`,
+      line1?.invoiced === qty - 1 && line1?.open_qty === qty,
       `invoiced=${line1?.invoiced} open=${line1?.open_qty}`
     );
     const flagAfterSql = (
       await db.query(`SELECT metadata->>'fully_invoiced' AS v FROM "order" WHERE id = $1`, [f.order_id])
     ).rows[0].v;
     check("flag sigue ausente (ningún evento corrió — derivación pura)", flagAfterSql === null, `v=${flagAfterSql}`);
+    // 2b. El PISO cuenta como apartado para el ESTADO (2026-08-25): qty−1
+    // facturadas sin fila física ⇒ partial, no none. Pre-fix los llamadores
+    // pasaban el `separated` crudo y esta orden derivaba `none` — la clase que
+    // dejó a 3021/S11432 con el botón en "Partially Separated" contra un modal
+    // y una lista en full.
+    check(
+      "product-status: separation_status=partial (piso parcial, cero filas físicas)",
+      ps1.json?.order?.separation_status === "partial",
+      `status=${ps1.json?.order?.separation_status}`
+    );
 
     // ── 3. Invoice REAL por API → evento → stamp (el fix) ────────────────────
     console.log("\n3. Invoice real por API (última unidad) → pos.invoice.created");
@@ -289,10 +324,14 @@ async function main() {
       "CONTROL POSITIVO: fully_invoiced=true estampado en orden con CERO separación",
       stamped === true
     );
+    // Facturado al 100% NO anula el trabajo de depósito (2026-08-20, supersede
+    // el `pending=0` original de este check): la mercadería sigue en el
+    // estante hasta el pickup/despacho, y la lista lo anuncia. El estado full
+    // (3b abajo) y el pending>0 conviven — son los dos slots de la columna.
     const row2 = await filterRow(token, f.order_id);
     check(
-      "lista: pending=0 con todo facturado",
-      row2 === null || row2?.separation_pending?.pending === 0 || row2?.separation_pending == null,
+      `lista: pending=${qty} aún con todo facturado (la factura no mueve mercadería)`,
+      row2?.separation_pending?.pending === qty,
       JSON.stringify(row2?.separation_pending)
     );
     // Badge + tab (owner 2026-08-14): una orden ABIERTA fully invoiced entra al
@@ -312,6 +351,15 @@ async function main() {
       docFull?.is_separated === false,
       `is_separated=${docFull?.is_separated}`
     );
+    // 3b. Con TODO facturado y ninguna fila física, la derivación viva dice
+    // full — el mismo valor que el badge de la lista deriva por el atajo
+    // fully_invoiced. Pre-fix decía `none` y el botón contradecía a la lista.
+    const ps2 = await api(token, "GET", `/admin/orders/${f.order_id}/product-status`);
+    check(
+      "product-status: separation_status=full (piso cubre todo, cero filas físicas)",
+      ps2.json?.order?.separation_status === "full",
+      `status=${ps2.json?.order?.separation_status}`
+    );
 
     // ── 4. Void → evento → el flag y el pending REVIERTEN solos ─────────────
     console.log("\n4. Void del invoice API → pos.invoice.voided");
@@ -328,8 +376,8 @@ async function main() {
     check("flag=false tras void (recompute por evento)", unstamped === true);
     const row3 = await filterRow(token, f.order_id);
     check(
-      "lista: pending=1 de nuevo (el legacy sigue cubriendo el resto)",
-      row3?.separation_pending?.pending === 1,
+      `lista: pending=${qty} de nuevo (cae el gate de fully_invoiced, nada se facturó al depósito)`,
+      row3?.separation_pending?.pending === qty,
       JSON.stringify(row3?.separation_pending)
     );
     const docNone = await waitFor("doc Meili vuelve a none tras void", async () => {
@@ -341,6 +389,15 @@ async function main() {
       docNone?.separation_state === "none",
       `state=${docNone?.separation_state}`
     );
+    // 4b. El void baja el piso de la línea a qty−1 (queda el invoice legacy):
+    // la derivación viva vuelve a partial — sigue al piso en las dos
+    // direcciones, nunca queda pegada en full.
+    const ps3 = await api(token, "GET", `/admin/orders/${f.order_id}/product-status`);
+    check(
+      "product-status: separation_status=partial tras void (el piso baja con él)",
+      ps3.json?.order?.separation_status === "partial",
+      `status=${ps3.json?.order?.separation_status}`
+    );
 
     // ── 5. Negativas ─────────────────────────────────────────────────────────
     console.log("\n5. Negativas");
@@ -351,7 +408,12 @@ async function main() {
     check("order_line_separation VACÍA — facturar jamás fabrica separación física",
       sepRows.rows[0].n === 0);
     const invAfter = await invSnapshot();
-    check("reservation_item + inventory_level byte-iguales", invAfter === invBefore);
+    const invDiff = diffSnapshots(invBefore, invAfter);
+    check(
+      "reservation_item + inventory_level byte-iguales",
+      invDiff.length === 0,
+      invDiff.slice(0, 5).join(" | ")
+    );
   } finally {
     // ── Revert ───────────────────────────────────────────────────────────────
     console.log("\nRevert del sandbox…");

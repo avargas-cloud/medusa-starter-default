@@ -35,7 +35,11 @@ import { join } from "node:path";
 import type { ExecArgs } from "@medusajs/framework/types";
 
 import { getDbPool } from "../../api/utils/db-pool";
-import { separationStatusLinesOf } from "../../api/admin/orders/_lib/separation-caps";
+import {
+  effectiveSeparatedOf,
+  separationStatusLinesOf,
+} from "../../api/admin/orders/_lib/separation-caps";
+import { deriveSeparationStatus } from "../../api/admin/orders/_lib/separation-status";
 import { loadSeparationData } from "../../api/admin/orders/[id]/_lib/separation-data";
 import { loadSeparationPending } from "../../api/admin/orders/_lib/separation-availability";
 import { loadFullyInvoicedForOrder } from "../../lib/invoices/load-fully-invoiced";
@@ -179,6 +183,44 @@ export default async function verifySeparationInvoiced({
   console.log(
     `[3] no fulfilled_quantity in ${SEPARATION_SOURCES.length} separation source(s): ${
       poisoned === 0 ? "OK" : `${poisoned} offender(s)`
+    }`
+  );
+
+  // ── 4. stamp ↔ recompute parity (the toolbar button, 2026-08-25) ─────────
+  // `metadata.separation_status` is a STORED value the order-detail toolbar
+  // reads raw; the modal and the list derive live. Sections 1–2 never compared
+  // the stamp itself, so 3021/S11432 wore three states at once: stamp
+  // `partial`, modal "162 of 162 set aside", list badge full. The invariant:
+  // what the button shows (stamp, absent = none) equals the recompute with
+  // `effectiveSeparatedOf` — the invoiced floor counts as separated, the same
+  // `max` the modal renders. Absent stamps are held to the same bar: a
+  // recompute of partial/full over a missing stamp is the button contradicting
+  // the modal, which the backfill exists to close.
+  let stampMismatches = 0;
+  for (const o of open) {
+    const data = await loadSeparationData(pool, o.id);
+    if (!data) continue;
+    const computed = deriveSeparationStatus(
+      separationStatusLinesOf(data.lines).map((l) => ({
+        quantity: l.quantity,
+        fulfilled: l.fulfilled,
+        separated: effectiveSeparatedOf(l),
+      })),
+      data.legacySeparatedFlag
+    );
+    const raw = (o.metadata ?? {}).separation_status;
+    const shown = raw === "partial" || raw === "full" ? raw : "none";
+    if (shown !== computed) {
+      stampMismatches++;
+      console.log(
+        `  ❌ S${o.display_id}: stamped=${raw ?? "(absent)"}, recomputed=${computed}`
+      );
+    }
+  }
+  if (stampMismatches) failures++;
+  console.log(
+    `[4] stamp↔recompute parity over ${open.length} open orders: ${
+      stampMismatches === 0 ? "OK" : `${stampMismatches} mismatch(es)`
     }`
   );
 

@@ -33,7 +33,10 @@
 import type { Pool } from "pg";
 
 import { loadSeparationData } from "../../api/admin/orders/[id]/_lib/separation-data";
-import { separationStatusLinesOf } from "../../api/admin/orders/_lib/separation-caps";
+import {
+  effectiveSeparatedOf,
+  separationStatusLinesOf,
+} from "../../api/admin/orders/_lib/separation-caps";
 import { deriveSeparationStatus } from "../../api/admin/orders/_lib/separation-status";
 
 /** Returns the order_line_item ids whose separation this call zeroed. */
@@ -101,7 +104,10 @@ export async function clearDeliveredSeparations(
         separationStatusLinesOf(data.lines).map((l) => ({
           quantity: l.quantity,
           fulfilled: l.fulfilled,
-          separated: l.separated,
+          // Piso facturado incluido — el mismo valor que muestra el modal y
+          // que estampa el Save; el crudo dejaba `partial` en órdenes cuyas
+          // unidades restantes estaban facturadas sin fila física (3021).
+          separated: effectiveSeparatedOf(l),
         })),
         // legacy = false A PROPOSITO. Ese flag existe para ordenes anteriores al
         // tracking por linea, donde `is_separated=true` sin filas se honra como

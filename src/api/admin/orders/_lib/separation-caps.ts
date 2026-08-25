@@ -147,6 +147,23 @@ export function invoicedFloorOf(line: SeparationLineInput): number {
   );
 }
 
+/**
+ * Separated units of the line as every surface must count them: the stored
+ * separation OR the invoiced floor, whichever is higher — the same `max` the
+ * modal renders per row. The floor is a promise (billed, not yet out the
+ * door), so a line covered only by invoices counts as set aside even with no
+ * physical row.
+ *
+ * This is the ONLY value `deriveSeparationStatus` may be fed as `separated`.
+ * Its three callers used to pass the stored value raw, so an order whose
+ * open units were partly covered by invoices alone stamped `partial` while
+ * the modal showed everything set aside and the list badge said full —
+ * S11432/3021 wore all three at once.
+ */
+export function effectiveSeparatedOf(line: SeparationLineInput): number {
+  return Math.max(nz(line.separated), invoicedFloorOf(line));
+}
+
 /** Stock left for this ORDER to separate: what other orders' live separations
  *  have not already claimed. */
 function orderPool(inv: InventorySnapshot): number {

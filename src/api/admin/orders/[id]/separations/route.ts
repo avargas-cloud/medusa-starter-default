@@ -33,6 +33,7 @@ import {
   type KnexRawConnection,
 } from "../../../../../lib/pos/order-activity";
 import {
+  effectiveSeparatedOf,
   separationStatusLinesOf,
   validateSeparationRequest,
 } from "../../_lib/separation-caps";
@@ -123,12 +124,17 @@ export async function POST(
   // Merge requested over stored to derive the resulting order-level status.
   // Las líneas sin inventario quedan AFUERA: aportarían pendiente que nadie
   // puede apartar, y una orden con una instalación no llegaría nunca a `full`.
+  // `separated` va por `effectiveSeparatedOf` (piso facturado incluido) — el
+  // valor crudo estampaba `partial` en órdenes cubiertas en parte sólo por
+  // invoices, contradiciendo al modal y al badge de la lista (S11432/3021).
+  // Para las líneas del request el valor tipeado ya pasó la validación del
+  // piso (`below_invoiced_floor` rechaza arriba), así que se respeta tal cual.
   const mergedLines = separationStatusLinesOf(data.lines).map((l) => ({
     quantity: l.quantity,
     fulfilled: l.fulfilled,
     separated: requested.has(l.lineId)
       ? (requested.get(l.lineId) as number)
-      : l.separated,
+      : effectiveSeparatedOf(l),
   }));
   const separation_status = deriveSeparationStatus(
     mergedLines,

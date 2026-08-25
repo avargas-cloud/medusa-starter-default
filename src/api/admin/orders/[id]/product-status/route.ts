@@ -21,6 +21,7 @@ import { loadPosForOrder } from "../../../purchase-orders/for-order/_lib/po-for-
 import {
   computeSeparationCaps,
   isSeparableLine,
+  effectiveSeparatedOf,
   separationStatusLinesOf,
 } from "../../_lib/separation-caps";
 import { deriveSeparationStatus } from "../../_lib/separation-status";
@@ -55,7 +56,9 @@ export async function GET(
     separationStatusLinesOf(data.lines).map((l) => ({
       quantity: l.quantity,
       fulfilled: l.fulfilled,
-      separated: l.separated,
+      // Piso facturado incluido — mismo valor que el Save y la entrega
+      // estampan; el crudo hacía decir `partial` acá con el modal en full.
+      separated: effectiveSeparatedOf(l),
     })),
     data.legacySeparatedFlag
   );
