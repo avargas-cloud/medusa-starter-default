@@ -24,6 +24,9 @@ const LL_CATEGORIES = [
     { key: "led_neon_accessory", label: "LED Neon Accessories" },
     { key: "bare_wire_connector", label: "Bare Wire Connectors" },
     { key: "cable", label: "Cables" },
+    // Línea vieja: pool de reemplazos de BOM. Sin sistema (no participa del
+    // designer) — por eso addProduct la taggea con systems [].
+    { key: "easyled_legacy", label: "EASYLED Legacy" },
 ] as const;
 
 type LlCategoryKey = (typeof LL_CATEGORIES)[number]["key"];
@@ -121,7 +124,9 @@ const LinearLightingAdminPage = () => {
     const addProduct = async (p: LlProductRow) => {
         setSearchQuery("");
         setSearchResults([]);
-        await saveTag(p.id, activeTab, ["easyled", "essential"]);
+        // Legacy no pertenece a ningún sistema del designer: es el pool de
+        // reemplazos de BOM. Con systems [] jamás aparece en los pickers.
+        await saveTag(p.id, activeTab, activeTab === "easyled_legacy" ? [] : ["easyled", "essential"]);
         toast.success(`Added to ${categoryLabel}`);
     };
 
@@ -253,31 +258,37 @@ const LinearLightingAdminPage = () => {
                                     <Text size="xsmall" className="text-ui-fg-muted font-mono truncate">
                                         {p.variants.map((v) => v.sku).filter(Boolean).join(" · ") || "no SKU"}
                                     </Text>
-                                    {systems.length === 0 && (
+                                    {systems.length === 0 && activeTab !== "easyled_legacy" && (
                                         <Badge size="2xsmall" color="grey" className="mt-1 self-start">
                                             no system — inactive
                                         </Badge>
                                     )}
                                 </div>
                                 <div className="flex gap-2 shrink-0 items-center">
-                                    <Button
-                                        size="small"
-                                        variant="secondary"
-                                        className={systems.includes("easyled") ? SYSTEM_TOGGLE_ACTIVE_CLASS : undefined}
-                                        disabled={saving === p.id}
-                                        onClick={() => toggleSystem(p, "easyled")}
-                                    >
-                                        EASYLED
-                                    </Button>
-                                    <Button
-                                        size="small"
-                                        variant="secondary"
-                                        className={systems.includes("essential") ? SYSTEM_TOGGLE_ACTIVE_CLASS : undefined}
-                                        disabled={saving === p.id}
-                                        onClick={() => toggleSystem(p, "essential")}
-                                    >
-                                        Essential
-                                    </Button>
+                                    {/* Legacy no tiene sistema: es el pool de reemplazos de BOM,
+                                        y un toggle acá sólo fabricaría estados sin significado. */}
+                                    {activeTab !== "easyled_legacy" && (
+                                        <>
+                                            <Button
+                                                size="small"
+                                                variant="secondary"
+                                                className={systems.includes("easyled") ? SYSTEM_TOGGLE_ACTIVE_CLASS : undefined}
+                                                disabled={saving === p.id}
+                                                onClick={() => toggleSystem(p, "easyled")}
+                                            >
+                                                EASYLED
+                                            </Button>
+                                            <Button
+                                                size="small"
+                                                variant="secondary"
+                                                className={systems.includes("essential") ? SYSTEM_TOGGLE_ACTIVE_CLASS : undefined}
+                                                disabled={saving === p.id}
+                                                onClick={() => toggleSystem(p, "essential")}
+                                            >
+                                                Essential
+                                            </Button>
+                                        </>
+                                    )}
                                     <Button size="small" variant="danger" onClick={() => removeProduct(p)}>
                                         Remove
                                     </Button>
