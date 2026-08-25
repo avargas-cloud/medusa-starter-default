@@ -94,17 +94,21 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
       [CHINA_LOCATION_ID]
     ),
     // Transfers shipped OUT of China (−qty), one row per transfer × variant.
+    // po_number: the PO the transfer was cut from (TR REF column of the sheet).
     pg.raw(
       `SELECT it.number AS transfer_number, it.shipped_at,
+              po.number AS po_number,
               itl.product_variant_id AS variant_id, MIN(itl.sku) AS sku,
               SUM(itl.qty)::int AS qty
          FROM inventory_transfer_line itl
          JOIN inventory_transfer it ON it.id = itl.transfer_id
+         LEFT JOIN purchase_order po
+           ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
         WHERE itl.deleted_at IS NULL AND it.deleted_at IS NULL
           AND it.origin_country = 'CN' AND it.voided_at IS NULL
           AND it.shipped_at IS NOT NULL
           AND itl.sku NOT IN ${EXCLUDED_SKUS}
-        GROUP BY it.id, it.number, it.shipped_at, itl.product_variant_id
+        GROUP BY it.id, it.number, it.shipped_at, po.number, itl.product_variant_id
         ORDER BY it.shipped_at ASC, it.number ASC`,
       []
     ),
@@ -163,6 +167,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   }));
   const transfers = (trRes.rows as Record<string, unknown>[]).map((r) => ({
     transfer_number: r.transfer_number != null ? String(r.transfer_number) : null,
+    po_number: r.po_number != null ? String(r.po_number) : null,
     shipped_at: r.shipped_at,
     variant_id: String(r.variant_id ?? ""),
     sku: String(r.sku ?? ""),
