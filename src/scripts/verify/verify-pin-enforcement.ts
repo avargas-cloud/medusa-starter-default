@@ -310,6 +310,12 @@ const MUST_GATE_ROUTES: {
     rel: "api/admin/purchase-orders/[id]/factory-order-mirror/route.ts",
     what: "crea o sincroniza el Factory Order espejo de un PO",
   },
+  {
+    rel: "api/admin/reports/sales/revenue-baseline/route.ts",
+    what:
+      "escribe el baseline manual que se SUMA al gráfico anual de ventas — un " +
+      "número tipeado a mano que después se lee como si fuera facturación",
+  },
 ];
 for (const { rel, what } of MUST_GATE_ROUTES) {
   const p = path.join(BACKEND_SRC, rel);
