@@ -476,10 +476,28 @@ export async function pollSubmittedRows(
           msgs?.CreditMemoModRs?.CreditMemoRet?.CreditMemoLineRet ??
           null;
 
-        // Cache EditSequence (+ TxnLineIDs when available) so next mod can skip the GET round-trip
+        // Cache EditSequence (+ TxnLineIDs when available) so next mod can skip the GET round-trip.
+        //
+        // The key is the DOCUMENT, never the step. This wrote `row.step` raw, so
+        // a `sales_order_mod` confirmation stored its fresh line map under the
+        // entity type "sales_order_mod" while every reader
+        // (getSalesOrderDetailsFromQb, getEstimateDetailsFromQb) asks for
+        // "sales_order"/"estimate" — the base row kept the PRE-mod EditSequence
+        // and TxnLineIDs forever, and no reader ever saw the orphan.
+        //
+        // Cost: order 3231 (S11614). A sales_order_mod deleted the shipping line
+        // from SO 6492; the invoice ADD then read the stale "sales_order" entry,
+        // stamped LinkToTxnLineID of the DELETED line, and QuickBooks answered
+        // 3210 on every retry for 33 h — the cache hit meant it never re-queried
+        // QB, so the failure could not self-heal. The failure path already
+        // resolved this correctly (invalidateEditSequenceCache below uses
+        // stepToCacheEntityType); only the success path disagreed.
         if (editSeq && txnId) {
           await cacheEditSequence(
-            row.step,
+            stepToCacheEntityType(
+              row.step as string,
+              (row.reference_type as string | null) ?? null
+            ),
             txnId,
             editSeq,
             lineIds ?? undefined

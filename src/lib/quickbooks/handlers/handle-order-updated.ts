@@ -2,7 +2,9 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { getDbPool } from "../../../api/utils/db-pool";
 import { updateSalesOrderInQb } from "../client/sales-orders";
-import { buildQbItems, resolveProductTaxableMap, resolveLineTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
+import { resolveProductTaxableMap, resolveLineTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
+import { buildSalesOrderModQbItems } from "../build-sales-order-mod-items";
+import { getQbConfig } from "../qb-config";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { getSoTxnId, getSoRef } from "../qb-metadata-types";
@@ -199,12 +201,18 @@ export async function handleOrderUpdated(
       pgConn,
       typedOrder.items || []
     );
-    const qbItems = buildQbItems(
-      typedOrder.items || [],
-      typedOrder.metadata,
+    // A MOD is a full snapshot: a line this payload omits is DELETED from the
+    // Sales Order. buildSalesOrderModQbItems adds the freight line the CREATE
+    // path already emits — see its doc comment for what stays out and why.
+    const qbConfig = await getQbConfig();
+    const qbItems = buildSalesOrderModQbItems({
+      items: typedOrder.items || [],
+      metadata: typedOrder.metadata,
+      shippingMethods: (fullOrder as any).shipping_methods || [],
+      shippingItemId: qbConfig.shippingItemId,
       productTaxableMap,
-      lineTaxableMap
-    );
+      lineTaxableMap,
+    });
     const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep);
 
     // Cases 2-4 (2026-08-06): a customer change on a pos-order must reach the
