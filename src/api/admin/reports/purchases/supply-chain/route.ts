@@ -300,7 +300,7 @@ const EFFECTIVE_AGENT_UNIT_CENTS = `COALESCE(
 // split by whether the vendor is the China purchasing agent (Veetech). Local
 // vendor lines use the PO's own total_cents (already landed — domestic, no
 // freight/tariff); agent lines use the blended real/estimated landed value.
-async function fetchPoSpend(pg: any, from: string, to: string) {
+export async function fetchPoSpend(pg: any, from: string, to: string) {
   const result = await pg.raw(
     `SELECT
        COALESCE(SUM(CASE WHEN NOT COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
@@ -334,23 +334,39 @@ async function fetchPoSpend(pg: any, from: string, to: string) {
 // pre-landed at factory cost throughout this route. Scoped identically to the
 // fo_receipts CTE of fetchChinaInventoryValueAtDate, so the arrow equals the
 // movement that actually hit China inventory.
-async function fetchFactoryOrderReceived(pg: any, from: string, to: string): Promise<number> {
+// The cohort leg (same purpose as fetchPeriodReceivedSplit's) needs the FO
+// header for its placed date, which this query did not previously join at all.
+export async function fetchFactoryOrderReceived(
+  pg: any,
+  from: string,
+  to: string
+): Promise<{ cents: number; cohortCents: number }> {
   const result = await pg.raw(
-    `SELECT COALESCE(ROUND(SUM(forl.qty_received_now * ${FACTORY_COST} * 100)), 0)::bigint AS cents
-     FROM factory_order_receipt_line forl
-     JOIN factory_order_receipt fore ON fore.id = forl.factory_order_receipt_id
-     LEFT JOIN product_variant pv ON pv.id = forl.product_variant_id AND pv.deleted_at IS NULL
-     WHERE forl.deleted_at IS NULL AND fore.deleted_at IS NULL AND fore.status = 'applied'
-       AND fore.voided_at IS NULL AND fore.stock_location_id = ?
-       AND fore.received_at >= ? AND fore.received_at < ?`,
-    [CHINA_SLOC, from, to]
+    `SELECT
+       COALESCE(ROUND(SUM(value_cents)), 0)::bigint AS cents,
+       COALESCE(ROUND(SUM(CASE WHEN in_cohort THEN value_cents ELSE 0 END)), 0)::bigint AS cohort_cents
+     FROM (
+       SELECT
+         (COALESCE(fo.ordered_at, fo.submitted_at) >= ?
+          AND COALESCE(fo.ordered_at, fo.submitted_at) < ?) AS in_cohort,
+         forl.qty_received_now * ${FACTORY_COST} * 100 AS value_cents
+       FROM factory_order_receipt_line forl
+       JOIN factory_order_receipt fore ON fore.id = forl.factory_order_receipt_id
+       JOIN factory_order fo ON fo.id = fore.factory_order_id AND fo.deleted_at IS NULL
+       LEFT JOIN product_variant pv ON pv.id = forl.product_variant_id AND pv.deleted_at IS NULL
+       WHERE forl.deleted_at IS NULL AND fore.deleted_at IS NULL AND fore.status = 'applied'
+         AND fore.voided_at IS NULL AND fore.stock_location_id = ?
+         AND fore.received_at >= ? AND fore.received_at < ?
+     ) t`,
+    [from, to, CHINA_SLOC, from, to]
   )
-  return Number(result.rows[0]?.cents ?? 0)
+  const r = result.rows[0]
+  return { cents: Number(r?.cents ?? 0), cohortCents: Number(r?.cohort_cents ?? 0) }
 }
 
 // Factory orders actually PLACED in [from, to) — draft excluded, same reasoning
 // as purchase orders — cost basis, mirrors purchase orders.
-async function fetchFactoryOrderSpend(pg: any, from: string, to: string): Promise<number> {
+export async function fetchFactoryOrderSpend(pg: any, from: string, to: string): Promise<number> {
   const result = await pg.raw(
     `SELECT COALESCE(SUM(fo.total_cents), 0)::bigint AS cents
      FROM factory_order fo
@@ -391,30 +407,50 @@ async function fetchFactoryOrderSpend(pg: any, from: string, to: string): Promis
 // purchase_order_line join) so the arrow equals the inventory movement to the
 // cent — an inner join on a soft-deleted PO line used to silently drop stock
 // that had physically arrived.
-async function fetchPeriodReceivedSplit(pg: any, from: string, to: string) {
+// The `*_cohort_cents` legs answer the question the three stacked numbers kept
+// provoking (user, 2026-08-27: "casi $28500 creados, casi $28000 recibidos… y
+// aun asi salen $9191.23 in transit — no cuadra"): how much of what ARRIVED
+// this period belongs to the orders PLACED this period. Received mixes
+// cohorts by design — August 2026 landed $8,685.49 of merchandise ordered in
+// July — so `created − received` is a subtraction across two different sets of
+// POs and can never equal In Transit. Scoped to the cohort, the identity does
+// close: $19,289.58 received + $9,191.23 still in transit = $28,480.81 created,
+// to the cent, for the China lane that month.
+export async function fetchPeriodReceivedSplit(pg: any, from: string, to: string) {
   const result = await pg.raw(
     `SELECT
-       COALESCE(ROUND(SUM(CASE WHEN NOT COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
-                         THEN porl.qty_received_now * ${LANDED_COST} * 100
-                         ELSE 0 END)), 0)::bigint AS vendor_received_cents,
-       COALESCE(ROUND(SUM(CASE WHEN COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
-                         THEN porl.qty_received_now * ${LANDED_COST} * 100
-                         ELSE 0 END)), 0)::bigint AS agent_received_cents
-     FROM purchase_order_receipt por
-     JOIN purchase_order_receipt_line porl ON porl.purchase_order_receipt_id = por.id
-       AND porl.deleted_at IS NULL
-     JOIN purchase_order po ON po.id = por.purchase_order_id AND po.deleted_at IS NULL
-     LEFT JOIN qb_vendor v ON v.id = po.vendor_id
-     LEFT JOIN product_variant pv ON pv.id = porl.product_variant_id AND pv.deleted_at IS NULL
-     WHERE por.voided_at IS NULL AND por.deleted_at IS NULL
-       AND por.stock_location_id = ?
-       AND por.received_at >= ? AND por.received_at < ?`,
-    [USA_SLOC, from, to]
+       COALESCE(ROUND(SUM(CASE WHEN NOT is_agent THEN value_cents ELSE 0 END)), 0)::bigint
+         AS vendor_received_cents,
+       COALESCE(ROUND(SUM(CASE WHEN is_agent     THEN value_cents ELSE 0 END)), 0)::bigint
+         AS agent_received_cents,
+       COALESCE(ROUND(SUM(CASE WHEN NOT is_agent AND in_cohort THEN value_cents ELSE 0 END)), 0)::bigint
+         AS vendor_received_cohort_cents,
+       COALESCE(ROUND(SUM(CASE WHEN is_agent     AND in_cohort THEN value_cents ELSE 0 END)), 0)::bigint
+         AS agent_received_cohort_cents
+     FROM (
+       SELECT
+         COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false) AS is_agent,
+         (COALESCE(po.ordered_at, po.created_at) >= ?
+          AND COALESCE(po.ordered_at, po.created_at) < ?) AS in_cohort,
+         porl.qty_received_now * ${LANDED_COST} * 100 AS value_cents
+       FROM purchase_order_receipt por
+       JOIN purchase_order_receipt_line porl ON porl.purchase_order_receipt_id = por.id
+         AND porl.deleted_at IS NULL
+       JOIN purchase_order po ON po.id = por.purchase_order_id AND po.deleted_at IS NULL
+       LEFT JOIN qb_vendor v ON v.id = po.vendor_id
+       LEFT JOIN product_variant pv ON pv.id = porl.product_variant_id AND pv.deleted_at IS NULL
+       WHERE por.voided_at IS NULL AND por.deleted_at IS NULL
+         AND por.stock_location_id = ?
+         AND por.received_at >= ? AND por.received_at < ?
+     ) t`,
+    [from, to, USA_SLOC, from, to]
   )
   const r = result.rows[0]
   return {
     vendorReceivedCents: Number(r.vendor_received_cents),
     agentReceivedCents:  Number(r.agent_received_cents),
+    vendorReceivedCohortCents: Number(r.vendor_received_cohort_cents),
+    agentReceivedCohortCents:  Number(r.agent_received_cohort_cents),
   }
 }
 
@@ -626,14 +662,30 @@ async function fetchMiamiPeriodLedger(
 // Purchase orders still open (submitted or partially received) — valued at
 // only the REMAINING un-received qty per line (not the full PO), so a PO
 // that's 476/481 received shows the ~$5 still owed, not its full $300 total.
-async function fetchCurrentPoOutstanding(pg: any) {
+// `cohort` is optional and NEVER narrows the headline number — In Transit stays
+// the period-independent live figure it has always been (see
+// fetchPeriodReceivedSplit). It only adds the sub-total of open POs that were
+// PLACED inside [from, to), which is the half of the arrow's arithmetic that was
+// invisible: in August 2026 the whole $9,191.23 happens to be August-placed, but
+// a PO dragged over from June is still in transit in August and would leave even
+// the cohort-scoped identity short — the sub-line is what makes that visible
+// instead of leaving the reader to subtract two numbers that never matched.
+export async function fetchCurrentPoOutstanding(pg: any, cohort?: { from: string; to: string }) {
   const result = await pg.raw(
     `SELECT
        COALESCE(SUM(CASE WHEN NOT is_agent THEN remaining_cents ELSE 0 END), 0)::bigint AS local_vendor_cents,
-       COALESCE(SUM(CASE WHEN is_agent     THEN remaining_cents ELSE 0 END), 0)::bigint AS china_agent_cents
+       COALESCE(SUM(CASE WHEN is_agent     THEN remaining_cents ELSE 0 END), 0)::bigint AS china_agent_cents,
+       COALESCE(SUM(CASE WHEN NOT is_agent AND in_cohort THEN remaining_cents ELSE 0 END), 0)::bigint
+         AS local_vendor_cohort_cents,
+       COALESCE(SUM(CASE WHEN is_agent     AND in_cohort THEN remaining_cents ELSE 0 END), 0)::bigint
+         AS china_agent_cohort_cents
      FROM (
        SELECT
          COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false) AS is_agent,
+         ${cohort
+           ? `(COALESCE(po.ordered_at, po.created_at) >= ?
+              AND COALESCE(po.ordered_at, po.created_at) < ?)`
+           : `false`} AS in_cohort,
          CASE WHEN COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
            THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) * ${EFFECTIVE_AGENT_UNIT_CENTS}
            ELSE GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) * pol.unit_cost_cents
@@ -644,26 +696,44 @@ async function fetchCurrentPoOutstanding(pg: any) {
        LEFT JOIN product_variant pv ON pv.id = pol.product_variant_id AND pv.deleted_at IS NULL
        ${BILLED_JOIN}
        WHERE po.deleted_at IS NULL AND po.status IN ('submitted','partially_received')
-     ) t`
+     ) t`,
+    cohort ? [cohort.from, cohort.to] : []
   )
   const r = result.rows[0]
   return {
     localVendorCents: Number(r.local_vendor_cents),
     chinaAgentCents:  Number(r.china_agent_cents),
+    localVendorCohortCents: Number(r.local_vendor_cohort_cents),
+    chinaAgentCohortCents:  Number(r.china_agent_cohort_cents),
   }
 }
 
-// Factory orders still open — same remaining-qty logic as POs above.
-async function fetchCurrentFoOutstanding(pg: any): Promise<number> {
+// Factory orders still open — same remaining-qty logic as POs above, and the
+// same optional cohort leg (FOs placed inside the period).
+export async function fetchCurrentFoOutstanding(
+  pg: any,
+  cohort?: { from: string; to: string }
+): Promise<{ cents: number; cohortCents: number }> {
   const result = await pg.raw(
-    `SELECT COALESCE(SUM(
-       GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) * fol.unit_cost_cents
-     ), 0)::bigint AS cents
-     FROM factory_order fo
-     JOIN factory_order_line fol ON fol.factory_order_id = fo.id AND fol.deleted_at IS NULL
-     WHERE fo.deleted_at IS NULL AND fo.status IN ('submitted','partially_received')`
+    `SELECT
+       COALESCE(SUM(remaining_cents), 0)::bigint AS cents,
+       COALESCE(SUM(CASE WHEN in_cohort THEN remaining_cents ELSE 0 END), 0)::bigint AS cohort_cents
+     FROM (
+       SELECT
+         ${cohort
+           ? `(COALESCE(fo.ordered_at, fo.submitted_at) >= ?
+              AND COALESCE(fo.ordered_at, fo.submitted_at) < ?)`
+           : `false`} AS in_cohort,
+         GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) * fol.unit_cost_cents
+           AS remaining_cents
+       FROM factory_order fo
+       JOIN factory_order_line fol ON fol.factory_order_id = fo.id AND fol.deleted_at IS NULL
+       WHERE fo.deleted_at IS NULL AND fo.status IN ('submitted','partially_received')
+     ) t`,
+    cohort ? [cohort.from, cohort.to] : []
   )
-  return Number(result.rows[0]?.cents ?? 0)
+  const r = result.rows[0]
+  return { cents: Number(r?.cents ?? 0), cohortCents: Number(r?.cohort_cents ?? 0) }
 }
 
 // Net sales revenue (canonical policy — see reports/_lib/sales-revenue.ts) for
@@ -764,11 +834,21 @@ interface PoAmounts {
   // underlying PO was placed.
   localVendorReceivedCents?: number
   chinaAgentReceivedCents?: number
+  // The COHORT slice of the two above: received in the period AND placed in the
+  // period. Without it, Created and Received look like two ends of one
+  // subtraction when they describe different sets of POs entirely.
+  localVendorReceivedCohortCents?: number
+  chinaAgentReceivedCohortCents?: number
   // "current" mode always, "period" mode only when in-progress: live
   // outstanding/in-transit $ — same number either way (see
   // fetchPeriodReceivedSplit's comment for why this is never period-scoped).
   localVendorInTransitCents?: number
   chinaAgentInTransitCents?: number
+  // "period" mode, in-progress only: the slice of that live figure whose POs
+  // were placed inside the period. Equal to the full figure when nothing older
+  // is still open — which is exactly the fact worth showing.
+  localVendorInTransitCohortCents?: number
+  chinaAgentInTransitCohortCents?: number
   // "period" mode only: what the purchasing agent BILLED in the period, by the
   // bill's document date (see fetchAgentCommission — deliberately NOT the
   // receipt date the Received figures above use). China lane only; local
@@ -788,21 +868,34 @@ async function fetchFactoryOrderAmounts(
   isInProgress: boolean,
   from: string,
   to: string
-): Promise<{ amount: number; created?: number; received?: number; in_transit?: number }> {
+): Promise<{
+  amount: number
+  created?: number
+  received?: number
+  received_this_period?: number
+  in_transit?: number
+  in_transit_this_period?: number
+}> {
   if (mode === 'current') {
     const outstanding = await fetchCurrentFoOutstanding(pg)
-    return { amount: outstanding / 100, in_transit: outstanding / 100 }
+    return { amount: outstanding.cents / 100, in_transit: outstanding.cents / 100 }
   }
-  const [createdCents, receivedCents, outstandingCents] = await Promise.all([
+  const [createdCents, received, outstanding] = await Promise.all([
     fetchFactoryOrderSpend(pg, from, to),
     fetchFactoryOrderReceived(pg, from, to),
-    isInProgress ? fetchCurrentFoOutstanding(pg) : Promise.resolve(null),
+    isInProgress ? fetchCurrentFoOutstanding(pg, { from, to }) : Promise.resolve(null),
   ])
   return {
     amount: createdCents / 100,
     created: createdCents / 100,
-    received: receivedCents / 100,
-    ...(outstandingCents !== null ? { in_transit: outstandingCents / 100 } : {}),
+    received: received.cents / 100,
+    received_this_period: received.cohortCents / 100,
+    ...(outstanding !== null
+      ? {
+          in_transit: outstanding.cents / 100,
+          in_transit_this_period: outstanding.cohortCents / 100,
+        }
+      : {}),
   }
 }
 
@@ -831,7 +924,7 @@ async function fetchPoAmounts(
   const [createdR, receivedR, outstandingR, commissionR] = await Promise.all([
     fetchPoSpend(pg, from, to),
     fetchPeriodReceivedSplit(pg, from, to),
-    isInProgress ? fetchCurrentPoOutstanding(pg) : Promise.resolve(null),
+    isInProgress ? fetchCurrentPoOutstanding(pg, { from, to }) : Promise.resolve(null),
     fetchAgentCommission(pg, from, to),
   ])
   return {
@@ -841,12 +934,16 @@ async function fetchPoAmounts(
     chinaAgentCreatedCents: createdR.chinaAgentCents,
     localVendorReceivedCents: receivedR.vendorReceivedCents,
     chinaAgentReceivedCents: receivedR.agentReceivedCents,
+    localVendorReceivedCohortCents: receivedR.vendorReceivedCohortCents,
+    chinaAgentReceivedCohortCents: receivedR.agentReceivedCohortCents,
     agentCommissionCents: commissionR.cents,
     agentCommissionOrders: commissionR.orders,
     ...(outstandingR
       ? {
           localVendorInTransitCents: outstandingR.localVendorCents,
           chinaAgentInTransitCents: outstandingR.chinaAgentCents,
+          localVendorInTransitCohortCents: outstandingR.localVendorCohortCents,
+          chinaAgentInTransitCohortCents: outstandingR.chinaAgentCohortCents,
         }
       : {}),
   }
@@ -1051,7 +1148,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         amount: poAmounts.localVendorCents / 100,
         ...(poAmounts.localVendorCreatedCents !== undefined ? { created: poAmounts.localVendorCreatedCents / 100 } : {}),
         ...(poAmounts.localVendorReceivedCents !== undefined ? { received: poAmounts.localVendorReceivedCents / 100 } : {}),
+        ...(poAmounts.localVendorReceivedCohortCents !== undefined ? { received_this_period: poAmounts.localVendorReceivedCohortCents / 100 } : {}),
         ...(poAmounts.localVendorInTransitCents !== undefined ? { in_transit: poAmounts.localVendorInTransitCents / 100 } : {}),
+        ...(poAmounts.localVendorInTransitCohortCents !== undefined ? { in_transit_this_period: poAmounts.localVendorInTransitCohortCents / 100 } : {}),
       },
       // Factories → China arrow. Same shape as the two PO arrows: Created is
       // what was placed with the factories in the period, Received is what
@@ -1066,7 +1165,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         amount: poAmounts.chinaAgentCents / 100,
         ...(poAmounts.chinaAgentCreatedCents !== undefined ? { created: poAmounts.chinaAgentCreatedCents / 100 } : {}),
         ...(poAmounts.chinaAgentReceivedCents !== undefined ? { received: poAmounts.chinaAgentReceivedCents / 100 } : {}),
+        // The cohort slice — see fetchPeriodReceivedSplit for why Created minus
+        // Received never equalled In Transit without it.
+        ...(poAmounts.chinaAgentReceivedCohortCents !== undefined ? { received_this_period: poAmounts.chinaAgentReceivedCohortCents / 100 } : {}),
         ...(poAmounts.chinaAgentInTransitCents !== undefined ? { in_transit: poAmounts.chinaAgentInTransitCents / 100 } : {}),
+        ...(poAmounts.chinaAgentInTransitCohortCents !== undefined ? { in_transit_this_period: poAmounts.chinaAgentInTransitCohortCents / 100 } : {}),
         // What the agent invoiced in the period, by BILL DOCUMENT DATE — a
         // different event from `received` above, on purpose (fetchAgentCommission).
         // Absent in "current" mode, which has no period to bill against.
