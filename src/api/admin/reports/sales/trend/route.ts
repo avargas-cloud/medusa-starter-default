@@ -1,6 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
-import { autoBucket, bucketTrunc } from "../../_lib/auto-bucket"
+import { autoBucket, bucketLabel, bucketTrunc, parseBucket } from "../../_lib/auto-bucket"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import {
   NET_ITEM_REVENUE,
@@ -12,14 +12,16 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
   if (!range) return res.status(400).json({ error: "from and to are required" })
 
-  const bucket = autoBucket(range)
-  const trunc = bucketTrunc(bucket, "i.issued_at AT TIME ZONE 'America/New_York'")
+  const bucket = autoBucket(range, parseBucket((req.query as { bucket?: string }).bucket))
+  const etIssuedAt = "i.issued_at AT TIME ZONE 'America/New_York'"
+  const trunc = bucketTrunc(bucket, etIssuedAt)
+  const label = bucketLabel(bucket, etIssuedAt)
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
     const result = await pg.raw(
       `SELECT
-         ${trunc}                              AS bucket,
+         ${label}                              AS bucket,
          SUM(${NET_ITEM_REVENUE})::bigint     AS revenue,
          SUM(${COST_DOLLARS})::bigint           AS cogs
        FROM pos_invoice i
@@ -28,8 +30,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        WHERE i.deleted_at IS NULL
          AND ${SALES_ACTIVE_STATUSES_SQL}
          AND ${SALES_DATE_FILTER_SQL}
-       GROUP BY 1
-       ORDER BY 1`,
+       GROUP BY ${trunc}
+       ORDER BY ${trunc}`,
       [range.from, range.to]
     )
 
@@ -39,9 +41,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       const profit  = revenue - cogs
       const margin = revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0
       return {
-        label: bucket === "day"
-          ? String(r.bucket).slice(0, 10)
-          : String(r.bucket).slice(0, 7),
+        label: String(r.bucket),
         revenue,
         profit,
         margin,
