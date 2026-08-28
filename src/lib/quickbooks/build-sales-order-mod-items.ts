@@ -1,5 +1,6 @@
 import {
   buildQbItems,
+  buildQbOrderDiscountLines,
   buildShippingQbItem,
   type MedusaOrderForQb,
 } from "./order-flow-core";
@@ -20,19 +21,28 @@ import type { QbOrderItem } from "./client/types";
  * said $63.46 — and the invoice that followed died with QB Error 3210 pointing
  * at the TxnLineID that edit had just removed.
  *
- * DELIBERATELY NOT INCLUDED — the order-level Subtotal / Discount pair
- * (`buildQbOrderDiscountLines`). Those lines are addressed by
- * `ItemRef.FullName` and carry NO productId, so updateSalesOrderInQb cannot
- * match them against an existing TxnLineID: every MOD would append a fresh
- * pair and the Sales Order would grow a duplicate discount each time an order
- * is edited. A MOD that strips them (today's behavior) is wrong but bounded; a
- * MOD that duplicates them corrupts the document. Fixing that needs the same
- * treatment credit memos got — persisting synthetic line ids by FullName
- * (`credit-memo-synthetic-lines.ts`) — and is tracked separately.
+ * The order-level Subtotal / Discount pair (`buildQbOrderDiscountLines`) is
+ * included too, as of 2026-08-28. Stripping it was the same bug as the freight
+ * one and it had already hit four Sales Orders in production (S11557 -$198.61,
+ * S2937 -$295.65, S11543 -$22.46, S11417 -$10.38): QB showed the order at full
+ * price while the POS showed it discounted.
  *
- * Shipping is safe precisely because it does carry a productId (the QB item's
- * ListID), so the mod matches it to its existing TxnLineID and QuickBooks
- * updates the line in place.
+ * The pair is emitted WITHOUT a productId because it is addressed by name — but
+ * it is NOT identity-less: QuickBooks does give those two items a ListID
+ * (Subtotal 80000D54-…, Discount 8000040C-…), so they already appear in the
+ * live line map keyed by ListID. `syntheticOrderLine` marks them so
+ * updateSalesOrderInQb can resolve that ListID off the fetched Sales Order and
+ * reuse the existing TxnLineID, instead of appending a duplicate pair on every
+ * edit. The marker is stripped before the payload reaches the bridge.
+ *
+ * ORDER IS LOAD-BEARING: a QB Subtotal item totals the lines ABOVE it, so the
+ * pair goes after the products and before shipping — exactly where the CREATE
+ * path puts it (handle-order-placed). Shipping after the discount is correct
+ * and intentional: the POS never discounts freight.
+ *
+ * Shipping is safe on its own because it carries a real productId (the QB
+ * item's ListID), so the mod matches it to its TxnLineID and QB updates it in
+ * place.
  */
 export function buildSalesOrderModQbItems(input: {
   items: MedusaOrderForQb["items"];
@@ -46,6 +56,10 @@ export function buildSalesOrderModQbItems(input: {
   // put a type-only edit into a file this change has no business touching.
   productTaxableMap?: Parameters<typeof buildQbItems>[2];
   lineTaxableMap?: Parameters<typeof buildQbItems>[3];
+  /** getEffectiveOrderDiscount(order) — dollars, 0 when there is no discount. */
+  orderDiscountTotal?: number;
+  /** order.subtotal — only used to render the "(N%)" suffix on the desc. */
+  orderSubtotal?: number;
 }): QbOrderItem[] {
   const items = buildQbItems(
     input.items,
@@ -53,6 +67,16 @@ export function buildSalesOrderModQbItems(input: {
     input.productTaxableMap,
     input.lineTaxableMap
   );
+
+  const discountTotal = Number(input.orderDiscountTotal || 0);
+  const subtotal = Number(input.orderSubtotal || 0);
+  const discountLines =
+    discountTotal > 0
+      ? buildQbOrderDiscountLines(
+          discountTotal,
+          subtotal > 0 ? (discountTotal / subtotal) * 100 : null
+        ).map((line) => ({ ...line, syntheticOrderLine: true as const }))
+      : [];
 
   // Money fields from query.graph arrive as string | BigNumber | number —
   // buildShippingQbItem does `Number(method.amount || 0)`, which yields NaN for
@@ -67,5 +91,5 @@ export function buildSalesOrderModQbItems(input: {
     input.shippingItemId
   );
 
-  return shippingItem ? [...items, shippingItem] : items;
+  return [...items, ...discountLines, ...(shippingItem ? [shippingItem] : [])];
 }

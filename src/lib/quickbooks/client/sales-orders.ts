@@ -1,6 +1,7 @@
 import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
 
 import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core";
+import { resolveSoModLineIds } from "../resolve-so-mod-line-ids";
 
 function compareTxnLineIds(a: string, b: string): number {
   const numA = Number(a);
@@ -11,6 +12,7 @@ function compareTxnLineIds(a: string, b: string): number {
   if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
   return String(a).localeCompare(String(b));
 }
+
 import {
   QbCreateSalesOrderPayload,
   QbUpdateSalesOrderPayload,
@@ -181,16 +183,21 @@ export async function updateSalesOrderInQb(
     const editSequence = details.editSequence;
     const qbLinesByProductId = details.linesByProductId || {};
 
-    // Make a mutable copy of the queues so .shift() doesn't mutate the cached object.
-    const txnLineQueue: Record<string, string[]> = Object.fromEntries(
-      Object.entries(qbLinesByProductId).map(([k, v]) => [k, [...v]])
-    );
-
-    const modItems = payload.items
-      .map((item) => {
+    // Line identity (which payload line updates which QB line) lives in a pure
+    // module so its rules — the synthetic pair's ListID resolved by name, and
+    // the Subtotal-ordering gate — can be verified without a bridge round-trip.
+    //
+    // NOTE the resolved ListID is used ONLY to pop the TxnLineID and is
+    // deliberately NOT forwarded as productId: the bridge takes its `Tax`
+    // branch for every line that has one when salesTaxCode is present, which
+    // would mark a Discount line taxable. The pair keeps travelling by name.
+    const modItems = resolveSoModLineIds({
+      items: payload.items,
+      rawLines: details.rawLines || [],
+      linesByProductId: qbLinesByProductId,
+    })
+      .map(({ item, txnLineId }) => {
         const pid = item.productId;
-        // Pop the first available TxnLineID for this productId (supports duplicates).
-        const txnLineId = pid ? txnLineQueue[pid]?.shift() : undefined;
         return {
           ...(txnLineId ? { TxnLineID: txnLineId } : {}),
           ...(pid ? { productId: pid } : {}),

@@ -22,6 +22,14 @@ export interface QbOrderItem {
    * or "-1" to append a new line. Omit for *Add operations.
    */
   TxnLineID?: string;
+  /**
+   * Marks the order-level Subtotal / Discount pair, which is addressed by name
+   * and carries no productId of its own. Consumed and STRIPPED by
+   * updateSalesOrderInQb — it never reaches the bridge — to resolve the pair's
+   * real ListID off the fetched Sales Order and reuse its TxnLineID instead of
+   * appending a duplicate pair on every edit. See build-sales-order-mod-items.
+   */
+  syntheticOrderLine?: boolean;
 }
 
 export interface QbCreateCustomerPayload {

@@ -340,6 +340,18 @@ const STEP_TO_CACHE_ENTITY_TYPE: Record<string, string> = {
   payment_txndate_change: "payment",
   refund_payment_txndate_change: "payment",
   refund_check_mod: "check",
+  // Void/deactivate steps: they DO modify their document (that is what a void
+  // is), so the poller caches the resulting EditSequence — but they have no
+  // FetchSpec, so before this map they fell through to `?? step` and wrote
+  // under their own step name. That entry is unreadable by construction: every
+  // reader asks for the document's type. 114 such orphans had accumulated by
+  // 2026-08-28 (35 void_sales_order, 13 estimate_deactivate, 6 void_estimate),
+  // and while the base row kept a pre-void EditSequence nobody could tell it
+  // was stale. They get no FetchSpec on purpose — auto-healing a voided
+  // document's EditSequence would be re-staging a mod against a dead doc.
+  void_sales_order: "sales_order",
+  void_estimate: "estimate",
+  estimate_deactivate: "estimate",
 };
 
 /**

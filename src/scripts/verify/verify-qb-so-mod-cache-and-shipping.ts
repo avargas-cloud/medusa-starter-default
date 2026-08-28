@@ -39,6 +39,7 @@ import {
   getCachedEditSequence,
 } from "../../lib/quickbooks/pipeline/edit-sequence";
 import { stepToCacheEntityType } from "../../lib/quickbooks/consolidator/refresh-edit-sequence";
+import { resolveSoModLineIds } from "../../lib/quickbooks/resolve-so-mod-line-ids";
 import { buildSalesOrderModQbItems } from "../../lib/quickbooks/build-sales-order-mod-items";
 
 const SYNTH_TXN = `9C9999-${Date.now()}`;
@@ -241,16 +242,24 @@ function section4(): void {
     shippingItemId: SHIPPING_ITEM_ID,
   });
 
-  // These carry no productId, so updateSalesOrderInQb cannot match them to an
-  // existing TxnLineID — every mod would APPEND a fresh pair. Stripping them is
-  // wrong but bounded; duplicating them corrupts the document.
+  // The pair is driven by orderDiscountTotal ALONE. metadata.computed_discount
+  // is passed here on purpose: it must not be enough to conjure a discount that
+  // getEffectiveOrderDiscount never resolved, or a mod would invent one.
   check(
     !built.some((i) => i.productName === "Subtotal"),
-    "no synthetic 'Subtotal' line (it would duplicate on every mod)"
+    "no 'Subtotal' line without orderDiscountTotal (metadata alone must not conjure one)"
   );
   check(
     !built.some((i) => i.productName === "Discount"),
-    "no synthetic 'Discount' line (it would duplicate on every mod)"
+    "no 'Discount' line without orderDiscountTotal"
+  );
+  check(
+    buildSalesOrderModQbItems({
+      items: [line("oli_1", 6, 5.99)] as any,
+      orderDiscountTotal: 0,
+      orderSubtotal: 35.94,
+    }).every((i) => i.productName !== "Discount"),
+    "a zero discount emits no pair"
   );
   check(
     built.every((i) => i.productId || i.productName),
@@ -276,6 +285,170 @@ function section4(): void {
     !src.includes(SHIPPING_ITEM_ID),
     "handle-order-updated does not hardcode the shipping ListID"
   );
+
+  // Callsite check, and it earns its place: getEffectiveOrderDiscount reads the
+  // per-line adjustments FIRST, so if the mod's query.graph stops asking for
+  // them it resolves 0, the pair is never emitted, and §5 keeps passing while
+  // production silently strips discounts again. Behaviour cannot see this —
+  // the field list is data the handler hands to Medusa.
+  check(
+    /"items\.adjustments\.\*"/.test(src),
+    "the mod's query.graph asks for items.adjustments.* (without it the discount resolves to 0)"
+  );
+  check(
+    /orderDiscountTotal:\s*getEffectiveOrderDiscount\(/.test(src),
+    "…and feeds it through getEffectiveOrderDiscount, not a hand-rolled sum"
+  );
+}
+
+// ── §5 · The order-level discount pair: emitted, and matched to its QB line ──
+// The mod used to strip it, which is how four Sales Orders ended up showing
+// full price in QB while the POS showed them discounted (S11557 -$198.61,
+// S2937 -$295.65, S11543 -$22.46, S11417 -$10.38).
+const SUBTOTAL_LIST_ID = "80000D54-1494527930";
+const DISCOUNT_LIST_ID = "8000040C-1377701244";
+
+/** A SalesOrderLineRet as the live query returns it. */
+const qbLine = (txnLineId: string, listId: string, fullName: string) => ({
+  TxnLineID: txnLineId,
+  ItemRef: { ListID: listId, FullName: fullName },
+});
+
+function section5(): void {
+  log("\n§5 — the order-level Subtotal/Discount pair survives a mod");
+
+  const built = buildSalesOrderModQbItems({
+    items: [line("oli_1", 6, 5.99)] as any,
+    shippingMethods: [{ name: "Uber", amount: 25 }],
+    shippingItemId: SHIPPING_ITEM_ID,
+    orderDiscountTotal: 33.2,
+    orderSubtotal: 664,
+  });
+
+  const names = built.map((i) => i.productName);
+  const iProduct = built.findIndex((i) => i.productId === PRODUCT_LIST_ID);
+  const iSubtotal = names.indexOf("Subtotal");
+  const iDiscount = names.indexOf("Discount");
+  const iShipping = built.findIndex((i) => i.productId === SHIPPING_ITEM_ID);
+
+  check(iSubtotal >= 0 && iDiscount >= 0, "the pair is emitted when there is a discount");
+  check(
+    built[iDiscount]?.amount === 33.2,
+    `discount amount is 33.2 (got ${built[iDiscount]?.amount})`
+  );
+  // A QB Subtotal totals the lines ABOVE it. Product → pair → shipping is the
+  // order the CREATE path emits; any other order changes what the doc says.
+  check(
+    iProduct < iSubtotal && iSubtotal < iDiscount && iDiscount < iShipping,
+    `order is product(${iProduct}) < Subtotal(${iSubtotal}) < Discount(${iDiscount}) < shipping(${iShipping})`
+  );
+  check(
+    built[iSubtotal]?.syntheticOrderLine === true &&
+      built[iDiscount]?.syntheticOrderLine === true,
+    "both pair lines are marked syntheticOrderLine"
+  );
+  check(
+    !built[iSubtotal]?.productId && !built[iDiscount]?.productId,
+    "the pair carries NO productId — a Discount with one gets taxed by the bridge"
+  );
+
+  // ── identity: the pair matches its EXISTING QB line, so QB updates in place ──
+  const rawLines = [
+    qbLine("1CCD42-1", PRODUCT_LIST_ID, "SUP-AP-IP-SM1-8S"),
+    qbLine("1CCD43-1", SUBTOTAL_LIST_ID, "Subtotal"),
+    qbLine("1CCD44-1", DISCOUNT_LIST_ID, "Discount"),
+  ];
+  const linesByProductId = {
+    [PRODUCT_LIST_ID]: ["1CCD42-1"],
+    [SUBTOTAL_LIST_ID]: ["1CCD43-1"],
+    [DISCOUNT_LIST_ID]: ["1CCD44-1"],
+  };
+
+  const reused = resolveSoModLineIds({
+    items: built,
+    rawLines,
+    linesByProductId,
+  });
+  check(
+    reused[iSubtotal]?.txnLineId === "1CCD43-1",
+    `Subtotal reuses its TxnLineID (got ${reused[iSubtotal]?.txnLineId})`
+  );
+  check(
+    reused[iDiscount]?.txnLineId === "1CCD44-1",
+    `Discount reuses its TxnLineID (got ${reused[iDiscount]?.txnLineId})`
+  );
+  check(
+    reused[iProduct]?.txnLineId === "1CCD42-1",
+    "the product line still matches its own TxnLineID"
+  );
+
+  // Qualified FullName ("Parent:Subtotal") must still match — QB returns that
+  // shape for a sub-item and the payload only ever carries the leaf.
+  const qualified = resolveSoModLineIds({
+    items: built,
+    rawLines: [
+      qbLine("1CCD42-1", PRODUCT_LIST_ID, "SUP-AP-IP-SM1-8S"),
+      qbLine("1CCD43-1", SUBTOTAL_LIST_ID, "Discounts:Subtotal"),
+      qbLine("1CCD44-1", DISCOUNT_LIST_ID, "Discounts:Discount"),
+    ],
+    linesByProductId,
+  });
+  check(
+    qualified[iSubtotal]?.txnLineId === "1CCD43-1",
+    "a qualified FullName ('Parent:Subtotal') still matches"
+  );
+
+  // ── the ordering gate: a NEW product line must suppress the reuse ──────────
+  const withNewProduct = buildSalesOrderModQbItems({
+    items: [line("oli_1", 6, 5.99), line("oli_2", 1, 10)] as any,
+    shippingMethods: [{ name: "Uber", amount: 25 }],
+    shippingItemId: SHIPPING_ITEM_ID,
+    orderDiscountTotal: 33.2,
+    orderSubtotal: 664,
+  });
+  const gated = resolveSoModLineIds({
+    items: withNewProduct,
+    // Only ONE product line exists in QB, so the second is genuinely new.
+    rawLines,
+    linesByProductId,
+  });
+  const gatedSynthetic = gated.filter((r) => r.synthetic);
+  check(
+    gatedSynthetic.length === 2 && gatedSynthetic.every((r) => !r.txnLineId),
+    "a NEW product line suppresses the pair's reuse (QB must recreate it LAST, below the new product)"
+  );
+  check(
+    gated.filter((r) => !r.synthetic).some((r) => r.txnLineId === "1CCD42-1"),
+    "…while the pre-existing product line keeps its id"
+  );
+
+  // A shipping line that is new must NOT trip the gate: it sits BELOW the
+  // Subtotal by design, so recreating the pair there would be pure churn.
+  const shippingIsNew = resolveSoModLineIds({
+    items: built,
+    rawLines,
+    linesByProductId, // no shipping line in QB at all
+  });
+  check(
+    shippingIsNew[iSubtotal]?.txnLineId === "1CCD43-1",
+    "a NEW shipping line does not suppress the reuse (it belongs below the Subtotal)"
+  );
+}
+
+// ── §6 · Void steps stop writing orphan cache keys ───────────────────────────
+function section6(): void {
+  log("\n§6 — void/deactivate steps resolve to their document's type");
+  for (const [step, want] of [
+    ["void_sales_order", "sales_order"],
+    ["void_estimate", "estimate"],
+    ["estimate_deactivate", "estimate"],
+  ] as const) {
+    const got = stepToCacheEntityType(step, null);
+    check(
+      got === want,
+      `stepToCacheEntityType("${step}") = "${got}" (want "${want}") — 114 orphans had piled up under the step names`
+    );
+  }
 }
 
 async function cleanup(): Promise<void> {
@@ -296,6 +469,8 @@ async function main(): Promise<void> {
     section2();
     section3();
     section4();
+    section5();
+    section6();
   } finally {
     await cleanup();
   }

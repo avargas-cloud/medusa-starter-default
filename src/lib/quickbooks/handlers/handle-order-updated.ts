@@ -2,7 +2,13 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { getDbPool } from "../../../api/utils/db-pool";
 import { updateSalesOrderInQb } from "../client/sales-orders";
-import { resolveProductTaxableMap, resolveLineTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
+import {
+  resolveProductTaxableMap,
+  resolveLineTaxableMap,
+  getEffectiveOrderDiscount,
+  type MedusaOrderForQb,
+} from "../order-flow-core";
+import { getFloat } from "./utils";
 import { buildSalesOrderModQbItems } from "../build-sales-order-mod-items";
 import { getQbConfig } from "../qb-config";
 import { parseSalesRepInitials } from "../parse-sales-rep";
@@ -173,6 +179,10 @@ export async function handleOrderUpdated(
       fields: [
         "*",
         "items.*",
+        // getEffectiveOrderDiscount reads the per-line adjustments FIRST (an
+        // aggregate discount_total cannot express per-line rounding). Without
+        // this field it sees none and the MOD would strip the discount pair.
+        "items.adjustments.*",
         "items.variant.*",
         "items.variant.metadata",
         "customer.*",
@@ -212,6 +222,8 @@ export async function handleOrderUpdated(
       shippingItemId: qbConfig.shippingItemId,
       productTaxableMap,
       lineTaxableMap,
+      orderDiscountTotal: getEffectiveOrderDiscount(fullOrder),
+      orderSubtotal: getFloat((fullOrder as any).subtotal),
     });
     const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep);
 
