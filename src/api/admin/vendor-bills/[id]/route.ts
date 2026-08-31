@@ -39,6 +39,10 @@ import {
   loadSecondaryDispatchFacts,
 } from "../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
 import {
+  decideConfirmReceiptRequirement,
+  loadConfirmReceiptFacts,
+} from "../../../../lib/purchase-orders/po-receipt-completeness";
+import {
   buildAdjustmentNote,
   diffBillLines,
   type AdjLineState,
@@ -872,6 +876,30 @@ export async function GET(
     }
   }
 
+  // B1.7 — may this bill be CONFIRMED yet? (2026-08-31)
+  //
+  // A purchasing-agent bill covers the whole purchase order, so it needs the PO
+  // to have arrived in full. The screen must not re-derive that: it reads the
+  // verdict the confirm route enforces, from the same function. `pendingFully-
+  // Receiption` in the POS used to compute its own version off `po_status`, and
+  // a button that decides for itself is how a screen and a route end up
+  // disagreeing about whether an action is allowed.
+  const confirmFacts = await loadConfirmReceiptFacts(knex as never, id);
+  const confirmVerdict = confirmFacts
+    ? decideConfirmReceiptRequirement(confirmFacts)
+    : null;
+  const confirm_gate = confirmVerdict
+    ? {
+        satisfied: confirmVerdict.satisfied,
+        reason: confirmVerdict.reason,
+        requires_full_receipt: Boolean(
+          confirmFacts?.is_agent_purchase && confirmFacts.has_purchase_order
+        ),
+        qty_ordered: confirmFacts?.qty_ordered ?? 0,
+        qty_received: confirmFacts?.qty_received ?? 0,
+      }
+    : null;
+
   // B1.5 — "a linked bill was edited; this one needs review".
   //
   // Every bill syncs to QuickBooks on its own (owner decision, 2026-08-04), so
@@ -935,6 +963,7 @@ export async function GET(
       qb,
       qb_pipeline,
       qb_dispatch,
+      confirm_gate,
       clearing_drift,
       revisions,
     },
@@ -1527,8 +1556,27 @@ export async function PATCH(
   // draft; the receipt predicates also keep the guard active after a reviewed
   // rebuild has removed the old QB identity but before the operator Reconfirms.
   // Truly receipt-less planning drafts may still mirror a not-yet-received PO.
+  //
+  // EXCEPT for a PURCHASING-AGENT bill, which mirrors the WHOLE purchase order
+  // (owner rule, 2026-08-31). Capping it at what has landed made "Update From
+  // PO" a dead end: it staged the newly added line and then Save rejected it
+  // with `qty_exceeds_received`, so the bill could not be brought up to date
+  // until the goods arrived. Saving is local bookkeeping and must stay free;
+  // what the arrival gates is CONFIRM, enforced in the confirm route.
+  //
+  // The cap that protects against double-billing is the OTHER one above
+  // (`qty_exceeds_po`, measured against the remaining ORDERED quantity via
+  // po-billed-quantities.ts). That one still applies to everybody, agent
+  // included — this exemption drops the receipt yardstick, not the ordered one.
+  const agentReceiptFacts = hasLineEdits
+    ? await loadConfirmReceiptFacts(knex as never, id)
+    : null;
+  const isAgentPurchaseBill = Boolean(
+    agentReceiptFacts?.is_agent_purchase && agentReceiptFacts.has_purchase_order
+  );
   if (
     hasLineEdits &&
+    !isAgentPurchaseBill &&
     (bill.qb_txn_id ||
       bill.purchase_order_receipt_id ||
       receiptIdsProvided)

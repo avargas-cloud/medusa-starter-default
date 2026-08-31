@@ -48,6 +48,10 @@ import {
   dispatchConfirmedSiblings,
   fatalSiblingOutcomes,
 } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
+import {
+  decideConfirmReceiptRequirement,
+  loadConfirmReceiptFacts,
+} from "../../../../../../../../lib/purchase-orders/po-receipt-completeness";
 import { enqueueChinaAgencyVendorBillModGroup } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import {
   receiptQuantitiesMatchBill,
@@ -286,6 +290,28 @@ export async function POST(
       error: `Vendor bill is already in status '${bill.status}'`,
       code: "not_draft",
     });
+  }
+  // A PURCHASING-AGENT bill covers the WHOLE purchase order (owner rule,
+  // 2026-08-31). The agent issues no per-shipment invoices, so confirming on a
+  // partial arrival mints a bill matching no document the supplier ever
+  // produced — and posts it to QuickBooks. Everyone else keeps the per-shipment
+  // confirm checked above; this narrows nothing for them.
+  //
+  // Measured, never read off `purchase_order.status`: that tag is display-only
+  // and a manual one wins over the receipt-driven rewrite, so a PO can read
+  // `received` with units outstanding. See po-receipt-completeness.ts.
+  const receiptFacts = await loadConfirmReceiptFacts(knex, bill.id);
+  if (receiptFacts) {
+    const verdict = decideConfirmReceiptRequirement(receiptFacts);
+    if (!verdict.satisfied) {
+      return res.status(422).json({
+        error: verdict.reason,
+        code: "agent_po_not_fully_received",
+        qty_ordered: receiptFacts.qty_ordered,
+        qty_received: receiptFacts.qty_received,
+        qty_outstanding: verdict.qty_outstanding,
+      });
+    }
   }
   // Legacy drafts may predate the create/save guard. Confirmation still checks
   // the Vendor Invoice Reference because it becomes QuickBooks' Bill Ref No.

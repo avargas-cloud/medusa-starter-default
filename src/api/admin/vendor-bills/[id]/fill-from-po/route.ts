@@ -12,6 +12,7 @@ import {
   resolveRemainingPoQuantities,
   seedableLines,
 } from "../../../../../lib/purchase-orders/po-billed-quantities";
+import { loadConfirmReceiptFacts } from "../../../../../lib/purchase-orders/po-receipt-completeness";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -106,7 +107,19 @@ export async function POST(
       code: "vendor_mismatch",
     });
   }
-  if (!["submitted", "partially_received"].includes(po.status)) {
+  // A fully received PO is normally done being billed, so it is excluded here.
+  //
+  // A PURCHASING-AGENT purchase order is the exact inverse (2026-08-31): its
+  // bill may only be CONFIRMED once the PO has arrived in full, so "fully
+  // received" is precisely when its bill gets built. Keeping the exclusion for
+  // it would leave the operator unable to seed the lines at the only moment the
+  // document is allowed to exist — a dead end created by the two rules meeting,
+  // not by either one alone.
+  const agentFacts = await loadConfirmReceiptFacts(knex as never, id);
+  const isAgentPo = Boolean(
+    agentFacts?.is_agent_purchase && agentFacts.has_purchase_order
+  );
+  if (!isAgentPo && !["submitted", "partially_received"].includes(po.status)) {
     return res.status(422).json({
       error: "Only open purchase orders can be used. Fully received purchase orders are excluded.",
       code: "po_not_open",
