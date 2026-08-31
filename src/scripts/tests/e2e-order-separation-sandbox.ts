@@ -5,13 +5,18 @@
  *  1. GET /admin/orders/:id/product-status responde con lines + caps + POs.
  *  2. POST separations parcial → status `partial`, fila en order_line_separation,
  *     metadata.separation_status=partial, is_separated=false (espejo del tab).
- *  3. POST por encima del tope físico → 409 `separation_exceeds_inventory` con
+ *  3. POST por encima de lo ORDENADO → 409 `separation_exceeds_open_qty` con
  *     rejections nombrando la línea (control de que la validación EXISTE).
  *  3b. CROSS-ORDEN (owner 2026-08-12): una separación VIVA en otra orden del
  *     mismo inventory item achica `separated_elsewhere`/`separable_cap` y sale
  *     en `separations_elsewhere` (tooltip); llevarla a live 0 (equivalente a
  *     entregada) o cancelar la otra orden la LIBERA; con la otra orden
  *     acaparando todo el stock, subir la separación propia da 409.
+ *  3d. RECLAMO AJENO CON ESTANTE DE SOBRA (S11543, 2026-08-31): otra orden
+ *     tiene apartadas ≥ las unidades que esta línea pide, y aun así sobra
+ *     stock — el techo NO baja y lo que el botón "Separate all available"
+ *     escribe se GUARDA. 3b sólo cubría el acaparamiento (rechazar es correcto
+ *     ahí), y el caso intermedio —el habitual— no lo probaba nadie.
  *  3c. ROUND-TRIP con entrega PARCIAL: la columna vive en el eje ORDENADO y el
  *     modal habla en unidades de estante — guardar N tiene que releerse N, y la
  *     columna tiene que quedar en N + despachado. Es el único caso donde la
@@ -129,6 +134,31 @@ async function main() {
        AND COALESCE(oi.fulfilled_quantity::numeric, 0) = 0
        AND sep.id IS NULL
        AND COALESCE(o.metadata->>'is_separated', 'false') <> 'true'
+       -- Margen de estante para el caso S11543 (3d): hace falta poder plantar
+       -- un reclamo ajeno >= lo que esta línea pide y que ADEMAS sobre stock.
+       AND il.stocked_quantity >= oi.quantity::numeric + 2
+       -- Y que exista otra orden viva sobre el MISMO inventory item, o las
+       -- secciones cross-orden se saltean enteras. Pasó: el 2026-08-31 la suite
+       -- dio 46/46 con 3b y 3d sin ejecutar una sola vez — un fixture que no
+       -- cumple la precondición de una sección no la hace pasar, la hace
+       -- desaparecer, y el reporte final se lee igual de verde.
+       AND EXISTS (
+         SELECT 1
+           FROM "order" o3
+           JOIN order_item oi3
+             ON oi3.order_id = o3.id AND oi3.version = o3.version AND oi3.deleted_at IS NULL
+           JOIN order_line_item oli3
+             ON oli3.id = oi3.item_id AND oli3.deleted_at IS NULL
+           JOIN product_variant_inventory_item p3
+             ON p3.variant_id = oli3.variant_id AND p3.deleted_at IS NULL
+           LEFT JOIN order_line_separation s3
+             ON s3.order_id = o3.id AND s3.order_line_item_id = oli3.id
+          WHERE p3.inventory_item_id = pvii.inventory_item_id
+            AND o3.id <> o.id
+            AND o3.deleted_at IS NULL
+            AND o3.status NOT IN ('canceled', 'archived')
+            AND s3.id IS NULL
+       )
      ORDER BY o.created_at DESC
      LIMIT 1`);
   const f = fx.rows[0];
@@ -222,9 +252,19 @@ async function main() {
     separations: [{ line_id: f.line_id, qty: 999999 }],
   });
   check("responde 409", over.status === 409, `status ${over.status}`);
+  // Pedir 999999 sobre una orden de 2 es pasarse de lo ORDENADO, no una disputa
+  // por stock. Este check fijaba `separation_exceeds_inventory` —el código del
+  // reclamo cross-orden— así que el E2E ratificaba el mensaje equivocado: el
+  // depósito salía a buscar unidades por un error de tipeo.
   check(
-    "error separation_exceeds_inventory",
-    over.json?.error === "separation_exceeds_inventory"
+    "error separation_exceeds_open_qty",
+    over.json?.error === "separation_exceeds_open_qty",
+    `error ${over.json?.error}`
+  );
+  check(
+    "el rejection nombra el motivo real",
+    over.json?.rejections?.[0]?.reason === "exceeds_open_qty",
+    `reason ${over.json?.rejections?.[0]?.reason}`
   );
   check(
     "rejections nombra la línea",
@@ -334,6 +374,88 @@ async function main() {
       Number(released?.separable_cap) === capBase,
       `cap ${released?.separable_cap}, esperado ${capBase}`
     );
+
+    // ── 3d. Reclamo ajeno ≥ lo que pide esta línea, PERO con estante de sobra
+    //        (owner 2026-08-31 — el caso de S11543) ──────────────────────────
+    //
+    // La sección que faltaba, y su ausencia dejó un 409 vivo en producción.
+    // Todo lo de arriba prueba el ACAPARAMIENTO —la otra orden se lleva TODO el
+    // stock— donde rechazar es lo correcto. Nadie probaba el caso intermedio,
+    // que es el habitual: otra orden tiene apartadas MÁS unidades que las que
+    // esta línea necesita, y aun así sobra estante para las dos. La fórmula
+    // vieja restaba ese reclamo de la cantidad abierta y daba techo 0, así que
+    // el modal ofrecía las unidades en ámbar y el Save contestaba 409.
+    const openQty3d = Number(base3b?.open_qty ?? 0);
+    const stocked3d = Number(base3b?.miami_stocked ?? 0);
+    // Que las ajenas igualen a lo que esta línea pide es la condición mínima
+    // para que la fórmula vieja diera 0 — es la premisa, y se afirma abajo.
+    const target3d = Math.max(openQty3d, elseBase);
+    if (openQty3d < 1 || stocked3d - target3d < 1) {
+      // Nunca en silencio: un fixture sin margen es cobertura que no se tomó.
+      console.log(
+        `  (sin margen para el caso S11543 — open ${openQty3d}, stocked ${stocked3d}, elsewhere base ${elseBase}: sección 3d SALTEADA)`
+      );
+    } else {
+      await db.query(
+        `UPDATE order_line_separation SET qty = $3
+          WHERE order_id = $1 AND order_line_item_id = $2`,
+        [other.order_id, other.line_id, otherFulfilled + (target3d - elseBase)]
+      );
+      const plenty = await readLine();
+      const elseNow = Number(plenty?.separated_elsewhere ?? 0);
+      check(
+        "3d premisa: otras órdenes tienen ≥ las unidades que esta línea pide",
+        elseNow >= openQty3d,
+        `elsewhere ${elseNow}, open ${openQty3d}`
+      );
+      check(
+        "3d premisa: el estante alcanza para las dos",
+        Number(plenty?.miami_stocked) > elseNow,
+        `stocked ${plenty?.miami_stocked}, elsewhere ${elseNow}`
+      );
+      check(
+        "3d el techo NO cae por un reclamo que el estante cubre",
+        Number(plenty?.max_separable) === openQty3d,
+        `max_separable ${plenty?.max_separable}, open ${openQty3d}`
+      );
+      check(
+        "3d el cap sigue ofreciendo trabajo",
+        Number(plenty?.separable_cap) > 0,
+        `cap ${plenty?.separable_cap}`
+      );
+      check(
+        "3d invariante cap ≤ max_separable",
+        Number(plenty?.separable_cap) <= Number(plenty?.max_separable),
+        `cap ${plenty?.separable_cap}, max ${plenty?.max_separable}`
+      );
+      // Y el efecto, que es lo único que prueba la feature: exactamente lo que
+      // el botón "Separate all available" del modal escribiría en la fila
+      // (SeparationModal.tsx:148) se GUARDA. Un check sobre los caps solos
+      // habría vuelto a pasar por al lado — el operador no mira los caps,
+      // aprieta el botón.
+      const buttonWrites = Math.max(
+        Number(plenty?.invoiced_floor ?? 0),
+        Math.min(openQty3d, Number(plenty?.separable_cap ?? 0))
+      );
+      const bulk = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+        separations: [{ line_id: f.line_id, qty: buttonWrites }],
+      });
+      check(
+        "3d lo que el botón masivo escribe se guarda (200)",
+        bulk.status === 200,
+        `status ${bulk.status} ${JSON.stringify(bulk.json?.rejections ?? bulk.json?.error ?? "")}`
+      );
+      const afterBulk = await readLine();
+      check(
+        "3d la fila queda con lo que el botón puso",
+        Number(afterBulk?.separated) === buttonWrites,
+        `separated ${afterBulk?.separated}, esperado ${buttonWrites}`
+      );
+      // Volver al valor que las secciones siguientes esperan (1 guardada).
+      await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+        separations: [{ line_id: f.line_id, qty: 1 }],
+      });
+    }
 
     // Overdraw: la otra orden acapara todo el stock → subir la propia da 409.
     await db.query(

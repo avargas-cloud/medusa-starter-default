@@ -133,9 +133,16 @@ describe("validateSeparationRequest", () => {
   });
 
   it("rejects a raise past what other orders left on the shelf", () => {
+    // [NÚMEROS SUPERSEDED → 2026-08-31] Este caso usaba `inv(10, 0, 7)` — 10 en
+    // el estante y 7 comprometidas afuera — y esperaba un techo de 3. Eso
+    // afirmaba `openQty − elsewhere`, que es la fórmula del bug: descontaba un
+    // reclamo sobre el POOL de la demanda de una LÍNEA. La regla sobrevive con
+    // un estante que de verdad no da para todos: 10 en Miami contra 17
+    // apartadas afuera son 7 de sobregiro, así que de las 10 pendientes esta
+    // línea puede reclamar 3.
     const rejections = validateSeparationRequest(
       [line({ lineId: "l1", quantity: 10 })],
-      new Map([["iitem_a", inv(10, 0, 7)]]),
+      new Map([["iitem_a", inv(10, 0, 17)]]),
       new Map([["l1", 5]])
     );
     expect(rejections).toEqual([
@@ -146,6 +153,19 @@ describe("validateSeparationRequest", () => {
         reason: "exceeds_claimed_elsewhere",
       },
     ]);
+  });
+
+  it("no rechaza cuando el estante cubre a todos — S11543", () => {
+    // El caso de producción del 2026-08-31: 88 unidades en Miami, 28 apartadas
+    // por otras órdenes, esta línea pide 2 de 2 pendientes. Quedan 60 libres y
+    // no hay nada que arbitrar; la fórmula vieja daba 2 − 28 = 0 y devolvía 409.
+    expect(
+      validateSeparationRequest(
+        [line({ lineId: "l1", quantity: 2 })],
+        new Map([["iitem_a", inv(88, 0, 28)]]),
+        new Map([["l1", 2]])
+      )
+    ).toEqual([]);
   });
 
   it("never forces lowering: keeping or reducing an over-cap stored value passes", () => {
@@ -160,15 +180,19 @@ describe("validateSeparationRequest", () => {
   });
 
   it("two lines of the same item compete with each other", () => {
-    // 6 pending each; each asks for 4, so each one's ceiling is 6 − the other's
-    // 4 = 2. They cannot both spend the same units even inside one request.
+    // [NÚMEROS SUPERSEDED → 2026-08-31] Antes: 5 en el estante, 6 pendientes en
+    // cada línea, cada una pide 4, y se esperaba techo 2 (`6 − 4`). Otra vez la
+    // resta cruzada de magnitudes. Una hermana compite por las MISMAS unidades,
+    // pero sólo puede quitarte lo que al estante le falta: con 1 unidad en Miami
+    // y la hermana reclamando 4, el sobregiro es 3 y el techo de cada una queda
+    // en 6 − 3 = 3. Siguen sin poder gastar las dos las mismas unidades.
     const lines = [
       line({ lineId: "l1", quantity: 6 }),
       line({ lineId: "l2", quantity: 6 }),
     ];
     const rejections = validateSeparationRequest(
       lines,
-      new Map([["iitem_a", inv(5)]]),
+      new Map([["iitem_a", inv(1)]]),
       new Map([
         ["l1", 4],
         ["l2", 4],
@@ -178,25 +202,50 @@ describe("validateSeparationRequest", () => {
     expect(
       rejections.every((r) => r.reason === "exceeds_claimed_elsewhere")
     ).toBe(true);
-    expect(rejections.every((r) => r.cap === 2)).toBe(true);
+    expect(rejections.every((r) => r.cap === 3)).toBe(true);
+  });
+
+  it("dos líneas del mismo ítem NO se estorban mientras el estante alcance", () => {
+    // El reverso del caso de arriba, y el que faltaba: con 100 en Miami, dos
+    // líneas de 6 pidiendo 4 cada una no tienen nada que disputarse. La regla
+    // vieja las rechazaba a las dos aunque sobrara stock — es el mismo defecto
+    // de S11543 puertas adentro de una sola orden.
+    const lines = [
+      line({ lineId: "l1", quantity: 6 }),
+      line({ lineId: "l2", quantity: 6 }),
+    ];
+    expect(
+      validateSeparationRequest(
+        lines,
+        new Map([["iitem_a", inv(100)]]),
+        new Map([
+          ["l1", 4],
+          ["l2", 4],
+        ])
+      )
+    ).toEqual([]);
   });
 
   it("an unmentioned sibling's stored separation still counts as demand", () => {
+    // [NÚMEROS SUPERSEDED → 2026-08-31] Antes: 10 en el estante y una hermana
+    // con 6 guardadas daban techo 2 (`8 − 6`) con 4 unidades libres sin usar.
+    // La demanda de la hermana sigue contando —no está en el request y sus 6
+    // unidades están apartadas igual— pero a través del estante: 1 en Miami
+    // contra las 6 de la hermana son 5 de sobregiro, y el techo queda en 3.
     const lines = [
       line({ lineId: "l1", quantity: 8, separated: 6 }), // not in the request
       line({ lineId: "l2", quantity: 8 }),
     ];
     const rejections = validateSeparationRequest(
       lines,
-      new Map([["iitem_a", inv(10)]]),
+      new Map([["iitem_a", inv(1)]]),
       new Map([["l2", 5]])
     );
-    // l2's ceiling is its own 8 pending minus the 6 its sibling holds.
     expect(rejections).toEqual([
       {
         lineId: "l2",
         requested: 5,
-        cap: 2,
+        cap: 3,
         reason: "exceeds_claimed_elsewhere",
       },
     ]);

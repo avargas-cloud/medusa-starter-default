@@ -13,6 +13,25 @@
  *
  * and never more than its open order quantity (qty − fulfilled).
  *
+ * ESE ES `cap`, EL NÚMERO DEL ESTANTE — no el techo que autoriza el POST. Desde
+ * el 2026-08-20 el stock dejó de ser techo (el operador MIRA el estante y el
+ * conteo puede estar mal), así que el techo es `maxSeparable`: la cantidad
+ * abierta menos el SOBREGIRO, que es lo único que un reclamo ajeno puede
+ * quitarte de verdad —
+ *
+ *   sobregiro = max(0, separado en OTRAS órdenes + hermanas − Miami stocked)
+ *
+ * Los dos números salen del mismo trío de hechos y por construcción
+ * `cap ≤ maxSeparable` SIEMPRE: la pantalla no puede ofrecer algo que la ruta
+ * después rechace. Ese invariante lo fija un test, porque su ausencia costó el
+ * bug del 2026-08-31 — `maxSeparable` restaba `separatedElsewhere` (un reclamo
+ * sobre el POOL) directo de `openQty` (la demanda de UNA línea), sin el término
+ * de stock. Bastaba con que otra orden tuviera apartadas tantas unidades como
+ * las que vos necesitabas para que tu techo cayera a cero: S11543 no podía
+ * apartar 2 módulos con 88 en Miami porque otras órdenes tenían 28. La pantalla
+ * ofrecía 2 en ámbar, el botón las escribía, y el Save contestaba 409 diciendo
+ * que no alcanzaba el inventario.
+ *
  * A separation is LIVE while its work is pending: max(0, qty − fulfilled) in a
  * non-canceled, non-archived order. Fulfilled units left the building and
  * release their claim; invoiced-but-unfulfilled ones still hold it.
@@ -74,8 +93,9 @@ export interface SeparationCap {
   /** Minimum the separation may never drop below: invoiced units still in the
    *  warehouse. Zero when nothing is invoiced or everything was fulfilled. */
   invoicedFloor: number;
-  /** The ceiling the operator may actually type: pending units net of what
-   *  other orders and sibling lines already claim. Never below the floor. */
+  /** The ceiling the operator may actually type: pending units net of the
+   *  OVERSUBSCRIPTION — the amount by which other orders' and sibling lines'
+   *  claims exceed the shelf. Never below the floor, and never below `cap`. */
   maxSeparable: number;
 }
 
@@ -187,6 +207,33 @@ function siblingStoredOf(
 }
 
 /**
+ * Cuánto le FALTA al estante para cubrir todos los reclamos ajenos — y por lo
+ * tanto lo único que un reclamo ajeno puede quitarle a esta línea.
+ *
+ * Un reclamo ajeno vive en el POOL: son unidades de un inventory item que otra
+ * orden (o una línea hermana de ésta) ya tiene apartadas. La demanda de una
+ * línea vive en la LÍNEA. Restar lo primero de lo segundo mezcla magnitudes y
+ * es exactamente el bug del 2026-08-31: con 88 unidades en Miami, 28 apartadas
+ * por otras órdenes y una línea que necesitaba 2, el techo daba `2 − 28 = 0`
+ * aunque sobraran 60 en el estante. El reclamo ajeno no compite con TU línea:
+ * compite con el ESTANTE, y sólo te alcanza cuando el estante no da para todos.
+ *
+ * Con `inv` ausente (la variante no tiene fila de `inventory_level` en Miami)
+ * el sobregiro es 0 y no se descuenta nada: no saber cuánto hay no es lo mismo
+ * que saber que no hay, y aquí la ignorancia no puede convertirse en un techo.
+ */
+function oversubscriptionOf(
+  inv: InventorySnapshot | undefined,
+  siblingsClaim: number
+): number {
+  if (!inv) return 0;
+  return Math.max(
+    0,
+    nz(inv.separatedElsewhere) + nz(siblingsClaim) - nz(inv.stocked)
+  );
+}
+
+/**
  * The ceiling the operator may type (owner decision 2026-08-20).
  *
  * NOT stock-backed. `stocked_quantity` is the system's belief about the shelf,
@@ -197,9 +244,12 @@ function siblingStoredOf(
  * so a stock ceiling pinned the row at a value it could not leave.
  *
  * What still binds is other people's claims — the cross-order arbiter of
- * 2026-08-12 is intact: units another order has separated, and units a sibling
- * line of this order has separated, are not available to take. Stock survives
- * as `cap` below: a WARNING the row paints amber, never a refusal.
+ * 2026-08-12 is intact, but it binds WHERE IT MEANS SOMETHING: only once those
+ * claims plus this order's sibling lines outgrow the shelf. While the shelf
+ * covers everyone there is nothing to arbitrate, and refusing anyway is what
+ * made a line with 88 units in Miami unsaveable for 2 (owner decision
+ * 2026-08-31). Stock survives as `cap` below: a WARNING the row paints amber,
+ * never a refusal.
  */
 function maxSeparableOf(
   line: SeparationLineInput,
@@ -207,11 +257,8 @@ function maxSeparableOf(
   inv: InventorySnapshot | undefined
 ): number {
   const openQty = openQtyOf(line);
-  const claimedElsewhere = inv ? nz(inv.separatedElsewhere) : 0;
-  return Math.max(
-    invoicedFloorOf(line),
-    Math.max(0, openQty - claimedElsewhere - siblingStoredOf(line, lines))
-  );
+  const short = oversubscriptionOf(inv, siblingStoredOf(line, lines));
+  return Math.max(invoicedFloorOf(line), Math.max(0, openQty - short));
 }
 
 /** Per-line separation ceilings (display + single-line validation). */
@@ -274,10 +321,10 @@ export interface SeparationRejection {
 /**
  * Validate a full requested set.
  *
- * RAISES are gated by other people's claims, not by the stock count (owner
- * decision 2026-08-20 — see maxSeparableOf). DROPS are gated by the invoiced
- * floor. The screen clamps both, but a POST is not a screen and re-validates
- * here.
+ * RAISES are gated by the OVERSUBSCRIPTION of the shelf, not by the stock count
+ * itself (owner decisions 2026-08-20 + 2026-08-31 — see maxSeparableOf). DROPS
+ * are gated by the invoiced floor. The screen clamps both, but a POST is not a
+ * screen and re-validates here.
  *
  * Lines sharing an inventory item compete with their TOTAL requested value;
  * lines the request does not mention still hold their stored separation.
@@ -345,14 +392,16 @@ export function validateSeparationRequest(
       continue;
     }
 
-    // What is left after everyone else's claim. Sibling lines of THIS order
-    // count with their EFFECTIVE value (a request that raises two lines of the
-    // same item at once must not let both spend the same units), other orders
-    // with their live separation.
+    // Lo mismo que `maxSeparableOf`, y por el MISMO helper: el sobregiro del
+    // estante, no el reclamo ajeno crudo. Las dos expresiones estaban escritas
+    // aparte y por eso pudieron divergir de `cap` sin que nada avisara.
+    //
+    // Sibling lines of THIS order count with their EFFECTIVE value (a request
+    // that raises two lines of the same item at once must not let both spend
+    // the same units), other orders with their live separation.
     const inv = line.inventoryItemId
       ? inventory.get(line.inventoryItemId)
       : undefined;
-    const claimedElsewhere = inv ? nz(inv.separatedElsewhere) : 0;
     const siblingsClaim = lines.reduce(
       (acc, l) =>
         l.lineId !== line.lineId && l.inventoryItemId === line.inventoryItemId
@@ -362,7 +411,7 @@ export function validateSeparationRequest(
     );
     const ceiling = Math.max(
       floor,
-      Math.max(0, openQty - claimedElsewhere - siblingsClaim)
+      Math.max(0, openQty - oversubscriptionOf(inv, siblingsClaim))
     );
     if (req > ceiling) {
       rejections.push({

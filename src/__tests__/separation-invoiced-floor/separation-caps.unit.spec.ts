@@ -116,20 +116,40 @@ describe("computeSeparationCaps", () => {
     });
   });
 
-  it("the ceiling drops by what other orders keep separated", () => {
+  // [SUPERSEDED → 2026-08-31] Este caso afirmaba `maxSeparable = 5` con 40 en
+  // Miami y 20 apartadas por otras órdenes, o sea `openQty − elsewhere`: restaba
+  // un reclamo sobre el POOL de la demanda de UNA línea. Era la fórmula del bug,
+  // fijada por un test, y por eso pasaba en verde mientras producción devolvía
+  // 409. La mitad que sobrevive —el reclamo ajeno sigue atando— se afirma abajo
+  // con un estante que de verdad queda corto.
+  it("el reclamo ajeno NO descuenta mientras el estante alcance", () => {
     const [cap] = computeSeparationCaps(
       [line({ quantity: 25, invoiced: 0 })],
       stock(40, 20)
     );
-    expect(cap.maxSeparable).toBe(5);
+    // 20 comprometidas de 40: no hay nada que arbitrar contra estas 25.
+    expect(cap.maxSeparable).toBe(25);
+    // El estante igual queda corto para las 25, y eso lo dice `cap` en ámbar.
+    expect(cap.cap).toBe(20);
+  });
+
+  it("el techo baja SÓLO por el sobregiro del estante", () => {
+    // 40 en Miami contra 48 apartadas por otras órdenes: 8 de sobregiro real.
+    const [cap] = computeSeparationCaps(
+      [line({ quantity: 25, invoiced: 0 })],
+      stock(40, 48)
+    );
+    expect(cap.maxSeparable).toBe(17);
+    expect(cap.cap).toBe(0);
   });
 
   it("the ceiling never falls under the floor, whoever else claims units", () => {
+    // 10 en Miami contra 30 apartadas afuera: 20 de sobregiro, que dejarían el
+    // techo en 5 — pero 18 están facturadas y esperando acá.
     const [cap] = computeSeparationCaps(
       [line({ quantity: 25, invoiced: 18 })],
-      stock(40, 24)
+      stock(10, 30)
     );
-    // 25 − 24 = 1, but 18 are billed and sitting here.
     expect(cap.maxSeparable).toBe(18);
   });
 
@@ -254,18 +274,35 @@ describe("validateSeparationRequest — the floor", () => {
   });
 
   it("still refuses units another order already keeps separated", () => {
-    // The cross-order arbiter of 2026-08-12 survives the change: 25 pending,
-    // 20 held by other orders, so this line may claim 5.
+    // [SUPERSEDED → 2026-08-31 en sus NÚMEROS, no en su regla] Este caso usaba
+    // `stock(40, 20)` y esperaba un rechazo con techo 5 — pero con 40 en el
+    // estante y 20 comprometidas no hay conflicto que arbitrar, y afirmarlo así
+    // era fijar el bug. El árbitro cross-orden del 2026-08-12 sigue vivo donde
+    // significa algo: 10 en Miami contra 30 apartadas afuera son 20 de
+    // sobregiro, así que de las 25 pendientes esta línea puede reclamar 5.
     const lines = [line({ quantity: 25, invoiced: 0, separated: 0 })];
     const out = validateSeparationRequest(
       lines,
-      stock(40, 20),
+      stock(10, 30),
       new Map([["l1", 9]])
     );
     expect(out[0]).toMatchObject({
       cap: 5,
       reason: "exceeds_claimed_elsewhere",
     });
+  });
+
+  it("acepta lo que el estante respalda aunque otras órdenes tengan más unidades que las que pide esta línea — S11543", () => {
+    // El caso exacto de producción: EMSH4V160D15W30, 88 en Miami, 28 apartadas
+    // por otras órdenes, esta orden pide 2. La fórmula vieja daba 2 − 28 = 0 y
+    // contestaba 409 "no alcanza el inventario" con 60 unidades libres en el
+    // estante. Basta con que otra orden tenga apartadas tantas unidades como
+    // las que vos necesitás para que el techo caiga a cero — o sea, para casi
+    // cualquier SKU que se mueva.
+    const lines = [line({ quantity: 2, invoiced: 0, separated: 0 })];
+    expect(
+      validateSeparationRequest(lines, stock(88, 28), new Map([["l1", 2]]))
+    ).toEqual([]);
   });
 
   it("gates the floor BEFORE the ceiling, so an unbacked floor is not reported as a stock problem", () => {
@@ -280,5 +317,103 @@ describe("validateSeparationRequest — the floor", () => {
     );
     expect(out).toHaveLength(1);
     expect(out[0]?.reason).toBe("below_invoiced_floor");
+  });
+});
+
+/**
+ * `cap ≤ maxSeparable`, siempre.
+ *
+ * No es una curiosidad aritmética: es el contrato entre las dos pantallas y la
+ * ruta. `separable_cap` es lo que el modal OFRECE (la columna Separable en
+ * ámbar) y lo que el botón "Separate all available" escribe de una
+ * (SeparationModal.tsx:148 → `min(open_qty, separable_cap)`); `max_separable`
+ * es contra lo que el POST AUTORIZA. Si el primero puede superar al segundo, el
+ * botón escribe un número que el Save rechaza — que es exactamente lo que pasó
+ * en producción con S11543 el 2026-08-31.
+ *
+ * Ningún test afirmaba esto. Había casos para `cap`, casos para `maxSeparable`
+ * y casos para el piso, todos verdes, y ninguno los comparaba entre sí: el
+ * defecto vivía justo en la relación que nadie miraba. Por eso va como
+ * PROPIEDAD sobre una grilla y no como un caso más — un ejemplo elegido a mano
+ * habría vuelto a esquivarlo.
+ */
+describe("invariante cap ≤ maxSeparable", () => {
+  const QUANTITIES = [0, 1, 2, 5, 25];
+  const FULFILLED = [0, 1];
+  const INVOICED = [0, 3, 25];
+  const STOCKED = [0, 1, 10, 40, 88];
+  const ELSEWHERE = [0, 1, 2, 20, 28, 120];
+  const SIBLING = [0, 3, 30];
+
+  it("se cumple en toda combinación de stock, reclamo ajeno, hermanas y piso", () => {
+    const violations: string[] = [];
+    let checked = 0;
+    for (const quantity of QUANTITIES)
+      for (const fulfilled of FULFILLED)
+        for (const invoiced of INVOICED)
+          for (const stocked of STOCKED)
+            for (const elsewhere of ELSEWHERE)
+              for (const sibling of SIBLING) {
+                const lines: SeparationLineInput[] = [
+                  line({ lineId: "l1", quantity, fulfilled, invoiced }),
+                  // Una hermana del MISMO inventory item con su separación ya
+                  // guardada: es demanda dura sobre las mismas unidades.
+                  line({
+                    lineId: "l2",
+                    quantity: 100,
+                    fulfilled: 0,
+                    invoiced: 0,
+                    separated: sibling,
+                  }),
+                ];
+                const caps = computeSeparationCaps(lines, stock(stocked, elsewhere));
+                for (const cap of caps) {
+                  checked += 1;
+                  if (cap.cap > cap.maxSeparable) {
+                    violations.push(
+                      `${cap.lineId} qty=${quantity} ful=${fulfilled} inv=${invoiced} stock=${stocked} else=${elsewhere} sib=${sibling}: cap ${cap.cap} > max ${cap.maxSeparable}`
+                    );
+                  }
+                }
+              }
+    expect(violations.slice(0, 5)).toEqual([]);
+    // Sin esto, un cambio que vacíe la grilla dejaría el test pasando en cero.
+    expect(checked).toBe(
+      QUANTITIES.length *
+        FULFILLED.length *
+        INVOICED.length *
+        STOCKED.length *
+        ELSEWHERE.length *
+        SIBLING.length *
+        2
+    );
+  });
+
+  it("lo que el botón masivo escribe nunca supera lo que la ruta autoriza", () => {
+    // El mismo invariante dicho como lo vive el operador: se toma el valor que
+    // `separateAll` pondría en la fila y se le pregunta a la validación de la
+    // ruta — que es el POST real, no una reimplementación.
+    for (const stocked of STOCKED)
+      for (const elsewhere of ELSEWHERE)
+        for (const quantity of [1, 2, 5, 25]) {
+          const lines = [line({ quantity, invoiced: 0, separated: 0 })];
+          const [cap] = computeSeparationCaps(lines, stock(stocked, elsewhere));
+          const whatTheButtonWrites = Math.max(
+            cap.invoicedFloor,
+            Math.min(cap.openQty, cap.cap)
+          );
+          const out = validateSeparationRequest(
+            lines,
+            stock(stocked, elsewhere),
+            new Map([["l1", whatTheButtonWrites]])
+          );
+          expect({
+            stocked,
+            elsewhere,
+            quantity,
+            wrote: whatTheButtonWrites,
+            rejections: out,
+          }).toMatchObject({ rejections: [] });
+        }
   });
 });

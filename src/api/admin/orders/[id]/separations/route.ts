@@ -98,26 +98,48 @@ export async function POST(
     requested
   );
   if (rejections.length) {
-    // Tres rechazos distintos comparten esta respuesta y piden acciones
+    // CUATRO rechazos distintos comparten esta respuesta y piden acciones
     // OPUESTAS — mandar el mensaje equivocado manda al depósito a buscar un
     // problema que no tiene.
-    const notSeparable = rejections.every((r) => r.reason === "not_separable");
-    const belowFloor = rejections.every(
-      (r) => r.reason === "below_invoiced_floor"
-    );
-    res.status(409).json({
-      error: notSeparable
-        ? "separation_line_not_separable"
-        : belowFloor
-          ? "separation_below_invoiced_floor"
-          : "separation_exceeds_inventory",
-      message: notSeparable
-        ? "Service and non-inventory lines have nothing to set aside."
-        : belowFloor
-          ? "Invoiced units that have not left the warehouse cannot be un-separated."
-          : "Some quantities exceed what is left after other orders' separations.",
-      rejections,
-    });
+    //
+    // `exceeds_open_qty` tenía que compartir el texto del reclamo cross-orden,
+    // así que pedir más unidades de las que la orden tiene abiertas contestaba
+    // "otras órdenes se llevaron el resto": ni el operador ni el E2E podían
+    // distinguir un error de tipeo de una disputa por stock. Cada motivo dice
+    // ahora lo suyo, y el genérico queda SÓLO para una tanda mezclada.
+    const allAre = (reason: string): boolean =>
+      rejections.every((r) => r.reason === reason);
+
+    const answer = allAre("not_separable")
+      ? {
+          error: "separation_line_not_separable",
+          message: "Service and non-inventory lines have nothing to set aside.",
+        }
+      : allAre("below_invoiced_floor")
+        ? {
+            error: "separation_below_invoiced_floor",
+            message:
+              "Invoiced units that have not left the warehouse cannot be un-separated.",
+          }
+        : allAre("exceeds_open_qty")
+          ? {
+              error: "separation_exceeds_open_qty",
+              message:
+                "Some quantities are higher than what the order still has open.",
+            }
+          : allAre("exceeds_claimed_elsewhere")
+            ? {
+                error: "separation_exceeds_inventory",
+                message:
+                  "Some quantities exceed what is left after other orders' separations.",
+              }
+            : {
+                error: "separation_rejected",
+                message:
+                  "Some lines could not be saved — see the reason on each one.",
+              };
+
+    res.status(409).json({ ...answer, rejections });
     return;
   }
 
