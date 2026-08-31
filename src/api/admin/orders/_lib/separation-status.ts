@@ -30,6 +30,33 @@ export type SeparationStatus = "none" | "partial" | "full";
  */
 export const SEPARATED_TAB_FILTER = 'separation_state IN ["partial", "full"]';
 
+/**
+ * Si el booleano `metadata.is_separated` puede hablar por esta orden.
+ *
+ * Sólo puede cuando la orden NO tiene ninguna fila en `order_line_separation`:
+ * ahí el booleano es el único registro que existe de su separación y honrarlo
+ * como `full` evita migrar datos. En cuanto hay una fila —aunque valga 0— el
+ * registro por línea es la verdad y el booleano es un espejo, no una fuente.
+ *
+ * Vive acá, con un nombre, porque escrito en línea se escribió MAL: durante
+ * meses los llamadores pasaban `metadata.is_separated` crudo, y como
+ * `deriveSeparationStatus` toma la rama legacy cuando ninguna línea tiene
+ * cantidad > 0, una orden con todas sus filas en CERO se hacía pasar por
+ * legacy. Como la ruta de escritura estampa ese booleano al llegar a `full`,
+ * el Save siguiente leía su propio rastro: **una orden que llegaba a `full` no
+ * se podía des-apartar nunca más** (S11326 lo reportó el 2026-08-12 y se
+ * atribuyó a órdenes viejas; lo alcanzaba a cualquiera).
+ *
+ * El único llamador que NO usa esto es la ruta de escritura, que pasa `false`
+ * fijo porque está a punto de escribir filas.
+ */
+export function legacyFullFlagOf(
+  isSeparatedMeta: boolean,
+  hasSeparationRows: boolean
+): boolean {
+  return isSeparatedMeta && !hasSeparationRows;
+}
+
 export interface SeparationStatusLine {
   /** Order quantity of the line. */
   quantity: number;

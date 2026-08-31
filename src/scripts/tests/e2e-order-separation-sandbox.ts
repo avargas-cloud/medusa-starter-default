@@ -22,8 +22,14 @@
  *     columna tiene que quedar en N + despachado. Es el único caso donde la
  *     conversión existe, y el fixture de abajo (fulfilled = 0) era ciego a él.
  *  4. POST completo → status `full`, is_separated=true.
+ *  4b. DES-APARTAR (2026-08-31): la misma orden en `full`, guardada toda en
+ *     cero, vuelve a `none` — stamp de la base y GET incluidos. La ruta leía el
+ *     `is_separated` que ella misma acababa de escribir y revivía el `full`, así
+ *     que una orden apartada del todo no se podía desapartar nunca más.
  *  5. Legacy: orden con metadata.is_separated=true y CERO filas → GET la lee
- *     como `full` sin migrar nada.
+ *     como `full` sin migrar nada. Es la red contra el modo de falla de 4b:
+ *     si el arreglo se pasara de rosca y matara la rama legacy, esto se pone
+ *     rojo antes de que 25 órdenes viejas pierdan su estado.
  *  6. NEGATIVAS (la razón de ser del diseño): reservation_item e inventory_level
  *     quedan BYTE-IGUALES — separar es una marca operativa, jamás mueve stock
  *     ni reservas nativas de Medusa (decisión del owner 2026-08-11).
@@ -690,6 +696,69 @@ async function main() {
       full.json?.separation_status === "partial"
     );
   }
+
+  // ── 4b. Des-apartar: full → todo en cero → none ────────────────────────────
+  //
+  // El viaje de vuelta, que nadie probaba. La ruta estampa `is_separated: true`
+  // al llegar a `full`, y `loadSeparationData` lo lee ANTES del write siguiente:
+  // guardar ceros encontraba ese booleano recién puesto, `deriveSeparationStatus`
+  // tomaba la rama legacy (ninguna línea con cantidad > 0) y devolvía `full`
+  // otra vez. Una orden que llegaba a `full` NO SE PODÍA DES-APARTAR: 200, filas
+  // en cero, "0 of N units set aside" en el modal, y el badge diciendo
+  // Separated. Reportado el 2026-08-12 (S11326) como problema de órdenes viejas
+  // y remediado a mano orden por orden; en realidad lo alcanzaba cualquiera.
+  //
+  // Va DESPUÉS de la sección 4 a propósito: necesita una orden que acabe de
+  // llegar a `full` por el camino real, no un fixture con el flag plantado.
+  console.log("\n4b. Des-apartar una orden ya apartada");
+  const stampAfterFull = (
+    await db.query(`SELECT metadata FROM "order" WHERE id = $1`, [f.order_id])
+  ).rows[0].metadata;
+  check(
+    "4b premisa: la orden quedó con is_separated=true",
+    stampAfterFull?.is_separated === true,
+    `is_separated ${stampAfterFull?.is_separated}`
+  );
+  const zeroed = await api(token, "POST", `/admin/orders/${f.order_id}/separations`, {
+    separations: wanted.map((w: { line_id: string }) => ({
+      line_id: w.line_id,
+      qty: 0,
+    })),
+  });
+  check("4b responde 200", zeroed.status === 200, `status ${zeroed.status}`);
+  check(
+    "4b el estado vuelve a none",
+    zeroed.json?.separation_status === "none",
+    `status ${zeroed.json?.separation_status}`
+  );
+  check(
+    "4b el espejo booleano se apaga",
+    zeroed.json?.is_separated === false,
+    `is_separated ${zeroed.json?.is_separated}`
+  );
+  // Y por el EFECTO, no por la respuesta: el stamp guardado es lo que leen el
+  // badge de la lista y el botón del toolbar.
+  const stampAfterZero = (
+    await db.query(`SELECT metadata FROM "order" WHERE id = $1`, [f.order_id])
+  ).rows[0].metadata;
+  check(
+    "4b el stamp de la base dice none",
+    stampAfterZero?.separation_status === "none",
+    `stamp ${stampAfterZero?.separation_status}`
+  );
+  check(
+    "4b metadata.is_separated queda en false",
+    stampAfterZero?.is_separated === false,
+    `flag ${stampAfterZero?.is_separated}`
+  );
+  const zeroLine = (
+    await api(token, "GET", `/admin/orders/${f.order_id}/product-status`)
+  ).json;
+  check(
+    "4b el GET coincide con el stamp (modal y badge no se contradicen)",
+    zeroLine?.order?.separation_status === "none",
+    `GET ${zeroLine?.order?.separation_status}`
+  );
 
   // ── 5. Legacy flag sin filas ───────────────────────────────────────────────
   console.log("\n5. Legacy boolean sin filas");

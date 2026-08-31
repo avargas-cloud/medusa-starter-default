@@ -27,6 +27,7 @@ import type { Pool } from "pg";
 import { USA_LOC } from "../../../../../lib/locations";
 import { allocateInvoicedToLines } from "../../../../../lib/invoices/per-line-invoiced";
 import { liveFulfilledSql, netSeparatedSql } from "../../_lib/separation-sql";
+import { legacyFullFlagOf } from "../../_lib/separation-status";
 import type {
   InventorySnapshot,
   SeparationLineInput,
@@ -62,8 +63,29 @@ export interface ElsewhereSeparationRow {
 export interface SeparationData {
   orderId: string;
   displayId: number | null;
-  /** Legacy boolean from metadata — honored when no rows exist. */
-  legacySeparatedFlag: boolean;
+  /**
+   * `metadata.is_separated` **y** la orden no tiene NINGUNA fila en
+   * `order_line_separation` — o sea, es de antes del tracking por línea y su
+   * único registro de la separación es ese booleano.
+   *
+   * El `&&` es la corrección del 2026-08-31 y no es cosmético. El contrato
+   * SIEMPRE dijo "honored when no rows exist", pero nadie miraba las filas:
+   * `deriveSeparationStatus` decide que una orden es legacy cuando ninguna
+   * línea tiene cantidad apartada, que es una cosa distinta. Una orden con seis
+   * filas EN CERO no es legacy — es una orden que alguien acaba de desapartar.
+   *
+   * Lo que eso costaba: la ruta de escritura estampa `is_separated: true` al
+   * llegar a `full`, así que el Save siguiente leía ese booleano recién puesto,
+   * se declaraba legacy con un flag que ella misma había fabricado, y revivía
+   * el `full`. **Una orden que llegaba a `full` no se podía des-apartar nunca
+   * más**: el modal decía "0 of N units set aside" y el badge decía Separated.
+   * Documentado desde el 2026-08-12 (S11326) como problema de órdenes viejas,
+   * cuando en realidad lo alcanzaba cualquier orden.
+   *
+   * La ruta de escritura NO usa este campo: pasa `false` porque acaba de
+   * escribir filas. Ver el comentario en `separations/route.ts`.
+   */
+  legacyFullFlag: boolean;
   metadata: Record<string, unknown>;
   lines: SeparationOrderLine[];
   inventory: Map<string, InventorySnapshot>;
@@ -98,8 +120,16 @@ export async function loadSeparationData(
     id: string;
     display_id: number | null;
     metadata: Record<string, unknown> | null;
+    has_separation_rows: boolean;
   }>(
-    `SELECT id, display_id, metadata
+    // El EXISTS va por ORDEN y no por línea a propósito: "legacy" significa que
+    // la separación de esta orden nunca se registró por línea, y una fila que
+    // quedó colgando de una versión vieja del pedido igual prueba que sí se
+    // registró. La pregunta es sobre la orden, no sobre las líneas de hoy.
+    `SELECT id, display_id, metadata,
+            EXISTS (
+              SELECT 1 FROM order_line_separation s WHERE s.order_id = "order".id
+            ) AS has_separation_rows
        FROM "order"
       WHERE id = $1 AND deleted_at IS NULL`,
     [orderId]
@@ -361,7 +391,10 @@ export async function loadSeparationData(
   return {
     orderId: order.id,
     displayId: order.display_id,
-    legacySeparatedFlag: metadata.is_separated === true,
+    legacyFullFlag: legacyFullFlagOf(
+      metadata.is_separated === true,
+      order.has_separation_rows === true
+    ),
     metadata,
     lines,
     inventory,

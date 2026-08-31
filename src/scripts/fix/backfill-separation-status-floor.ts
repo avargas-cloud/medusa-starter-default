@@ -89,7 +89,7 @@ export default async function backfillSeparationStatusFloor({
         fulfilled: l.fulfilled,
         separated: effectiveSeparatedOf(l),
       })),
-      data.legacySeparatedFlag
+      data.legacyFullFlag
     );
     const meta = (o.metadata ?? {}) as Record<string, unknown>;
     const raw = meta.separation_status;
@@ -101,7 +101,7 @@ export default async function backfillSeparationStatusFloor({
       old_separation_status: raw ?? null,
       old_is_separated: meta.is_separated ?? null,
       new_separation_status: computed,
-      legacy: data.legacySeparatedFlag,
+      legacy: data.legacyFullFlag,
     });
   }
 

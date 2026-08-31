@@ -158,10 +158,19 @@ export async function POST(
       ? (requested.get(l.lineId) as number)
       : effectiveSeparatedOf(l),
   }));
-  const separation_status = deriveSeparationStatus(
-    mergedLines,
-    data.legacySeparatedFlag
-  );
+  // `legacy = false` A PROPÓSITO, igual que `clearDeliveredSeparations`: este
+  // request está por escribir filas, así que la orden TIENE tracking por línea
+  // y su booleano ya no puede hablar por ella.
+  //
+  // Leerlo era un bucle cerrado sobre sí mismo. Esta misma ruta estampa
+  // `is_separated: true` al llegar a `full`, y `loadSeparationData` corre ANTES
+  // del write siguiente: guardar todo en 0 encontraba el flag que el Save
+  // anterior acababa de poner, `deriveSeparationStatus` lo tomaba por una orden
+  // pre-tracking (ninguna línea con cantidad > 0) y devolvía `full` otra vez.
+  // Una orden que llegaba a `full` no se podía des-apartar NUNCA: 200, filas en
+  // cero, "0 of N units set aside" en el modal, y el badge diciendo Separated.
+  // Se descubrió el 2026-08-31 devolviendo S11543 a su estado inicial.
+  const separation_status = deriveSeparationStatus(mergedLines, false);
   const isSeparated = separation_status === "full";
 
   const actorId = req.auth_context?.actor_id ?? null;

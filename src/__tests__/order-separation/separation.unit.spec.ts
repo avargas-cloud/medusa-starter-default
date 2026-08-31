@@ -21,7 +21,10 @@ import {
   type InventorySnapshot,
   type SeparationLineInput,
 } from "../../api/admin/orders/_lib/separation-caps";
-import { deriveSeparationStatus } from "../../api/admin/orders/_lib/separation-status";
+import {
+  deriveSeparationStatus,
+  legacyFullFlagOf,
+} from "../../api/admin/orders/_lib/separation-status";
 
 const inv = (
   stocked: number,
@@ -330,6 +333,42 @@ describe("deriveSeparationStatus", () => {
     expect(
       deriveSeparationStatus([{ quantity: 5, fulfilled: 0, separated: 0 }], true)
     ).toBe("full");
+  });
+
+  // El `true` de arriba es legítimo SÓLO si la orden no tiene filas, y quién
+  // decide eso es `legacyFullFlagOf` — no esta función, que sobre líneas todas
+  // en cero no puede distinguir "nunca se registró por línea" de "alguien acabó
+  // de desapartarla". Ese matiz vivía sólo en un comentario y por eso se
+  // escribió mal en todos los llamadores.
+  describe("legacyFullFlagOf — quién puede pasar ese true", () => {
+    it("una orden sin filas conserva su booleano: es su único registro", () => {
+      expect(legacyFullFlagOf(true, false)).toBe(true);
+    });
+
+    it("una orden CON filas ya no habla por booleano, aunque las filas valgan 0", () => {
+      // El caso que rompía todo: la ruta de escritura estampa `is_separated`
+      // al llegar a `full`, así que el Save siguiente leía su propio rastro y
+      // revivía el `full` sobre "0 of N units set aside". Una orden que llegaba
+      // a `full` no se podía des-apartar nunca más.
+      expect(legacyFullFlagOf(true, true)).toBe(false);
+    });
+
+    it("sin booleano no hay nada que honrar, haya filas o no", () => {
+      expect(legacyFullFlagOf(false, false)).toBe(false);
+      expect(legacyFullFlagOf(false, true)).toBe(false);
+    });
+
+    it("compuesto con la derivación: filas en cero dan none, sin filas dan full", () => {
+      // Las dos mitades juntas, que es como lo vive la orden: mismos datos de
+      // línea, misma metadata, y el resultado lo decide la EXISTENCIA de filas.
+      const lines = [{ quantity: 5, fulfilled: 0, separated: 0 }];
+      expect(deriveSeparationStatus(lines, legacyFullFlagOf(true, true))).toBe(
+        "none"
+      );
+      expect(deriveSeparationStatus(lines, legacyFullFlagOf(true, false))).toBe(
+        "full"
+      );
+    });
   });
 
   it("partial when some open qty is separated", () => {

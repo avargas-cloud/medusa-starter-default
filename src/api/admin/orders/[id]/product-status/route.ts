@@ -60,7 +60,7 @@ export async function GET(
       // estampan; el crudo hacía decir `partial` acá con el modal en full.
       separated: effectiveSeparatedOf(l),
     })),
-    data.legacySeparatedFlag
+    data.legacyFullFlag
   );
 
   const purchase_orders = await loadPosForOrder(pool, orderId);
@@ -70,7 +70,11 @@ export async function GET(
       id: data.orderId,
       display_id: data.displayId,
       separation_status,
-      legacy_separated_flag: data.legacySeparatedFlag,
+      // El nombre del campo en el cable conserva la forma vieja (lo declara el
+      // DTO del POS, que no lo lee nadie); lo que cambió es su VALOR: hoy sale
+      // `true` sólo si además la orden no tiene ninguna fila. Ver el contrato
+      // en `separation-data.ts`.
+      legacy_separated_flag: data.legacyFullFlag,
     },
     lines: data.lines.map((l) => {
       const cap = caps.get(l.lineId);

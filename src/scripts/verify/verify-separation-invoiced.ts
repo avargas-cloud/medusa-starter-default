@@ -206,7 +206,7 @@ export default async function verifySeparationInvoiced({
         fulfilled: l.fulfilled,
         separated: effectiveSeparatedOf(l),
       })),
-      data.legacySeparatedFlag
+      data.legacyFullFlag
     );
     const raw = (o.metadata ?? {}).separation_status;
     const shown = raw === "partial" || raw === "full" ? raw : "none";
