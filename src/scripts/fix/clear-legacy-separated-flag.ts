@@ -1,6 +1,11 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 import { Client } from "pg";
 
+// El MISMO fragmento que usan el modal, la lista y la ruta de escritura. Que el
+// guard traiga su propia definición de "apartado" es exactamente cómo terminó
+// midiendo distinto que todo el resto.
+import { liveFulfilledSql } from "../../api/admin/orders/_lib/separation-sql";
+
 /**
  * Clears the pre-per-line `metadata.is_separated` flag on NAMED orders.
  *
@@ -54,7 +59,11 @@ export default async function clearLegacySeparatedFlag({
               o.metadata->>'is_separated'      AS is_separated,
               o.metadata->>'separation_status' AS separation_status,
               (SELECT COUNT(*) FROM order_line_separation s
-                WHERE s.order_id = o.id AND s.qty > 0) AS rows_with_qty
+                WHERE s.order_id = o.id
+                  AND s.qty > ${liveFulfilledSql(
+                    "s.order_id",
+                    "s.order_line_item_id"
+                  )}) AS rows_with_qty
          FROM "order" o
         WHERE o.id = ANY($1::text[]) AND o.deleted_at IS NULL`,
       [ids]
@@ -75,6 +84,15 @@ export default async function clearLegacySeparatedFlag({
       // Refuse to erase a REAL separation. Only the legacy shape — flag set, no
       // line actually set aside — is safe to clear without asking a human what
       // is physically on the shelf.
+      //
+      // "Set aside" se mide NETO de lo entregado (2026-08-31), que es como lo
+      // mide todo lector del dominio (`netSeparatedSql`). Contaba `s.qty > 0`
+      // —la columna CRUDA— y por eso una orden cuyas unidades apartadas ya
+      // salieron del depósito le parecía una separación viva: S11265 (3
+      // apartadas el 13-ago, las 3 entregadas después, neto 0) quedaba
+      // inarreglable, con el guard defendiendo unidades que no están en ningún
+      // estante. Medir con una regla distinta a la del resto del dominio es el
+      // mismo defecto que este guard existe para prevenir.
       if (Number(r.rows_with_qty) > 0) {
         console.log(
           `${label}: REFUSING — ${r.rows_with_qty} line(s) carry a separated quantity. ` +
