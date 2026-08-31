@@ -168,12 +168,31 @@ export async function enqueueQbVendorBillAdd(
   if (bill.qb_source === "adopted") {
     return { queued: false, reason: "adopted_bill_readonly" };
   }
-  // An EXPENSE bill (operating expenses — supplies, installs, office costs)
-  // never has a purchase order: that is its defining structure. Every other
-  // type still requires one — for them a missing PO is data damage, not a
-  // document shape.
-  if (!bill.purchase_order_id && bill.bill_type !== "expense") {
-    return { queued: false, reason: "bill has no purchase order" };
+  // NO PURCHASE ORDER IS A DOCUMENT SHAPE, NOT DAMAGE (generalised 2026-08-31).
+  //
+  // This used to carve out `expense` alone and call a missing PO "data damage"
+  // for every other type. That was wrong for a real, legitimate case the owner
+  // named: a SERVICE bill for a sales commission (VB-1132 CPS CABINETS $2,450,
+  // VB-1133 AAF ELECTRICAL $2,676.13, both "Commission for Sale:Referral").
+  // There is no purchase to attach them to, so the guard refused them forever
+  // and they sat confirmed and unsent — silently, because the caller ignored
+  // the reason.
+  //
+  // The rule that replaces the carve-out is structural, the same way the
+  // clearing shape is decided by structure rather than by a vendor flag
+  // (2026-08-04): a bill with no purchase order has no regular bill that could
+  // ever absorb or clear it, so it is its own document and goes on its own.
+  // `enqueuePurchaseQbOperation` below already keys such a bill's dependency
+  // chain by its OWN id, which is what makes this safe for any type.
+  //
+  // Whether it is TIME to send is not decided here — that is
+  // qb-vendor-bill-sibling-dispatch.ts. This guard only answers whether the
+  // document can be built at all.
+  if (!bill.purchase_order_id && bill.bill_type === "regular") {
+    // A regular bill is the one type that genuinely cannot exist without a PO:
+    // its item lines are PO-linked goods, and `LinkToTxn` has nothing to point
+    // at. For it, a missing PO really is damage.
+    return { queued: false, reason: "regular bill has no purchase order" };
   }
 
   let po: PoRow | null = null;

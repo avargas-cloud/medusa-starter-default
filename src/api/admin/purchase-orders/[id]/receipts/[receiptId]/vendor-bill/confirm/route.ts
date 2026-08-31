@@ -44,6 +44,10 @@ import {
   type FreightPolicy,
 } from "../../../../../../../../lib/purchase-orders/freight-policy";
 import { enqueueQbVendorBillAdd } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-enqueue";
+import {
+  dispatchConfirmedSiblings,
+  fatalSiblingOutcomes,
+} from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
 import { enqueueChinaAgencyVendorBillModGroup } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import {
   receiptQuantitiesMatchBill,
@@ -1233,6 +1237,27 @@ export async function POST(
       WHERE id = ? AND deleted_at IS NULL AND status = 'draft'`,
       [vbNumber, userId, revisionId, bill.id]
     );
+
+    // Confirming the REGULAR bill is the green light for its whole group.
+    //
+    // Its item lines carry the full landed cost, so it posts a NEGATIVE
+    // clearing line per sibling. Those subtractions are only honest once the
+    // sibling Bills exist in QuickBooks — so the siblings go FIRST. The
+    // dependency chain is serial per purchase order, which makes enqueue order
+    // the order QuickBooks receives them: A/P is never short in between.
+    //
+    // Siblings still in draft are skipped; their own confirm will find this
+    // regular already confirmed and dispatch them (the other half of the rule
+    // in qb-vendor-bill-sibling-dispatch.ts).
+    const siblingOutcomes = await dispatchConfirmedSiblings(trx, bill.id);
+    const fatalSiblings = fatalSiblingOutcomes(siblingOutcomes);
+    if (fatalSiblings.length > 0) {
+      throw new Error(
+        `QuickBooks BillAdd could not be queued for linked ${fatalSiblings
+          .map((s) => `${s.bill_type} bill ${s.number ?? s.vendor_bill_id} (${s.reason})`)
+          .join("; ")}`
+      );
+    }
 
     // Freeze the QB outbox in the same transaction. Dispatch remains async, but
     // a confirmed revision can no longer exist without its durable QB intent.

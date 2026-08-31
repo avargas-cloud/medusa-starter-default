@@ -35,6 +35,10 @@ import {
 } from "../../../../lib/purchase-orders/qb-vendor-bill-clearing-lines";
 import { loadClearingSiblings } from "../../../../lib/purchase-orders/load-clearing-siblings";
 import {
+  decideSecondaryDispatch,
+  loadSecondaryDispatchFacts,
+} from "../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
+import {
   buildAdjustmentNote,
   diffBillLines,
   type AdjLineState,
@@ -845,6 +849,29 @@ export async function GET(
       }
     : null;
 
+  // B1.6 — "is this secondary bill WAITING, or was it LOST?" (2026-08-31)
+  //
+  // A service/freight/tariff bill that is `confirmed` with no `qb_txn_id` looks
+  // identical in both cases, and that is precisely why 18 of them went unnoticed
+  // for a month: the screen said "confirmed", the operator read "done", and
+  // QuickBooks had never heard of the document.
+  //
+  // Computed with `decideSecondaryDispatch` — the SAME pure function the two
+  // confirm routes use to decide whether to send. Deriving the banner from an
+  // independent copy of the rule is how a screen ends up contradicting the
+  // dispatcher; here they cannot disagree. Null for a regular bill and for
+  // anything already in QuickBooks.
+  let qb_dispatch: { deferred: boolean; reason: string } | null = null;
+  if (header.bill_type !== "regular" && header.qb_txn_id == null) {
+    const dispatchFacts = await loadSecondaryDispatchFacts(knex as never, id);
+    if (dispatchFacts) {
+      const decision = decideSecondaryDispatch(dispatchFacts);
+      qb_dispatch = decision.dispatch
+        ? { deferred: false, reason: decision.reason }
+        : { deferred: decision.deferred, reason: decision.reason };
+    }
+  }
+
   // B1.5 — "a linked bill was edited; this one needs review".
   //
   // Every bill syncs to QuickBooks on its own (owner decision, 2026-08-04), so
@@ -907,6 +934,7 @@ export async function GET(
       suggested_receipt_ids,
       qb,
       qb_pipeline,
+      qb_dispatch,
       clearing_drift,
       revisions,
     },

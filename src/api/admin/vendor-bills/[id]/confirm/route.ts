@@ -17,9 +17,19 @@ import {
 } from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 import { enqueueQbVendorBillAdd } from "../../../../../lib/purchase-orders/qb-vendor-bill-enqueue";
 import { enqueueVendorBillModSingle } from "../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
+import {
+  decideSecondaryDispatch,
+  loadSecondaryDispatchFacts,
+} from "../../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  transaction: () => Promise<
+    KnexInstance & {
+      commit: () => Promise<void>;
+      rollback: () => Promise<void>;
+    }
+  >;
 };
 
 function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
@@ -114,46 +124,86 @@ export async function POST(
     vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
   }
 
-  await knex.raw(
-    `UPDATE vendor_bill
-     SET number = ?,
-         status = 'confirmed',
-         confirmed_at = NOW(),
-         confirmed_by_user_id = ?,
-         updated_at = NOW()
-     WHERE id = ? AND deleted_at IS NULL`,
-    [vbNumber, userId, id]
-  );
-
-  // Send it to QuickBooks. Until 2026-08-04 this route confirmed the bill and
-  // returned — no enqueue at all — so a service/freight/tariff bill was a
-  // finished document in the POS that QuickBooks had never heard of. Four of
-  // them ($2,325.25, all 2026-07-29) sat that way, and VB-1061 was edited to
-  // $346.43 while QuickBooks kept quoting $328.60.
+  // THE CONFIRM AND ITS QUICKBOOKS INTENT ARE ONE OPERATION (2026-08-31).
   //
-  // Each bill goes ALONE (owner decision): the group Mod would drag the regular
-  // bill along, and that one may be mid-repair. The regular's clearing lines go
-  // stale as a result, which is what `qbResyncPending` on it is for.
-  let qbQueued: { queued: boolean; reason?: string } = { queued: false };
+  // This route used to run outside any transaction and swallow an enqueue
+  // failure into a 200 carrying `qb_sync: {queued:false, reason}` — a field the
+  // POS never even declared, so the reason arrived and nobody read it. Measured
+  // against production: not ONE service/freight/tariff bill ever produced a
+  // BillAdd row, in either pipeline table, since the feature shipped. 18 bills
+  // sat "finished" while QuickBooks had never heard of them, and nothing turned
+  // red, because a row that is never created cannot fail.
+  //
+  // So the write now behaves like the regular bill's confirm: one transaction,
+  // and a dispatch we decided to do that fails takes the confirm down with it.
+  const trx = await knex.transaction();
+  let qbQueued: { queued: boolean; reason: string; deferred?: boolean };
   try {
-    const billRow = await knex.raw(
+    await trx.raw(
+      `UPDATE vendor_bill
+       SET number = ?,
+           status = 'confirmed',
+           confirmed_at = NOW(),
+           confirmed_by_user_id = ?,
+           updated_at = NOW()
+       WHERE id = ? AND deleted_at IS NULL`,
+      [vbNumber, userId, id]
+    );
+
+    const billRow = await trx.raw(
       `SELECT qb_txn_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
       [id]
     );
     const qbTxnId = (billRow.rows[0] as { qb_txn_id: string | null } | undefined)
       ?.qb_txn_id;
-    qbQueued = qbTxnId
-      ? await enqueueVendorBillModSingle(knex as never, id)
-      : await enqueueQbVendorBillAdd(knex as never, id);
+
+    if (qbTxnId) {
+      // ALREADY in QuickBooks: this is a correction to a live document and is
+      // NEVER deferred. Holding a Mod back would leave QuickBooks quoting the
+      // old amount — exactly the VB-1061 failure ($346.43 here, $328.60 there).
+      //
+      // Each bill goes ALONE (owner decision): the group Mod would drag the
+      // regular bill along, and that one may be mid-repair. The regular's
+      // clearing lines go stale as a result, which is what `qbResyncPending`
+      // on it is for.
+      const mod = await enqueueVendorBillModSingle(trx as never, id);
+      qbQueued = mod.queued
+        ? { queued: true, reason: "queued" }
+        : { queued: false, reason: mod.reason };
+      if (!qbQueued.queued) {
+        throw new Error(`QuickBooks BillMod could not be queued: ${qbQueued.reason}`);
+      }
+    } else {
+      // NOT in QuickBooks yet — the pair rule decides.
+      const facts = await loadSecondaryDispatchFacts(trx, id);
+      if (!facts) throw new Error("Vendor bill vanished mid-confirm");
+      const decision = decideSecondaryDispatch(facts);
+
+      if (!decision.dispatch) {
+        // Deferred is a HEALTHY outcome, not a failure: the regular bill's
+        // confirm will dispatch this one. It is reported so the POS can say so.
+        qbQueued = {
+          queued: false,
+          reason: decision.reason,
+          deferred: decision.deferred,
+        };
+      } else {
+        const add = await enqueueQbVendorBillAdd(trx as never, id);
+        if (!add.queued) {
+          throw new Error(`QuickBooks BillAdd could not be queued: ${add.reason}`);
+        }
+        qbQueued = { queued: true, reason: decision.reason };
+      }
+    }
+    await trx.commit();
   } catch (qbErr) {
-    // A QuickBooks enqueue failure must not un-confirm the bill: the local
-    // document is correct and the sync is retryable. It is reported, never
-    // swallowed — a silent catch here is how this gap stayed invisible.
-    console.error("[vendor-bill-confirm] QB enqueue failed:", qbErr);
-    qbQueued = {
-      queued: false,
-      reason: qbErr instanceof Error ? qbErr.message : "enqueue failed",
-    };
+    await trx.rollback().catch(() => undefined);
+    console.error("[vendor-bill-confirm] confirm failed:", qbErr);
+    return res.status(500).json({
+      error:
+        qbErr instanceof Error ? qbErr.message : "Vendor bill confirm failed",
+      code: "confirm_failed",
+    });
   }
 
   const headerResult = await knex.raw(
