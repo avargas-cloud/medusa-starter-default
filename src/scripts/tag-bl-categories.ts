@@ -93,12 +93,48 @@ export default async function tagBlCategories({ container }: ExecArgs) {
         writeFileSync(backupPath, JSON.stringify(pending.map((t) => ({ variant_id: t.variant_id, sku: t.sku, metadata: t.metadata })), null, 2))
         console.log(`\n  respaldo del metadata previo: ${backupPath}`)
 
-        for (const t of pending) {
-            const next = { ...(t.metadata ?? {}) } as Record<string, unknown>
-            const bl = { ...((next.backlighting as Record<string, unknown>) ?? {}) }
-            bl.category = LL_TO_BL[t.ll_category]
-            next.backlighting = bl
-            await db.query(`UPDATE product_variant SET metadata = $1, updated_at = now() WHERE id = $2`, [next, t.variant_id])
+        // ── Por qué el merge se hace en SQL y no en JS ──────────────────────
+        // La versión anterior leía el metadata, lo mutaba en memoria y escribía
+        // el OBJETO ENTERO. Entre el SELECT y el UPDATE pasan segundos, y el
+        // pipeline de QuickBooks escribe `quickbooks_id` / `qb_edit_sequence` en
+        // ese mismo campo cada minuto en producción: cualquier escritura suya en
+        // esa ventana se perdía sin dejar rastro. Acá el `||` mergea DENTRO de
+        // Postgres, en los dos niveles, así que ninguna otra clave se toca —
+        // ni las que existan y este proceso no haya visto nunca.
+        //
+        // Y el `WHERE` lleva el valor esperado (compare-and-swap): si la fila se
+        // movió por debajo, no matchea, el conteo queda corto y se aborta la
+        // transacción entera. `IS NOT DISTINCT FROM` y no `=`, porque las 15 sin
+        // taguear tienen ese valor en NULL y `=` nunca matchearía.
+        await db.query("BEGIN")
+        try {
+            let written = 0
+            for (const t of pending) {
+                const res = await db.query(
+                    `UPDATE product_variant
+                        SET metadata = COALESCE(metadata, '{}'::jsonb)
+                                     || jsonb_build_object('backlighting',
+                                          COALESCE(metadata->'backlighting', '{}'::jsonb)
+                                          || jsonb_build_object('category', $1::text)),
+                            updated_at = now()
+                      WHERE id = $2
+                        AND deleted_at IS NULL
+                        AND metadata->'backlighting'->>'category' IS NOT DISTINCT FROM $3`,
+                    [LL_TO_BL[t.ll_category], t.variant_id, t.current],
+                )
+                if (res.rowCount !== 1) {
+                    throw new Error(
+                        `${t.sku ?? t.variant_id}: la fila cambió por debajo (esperaba ` +
+                        `${t.current ?? "sin taguear"}). No se escribió nada — la transacción se revierte.`,
+                    )
+                }
+                written += 1
+            }
+            await db.query("COMMIT")
+            console.log(`\n  ${written} filas escritas en UNA transacción, con compare-and-swap`)
+        } catch (e) {
+            await db.query("ROLLBACK")
+            throw e
         }
 
         const after = await db.query<{ cat: string; n: string }>(`
