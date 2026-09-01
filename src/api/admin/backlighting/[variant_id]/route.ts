@@ -1,16 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+import { VALID_BACKLIGHTING_CATEGORIES as VALID_CATEGORIES } from "../_categories";
 
 const DB = () => new Client({ connectionString: process.env.DATABASE_URL });
-
-const VALID_CATEGORIES = new Set([
-    "led-modules",
-    "led-drivers",
-    "controllers",
-    "amplifiers",
-    "remotes",
-    "accessories",
-]);
 
 interface ReqWithUser {
     auth_context?: { actor_id?: string; email?: string };
