@@ -57,3 +57,66 @@ export async function fetchReturnedProductCostDollars(
   )
   return Number(result.rows[0]?.cost ?? 0)
 }
+
+/**
+ * Costo de la mercadería DEVUELTA, listo para restar del COGS, en dólares y
+ * **por grano** — no un total del período.
+ *
+ * ## Por qué hace falta
+ *
+ * Cuando un cliente devuelve, pasan dos cosas: le devolvés la plata y la
+ * mercadería vuelve al estante. Los reportes netean lo primero y **no** lo
+ * segundo, así que cobran el costo de algo que nunca vendieron y el gross
+ * profit sale más chico de lo que fue: $7,219.06 subestimados en 2026.
+ *
+ * `fetchReturnedProductCostDollars` (arriba) ya hacía esta reversión, pero
+ * devuelve UN número del período entero y por eso sólo le sirve a
+ * `purchases/supply-chain`, que reporta un total. Un reporte que agrupa por
+ * cliente o por producto necesita el costo repartido en ESE grano; de ahí estos
+ * dos CTEs, mismo patrón que `CM_REFUNDS_BY_CUSTOMER_CTE` en `sales-revenue.ts`.
+ *
+ * ## La regla que no se puede tocar
+ *
+ * `GREATEST(0, quantity - damaged_qty)`. Una unidad devuelta DAÑADA se le
+ * reembolsa al cliente pero **no vuelve al estante** — `credit_memos/[id]/complete`
+ * restockea exactamente esta diferencia — así que su costo sigue siendo un gasto
+ * real y no se revierte. En 2026 fueron 25 unidades en 23 líneas. Quien "corrija"
+ * esto para que el número cierre más redondo rompe justo lo que lo hace correcto.
+ *
+ * El costo usa el MISMO fallback que `COST_DOLLARS` (snapshot congelado primero,
+ * costo canónico vivo después), o la reversión quedaría en otra base que el cargo.
+ *
+ * Cada CTE lleva DOS placeholders `?` (desde, hasta), en el orden en que aparece
+ * en el texto del SQL: al insertarlo hay que reacomodar los bindings de la ruta.
+ */
+const RETURNED_COST_SELECT = `
+    COALESCE(cmi.average_unit_cost, ${avgCostDollars("pv")}, 0)
+    * GREATEST(0, cmi.quantity - COALESCE(cmi.damaged_qty, 0))`;
+
+const RETURNED_COST_FROM = `
+  FROM pos_credit_memo cm
+  JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
+  LEFT JOIN product_variant pv ON pv.id = cmi.variant_id AND pv.deleted_at IS NULL
+  WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+    AND COALESCE(cm.completed_at, cm.created_at) >= ?
+    AND COALESCE(cm.completed_at, cm.created_at) <  ?`;
+
+/** Costo devuelto por CLIENTE. Alias del CTE: `returned_cost`. */
+export const RETURNED_COST_BY_CUSTOMER_CTE = `
+  returned_cost AS (
+    SELECT cm.customer_id, SUM(${RETURNED_COST_SELECT}) AS returned_cost_dollars
+    ${RETURNED_COST_FROM}
+      AND cm.customer_id IS NOT NULL
+    GROUP BY cm.customer_id
+  )
+`;
+
+/** Costo devuelto por VARIANTE. Alias del CTE: `returned_cost_variant`. */
+export const RETURNED_COST_BY_VARIANT_CTE = `
+  returned_cost_variant AS (
+    SELECT cmi.variant_id, SUM(${RETURNED_COST_SELECT}) AS returned_cost_dollars
+    ${RETURNED_COST_FROM}
+      AND cmi.variant_id IS NOT NULL
+    GROUP BY cmi.variant_id
+  )
+`;

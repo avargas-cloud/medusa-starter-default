@@ -37,6 +37,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND i.issued_at >= ? AND i.issued_at < ?
          GROUP BY 1
        ),
+       returned_by_user AS (
+         SELECT COALESCE(NULLIF(TRIM(cm.sales_rep->>'name'), ''), 'Unassigned Agent') AS pos_user,
+                SUM(COALESCE(cmi.average_unit_cost, 0) * GREATEST(0, cmi.quantity - COALESCE(cmi.damaged_qty, 0))) AS returned_cost
+         FROM pos_credit_memo cm
+         JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
+         WHERE cm.deleted_at IS NULL
+           AND cm.status = 'completed'
+           AND COALESCE(cm.completed_at, cm.created_at) >= ?
+           AND COALESCE(cm.completed_at, cm.created_at) <  ?
+         GROUP BY 1
+       ),
        cm_refunds AS (
          SELECT
            COALESCE(NULLIF(TRIM(cm.sales_rep->>'name'), ''), 'Unassigned Agent') AS pos_user,
@@ -57,11 +68,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          COALESCE(g.gross_revenue, 0)::bigint              AS gross_revenue,
          COALESCE(g.item_refunded, 0)::bigint              AS item_refunded,
          COALESCE(r.cm_refunded, 0)::bigint                AS cm_refunded,
-         COALESCE(g.cogs, 0)::bigint                       AS cogs
+         (COALESCE(g.cogs, 0) - COALESCE(ru.returned_cost, 0))::numeric AS cogs
        FROM gross g
        FULL OUTER JOIN cm_refunds r ON r.pos_user = g.pos_user
+       LEFT JOIN returned_by_user ru ON ru.pos_user = COALESCE(g.pos_user, r.pos_user)
        ORDER BY (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0)) DESC`,
-      [range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

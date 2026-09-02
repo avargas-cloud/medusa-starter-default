@@ -1,6 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
-import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
+import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -10,11 +12,21 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `WITH period_cte AS (
+      `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       ${RETURNED_COST_BY_CUSTOMER_CTE},
+       -- lifetime NO lleva ventana: su contraparte de ingreso tampoco la lleva.
+       cm_refunds_lifetime AS (
+         SELECT cm.customer_id, SUM(COALESCE(cm.subtotal,
+                  GREATEST(cm.total - COALESCE(cm.tax,0) - COALESCE(cm.shipping,0), 0)))::bigint AS cm_refunded
+         FROM pos_credit_memo cm
+         WHERE cm.deleted_at IS NULL AND cm.status = 'completed' AND cm.customer_id IS NOT NULL
+         GROUP BY cm.customer_id
+       ),
+       period_cte AS (
          SELECT
            i.customer_id,
            COUNT(DISTINCT i.id)::int          AS period_orders,
-           SUM(pii.total)::bigint             AS period_revenue,
+           SUM(${NET_ITEM_REVENUE})::bigint             AS period_revenue,
            SUM(${COST_DOLLARS})::bigint         AS period_cogs
          FROM pos_invoice i
          JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
@@ -28,7 +40,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            i.customer_id,
            COUNT(DISTINCT i.id)::int          AS lifetime_orders,
-           SUM(pii.total)::bigint             AS lifetime_revenue,
+           SUM(${NET_ITEM_REVENUE})::bigint             AS lifetime_revenue,
            MIN(i.issued_at)                   AS first_order_at,
            MAX(i.issued_at)                   AS last_order_at
          FROM pos_invoice i
@@ -36,6 +48,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          WHERE i.deleted_at IS NULL AND i.status NOT IN ('draft','voided')
            AND i.customer_id IS NOT NULL
          GROUP BY i.customer_id
+       ),
+       net_period AS (
+         SELECT p.customer_id, p.period_orders, p.period_cogs - COALESCE(rc.returned_cost_dollars, 0) AS period_cogs,
+                p.period_revenue - COALESCE(r.cm_refunded, 0) AS period_revenue
+         FROM period_cte p LEFT JOIN cm_refunds r ON r.customer_id = p.customer_id
+         LEFT JOIN returned_cost rc ON rc.customer_id = p.customer_id
+       ),
+       net_lifetime AS (
+         SELECT l.customer_id, l.lifetime_orders, l.first_order_at, l.last_order_at,
+                l.lifetime_revenue - COALESCE(rl.cm_refunded, 0) AS lifetime_revenue
+         FROM lifetime_cte l LEFT JOIN cm_refunds_lifetime rl ON rl.customer_id = l.customer_id
        )
        SELECT
          pc.customer_id,
@@ -51,11 +74,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          lc.lifetime_revenue,
          lc.first_order_at,
          lc.last_order_at
-       FROM period_cte pc
-       JOIN lifetime_cte lc ON lc.customer_id = pc.customer_id
+       FROM net_period pc
+       JOIN net_lifetime lc ON lc.customer_id = pc.customer_id
        JOIN customer c ON c.id = pc.customer_id
        ORDER BY pc.period_revenue DESC`,
-      [range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

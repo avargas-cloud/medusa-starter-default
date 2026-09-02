@@ -1,6 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
-import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 
 // Revenue per customer is NET (gross − credit memos completed in the period),
@@ -16,7 +16,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `WITH gross AS (
+      `WITH ${RETURNED_COST_BY_CUSTOMER_CTE},
+       gross AS (
          SELECT
            i.customer_id,
            COUNT(DISTINCT i.id)::int                         AS invoice_count,
@@ -55,19 +56,22 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          COALESCE(g.gross_revenue, 0)::bigint              AS gross_revenue,
          COALESCE(g.item_refunded, 0)::bigint              AS item_refunded,
          COALESCE(r.cm_refunded, 0)::bigint                AS cm_refunded,
-         COALESCE(g.cogs, 0)::bigint                       AS cogs
+         COALESCE(g.cogs, 0)::bigint                       AS cogs,
+         COALESCE(rc.returned_cost_dollars, 0)             AS returned_cost
        FROM gross g
        FULL OUTER JOIN cm_refunds r ON r.customer_id = g.customer_id
+       LEFT JOIN returned_cost rc ON rc.customer_id = COALESCE(g.customer_id, r.customer_id)
        LEFT JOIN customer c ON c.id = COALESCE(g.customer_id, r.customer_id)
        ORDER BY (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0)) DESC`,
-      [range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {
       const gross_revenue = Number(r.gross_revenue) / 100
       const cm_refunded   = Number(r.cm_refunded) / 100
       const revenue       = gross_revenue - cm_refunded
-      const cogs          = Number(r.cogs)
+      // El costo de lo devuelto vuelve al estante: no es COGS de este período.
+      const cogs          = Number(r.cogs) - Number(r.returned_cost ?? 0)
       const profit        = revenue - cogs
       const invoice_count = Number(r.invoice_count)
       return {

@@ -64,3 +64,40 @@ export async function fetchCmRefundsCentsForPeriod(
   )
   return Number(result.rows[0]?.refund_cents ?? 0)
 }
+
+/**
+ * Devoluciones por CLIENTE dentro de la ventana, en centavos.
+ *
+ * Los 8 reportes de `customers/` no revertían refunds: informaban el ingreso
+ * bruto de facturación como si nada hubiera vuelto ($20,146.77 sobre el
+ * histórico). Todos agrupan por `customer_id` en su nivel interno, así que este
+ * único CTE les sirve a los ocho — y, sobre todo, usa EXACTAMENTE la misma
+ * convención que el resto de `sales/`, que es lo que hace que las dos familias
+ * de reportes puedan por fin dar el mismo número para el mismo cliente.
+ *
+ * VIVE ACÁ Y NO EN `revenue-expr.ts` por una razón que costó un boot caído:
+ * este archivo ya importa `revenue-expr`, así que el import inverso cierra un
+ * CICLO y Medusa muere al registrar las rutas con "Cannot access
+ * CM_REFUND_CENTS_EXPR before initialization". `yarn type-check` y `yarn build`
+ * pasan los DOS con ese ciclo puesto — sólo lo caza arrancar el servidor.
+ *
+ * Lleva DOS placeholders `?` (desde, hasta), en el orden en que el CTE aparece
+ * en el texto del SQL: al insertarlo hay que reacomodar el array de bindings.
+ *
+ * OJO — inconsistencia PREEXISTENTE que hereda a propósito: el ingreso se netea
+ * de la devolución pero el COGS NO se revierte (sólo `purchases/supply-chain`
+ * llama a `fetchReturnedProductCostDollars`). Eso subestima el profit en ambas
+ * familias por igual. Se replica en vez de corregirse acá para que `customers/`
+ * y `sales/` COINCIDAN; arreglar la reversión de COGS es un cambio propio, para
+ * los dos lados a la vez.
+ */
+export const CM_REFUNDS_BY_CUSTOMER_CTE = `
+  cm_refunds AS (
+    SELECT cm.customer_id, SUM(${CM_REFUND_CENTS_EXPR})::bigint AS cm_refunded
+    FROM pos_credit_memo cm
+    WHERE ${CM_REFUND_SCOPE_SQL}
+      AND ${CM_REFUND_DATE_COL} >= ? AND ${CM_REFUND_DATE_COL} < ?
+      AND cm.customer_id IS NOT NULL
+    GROUP BY cm.customer_id
+  )
+`

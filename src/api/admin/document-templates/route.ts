@@ -43,6 +43,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         "return",
         "statement",
         "payment",
+        "packing_slip",
       ].includes(doc_type)
     ) {
       query += " WHERE doc_type = $1";
@@ -76,7 +77,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         | "factory_order"
         | "return"
         | "statement"
-        | "payment";
+        | "payment"
+        | "packing_slip";
       field_config?: Record<string, any>;
       layout_data?: any[];
       is_default?: boolean;

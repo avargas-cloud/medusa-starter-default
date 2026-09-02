@@ -41,7 +41,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            COALESCE(pt.category, 'Uncategorized')                        AS category,
            pt.category_id                                                 AS category_id,
-           SUM(cmi.line_total)::bigint                                   AS cm_refunded
+           SUM(cmi.line_total)::bigint                                   AS cm_refunded,
+           -- El costo de lo devuelto vuelve al estante: se resta del COGS.
+           -- Se usa quantity menos damaged_qty porque lo dañado se reembolsa
+           -- pero NO se restockea: su costo sigue siendo gasto real.
+           -- (Sin backticks: adentro de un template literal JS cierran el string.)
+           SUM(COALESCE(cmi.average_unit_cost, 0) * GREATEST(0, cmi.quantity - COALESCE(cmi.damaged_qty, 0)))                                        AS returned_cost
          FROM pos_credit_memo cm
          JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
          LEFT JOIN product_variant pv ON pv.id = cmi.variant_id
@@ -58,7 +63,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(g.category_id, r.category_id)                        AS category_id,
            COALESCE(g.qty_sold, 0)::int                                  AS qty_sold,
            (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
-           COALESCE(g.cogs, 0)::bigint                                   AS cogs,
+           (COALESCE(g.cogs, 0) - COALESCE(r.returned_cost, 0))::numeric AS cogs,
            COALESCE(g.invoice_count, 0)::int                             AS invoice_count
          FROM gross g
          FULL OUTER JOIN cm_refunds r

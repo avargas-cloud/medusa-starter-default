@@ -2,7 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 import { avgCostDollars } from "../../../../../lib/cost/cost-sql"
 import { parseDateRange } from "../../_lib/date-range"
-import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_VARIANT_CTE } from "../../_lib/cogs-join"
 import { parseRegion, regionClause } from "../../_lib/region-filter"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { TIER1_CTE } from "../../_lib/category-tier1"
@@ -18,6 +18,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const result = await pg.raw(
       `WITH RECURSIVE ${TIER1_CTE},
+       ${RETURNED_COST_BY_VARIANT_CTE},
        gross AS (
          SELECT
            pii.variant_id,
@@ -62,10 +63,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(g.category, 'Uncategorized')           AS category,
            COALESCE(g.qty_sold, 0)::int                    AS qty_sold,
            (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
-           COALESCE(g.cogs, 0)::bigint                     AS cogs,
+           (COALESCE(g.cogs, 0) - COALESCE(rc.returned_cost_dollars, 0))::numeric AS cogs,
            COALESCE(g.invoice_count, 0)::int               AS invoice_count
          FROM gross g
          FULL OUTER JOIN cm_refunds r ON r.variant_id = g.variant_id
+         LEFT JOIN returned_cost_variant rc
+           ON rc.variant_id = COALESCE(g.variant_id, r.variant_id)
          UNION ALL
          SELECT
            NULL::text                                                       AS variant_id,
@@ -90,7 +93,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND ic.applied_at >= ? AND ic.applied_at < ?
        ) t
        ORDER BY revenue DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

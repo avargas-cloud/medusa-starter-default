@@ -1,5 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange, priorPeriod } from "../../_lib/date-range"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -11,7 +13,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const [curr, prev] = await Promise.all([
       pg.raw(
-        `WITH first_purchase AS (
+        `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+         first_purchase AS (
            SELECT customer_id, MIN(issued_at) AS first_purchase_at
            FROM pos_invoice
            WHERE deleted_at IS NULL AND status NOT IN ('draft','voided') AND customer_id IS NOT NULL
@@ -20,13 +23,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          period_stats AS (
            SELECT i.customer_id,
              COUNT(DISTINCT i.id) AS order_count,
-             SUM(pii.total)::bigint AS revenue
+             SUM(${NET_ITEM_REVENUE})::bigint AS revenue
            FROM pos_invoice i
            JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
            WHERE i.deleted_at IS NULL AND i.status NOT IN ('draft','voided')
              AND i.customer_id IS NOT NULL
              AND i.issued_at >= ? AND i.issued_at < ?
            GROUP BY i.customer_id
+         ),
+         net_stats AS (
+           SELECT ps.customer_id, ps.order_count,
+                  ps.revenue - COALESCE(r.cm_refunded, 0) AS revenue
+           FROM period_stats ps
+           LEFT JOIN cm_refunds r ON r.customer_id = ps.customer_id
          )
          SELECT
            COUNT(*)::int AS total_customers,
@@ -36,10 +45,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                                 AND (c.metadata->>'legacy_customer') IS DISTINCT FROM 'true') THEN 1 END)::int AS returning_customers,
            COALESCE(SUM(ps.order_count)::numeric / NULLIF(COUNT(*), 0), 0) AS avg_orders,
            COALESCE(SUM(ps.revenue)::numeric / NULLIF(COUNT(*), 0), 0) AS avg_revenue_cents
-         FROM period_stats ps
+         FROM net_stats ps
          JOIN customer c ON c.id = ps.customer_id
          JOIN first_purchase fp ON fp.customer_id = ps.customer_id`,
-        [range.from, range.to, range.from, range.to, range.from, range.to]
+        [range.from, range.to, range.from, range.to, range.from, range.to, range.from, range.to]
       ),
       pg.raw(
         `SELECT COUNT(DISTINCT customer_id)::int AS total_customers

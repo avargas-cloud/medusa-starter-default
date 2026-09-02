@@ -2,7 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 import { avgCostDollars } from "../../../../../lib/cost/cost-sql"
 import { parseDateRange, priorPeriod } from "../../_lib/date-range"
-import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { COGS_JOIN, COST_DOLLARS, fetchReturnedProductCostDollars } from "../../_lib/cogs-join"
 import {
   NET_ITEM_REVENUE,
   SALES_ACTIVE_STATUSES_SQL,
@@ -102,11 +102,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       adjCogs,
       prevAdjCogs,
       currRefundCents,
+      returnedCostDollars,
       prevRefundCents,
       currUnitsRet,
       prevUnitsRet,
       currCommissionCents,
-      prevCommissionCents,
+      prevCommissionCents
     ] = await Promise.all([
       fetchPeriodStats(pg, range.from, range.to),
       fetchPeriodStats(pg, prior.from, prior.to),
@@ -114,6 +115,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       fetchInventoryAdjCogs(pg, range.from, range.to),
       fetchInventoryAdjCogs(pg, prior.from, prior.to),
       fetchCmRefundsCentsForPeriod(pg, range.from, range.to),
+      fetchReturnedProductCostDollars(pg, range.from, range.to),
       fetchCmRefundsCentsForPeriod(pg, prior.from, prior.to),
       fetchUnitsReturnedForPeriod(pg, range.from, range.to),
       fetchUnitsReturnedForPeriod(pg, prior.from, prior.to),
@@ -129,7 +131,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const gross_revenue = Number(curr.revenue) / 100   // cents → dollars
     const refunded      = currRefundCents / 100         // CM-authoritative refunds
     const net_revenue   = gross_revenue - refunded
-    const cogs          = Number(curr.cogs) + adjCogs   // dollars + inventory adj
+    // El costo de lo devuelto vuelve al estante: no es COGS de este período.
+    const cogs          = Number(curr.cogs) + adjCogs - Number(returnedCostDollars)
     const gross_profit  = net_revenue - cogs
     const margin_pct    = net_revenue > 0 ? (gross_profit / net_revenue) * 100 : 0
     const refund_pct    = gross_revenue > 0 ? (refunded / gross_revenue) * 100 : 0

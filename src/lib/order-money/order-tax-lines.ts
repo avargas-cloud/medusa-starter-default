@@ -354,8 +354,12 @@ export async function loadOrderMoneyBase(
     // adjustment rows on every edit rather than updating them, so a line with
     // one 12.5% discount edited twice holds three live rows (versions 35, 36,
     // 37) and summing them charges 37.5%. They are history, not duplicates.
-    // The de-dup convention is the repo's existing one from
-    // `api/admin/reports/_lib/item-discount.ts`: newest version per (item, code).
+    // De-dup: newest version per (item, code). Esta consulta es ahora el ÚNICO
+    // lugar del repo que lee `order_line_item_adjustment`; el helper que antes
+    // compartía la convención (`api/admin/reports/_lib/item-discount.ts`) se
+    // borró el 2026-09-01 porque nadie lo importaba y, para reportes, la orden
+    // VIVA es la fuente equivocada: ahí manda `pos_invoice_item.net_total_cents`,
+    // el neto congelado al emitir la factura.
     `SELECT COALESCE(li.taxable, true) AS taxable,
             li.unit_price,
             NULLIF(li.metadata->>'original_unit_price','')::numeric AS original_unit_price,

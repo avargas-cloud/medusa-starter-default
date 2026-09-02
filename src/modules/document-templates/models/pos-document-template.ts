@@ -18,6 +18,7 @@ const PosDocumentTemplate = model.define("pos_document_template", {
     "return",
     "statement",
     "payment",
+    "packing_slip",
   ]),
   is_default: model.boolean().default(false),
   thumbnail: model.text().nullable(), // base64 or Minio URL

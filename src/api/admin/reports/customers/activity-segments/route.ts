@@ -1,5 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -9,13 +11,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `WITH customer_stats AS (
+      `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       customer_stats AS (
          SELECT
            i.customer_id,
            MIN(i.issued_at) AS first_purchase_ever,
            MAX(CASE WHEN i.issued_at < ? THEN i.issued_at END) AS last_before_period,
            COUNT(DISTINCT CASE WHEN i.issued_at >= ? AND i.issued_at < ? THEN i.id END)::int AS orders_in_period,
-           COALESCE(SUM(CASE WHEN i.issued_at >= ? AND i.issued_at < ? THEN pii.total ELSE 0 END), 0)::bigint AS revenue_in_period
+           COALESCE(SUM(CASE WHEN i.issued_at >= ? AND i.issued_at < ? THEN ${NET_ITEM_REVENUE} ELSE 0 END), 0)::bigint AS revenue_in_period
          FROM pos_invoice i
          JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
          WHERE i.deleted_at IS NULL AND i.status NOT IN ('draft','voided')
@@ -26,7 +29,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            cs.customer_id,
            cs.orders_in_period,
-           cs.revenue_in_period,
+           cs.revenue_in_period - COALESCE(r.cm_refunded, 0) AS revenue_in_period,
            CASE
              WHEN cs.orders_in_period > 0
                AND cs.first_purchase_ever >= ? AND cs.first_purchase_ever < ?
@@ -41,6 +44,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            END AS segment
          FROM customer_stats cs
          JOIN customer c ON c.id = cs.customer_id
+         LEFT JOIN cm_refunds r ON r.customer_id = cs.customer_id
        )
        SELECT
          segment,
@@ -52,6 +56,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        GROUP BY segment
        ORDER BY CASE segment WHEN 'new' THEN 1 WHEN 'active' THEN 2 WHEN 'at_risk' THEN 3 ELSE 4 END`,
       [
+        range.from, range.to,   // cm_refunds: ventana de devoluciones
         range.from,             // last_before_period: issued_at < from
         range.from, range.to,   // orders_in_period COUNT
         range.from, range.to,   // revenue_in_period SUM

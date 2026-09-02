@@ -1,5 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -9,11 +11,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `WITH customer_orders AS (
+      `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       customer_orders AS (
          SELECT
            i.customer_id,
            COUNT(DISTINCT i.id)::int AS order_count,
-           SUM(pii.total)::bigint    AS revenue
+           SUM(${NET_ITEM_REVENUE})::bigint    AS revenue
          FROM pos_invoice i
          JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
          WHERE i.deleted_at IS NULL AND i.status NOT IN ('draft','voided')
@@ -21,12 +24,18 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND i.issued_at >= ? AND i.issued_at < ?
          GROUP BY i.customer_id
        ),
+       net_orders AS (
+         SELECT co.customer_id, co.order_count,
+                co.revenue - COALESCE(r.cm_refunded, 0) AS revenue
+         FROM customer_orders co
+         LEFT JOIN cm_refunds r ON r.customer_id = co.customer_id
+       ),
        bucketed AS (
          SELECT
            CASE WHEN order_count >= 5 THEN '5+' ELSE order_count::text END AS bucket,
            CASE WHEN order_count >= 5 THEN 5    ELSE order_count          END AS bucket_sort,
            revenue
-         FROM customer_orders
+         FROM net_orders
        )
        SELECT
          bucket,
@@ -37,7 +46,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        FROM bucketed
        GROUP BY bucket, bucket_sort
        ORDER BY bucket_sort`,
-      [range.from, range.to]
+      [range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => ({

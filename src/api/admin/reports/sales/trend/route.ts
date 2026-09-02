@@ -52,19 +52,50 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const [sales, refunds] = await Promise.all([
       pg.raw(
-        `SELECT
-           ${label}                              AS bucket,
-           SUM(${NET_ITEM_REVENUE})::bigint     AS revenue,
-           SUM(${COST_DOLLARS})::bigint           AS cogs
-         FROM pos_invoice i
-         JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
-         ${COGS_JOIN}
-         WHERE i.deleted_at IS NULL
-           AND ${SALES_ACTIVE_STATUSES_SQL}
-           AND ${SALES_DATE_FILTER_SQL}
-         GROUP BY ${trunc}
-         ORDER BY ${trunc}`,
-        [range.from, range.to]
+        // El costo de lo devuelto se resta DENTRO de esta query, por balde, para
+        // que la forma de salida siga siendo {bucket, revenue, cogs} y
+        // mergeTrendPoints no cambie: ese merge es dinero y su bug vivió en
+        // esas pocas líneas, así que no se toca si no hace falta.
+        //
+        // Límite conocido y aceptado: un balde con devoluciones y CERO ventas no
+        // aparece en `ventas`, así que su costo devuelto no se resta en ningún
+        // lado. El ingreso de ese balde sí se dibuja (la query de refunds va
+        // aparte y el merge une labels), o sea que quedaría en negativo sin su
+        // contraparte de costo. Es el mismo caso que ya se decidió no unir por
+        // JOIN, y no ocurre en los datos actuales.
+        `WITH ventas AS (
+           SELECT
+             ${trunc}                              AS b,
+             ${label}                              AS bucket,
+             SUM(${NET_ITEM_REVENUE})::bigint      AS revenue,
+             SUM(${COST_DOLLARS})::bigint          AS cogs
+           FROM pos_invoice i
+           JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
+           ${COGS_JOIN}
+           WHERE i.deleted_at IS NULL
+             AND ${SALES_ACTIVE_STATUSES_SQL}
+             AND ${SALES_DATE_FILTER_SQL}
+           GROUP BY ${trunc}
+         ),
+         devuelto AS (
+           SELECT
+             ${refundTrunc}                        AS b,
+             SUM(COALESCE(cmi.average_unit_cost, 0)
+                 * GREATEST(0, cmi.quantity - COALESCE(cmi.damaged_qty, 0))) AS returned_cost
+           FROM pos_credit_memo cm
+           JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
+           WHERE ${CM_REFUND_SCOPE_SQL}
+             AND ${CM_REFUND_DATE_COL} >= ?
+             AND ${CM_REFUND_DATE_COL} <  ?
+           GROUP BY ${refundTrunc}
+         )
+         SELECT v.bucket,
+                v.revenue,
+                (v.cogs - COALESCE(d.returned_cost, 0))::numeric AS cogs
+         FROM ventas v
+         LEFT JOIN devuelto d ON d.b = v.b
+         ORDER BY v.b`,
+        [range.from, range.to, range.from, range.to]
       ),
       pg.raw(
         `SELECT
