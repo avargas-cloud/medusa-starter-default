@@ -32,7 +32,14 @@ export async function GET(
   try {
     const pool = getDbPool();
     const { rows } = await pool.query(
-      `SELECT l.id, l.customer_id, l.qb_vendor_id, l.vendor_full_name,
+      // `l.vendor_full_name` es una FOTO del nombre al momento de linkear y
+      // nadie la refresca: renombrar el vendor (en QB, que vuelve por el sync
+      // runner matcheando por ListID, o desde el POS por VendorMod) deja esta
+      // columna con el nombre viejo. El link nunca se rompe —apunta a
+      // `qb_vendor.id`— pero las pantallas mostraban el nombre muerto. Se lee
+      // el vivo y la foto queda de fallback para un vendor borrado.
+      `SELECT l.id, l.customer_id, l.qb_vendor_id,
+              COALESCE(v.full_name, l.vendor_full_name) AS vendor_full_name,
               v.qb_list_id AS vendor_qb_list_id, v.sync_status AS vendor_sync_status
          FROM customer_vendor_link l
          LEFT JOIN qb_vendor v ON v.id = l.qb_vendor_id

@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { getDbPool } from "../../../../utils/db-pool";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../modules/quickbooks-catalog";
 import { pushVendorModToQuickBooks } from "../../../../../lib/quickbooks/qb-vendor-mod";
 import {
@@ -216,6 +217,56 @@ export const PATCH = async (
   }
   if ("full_name" in updates && !updates.full_name) {
     return res.status(400).json({ error: "full_name cannot be blank" });
+  }
+
+  // ── El vendor espejo no puede llamarse igual que su customer ────────────────
+  // QuickBooks Desktop comparte namespace entre las listas de Customer y de
+  // Vendor (ORDER_COMMISSIONS_PLAN §3.7): por eso el espejo de comisiones nace
+  // con el sufijo " (Comm)". Renombrarlo al nombre pelado del customer lo hace
+  // rechazar por QuickBooks — pero la escritura LOCAL ya habría pasado, y el
+  // VendorMod corre después y en background, así que el resultado era una fila
+  // local renombrada, QB con el nombre viejo y un `sync_status='error'` que
+  // nadie mira. Se corta antes de escribir.
+  //
+  // Dispara SÓLO cuando el nombre CAMBIA: hay 11 vendors linkeados cuyo nombre
+  // ya coincide con el de su customer en Medusa (son pares importados de QB,
+  // donde el nombre real del customer difiere), y evaluarlo sobre el resultado
+  // en vez de sobre el cambio los volvería ineditables para siempre.
+  //
+  // Límite honesto: comparamos contra el nombre del customer en MEDUSA, que es
+  // el que ve el operador; el FullName del customer en QuickBooks no se guarda
+  // acá. Esto es fail-fast legible, no el árbitro — el árbitro sigue siendo QB.
+  const canon = (s: string): string => s.trim().replace(/\s+/g, " ").toLowerCase();
+  const renamedTo = normalizeText(body.full_name ?? body.name);
+  if (renamedTo && canon(renamedTo) !== canon(String(vendor.full_name ?? ""))) {
+    const { rows: linkRows } = await getDbPool().query<{
+      person_name: string;
+      company_name: string;
+    }>(
+      `SELECT btrim(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) AS person_name,
+              btrim(COALESCE(c.company_name, ''))                                  AS company_name
+         FROM customer_vendor_link l
+         JOIN customer c ON c.id = l.customer_id AND c.deleted_at IS NULL
+        WHERE l.qb_vendor_id = $1 AND l.deleted_at IS NULL
+        LIMIT 1`,
+      [id]
+    );
+    const linked = linkRows[0];
+    if (linked) {
+      const collides = [linked.person_name, linked.company_name]
+        .filter(Boolean)
+        .some((candidate) => canon(candidate) === canon(renamedTo));
+      if (collides) {
+        return res.status(409).json({
+          error:
+            // El sufijo canónico vive en COMMISSION_VENDOR_SUFFIX
+            // (api/admin/commissions/customer-vendor-link/route.ts); acá va
+            // literal para no importar un módulo de ruta desde otra ruta.
+            `"${renamedTo}" is the name of the customer this vendor mirrors. QuickBooks keeps ONE namespace for customers and vendors, so it would reject the change — keep a distinguishing suffix (the commission mirror uses "(Comm)").`,
+          code: "vendor_name_collides_with_customer",
+        });
+      }
+    }
   }
 
   // Setting the vendor's default payment term BY HAND marks it as a manual

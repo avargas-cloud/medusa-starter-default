@@ -539,6 +539,64 @@ const funcBody = (src: string, marker: string): string => {
   );
 }
 
+// 27 (2026-09-03, delta v5) · el VENDOR ESPEJO: las cuatro propiedades que lo
+// hacen servir para lo único que existe.
+//
+// El camino store_credit obliga a un vendor porque el CheckAdd a su nombre es
+// lo que hace que QuickBooks capture la comisión en el 1099 solo (§11.5). Eso
+// pide que el vendor nazca 1099-elegible — el alta mandaba sólo `name` y el
+// flag quedaba en null, así que la razón entera del diseño no se cumplía y
+// nada lo decía. Los otros tres son el flujo alrededor: el nombre que se
+// muestra tiene que ser el VIVO (la copia del link no se refresca nunca), el
+// modal tiene que despertar del `waiting` solo, y un rename no puede llevar al
+// espejo al nombre pelado de su customer (namespace compartido de QB, §3.7).
+{
+  const posApi = read("../store-pos/app/(pos)/accounting/commissions/_lib/api.ts");
+  check(
+    "el alta del vendor espejo lo marca 1099-elegible",
+    /createCommissionVendor[\s\S]{0,600}?is_vendor_eligible_for_1099:\s*true/.test(posApi)
+  );
+
+  const linkRoute = read("src/api/admin/commissions/customer-vendor-link/route.ts");
+  check(
+    "el GET del link sirve el nombre VIVO del vendor (COALESCE), no la foto del alta",
+    linkRoute.includes("COALESCE(v.full_name, l.vendor_full_name) AS vendor_full_name")
+  );
+
+  const settleModal = read(
+    "../store-pos/app/(pos)/accounting/commissions/_components/SettleModal.tsx"
+  );
+  check(
+    "el modal repolla mientras el vendor no confirmó en QB (y para en synced/error)",
+    /refetchInterval:[\s\S]{0,400}?vendor_sync_status[\s\S]{0,200}?'synced'[\s\S]{0,60}?'error'/.test(
+      settleModal
+    )
+  );
+
+  // El guard del rename se afirma POR NOMBRE de ruta, no por lo que su texto
+  // mencione: es exactamente la ceguera de §quinta extensión de secrets.md —
+  // una ruta que debería validar y no nombra nada sale limpia de un barrido
+  // por menciones. Y se exige el 409 ANTES del write local: el VendorMod corre
+  // en background, así que validar después deja la fila local ya renombrada.
+  const vendorPatch = read("src/api/admin/qb-catalog/vendors/[id]/route.ts");
+  const guardAt = vendorPatch.indexOf("vendor_name_collides_with_customer");
+  const writeAt = vendorPatch.indexOf("await catalog.updateQbVendors({\n    id,\n    ...updates,");
+  check(
+    "el PATCH del vendor rechaza el rename que colisiona con su customer linkeado",
+    guardAt > -1 &&
+      /FROM customer_vendor_link l\s+JOIN customer c/.test(vendorPatch) &&
+      vendorPatch.includes("status(409)")
+  );
+  check(
+    "ese rechazo ocurre ANTES de escribir la fila local",
+    guardAt > -1 && writeAt > -1 && guardAt < writeAt
+  );
+  check(
+    "el guard sólo mira RENAMES (compara contra el full_name actual), no toda edición",
+    /canon\(renamedTo\) !== canon\(String\(vendor\.full_name/.test(vendorPatch)
+  );
+}
+
 console.log("");
 if (failures.length > 0) {
   console.error(`❌ ${failures.length} chequeo(s) fallaron:`);

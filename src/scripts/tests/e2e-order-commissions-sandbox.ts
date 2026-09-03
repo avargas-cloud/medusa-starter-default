@@ -1635,6 +1635,178 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── 15 (2026-09-03) · El vendor ESPEJO: nombre vivo + guard de rename ──────
+  //
+  // El link nunca se rompe al renombrar (apunta a `qb_vendor.id`), pero la
+  // columna `vendor_full_name` del link es una FOTO del alta que nadie
+  // refresca: el GET tiene que servir el nombre VIVO. Y un rename al nombre
+  // PELADO del customer lo rechaza QuickBooks (namespace compartido, §3.7),
+  // así que hay que cortarlo ANTES del write local o queda la fila renombrada
+  // contra un QB que dijo que no.
+  //
+  // Las dos aserciones NEGATIVAS son la mitad que importa: un guard de rename
+  // que muerda toda edición deja al vendor ineditable, y uno que no mire el
+  // link se come renames legítimos de cualquier vendor del catálogo.
+  console.log("── 15 (2026-09-03) · Vendor espejo: nombre vivo + guard de rename ──");
+  {
+    const VENDOR_ID = "qbvnd_e2e_comm_mirror";
+    const LINK_ID = "cvl_e2e_comm_mirror";
+    const cleanup = async (): Promise<void> => {
+      await pool.query(`DELETE FROM customer_vendor_link WHERE id = $1`, [LINK_ID]);
+      await pool.query(`DELETE FROM qb_vendor WHERE id = $1`, [VENDOR_ID]);
+    };
+    await cleanup();
+    try {
+      const { rows: custRows } = await pool.query<{ id: string; person_name: string }>(
+        `SELECT c.id,
+                btrim(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) AS person_name
+           FROM customer c
+          WHERE c.deleted_at IS NULL
+            AND btrim(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) <> ''
+            AND NOT EXISTS (
+              SELECT 1 FROM customer_vendor_link l
+               WHERE l.customer_id = c.id AND l.deleted_at IS NULL
+            )
+          LIMIT 1`
+      );
+      const cust = custRows[0];
+      check("sección 15: fixture — customer sin link disponible", !!cust, cust?.person_name ?? "");
+      if (cust) {
+        const MIRROR = `${cust.person_name} (Comm)`;
+        const RENAMED = `${cust.person_name} (Comm E2E)`;
+        await pool.query(
+          `INSERT INTO qb_vendor (id, qb_list_id, full_name, name, is_active)
+           VALUES ($1, $2, $3, $3, true)`,
+          [VENDOR_ID, `8000E2E9-${Date.now()}`, MIRROR]
+        );
+        await pool.query(
+          `INSERT INTO customer_vendor_link (id, customer_id, qb_vendor_id, vendor_full_name)
+           VALUES ($1, $2, $3, $4)`,
+          [LINK_ID, cust.id, VENDOR_ID, MIRROR]
+        );
+
+        // 15a · el nombre que se muestra es el VIVO, no la foto del alta.
+        await pool.query(`UPDATE qb_vendor SET full_name = $2, name = $2 WHERE id = $1`, [
+          VENDOR_ID,
+          RENAMED,
+        ]);
+        const linkGet = await api(
+          token,
+          "GET",
+          `/admin/commissions/customer-vendor-link?customer_id=${encodeURIComponent(cust.id)}`
+        );
+        const served = (linkGet.body.link as { vendor_full_name?: string } | null)?.vendor_full_name;
+        check(
+          "sección 15a: el GET del link sirve el nombre VIVO tras renombrar el vendor",
+          served === RENAMED,
+          `servido=${served}`
+        );
+        const { rows: snapRows } = await pool.query<{ vendor_full_name: string }>(
+          `SELECT vendor_full_name FROM customer_vendor_link WHERE id = $1`,
+          [LINK_ID]
+        );
+        // Sin este check el anterior podría pasar porque la foto se actualizó
+        // sola, y no probaría nada del COALESCE.
+        check(
+          "sección 15a: la foto del link quedó VIEJA — o sea que lo que salva es el COALESCE",
+          snapRows[0]?.vendor_full_name === MIRROR,
+          `foto=${snapRows[0]?.vendor_full_name}`
+        );
+
+        // 15b · rename al nombre pelado del customer → 409 y NO escribe.
+        const collide = await api(token, "PATCH", `/admin/qb-catalog/vendors/${VENDOR_ID}`, {
+          full_name: cust.person_name,
+        });
+        check(
+          "sección 15b: renombrar al nombre del customer linkeado → 409 vendor_name_collides_with_customer",
+          collide.status === 409 && collide.body.code === "vendor_name_collides_with_customer",
+          `status=${collide.status} code=${String(collide.body.code)}`
+        );
+        const { rows: afterCollide } = await pool.query<{ full_name: string }>(
+          `SELECT full_name FROM qb_vendor WHERE id = $1`,
+          [VENDOR_ID]
+        );
+        check(
+          "sección 15b: la fila local NO se renombró (el 409 corta ANTES del write)",
+          afterCollide[0]?.full_name === RENAMED,
+          `full_name=${afterCollide[0]?.full_name}`
+        );
+
+        // 15c · NEGATIVA: una edición que no toca el nombre no la mira el guard.
+        const notesPatch = await api(token, "PATCH", `/admin/qb-catalog/vendors/${VENDOR_ID}`, {
+          notes: "e2e commission mirror",
+        });
+        check(
+          "sección 15c: NEGATIVA — un PATCH que no toca el nombre pasa igual",
+          notesPatch.status === 200,
+          `status=${notesPatch.status}`
+        );
+
+        // 15d · NEGATIVA: un rename a un nombre distinto pasa y persiste.
+        const OTHER = `${cust.person_name} (Comm 2)`;
+        const okRename = await api(token, "PATCH", `/admin/qb-catalog/vendors/${VENDOR_ID}`, {
+          full_name: OTHER,
+        });
+        const { rows: afterOk } = await pool.query<{ full_name: string }>(
+          `SELECT full_name FROM qb_vendor WHERE id = $1`,
+          [VENDOR_ID]
+        );
+        check(
+          "sección 15d: NEGATIVA — un rename a otro nombre pasa y persiste",
+          okRename.status === 200 && afterOk[0]?.full_name === OTHER,
+          `status=${okRename.status} full_name=${afterOk[0]?.full_name}`
+        );
+
+        // 15e · CONTROL POSITIVO invertido: sin link vivo el guard no aplica.
+        // Prueba que lo que gatilla es el LINK y no el parecido de los nombres.
+        await pool.query(`UPDATE customer_vendor_link SET deleted_at = NOW() WHERE id = $1`, [
+          LINK_ID,
+        ]);
+        const unlinked = await api(token, "PATCH", `/admin/qb-catalog/vendors/${VENDOR_ID}`, {
+          full_name: cust.person_name,
+        });
+        check(
+          "sección 15e: sin link vivo, el MISMO rename pasa — el guard mira el link, no el parecido",
+          unlinked.status === 200,
+          `status=${unlinked.status}`
+        );
+
+        // 15f · el caso REAL que obliga a mirar el cambio y no el resultado.
+        // En producción hay 11 vendors linkeados cuyo nombre YA coincide con el
+        // de su customer en Medusa (pares importados de QuickBooks, donde el
+        // nombre verdadero del customer difiere). Un guard evaluado sobre el
+        // RESULTADO los dejaría ineditables para siempre: ni un cambio de notas
+        // ni un re-save del mismo nombre podrían pasar nunca.
+        await pool.query(`UPDATE qb_vendor SET full_name = $2, name = $2 WHERE id = $1`, [
+          VENDOR_ID,
+          cust.person_name,
+        ]);
+        await pool.query(`UPDATE customer_vendor_link SET deleted_at = NULL WHERE id = $1`, [
+          LINK_ID,
+        ]);
+        const legacyNotes = await api(token, "PATCH", `/admin/qb-catalog/vendors/${VENDOR_ID}`, {
+          notes: "e2e legacy pair",
+        });
+        check(
+          "sección 15f: LEGACY (vendor ya llamado como su customer) — editar otro campo pasa",
+          legacyNotes.status === 200,
+          `status=${legacyNotes.status}`
+        );
+        const legacySameName = await api(token, "PATCH", `/admin/qb-catalog/vendors/${VENDOR_ID}`, {
+          full_name: cust.person_name,
+          notes: "e2e legacy pair, same name resent",
+        });
+        check(
+          "sección 15f: LEGACY — reenviar el MISMO nombre no es un rename, así que pasa",
+          legacySameName.status === 200,
+          `status=${legacySameName.status}`
+        );
+      }
+    } finally {
+      await cleanup();
+    }
+  }
+
   await pool.end();
   console.log(`\n${failed === 0 ? "✅" : "❌"} ${passed} passed · ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
