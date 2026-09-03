@@ -23,6 +23,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { deriveClearingDrift } from "../../lib/purchase-orders/qb-vendor-bill-clearing-lines";
 import { loadClearingSiblings } from "../../lib/purchase-orders/load-clearing-siblings";
+import { scanClearingDrift } from "../../lib/purchase-orders/vendor-bill-invariant-scans";
 
 function resolveDbUrl(): string {
   if (process.env.SB === "1") {
@@ -181,6 +182,7 @@ async function main(): Promise<void> {
     let mismatches = 0;
     let staleBills = 0;
     let totalDelta = 0;
+    const staleIds: string[] = [];
     for (const [billId, rows] of byBill) {
       const siblings = await loadClearingSiblings(knexLike, billId);
       const persistedResult = await db.query<{ lines: unknown }>(
@@ -209,6 +211,7 @@ async function main(): Promise<void> {
         );
       }
       if (drift.stale && rows[0].in_qb) {
+        staleIds.push(billId);
         staleBills += 1;
         totalDelta += drift.delta_cents;
         for (const item of drift.items) {
@@ -232,6 +235,21 @@ async function main(): Promise<void> {
       `el aviso se dispararía en ${staleBills} de ${inQbWithSiblings} bills que SÍ están en QuickBooks`,
       staleBills <= inQbWithSiblings,
       `${staleBills} > ${inQbWithSiblings}`
+    );
+
+    // ── 2b · El barrido que MANDA EL MAIL ve exactamente lo mismo ─────────────
+    //
+    // `scanClearingDrift` es lo que lee la sección 13 del digest, o sea lo único
+    // que le llega a una persona sin que la tipee. Si divergiera de este script,
+    // el mail podría callar sobre un bill que acá sale en rojo — y nadie se
+    // enteraría, porque el que calla es justamente el que nadie corre a mano.
+    // Se compara contra los ids del cruce SQL de arriba, no contra sí mismo.
+    const scanned = await scanClearingDrift(knexLike);
+    const scannedIds = scanned.map((f) => f.vendor_bill_id).sort();
+    check(
+      "el barrido del digest ve los MISMOS bills que el cruce SQL",
+      JSON.stringify(scannedIds) === JSON.stringify([...staleIds].sort()),
+      `digest [${scannedIds.join(", ")}] vs SQL [${[...staleIds].sort().join(", ")}]`
     );
     if (staleBills > 0) {
       console.log(`\n  A/P descuadrado en total: ${money(totalDelta)}\n`);

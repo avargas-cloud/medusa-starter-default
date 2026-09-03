@@ -30,10 +30,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Knex from "knex";
-import {
-  decideSecondaryDispatch,
-  loadSecondaryDispatchFacts,
-} from "../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
+import { scanLostSiblingBills } from "../../lib/purchase-orders/vendor-bill-invariant-scans";
 
 const SRC = path.resolve(__dirname, "../..");
 
@@ -153,50 +150,19 @@ async function main(): Promise<void> {
 
   const knex = Knex({ client: "pg", connection: url, pool: { min: 0, max: 3 } });
   try {
-    const billsResult = await knex.raw(
-      `SELECT vb.id, vb.number, vb.bill_type, vb.status,
-              COALESCE((SELECT SUM(l.qty * l.unit_cost_cents)::bigint
-                          FROM vendor_bill_line l
-                         WHERE l.vendor_bill_id = vb.id
-                           AND l.deleted_at IS NULL), 0) AS total_cents,
-              EXISTS (SELECT 1 FROM qb_vendor_bill_pipeline p
-                       WHERE p.vendor_bill_id = vb.id
-                         AND p.deleted_at IS NULL
-                         AND p.status NOT IN ('error','failed_permanent')) AS has_live_row
-         FROM vendor_bill vb
-        WHERE vb.deleted_at IS NULL
-          AND vb.bill_type <> 'regular'
-          AND vb.status = 'confirmed'
-          AND vb.qb_txn_id IS NULL
-        ORDER BY vb.number`,
-      []
-    );
-
-    const lost: string[] = [];
-    const waiting: string[] = [];
-    let lostCents = 0;
-
-    for (const row of billsResult.rows as Array<{
-      id: string;
-      number: string | null;
-      bill_type: string;
-      total_cents: string | number;
-      has_live_row: boolean;
-    }>) {
-      if (row.has_live_row) continue; // already queued — nothing to say
-      const f = await loadSecondaryDispatchFacts(knex as never, row.id);
-      if (!f) continue;
-      const decision = decideSecondaryDispatch(f);
-      const label = `${row.number ?? row.id} (${row.bill_type}, $${(
-        Number(row.total_cents) / 100
-      ).toFixed(2)})`;
-      if (decision.dispatch) {
-        lost.push(`${label} — ${decision.reason}`);
-        lostCents += Number(row.total_cents);
-      } else if (decision.deferred) {
-        waiting.push(`${label} — ${decision.reason}`);
-      }
-    }
+    // EL BARRIDO NO VIVE ACÁ (2026-09-03). Vive en
+    // `lib/purchase-orders/vendor-bill-invariant-scans.ts` y lo comparte con la
+    // sección 12 del digest diario, que es la que le llega a una persona por
+    // mail. Cuando en este repo la misma comparación existió en dos copias, ya
+    // habían divergido en tres campos: el barrido y el reporte dejaron de
+    // coincidir en qué era deriva. Este script quedó como IMPRESOR.
+    const scan = await scanLostSiblingBills(knex as never);
+    const money = (c: number) => `$${(c / 100).toFixed(2)}`;
+    const label = (b: { number: string | null; vendor_bill_id: string; bill_type: string; total_cents: number; reason: string }) =>
+      `${b.number ?? b.vendor_bill_id} (${b.bill_type}, ${money(b.total_cents)}) — ${b.reason}`;
+    const lost = scan.lost.map(label);
+    const waiting = scan.waiting.map(label);
+    const lostCents = scan.lost_cents;
 
     check(
       lost.length === 0,

@@ -561,6 +561,61 @@ async function main(): Promise<void> {
     check("la columna NO se toca al encolar — falla cerrado si el Mod no aterriza",
       staleCommission?.amount_cents === -33300, String(staleCommission?.amount_cents));
 
+    // ── §7 · Las secciones del digest EMITEN de verdad ────────────────────────
+    //
+    // Los dos invariantes existían desde agosto y vivían sólo dentro de su
+    // `verify-*`. Medido el 2026-09-03: de 167 verificadores del backend, UNO lo
+    // corre algo automáticamente. O sea que el chequeo que habría avisado de
+    // VB-1129/VB-1130 estaba escrito, era correcto, y no tenía quién lo mirara.
+    //
+    // Una sección de digest que nunca produjo una fila es un verificador sin
+    // probar: acá se plantan los datos que la deben disparar y se comprueba que
+    // el mail los nombra — y, lo que importa más, que NO nombra a los sanos.
+    console.log("\n§7 — el digest diario emite estas dos secciones");
+    const { collectLostSiblingBillSection, collectClearingDriftSection } =
+      await import("../../jobs/_lib/_qb-vendor-bill-invariant-sections");
+    const quietLogger = { warn: () => undefined };
+
+    // Un grupo con la forma de VB-1128 y SIN despachar: par completo, regular
+    // vivo en QuickBooks, hermanos confirmados sin documento. Esto es plata
+    // faltante del A/P y tiene que llegar por mail.
+    const i = await plant(db, {
+      regularStatus: "draft", regularInQb: true, regularClearing: true,
+      siblingStatus: "confirmed",
+    });
+    planted.push(i);
+
+    const lostSection = await collectLostSiblingBillSection(knexLike as never, quietLogger);
+    const lostIds = (lostSection?.rows ?? []).map((r) => r.id);
+    check("la sección 12 emite una fila por cada hermano perdido",
+      lostIds.includes(i.serviceId as string) && lostIds.includes(i.freightId as string),
+      JSON.stringify(lostSection?.rows.map((r) => [r.medusa_ref, r.error])));
+    check("y su título lleva el monto que falta del A/P",
+      Boolean(lostSection?.title.includes("$")), String(lostSection?.title));
+
+    // CONTROL NEGATIVO, que es la mitad del test: el grupo `d` tiene hermanos
+    // confirmados esperando a un regular en draft que NUNCA fue a QuickBooks.
+    // Ésos están SANOS. Una sección que también los nombrara sería ruido, y un
+    // mail ruidoso se aprende a ignorar — que es como este invariante se perdió.
+    check("y NO nombra a los que esperan legítimamente a su regular",
+      !lostIds.includes(d.freightId as string) && !lostIds.includes(d.serviceId as string),
+      JSON.stringify(lostIds));
+
+    // La sección 13 sobre el mismo grupo: su columna de clearing quedó
+    // desactualizada (−333,00 contra un hermano de −328,60).
+    const driftSection = await collectClearingDriftSection(knexLike as never, quietLogger);
+    const driftIds = (driftSection?.rows ?? []).map((r) => r.id);
+    check("la sección 13 nombra al regular con clearing desactualizada",
+      driftIds.includes(i.regularId as string),
+      JSON.stringify(driftSection?.rows.map((r) => [r.medusa_ref, r.error])));
+    check("y explica la diferencia por cuenta, no un total mudo",
+      Boolean(driftSection?.rows.find((r) => r.id === i.regularId)?.error.includes("commission")),
+      String(driftSection?.rows.find((r) => r.id === i.regularId)?.error));
+    // El regular de `d` NO está en QuickBooks: su columna todavía no existe y no
+    // hay A/P descuadrado que reportar.
+    check("y NO nombra a un regular que todavía no llegó a QuickBooks",
+      !driftIds.includes(d.regularId as string), JSON.stringify(driftIds));
+
     // Idempotencia: correrlo dos veces no duplica.
     const outAgain = await dispatchConfirmedSiblings(knexLike as never, a.regularId as string);
     check("re-despachar no duplica filas",

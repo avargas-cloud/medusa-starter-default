@@ -18,6 +18,10 @@ import { collectReservationDriftSection } from "./_lib/_reservation-drift-sectio
 import { collectDiscountInvariantSection } from "./_lib/_discount-invariant-section";
 import { collectRoundingInvariantSection } from "./_lib/_rounding-invariant-section";
 import { collectCommissionInvariantSection } from "./_lib/_commission-invariant-section";
+import {
+  collectClearingDriftSection,
+  collectLostSiblingBillSection,
+} from "./_lib/_qb-vendor-bill-invariant-sections";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
@@ -675,6 +679,21 @@ export async function buildDigestEmail(
   // Silencio = limpio. Fail-isolated.
   const commissionSection = await collectCommissionInvariantSection(knex, logger);
   if (commissionSection) sections.push(commissionSection);
+
+  // Sección 12 — bills secundarios PERDIDOS: par completo, sin documento en
+  // QuickBooks, con la clearing line del regular ya restándolos del A/P. El
+  // invariante existía desde el 2026-08-31 dentro de `verify-sibling-bill-
+  // dispatch.ts` y nadie lo corría: $965,68 invisibles tres días, hasta que un
+  // operador apretó Confirm y se comió un 422. Los que ESPERAN a su regular no
+  // entran — mezclarlos es lo que hacía imposible ver éstos. Fail-isolated.
+  const lostSiblingSection = await collectLostSiblingBillSection(knex, logger);
+  if (lostSiblingSection) sections.push(lostSiblingSection);
+
+  // Sección 13 — clearing lines desactualizadas: QuickBooks cancela una cifra
+  // que el hermano ya no vale. Es el mismo aviso de la pantalla del bill, que
+  // sólo veía quien abriera ESE bill. Silencio = limpio. Fail-isolated.
+  const clearingDriftSection = await collectClearingDriftSection(knex, logger);
+  if (clearingDriftSection) sections.push(clearingDriftSection);
 
   const qbErrors = sections.reduce((acc, s) => acc + s.rows.length, 0);
 
