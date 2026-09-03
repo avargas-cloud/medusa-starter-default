@@ -34,7 +34,18 @@ const LL_TO_BL: Record<string, string> = {
     bare_wire_connector: "bare-wire-connectors",
     cable: "cables",
     led_driver_accessory: "led-driver-accessories",
+    led_driver: "led-drivers",
 }
+
+/**
+ * Drivers de LL que BL adopta EXPLÍCITAMENTE (user-requested 2026-09-03: los
+ * XLG metálicos para el filtro driverFormFactor). `led_driver` NO se mapea
+ * completo a propósito: BL ya tiene su set de drivers (EPS) y adoptar
+ * minis/EASYLED/SWN en bloque haría que el próximo Sync Medusa de BL los dé de
+ * alta como productos nuevos sin decisión humana. Un driver nuevo entra acá
+ * por nombre, nunca por barrido.
+ */
+const LED_DRIVER_SKU_ALLOWLIST = ["XLG-200-24-A", "XLG-320-V-A"]
 
 export default async function tagBlCategories({ container }: ExecArgs) {
     void container
@@ -71,8 +82,9 @@ export default async function tagBlCategories({ container }: ExecArgs) {
               JOIN product p ON p.id = s.product_id AND p.deleted_at IS NULL
               JOIN product_variant v ON v.product_id = p.id AND v.deleted_at IS NULL
              WHERE s.spec->>'category' = ANY($1::text[])
+                OR (s.spec->>'category' = 'led_driver' AND v.sku = ANY($2::text[]))
              ORDER BY 3, 2`,
-            [Object.keys(LL_TO_BL)],
+            [Object.keys(LL_TO_BL).filter((k) => k !== "led_driver"), LED_DRIVER_SKU_ALLOWLIST],
         )
 
         const pending = targets.filter((t) => t.current !== LL_TO_BL[t.ll_category])
