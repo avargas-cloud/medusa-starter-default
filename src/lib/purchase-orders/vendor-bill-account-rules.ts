@@ -13,7 +13,24 @@ export function accountAllowedForVendorBillType(
       fullName === "commission for purchase:veetech representative" ||
       // Order Commissions v1 (docs/ORDER_COMMISSIONS_PLAN.md §11): el bill del
       // caso 1 factura la comisión de VENTA contra esta cuenta COGS.
-      fullName === "commission for sale:referral"
+      fullName === "commission for sale:referral" ||
+      // Order Outsourced Services v1: el costo de un servicio subcontratado
+      // (programación, armado, instalación) atado a una orden de venta.
+      //
+      // Va a COGS y no a `expense` a propósito: es costo directo de una venta
+      // concreta, y una cuenta de gasto operativo desalinearía el margen de esa
+      // orden. El árbol `Subcontractor Labor` ya existía en QuickBooks con
+      // hijas por proveedor, así que esto no inventa cuentas — habilita las que
+      // el contador ya usa.
+      //
+      // El prefijo cubre las hijas (`Subcontractor Labor:Bella Lighting`, …).
+      // Que el conjunto sea DISJUNTO del de comisiones es lo que impide que un
+      // mismo bill se reclame de los dos lados: cada feature exige que TODAS
+      // las líneas apunten a SU cuenta, así que un bill de subcontrato es
+      // inválido como bill de comisión y viceversa.
+      // `verify-outsourced-services.ts` afirma esa disjunción.
+      (account.account_type === "CostOfGoodsSold" &&
+        fullName.startsWith("subcontractor labor"))
     );
   }
   if (billType === "freight") {
