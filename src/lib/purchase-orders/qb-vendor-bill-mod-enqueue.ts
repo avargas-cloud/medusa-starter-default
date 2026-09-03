@@ -23,7 +23,17 @@ export type VendorBillModKnex = {
 };
 
 export type VendorBillModEnqueueResult =
-  | { queued: true; groupId: string; billIds: string[] }
+  | {
+      queued: true;
+      groupId: string;
+      billIds: string[];
+      /**
+       * Group members that were NOT given a Mod because they do not live in
+       * QuickBooks yet. Reported rather than silent: a caller that wants to
+       * know whether the whole group was covered can ask.
+       */
+      skippedBillIds?: string[];
+    }
   | { queued: false; reason: string };
 
 type BillType = "regular" | "service" | "freight" | "tariff" | "expense";
@@ -542,10 +552,48 @@ export async function enqueueChinaAgencyVendorBillModGroup(
     bills.push(bill);
   }
 
-  for (const bill of bills) {
+  // A GROUP MEMBER THAT DOES NOT LIVE IN QUICKBOOKS GETS NO Mod (2026-09-03).
+  //
+  // This loop used to Mod every sibling the regular points at, and `buildPayload`
+  // throws for one without a TxnID/EditSequence. That is a DEADLOCK on the only
+  // shape that reaches it: the regular's confirm runs `dispatchConfirmedSiblings`
+  // FIRST, which enqueues a BillAdd for each sibling that is confirmed and not
+  // in QuickBooks yet — an Add that has only been QUEUED, so the sibling's
+  // `qb_txn_id` is still null one statement later when this group runs. The
+  // throw then rolled back the same transaction that had just queued those Adds,
+  // so the confirm could never succeed and the Adds never survived either.
+  //
+  // Measured on production 2026-09-03: VB-1128 (VEETECH, PO of 2026-08-21) had
+  // been synced under the older bug where no sibling was ever enqueued at all,
+  // so its QuickBooks Bill carried −$388.87 and −$585.00 of clearing lines
+  // against VB-1129 and VB-1130, neither of which existed there. Every attempt
+  // to re-confirm it returned 422 `VB-1129: missing QB TxnID/EditSequence`.
+  //
+  // Skipping is the correct operation, not a workaround: a BillMod names a
+  // document by TxnID, so "modify a bill QuickBooks has never seen" is not an
+  // operation that exists. The Add queued a moment earlier is what puts it
+  // there, and the dependency chain is serial per purchase order, so it lands
+  // BEFORE this Mod — which is also why A/P is never short in between.
+  //
+  // The REGULAR is never skipped: it reached this function precisely because it
+  // has a `qb_txn_id` (the caller branches Add/Mod on that), so a missing one
+  // here is damage and must stay loud.
+  const modBills = bills.filter(
+    (bill) => bill.id === regular.id || Boolean(bill.qb_txn_id)
+  );
+  const skippedBillIds = bills
+    .filter((bill) => !modBills.includes(bill))
+    .map((bill) => bill.id);
+
+  for (const bill of modBills) {
     await enqueueOneBillMod(db, bill, regular, groupId);
   }
-  return { queued: true, groupId, billIds: bills.map((b) => b.id) };
+  return {
+    queued: true,
+    groupId,
+    billIds: modBills.map((b) => b.id),
+    skippedBillIds,
+  };
 }
 
 /**

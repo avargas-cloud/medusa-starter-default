@@ -121,6 +121,34 @@ async function main(): Promise<void> {
     "the screen derives its banner from the SAME rule as the dispatcher"
   );
 
+  // THE OTHER HALF OF THE SAME TRANSACTION (2026-09-03).
+  //
+  // `dispatchConfirmedSiblings` runs first and queues a BillAdd for each
+  // sibling that is not in QuickBooks. One statement later the group Mod runs,
+  // and those siblings STILL have no TxnID — the Add is only queued. A Mod
+  // built for them throws, rolling back the very transaction that queued the
+  // Adds, so the regular's confirm can never succeed. That is what returned
+  // 422 `VB-1129: missing QB TxnID/EditSequence` on VB-1128 for days.
+  //
+  // Asserted on the FILTER, not on the absence of a throw: the throw in
+  // buildPayload is correct and must stay for the regular.
+  const modEnqueue = bodyWithoutImports(
+    "lib/purchase-orders/qb-vendor-bill-mod-enqueue.ts"
+  );
+  check(
+    /const\s+modBills\s*=\s*bills\.filter\s*\(/.test(modEnqueue) &&
+      /bill\.id\s*===\s*regular\.id\s*\|\|\s*Boolean\(bill\.qb_txn_id\)/.test(
+        modEnqueue
+      ),
+    "the group Mod skips members that do not live in QuickBooks yet",
+    "a BillMod names a document by TxnID — one that is not there is not modifiable"
+  );
+  check(
+    /for\s*\(\s*const\s+bill\s+of\s+modBills\s*\)/.test(modEnqueue),
+    "…and it is the FILTERED list the group actually enqueues",
+    "computing modBills and then looping `bills` would be a filter that does nothing"
+  );
+
   console.log("\n§2 — the invariant, against live data\n");
 
   const knex = Knex({ client: "pg", connection: url, pool: { min: 0, max: 3 } });

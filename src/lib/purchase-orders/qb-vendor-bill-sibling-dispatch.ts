@@ -65,6 +65,21 @@ export const REGULAR_GREEN_LIGHT_STATUSES: ReadonlySet<string> = new Set([
   "synced",
 ]);
 
+/**
+ * Statuses in which the regular bill is a LIVE POS document — including `draft`,
+ * which is what a bill under revision looks like.
+ *
+ * An ALLOW-list on purpose, not a deny-list of `cancelled`/`voided`: this set
+ * gates a green light derived from the regular's TxnID (see
+ * `parentDocumentIsLive`), so a status nobody has thought of yet must fail
+ * CLOSED — defer — rather than authorise a charge into A/P.
+ */
+export const REGULAR_LIVE_DOCUMENT_STATUSES: ReadonlySet<string> = new Set([
+  "draft",
+  "confirmed",
+  "synced",
+]);
+
 /** Statuses in which a SECONDARY bill is a finished document worth sending. */
 export const SECONDARY_SENDABLE_STATUSES: ReadonlySet<string> = new Set([
   "confirmed",
@@ -75,6 +90,12 @@ export interface ParentRegularFacts {
   vendor_bill_id: string;
   number: string | null;
   status: string;
+  /**
+   * The regular bill's own TxnID — present means its Bill EXISTS in QuickBooks
+   * right now, carrying the negative clearing line that cancels this sibling,
+   * whatever the POS status says. See `parentDocumentIsLive`.
+   */
+  already_in_quickbooks: boolean;
 }
 
 /** Everything the decision needs. No database, no I/O — see `decide*` below. */
@@ -149,6 +170,36 @@ export function decideSecondaryDispatch(
     };
   }
 
+  // THE STATUS IS NOT THE DOCUMENT (2026-09-03).
+  //
+  // A regular bill drops back to `draft` while an operator edits it — a
+  // revision — WITHOUT its QuickBooks Bill going anywhere. That Bill is still
+  // there, still carrying the negative clearing line that cancels this sibling.
+  // So "waiting on a draft" and "its A/P subtraction is already live and this
+  // document is missing" were the same answer, and the wrong one: the sibling
+  // was told to wait for an event that had already happened.
+  //
+  // Measured on production 2026-09-03: VB-1129 ($380.68) and VB-1130 ($585.00)
+  // read as healthily WAITING on VB-1128, whose QuickBooks Bill had been
+  // subtracting exactly them since 2026-08-31. A/P was short $965.68 and every
+  // check was green.
+  //
+  // `already_in_quickbooks` is therefore a green light in its own right — but
+  // only while the regular is still a LIVE document. A `cancelled`/`voided`
+  // regular keeps its TxnID pointing at something that is gone, and posting a
+  // charge against that leaves it with no counterpart: the case
+  // REGULAR_GREEN_LIGHT_STATUSES was protecting, and still does.
+  if (parentDocumentIsLive(facts.parent_regular)) {
+    return {
+      dispatch: true,
+      reason: `regular bill ${
+        facts.parent_regular.number ?? facts.parent_regular.vendor_bill_id
+      } already lives in QuickBooks (status '${
+        facts.parent_regular.status
+      }') — its clearing line already subtracts this one`,
+    };
+  }
+
   return {
     dispatch: false,
     deferred: true,
@@ -156,6 +207,18 @@ export function decideSecondaryDispatch(
       facts.parent_regular.number ?? facts.parent_regular.vendor_bill_id
     } (still '${facts.parent_regular.status}')`,
   };
+}
+
+/**
+ * PURE. True when the regular bill's QuickBooks document exists AND the bill is
+ * still a live document — the second half is what keeps a `voided` regular from
+ * greenlighting a charge with nothing to cancel it.
+ */
+export function parentDocumentIsLive(parent: ParentRegularFacts): boolean {
+  return (
+    parent.already_in_quickbooks &&
+    REGULAR_LIVE_DOCUMENT_STATUSES.has(parent.status)
+  );
 }
 
 /**
@@ -176,7 +239,8 @@ export async function loadSecondaryDispatchFacts(
             (vb.qb_txn_id IS NOT NULL)         AS in_qb,
             reg.id     AS parent_id,
             reg.number AS parent_number,
-            reg.status AS parent_status
+            reg.status AS parent_status,
+            (reg.qb_txn_id IS NOT NULL) AS parent_in_qb
        FROM vendor_bill vb
        LEFT JOIN vendor_bill reg
               ON reg.deleted_at IS NULL
@@ -197,6 +261,7 @@ export async function loadSecondaryDispatchFacts(
         parent_id: string | null;
         parent_number: string | null;
         parent_status: string | null;
+        parent_in_qb: boolean | null;
       }
     | undefined;
   if (!row) return null;
@@ -211,6 +276,7 @@ export async function loadSecondaryDispatchFacts(
             vendor_bill_id: row.parent_id,
             number: row.parent_number,
             status: row.parent_status,
+            already_in_quickbooks: Boolean(row.parent_in_qb),
           }
         : null,
   };

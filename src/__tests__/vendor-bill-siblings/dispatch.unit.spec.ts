@@ -13,8 +13,11 @@
 import {
   decideSecondaryDispatch,
   fatalSiblingOutcomes,
+  parentDocumentIsLive,
   REGULAR_GREEN_LIGHT_STATUSES,
+  REGULAR_LIVE_DOCUMENT_STATUSES,
   SECONDARY_SENDABLE_STATUSES,
+  type ParentRegularFacts,
   type SecondaryDispatchFacts,
   type SiblingDispatchOutcome,
 } from "../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
@@ -23,6 +26,19 @@ const facts = (over: Partial<SecondaryDispatchFacts> = {}): SecondaryDispatchFac
   bill_type: "freight",
   has_purchase_order: true,
   parent_regular: null,
+  already_in_quickbooks: false,
+  ...over,
+});
+
+/**
+ * A parent that is NOT in QuickBooks by default. The interesting cases are the
+ * ones that flip it on, so the default has to be the quiet one — a helper that
+ * defaulted to `true` would make half these tests pass for the wrong reason.
+ */
+const parent = (over: Partial<ParentRegularFacts> = {}): ParentRegularFacts => ({
+  vendor_bill_id: "vb_1",
+  number: "VB-1139",
+  status: "draft",
   already_in_quickbooks: false,
   ...over,
 });
@@ -66,7 +82,7 @@ describe("decideSecondaryDispatch", () => {
   it("defers while the regular bill is still a draft", () => {
     const d = decideSecondaryDispatch(
       facts({
-        parent_regular: { vendor_bill_id: "vb_1", number: "VB-1139", status: "draft" },
+        parent_regular: parent({ number: "VB-1139", status: "draft" }),
       })
     );
     expect(d).toMatchObject({ dispatch: false, deferred: true });
@@ -79,7 +95,7 @@ describe("decideSecondaryDispatch", () => {
     (status) => {
       const d = decideSecondaryDispatch(
         facts({
-          parent_regular: { vendor_bill_id: "vb_1", number: "VB-1070", status },
+          parent_regular: parent({ number: "VB-1070", status }),
         })
       );
       expect(d.dispatch).toBe(true);
@@ -96,7 +112,7 @@ describe("decideSecondaryDispatch", () => {
       // inventing a behaviour nobody specified.
       const d = decideSecondaryDispatch(
         facts({
-          parent_regular: { vendor_bill_id: "vb_1", number: "VB-9", status },
+          parent_regular: parent({ number: "VB-9", status }),
         })
       );
       expect(d).toMatchObject({ dispatch: false, deferred: true });
@@ -106,7 +122,7 @@ describe("decideSecondaryDispatch", () => {
   it("falls back to the bill id when the regular has no number yet", () => {
     const d = decideSecondaryDispatch(
       facts({
-        parent_regular: { vendor_bill_id: "vb_abc", number: null, status: "draft" },
+        parent_regular: parent({ vendor_bill_id: "vb_abc", number: null, status: "draft" }),
       })
     );
     expect(d.reason).toContain("vb_abc");
@@ -118,10 +134,92 @@ describe("decideSecondaryDispatch", () => {
     const d = decideSecondaryDispatch(
       facts({
         already_in_quickbooks: true,
-        parent_regular: { vendor_bill_id: "vb_1", number: "VB-1139", status: "draft" },
+        parent_regular: parent({ number: "VB-1139", status: "draft" }),
       })
     );
     expect(d).toMatchObject({ dispatch: false, deferred: false });
+  });
+
+  // ── the regular is a DRAFT but its QuickBooks Bill exists (2026-09-03) ──
+  //
+  // The production case: VB-1128 went back to `draft` for a revision while its
+  // Bill stayed in QuickBooks, subtracting VB-1129 ($380.68) and VB-1130
+  // ($585.00) through clearing lines. Both read as healthily "waiting" for a
+  // month. The status is not the document.
+
+  it("dispatches when the regular is a draft whose Bill ALREADY lives in QuickBooks", () => {
+    const d = decideSecondaryDispatch(
+      facts({
+        parent_regular: parent({
+          number: "VB-1128",
+          status: "draft",
+          already_in_quickbooks: true,
+        }),
+      })
+    );
+    expect(d.dispatch).toBe(true);
+    // The reason has to name the bill AND say why, or the operator reading the
+    // verifier cannot tell this apart from the ordinary confirmed case.
+    expect(d.reason).toContain("VB-1128");
+    expect(d.reason).toContain("QuickBooks");
+  });
+
+  it("still defers a draft regular that has never reached QuickBooks", () => {
+    // The other half, and the reason this is not just "draft is green now":
+    // VB-1139's group is genuinely virgin, so its siblings are correctly
+    // waiting and must NOT be dispatched.
+    const d = decideSecondaryDispatch(
+      facts({
+        parent_regular: parent({
+          number: "VB-1139",
+          status: "draft",
+          already_in_quickbooks: false,
+        }),
+      })
+    );
+    expect(d).toMatchObject({ dispatch: false, deferred: true });
+  });
+
+  it.each(["cancelled", "voided", "deleted"])(
+    "does NOT greenlight on a '%s' regular even when it kept a TxnID",
+    (status) => {
+      // A TxnID on a killed bill points at a document that is gone. Posting a
+      // charge against it leaves it with no counterpart — worse than waiting.
+      const d = decideSecondaryDispatch(
+        facts({
+          parent_regular: parent({
+            number: "VB-9",
+            status,
+            already_in_quickbooks: true,
+          }),
+        })
+      );
+      expect(d).toMatchObject({ dispatch: false, deferred: true });
+    }
+  );
+});
+
+describe("parentDocumentIsLive", () => {
+  it("needs BOTH the TxnID and a live status", () => {
+    expect(
+      parentDocumentIsLive(parent({ status: "draft", already_in_quickbooks: true }))
+    ).toBe(true);
+    expect(
+      parentDocumentIsLive(parent({ status: "draft", already_in_quickbooks: false }))
+    ).toBe(false);
+    expect(
+      parentDocumentIsLive(parent({ status: "voided", already_in_quickbooks: true }))
+    ).toBe(false);
+  });
+
+  it("fails CLOSED on a status nobody has thought of yet", () => {
+    // An allow-list, not a deny-list: a status added later must not silently
+    // authorise money into A/P because it forgot to add itself to a blocklist.
+    expect(
+      parentDocumentIsLive(
+        parent({ status: "some_future_status", already_in_quickbooks: true })
+      )
+    ).toBe(false);
   });
 });
 
@@ -129,6 +227,16 @@ describe("the status sets", () => {
   it("treats confirmed and synced as green light, nothing else", () => {
     expect([...REGULAR_GREEN_LIGHT_STATUSES].sort()).toEqual(["confirmed", "synced"]);
     expect(REGULAR_GREEN_LIGHT_STATUSES.has("draft")).toBe(false);
+  });
+
+  it("counts draft among the LIVE document statuses — and nothing dead", () => {
+    expect([...REGULAR_LIVE_DOCUMENT_STATUSES].sort()).toEqual([
+      "confirmed",
+      "draft",
+      "synced",
+    ]);
+    expect(REGULAR_LIVE_DOCUMENT_STATUSES.has("voided")).toBe(false);
+    expect(REGULAR_LIVE_DOCUMENT_STATUSES.has("cancelled")).toBe(false);
   });
 
   it("only sends a secondary that is itself a finished document", () => {
