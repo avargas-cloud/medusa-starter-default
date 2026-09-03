@@ -1471,6 +1471,25 @@ async function main(): Promise<void> {
     let r14 = await readRecipient();
     check("sección 14: factura de -31d → eligible", r14?.state === "eligible", `state=${r14?.state}`);
 
+    // Customer EFECTIVO (delta v4): el beneficiario se asignó por VENDOR
+    // (customer_id crudo NULL), pero el link inverso existe (lo creó la
+    // sección 5) → el listado tiene que servir el customer resuelto, que es
+    // lo que habilita Store Credit en el SettleModal. Antes servía el crudo
+    // y la pantalla decía "no linked customer account" con el link vivo.
+    {
+      const list14 = await api(token, "GET", "/admin/commissions?tab=open");
+      const rows14 =
+        (list14.body as {
+          rows?: Array<{ recipient_id: string; customer_id: string | null; qb_vendor_id: string | null }>;
+        }).rows ?? [];
+      const listRow = rows14.find((x) => x.recipient_id === r14?.id);
+      check(
+        "sección 14: listado sirve customer EFECTIVO vía link inverso (beneficiario vendor-only)",
+        listRow?.customer_id === beneficiaryCustomer.id && listRow?.qb_vendor_id === vendor.id,
+        `customer_id=${listRow?.customer_id ?? "null"}`
+      );
+    }
+
     // b. MIN vs MAX — aparece una SEGUNDA factura HOY (clon de la primera).
     //    Con el MAX viejo, el próximo refresh reiniciaba la espera y el
     //    beneficiario caía eligible→draft; con MIN la espera corre desde la

@@ -128,7 +128,14 @@ export async function GET(
     const { rows } = await pool.query<ListRow>(
       `SELECT r.id, r.state, r.percent_bps, r.amount_cents, r.eligible_at,
               r.amount_mode, r.fixed_amount_cents,
-              r.payout_method, r.display_name, r.customer_id,
+              r.payout_method, r.display_name,
+              -- Customer EFECTIVO (2026-09-03, espejo del vendor efectivo de
+              -- abajo): para beneficiarios asignados por identidad de VENDOR,
+              -- el customer sale del link inverso — sin esto el SettleModal
+              -- deshabilitaba Store Credit ("no linked customer account") con
+              -- el link existiendo, mientras resolveBeneficiary() en settle
+              -- SÍ lo resolvía. Ambas direcciones, mismo orden que settle.
+              COALESCE(r.customer_id, vcl.customer_id) AS customer_id,
               -- Vendor EFECTIVO: la columna del recipient o, para beneficiarios
               -- asignados por identidad de customer, su customer_vendor_link —
               -- mismo orden de resolución que resolveBeneficiary() en settle.
@@ -171,6 +178,11 @@ export async function GET(
             WHERE l.customer_id = r.customer_id AND l.deleted_at IS NULL
             LIMIT 1
          ) cvl ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT l.customer_id FROM customer_vendor_link l
+            WHERE l.qb_vendor_id = r.qb_vendor_id AND l.deleted_at IS NULL
+            LIMIT 1
+         ) vcl ON TRUE
          LEFT JOIN "user" ua ON ua.id = r.assigned_by
          LEFT JOIN "user" uap ON uap.id = r.approved_by
          LEFT JOIN "user" us ON us.id = r.settled_by

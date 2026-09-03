@@ -498,6 +498,22 @@ const funcBody = (src: string, marker: string): string => {
   );
 }
 
+// 25b (2026-09-03, delta v4) · identidad EFECTIVA en el listado, en AMBAS
+// direcciones. El vendor efectivo existe desde el 2026-08-15; el espejo
+// (customer efectivo por el link inverso) faltó y el SettleModal deshabilitaba
+// Store Credit para beneficiarios asignados por vendor con el link existiendo.
+{
+  const list = read("src/api/admin/commissions/route.ts");
+  check(
+    "el listado sirve customer EFECTIVO (COALESCE con el link inverso)",
+    list.includes("COALESCE(r.customer_id, vcl.customer_id) AS customer_id")
+  );
+  check(
+    "el link inverso resuelve por qb_vendor_id (lateral vcl)",
+    /SELECT l\.customer_id FROM customer_vendor_link l\s+WHERE l\.qb_vendor_id = r\.qb_vendor_id AND l\.deleted_at IS NULL/.test(list)
+  );
+}
+
 // 26 (2026-09-03) · approve TEMPRANO: sólo saltea la ESPERA, nunca el pago.
 //
 // canApproveEarly exige draft + eligible_at DETERMINADO (pago completo +
