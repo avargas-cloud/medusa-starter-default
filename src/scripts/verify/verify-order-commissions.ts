@@ -476,6 +476,53 @@ const funcBody = (src: string, marker: string): string => {
   }
 }
 
+// 25 (2026-09-03) · devengo por PRIMER invoice — los DOS lectores.
+//
+// El MAX viejo reiniciaba la espera con cada factura parcial nueva. La regla
+// vive en DOS queries (snapshot del devengo + listado); si divergen, la fecha
+// del modal y la que aplica el refresh se contradicen en pantalla.
+{
+  const money = read("src/lib/commissions/order-money.ts");
+  check(
+    "order-money deriva first_invoice_at con MIN(created_at), no MAX",
+    money.includes("MIN(created_at) AS first_invoice_at") && !money.includes("last_invoice_at")
+  );
+  const list = read("src/api/admin/commissions/route.ts");
+  check(
+    "el listado deriva first_invoice_at con MIN(pi.created_at), no MAX",
+    list.includes("MIN(pi.created_at) AS first_invoice_at") && !list.includes("last_invoice_at")
+  );
+  check(
+    "approval_ready_at del listado suma la espera sobre first_invoice_at",
+    list.includes("inv.first_invoice_at + (c.wait_days || ' days')::interval")
+  );
+}
+
+// 26 (2026-09-03) · approve TEMPRANO: sólo saltea la ESPERA, nunca el pago.
+//
+// canApproveEarly exige draft + eligible_at DETERMINADO (pago completo +
+// factura). El writer sólo lo acepta con opt-in explícito del caller, y la
+// ruta lo deriva de `early === true` — un typo en el body no puede abrirlo.
+{
+  const transitions = read("src/lib/commissions/transitions.ts");
+  check(
+    "canApproveEarly exige draft + eligible_at no-null",
+    /current === "draft" && eligibleAt != null/.test(transitions)
+  );
+  const writer = read("src/lib/commissions/writer.ts");
+  check(
+    "approveRecipient sólo acepta early con opt-in explícito (allowEarly === true) + canApproveEarly",
+    writer.includes("opts?.allowEarly === true && canApproveEarly(row.state, row.eligible_at)")
+  );
+  const route = read(
+    "src/api/admin/commissions/orders/[orderId]/recipients/[recipientId]/route.ts"
+  );
+  check(
+    "la ruta de approve deriva allowEarly de body.early === true (estricto)",
+    route.includes("allowEarly: body.early === true")
+  );
+}
+
 console.log("");
 if (failures.length > 0) {
   console.error(`❌ ${failures.length} chequeo(s) fallaron:`);

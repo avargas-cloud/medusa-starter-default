@@ -1444,6 +1444,178 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log("── 14 (2026-09-03) · PRIMER invoice manda + approve temprano + bill con fecha/ref ──");
+  {
+    const CLONE_INVOICE_ID = "e2e_inv_min_14";
+    // Corrida previa pudo dejar el clon: limpiarlo ANTES de medir nada.
+    await pool.query(`DELETE FROM pos_invoice WHERE id = $1`, [CLONE_INVOICE_ID]);
+
+    const readRecipient = async (): Promise<{
+      id: string; state: string; eligible_at: string | null;
+    } | null> => {
+      const got = await api(token, "GET", orderPath);
+      const c = got.body.commission as {
+        recipients: Array<{ id: string; state: string; eligible_at: string | null }>;
+      } | null;
+      return c?.recipients[0] ?? null;
+    };
+
+    // a. Base: asignación fresca sobre el fixture (facturas a -31d) → eligible.
+    await resetCommission(fixture.order_id);
+    const assigned14 = await api(
+      token, "POST", orderPath,
+      { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 300 }] },
+      E2E_PIN
+    );
+    check("sección 14: asignación guarda", assigned14.status === 200);
+    let r14 = await readRecipient();
+    check("sección 14: factura de -31d → eligible", r14?.state === "eligible", `state=${r14?.state}`);
+
+    // b. MIN vs MAX — aparece una SEGUNDA factura HOY (clon de la primera).
+    //    Con el MAX viejo, el próximo refresh reiniciaba la espera y el
+    //    beneficiario caía eligible→draft; con MIN la espera corre desde la
+    //    PRIMERA factura y el estado NO se mueve. Discrimina de verdad: este
+    //    check falla si se revierte el MIN.
+    await pool.query(
+      `CREATE TEMP TABLE tmp_e2e_inv_14 AS
+        SELECT * FROM pos_invoice
+         WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')
+         ORDER BY created_at ASC LIMIT 1`,
+      [fixture.order_id]
+    );
+    await pool.query(
+      `UPDATE tmp_e2e_inv_14
+          SET id = $1, invoice_number = 'E2E-MIN-14', created_at = NOW(), updated_at = NOW()`,
+      [CLONE_INVOICE_ID]
+    );
+    await pool.query(`INSERT INTO pos_invoice SELECT * FROM tmp_e2e_inv_14`);
+    await pool.query(`DROP TABLE tmp_e2e_inv_14`);
+    try {
+      r14 = await readRecipient();
+      check(
+        "sección 14: una factura NUEVA no reinicia la espera (MIN — sigue eligible)",
+        r14?.state === "eligible",
+        `state=${r14?.state}`
+      );
+      const got14 = await api(token, "GET", orderPath);
+      const money14 = got14.body.money as { first_invoice_at: string | null } | null;
+      const firstInvoiceAgeDays = money14?.first_invoice_at
+        ? (Date.now() - new Date(money14.first_invoice_at).getTime()) / 86_400_000
+        : null;
+      check(
+        "sección 14: money.first_invoice_at es la factura VIEJA (~31d), no la de hoy",
+        firstInvoiceAgeDays !== null && firstInvoiceAgeDays > 25,
+        `age=${firstInvoiceAgeDays?.toFixed(1)}d`
+      );
+    } finally {
+      await pool.query(`DELETE FROM pos_invoice WHERE id = $1`, [CLONE_INVOICE_ID]);
+    }
+
+    // c. Approve TEMPRANO. Facturas a -5d → el devengo queda DETERMINADO pero
+    //    futuro: el refresh deja al beneficiario en draft con eligible_at.
+    await resetCommission(fixture.order_id);
+    await pool.query(
+      `UPDATE pos_invoice SET created_at = NOW() - INTERVAL '5 days'
+        WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`,
+      [fixture.order_id]
+    );
+    try {
+      const assigned14c = await api(
+        token, "POST", orderPath,
+        { recipients: [{ qb_vendor_id: vendor.id, display_name: vendor.full_name, percent_bps: 300 }] },
+        E2E_PIN
+      );
+      check("sección 14c: asignación guarda", assigned14c.status === 200);
+      r14 = await readRecipient();
+      const eligibleFuture =
+        !!r14?.eligible_at && new Date(r14.eligible_at).getTime() > Date.now();
+      check(
+        "sección 14c: factura de -5d → draft con eligible_at FUTURO (devengo determinado)",
+        r14?.state === "draft" && eligibleFuture,
+        `state=${r14?.state} eligible_at=${r14?.eligible_at}`
+      );
+
+      const noEarly = await api(
+        token, "POST", `${orderPath}/recipients/${r14?.id}`,
+        { action: "approve" }, E2E_PIN
+      );
+      check(
+        "sección 14c: approve SIN early → 409 (la espera no venció)",
+        noEarly.status === 409,
+        `status=${noEarly.status}`
+      );
+
+      const early = await api(
+        token, "POST", `${orderPath}/recipients/${r14?.id}`,
+        { action: "approve", early: true }, E2E_PIN
+      );
+      check("sección 14c: approve CON early → 200", early.status === 200, JSON.stringify(early.body).slice(0, 80));
+      const { rows: earlyRows } = await pool.query<{
+        state: string; before_eligible: boolean;
+      }>(
+        `SELECT state, (approved_at < eligible_at) AS before_eligible
+           FROM order_commission_recipient WHERE id = $1`,
+        [r14?.id]
+      );
+      check(
+        "sección 14c: approved en DB, y la traza queda sola (approved_at < eligible_at)",
+        earlyRows[0]?.state === "approved" && earlyRows[0]?.before_eligible === true,
+        JSON.stringify(earlyRows[0])
+      );
+
+      // d. El bill del settle acepta fecha y referencia PROPIAS (lo que el
+      //    SettleModal ahora manda) y el settle lo valida y linkea igual.
+      const { rows: amtRows } = await pool.query<{ amount_cents: string }>(
+        `SELECT amount_cents::text FROM order_commission_recipient WHERE id = $1`,
+        [r14?.id]
+      );
+      const amount14 = parseInt(String(amtRows[0]?.amount_cents ?? "0"), 10);
+      const REF_14 = `E2E-COMM-S14-${Date.now().toString(36)}`;
+      const DOC_DATE_14 = new Date("2026-08-15T12:00:00").toISOString();
+      const bill14 = await api(token, "POST", "/admin/vendor-bills", {
+        vendor_id: vendor.id,
+        bill_type: "service",
+        reference_id: REF_14,
+        document_date: DOC_DATE_14,
+        initial_account_line: { qb_account_list_id: EXPENSE_LIST_ID, amount_cents: amount14 },
+      });
+      const billId14 = String(
+        (bill14.body as { vendor_bill?: { id?: string } }).vendor_bill?.id ?? ""
+      );
+      check(
+        "sección 14d: bill service con document_date + ref custom se crea",
+        (bill14.status === 200 || bill14.status === 201) && !!billId14,
+        `status=${bill14.status}`
+      );
+      const { rows: billRows } = await pool.query<{ reference_id: string | null; same_day: boolean }>(
+        `SELECT reference_id, (document_date::date = $2::date) AS same_day
+           FROM vendor_bill WHERE id = $1`,
+        [billId14, DOC_DATE_14]
+      );
+      check(
+        "sección 14d: el bill PERSISTIÓ la fecha y la referencia elegidas",
+        billRows[0]?.reference_id === REF_14 && billRows[0]?.same_day === true,
+        JSON.stringify(billRows[0])
+      );
+      const settle14 = await api(
+        token, "POST", `${orderPath}/recipients/${r14?.id}`,
+        { action: "settle", method: "vendor_bill", vendor_bill_id: billId14 }, E2E_PIN
+      );
+      check(
+        "sección 14d: settle valida y linkea el bill con fecha/ref propias → settling",
+        settle14.status === 200,
+        `status=${settle14.status} ${JSON.stringify(settle14.body).slice(0, 80)}`
+      );
+    } finally {
+      // Repetibilidad: el fixture vuelve a su forma canónica (-31d) pase lo que pase.
+      await pool.query(
+        `UPDATE pos_invoice SET created_at = NOW() - INTERVAL '31 days'
+          WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`,
+        [fixture.order_id]
+      );
+    }
+  }
+
   await pool.end();
   console.log(`\n${failed === 0 ? "✅" : "❌"} ${passed} passed · ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);

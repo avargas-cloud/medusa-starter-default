@@ -1,8 +1,11 @@
 /**
  * POST /admin/commissions/orders/:orderId/recipients/:recipientId
- *   body { action: "approve" | "void" | "settle", reason?, method?, vendor_bill_id? }
+ *   body { action: "approve" | "void" | "settle", early?, reason?, method?, vendor_bill_id? }
  *
  * approve: eligible → approved, congela el monto (guard accounting + PIN).
+ *   · early: true permite aprobar un draft cuya espera no venció, siempre que
+ *     el devengo esté DETERMINADO (pago completo + factura → eligible_at
+ *     calculado). Sólo saltea la espera, nunca el pago (canApproveEarly).
  * void:    draft/eligible/approved → void, con motivo (guard accounting + PIN).
  * settle:  approved → settling (guard accounting + PIN):
  *   · method 'vendor_bill' → valida y linkea un bill YA creado por el chokepoint
@@ -70,6 +73,7 @@ export async function POST(
 
   const body = (req.body ?? {}) as {
     action?: unknown;
+    early?: unknown;
     reason?: unknown;
     method?: unknown;
     vendor_bill_id?: unknown;
@@ -114,7 +118,9 @@ export async function POST(
               "This order is 'canceled' — its commission cannot be approved."
             );
           }
-          return await approveRecipient(client, recipientId, pin.actorId);
+          return await approveRecipient(client, recipientId, pin.actorId, {
+            allowEarly: body.early === true,
+          });
         }
         await voidRecipient(client, recipientId, pin.actorId, reason);
         return null;

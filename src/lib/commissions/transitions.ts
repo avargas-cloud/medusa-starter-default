@@ -47,6 +47,21 @@ export function canApprove(current: RecipientState): boolean {
   return current === "eligible";
 }
 
+/**
+ * Approve TEMPRANO (2026-09-03): la espera de waitDays todavía no venció pero
+ * el devengo está DETERMINADO — pago completo + factura, o sea `eligible_at`
+ * calculado aunque sea futuro. Saltea únicamente la ESPERA, nunca el pago:
+ * una orden impaga o sin facturar tiene `eligible_at` null y sigue bloqueada.
+ * Requiere opt-in explícito del caller (`early: true` + PIN en la ruta); la
+ * traza queda sola en los datos: `approved_at < eligible_at` = fue temprano.
+ */
+export function canApproveEarly(
+  current: RecipientState,
+  eligibleAt: Date | string | null
+): boolean {
+  return current === "draft" && eligibleAt != null;
+}
+
 export function canStartSettlement(current: RecipientState): boolean {
   return current === "approved";
 }

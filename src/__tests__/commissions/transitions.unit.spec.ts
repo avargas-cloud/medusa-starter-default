@@ -3,6 +3,7 @@
  */
 import {
   canApprove,
+  canApproveEarly,
   canReSaveAssignment,
   canStartSettlement,
   canVoid,
@@ -45,6 +46,19 @@ describe("guardas de transición", () => {
     expect(canApprove("eligible")).toBe(true);
     for (const s of ["draft", "approved", "settling", "closed", "void"] as const) {
       expect(canApprove(s)).toBe(false);
+    }
+  });
+
+  it("approve temprano: draft con devengo DETERMINADO (aunque futuro), nunca sin él", () => {
+    // La espera no venció pero pago+factura ya fijaron eligible_at → se puede.
+    expect(canApproveEarly("draft", FUTURE)).toBe(true);
+    // eligible_at también llega como string desde pg — mismo veredicto.
+    expect(canApproveEarly("draft", FUTURE.toISOString())).toBe(true);
+    // Orden impaga o sin factura (eligible_at null): early NO saltea el pago.
+    expect(canApproveEarly("draft", null)).toBe(false);
+    // Cualquier estado que no sea draft va por el camino normal, no por early.
+    for (const s of ["eligible", "approved", "settling", "closed", "void"] as const) {
+      expect(canApproveEarly(s, FUTURE)).toBe(false);
     }
   });
 

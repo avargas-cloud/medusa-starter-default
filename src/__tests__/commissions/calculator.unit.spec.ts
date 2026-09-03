@@ -364,7 +364,7 @@ describe("eligibleAt", () => {
   const paid = new Date("2026-08-01T12:00:00Z");
   const invoiced = new Date("2026-07-20T09:00:00Z");
 
-  it("es la más tardía entre pago completo y última factura + espera", () => {
+  it("es la más tardía entre pago completo y PRIMERA factura + espera", () => {
     // factura + 30d = 2026-08-19 > pago 2026-08-01
     expect(eligibleAt(paid, invoiced, 30)?.toISOString()).toBe("2026-08-19T09:00:00.000Z");
   });

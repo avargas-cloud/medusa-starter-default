@@ -29,13 +29,13 @@ import {
   type CommissionAmountMode,
   type RecipientInput,
 } from "./calculator";
-import { canApprove, canReSaveAssignment, canVoid, refreshedState, type RecipientState } from "./transitions";
+import { canApprove, canApproveEarly, canReSaveAssignment, canVoid, refreshedState, type RecipientState } from "./transitions";
 
 export interface OrderMoneySnapshot {
   itemSubtotalCents: number;
   discountCents: number;
   fullyPaidAt: Date | null;
-  lastInvoiceAt: Date | null;
+  firstInvoiceAt: Date | null;
 }
 
 /**
@@ -239,7 +239,7 @@ export async function saveAssignment(
   const discountBps = discountBpsOf(input.money);
   const eligible = computeEligibleAt(
     input.money.fullyPaidAt,
-    input.money.lastInvoiceAt,
+    input.money.firstInvoiceAt,
     input.waitDays
   );
 
@@ -342,7 +342,7 @@ export async function refreshCommission(
 
   const base = commissionBaseCents(money);
   const discountBps = discountBpsOf(money);
-  const eligible = computeEligibleAt(money.fullyPaidAt, money.lastInvoiceAt, existing.commission.wait_days);
+  const eligible = computeEligibleAt(money.fullyPaidAt, money.firstInvoiceAt, existing.commission.wait_days);
 
   // Cap combinado VIVO: se mide contra el `cap_bps` CONGELADO en la comisión
   // (cambiar el setting global no debe mover comisiones ya asignadas), y sólo
@@ -394,7 +394,8 @@ export async function refreshCommission(
 export async function approveRecipient(
   client: PoolClient,
   recipientId: string,
-  actorId: string | null
+  actorId: string | null,
+  opts?: { allowEarly?: boolean }
 ): Promise<{ amountCents: number }> {
   const { rows } = await client.query<RecipientRow & { base_cents: string | number }>(
     `SELECT r.*, c.base_cents
@@ -406,7 +407,15 @@ export async function approveRecipient(
   );
   const row = rows[0];
   if (!row) throw new CommissionError("not_found", "Recipient not found.");
-  if (!canApprove(row.state)) {
+  const early = opts?.allowEarly === true && canApproveEarly(row.state, row.eligible_at);
+  if (!early && !canApprove(row.state)) {
+    if (opts?.allowEarly === true && row.state === "draft") {
+      throw new CommissionError(
+        "invalid_state",
+        "Cannot approve early: the accrual is not determined yet (the order is not fully paid or has no invoice).",
+        { state: row.state, reason: "accrual_undetermined" }
+      );
+    }
     throw new CommissionError("invalid_state", `Cannot approve from state '${row.state}'.`, {
       state: row.state,
     });

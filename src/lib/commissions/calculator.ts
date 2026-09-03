@@ -153,15 +153,18 @@ export function validateRecipients(recipients: RecipientInput[]): RecipientsVali
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Devengo: max(pago completo, última factura + waitDays corridos).
+ * Devengo: max(pago completo, PRIMERA factura + waitDays corridos).
  * Falta cualquiera de las dos condiciones → null (todavía no elegible).
+ * La espera corre desde la primera factura viva de la orden (2026-09-03,
+ * pedido del owner — antes corría desde la última, que la reiniciaba con
+ * cada factura parcial nueva).
  */
 export function eligibleAt(
   fullyPaidAt: Date | null,
-  lastInvoiceAt: Date | null,
+  firstInvoiceAt: Date | null,
   waitDays: number
 ): Date | null {
-  if (!fullyPaidAt || !lastInvoiceAt) return null;
-  const invoicePlusWait = new Date(lastInvoiceAt.getTime() + waitDays * DAY_MS);
+  if (!fullyPaidAt || !firstInvoiceAt) return null;
+  const invoicePlusWait = new Date(firstInvoiceAt.getTime() + waitDays * DAY_MS);
   return invoicePlusWait.getTime() >= fullyPaidAt.getTime() ? invoicePlusWait : fullyPaidAt;
 }

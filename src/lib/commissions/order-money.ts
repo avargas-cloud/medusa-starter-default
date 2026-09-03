@@ -67,21 +67,21 @@ export async function readOrderMoneySnapshot(
   const money = moneyRows[0];
   const fullyPaidAt = money?.fully_paid && money.paid_at ? money.paid_at : null;
 
-  const { rows: invoiceRows } = await client.query<{ last_invoice_at: Date | null }>(
-    `SELECT MAX(created_at) AS last_invoice_at
+  const { rows: invoiceRows } = await client.query<{ first_invoice_at: Date | null }>(
+    `SELECT MIN(created_at) AS first_invoice_at
        FROM pos_invoice
       WHERE order_id = $1
         AND deleted_at IS NULL
         AND status NOT IN ('draft', 'voided')`,
     [orderId]
   );
-  const lastInvoiceAt = invoiceRows[0]?.last_invoice_at ?? null;
+  const firstInvoiceAt = invoiceRows[0]?.first_invoice_at ?? null;
 
   return {
     itemSubtotalCents,
     discountCents,
     fullyPaidAt,
-    lastInvoiceAt,
+    firstInvoiceAt,
     orderCustomerId: order.customer_id,
     currencyCode: order.currency_code ?? "usd",
     orderDisplayId: order.display_id == null ? null : String(order.display_id),

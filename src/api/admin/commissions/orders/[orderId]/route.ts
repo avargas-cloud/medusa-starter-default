@@ -118,7 +118,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse):
         item_subtotal_cents: money.itemSubtotalCents,
         discount_cents: money.discountCents,
         fully_paid_at: money.fullyPaidAt,
-        last_invoice_at: money.lastInvoiceAt,
+        first_invoice_at: money.firstInvoiceAt,
       },
       commission: existing
         ? {

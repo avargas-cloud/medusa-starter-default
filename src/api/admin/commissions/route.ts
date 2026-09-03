@@ -30,7 +30,7 @@ const REFRESH_CAP = 100;
 interface ListRow {
   id: string;
   order_fully_paid: boolean;
-  last_invoice_at: Date | null;
+  first_invoice_at: Date | null;
   approval_ready_at: Date | null;
   wait_days: number;
   assigned_by_email: string | null;
@@ -141,12 +141,12 @@ export async function GET(
               o.display_id AS order_display_id,
               o.metadata->>'document_number' AS order_document_number,
               -- Las DOS condiciones del devengo, por separado (la UI las muestra
-              -- explícitas): pago completo hoy, y última factura + espera.
+              -- explícitas): pago completo hoy, y PRIMERA factura + espera.
               COALESCE(omp.order_total_cents > 0
                 AND omp.applied_cents + omp.deposit_cents >= omp.order_total_cents,
                 FALSE) AS order_fully_paid,
-              inv.last_invoice_at,
-              inv.last_invoice_at + (c.wait_days || ' days')::interval AS approval_ready_at,
+              inv.first_invoice_at,
+              inv.first_invoice_at + (c.wait_days || ' days')::interval AS approval_ready_at,
               ua.email AS assigned_by_email,
               uap.email AS approved_by_email,
               us.email AS settled_by_email,
@@ -161,7 +161,7 @@ export async function GET(
          LEFT JOIN "order" o ON o.id = c.order_id
          LEFT JOIN order_money_projection omp ON omp.order_id = c.order_id
          LEFT JOIN LATERAL (
-           SELECT MAX(pi.created_at) AS last_invoice_at
+           SELECT MIN(pi.created_at) AS first_invoice_at
              FROM pos_invoice pi
             WHERE pi.order_id = c.order_id
               AND pi.deleted_at IS NULL AND pi.status NOT IN ('draft', 'voided')
@@ -286,7 +286,7 @@ export async function GET(
           currency_code: r.currency_code,
           eligible_at: r.eligible_at,
           order_fully_paid: r.order_fully_paid,
-          last_invoice_at: r.last_invoice_at,
+          first_invoice_at: r.first_invoice_at,
           approval_ready_at: r.approval_ready_at,
           wait_days: r.wait_days,
           payout_method: r.payout_method,
