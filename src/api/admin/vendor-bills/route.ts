@@ -28,6 +28,7 @@ import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/au
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
 import { accountAllowedForVendorBillType } from "../../../lib/purchase-orders/vendor-bill-account-rules";
 import { resolveVendorBillPaymentTerms } from "../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { isUsableQbListId } from "../../../lib/purchase-orders/vendor-bill-vendor-identity";
 import {
   findDuplicateVendorBillReference,
   normalizeRequiredVendorBillReference,
@@ -529,7 +530,13 @@ export async function POST(
         vbNumber,
         vendor.id,
         vendorName,
-        vendor.qb_list_id,
+        // A brand-new vendor's ListID can still be the `pending_...`
+        // placeholder minted before QuickBooks confirms it (~1 min sync
+        // window, VB-1148/Error 3000). Freezing that placeholder froze the
+        // eventual BillAdd's failure too — leaving it NULL here does not
+        // block the operator; the enqueue resolves it from the LIVE vendor
+        // at confirm time.
+        isUsableQbListId(vendor.qb_list_id) ? vendor.qb_list_id : null,
         body.bill_type,
         referenceId,
         body.document_date ?? null,

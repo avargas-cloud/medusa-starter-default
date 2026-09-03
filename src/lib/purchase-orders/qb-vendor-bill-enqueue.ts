@@ -68,6 +68,7 @@ import {
   costTruncationDriftCents,
   type CostTruncationLine,
 } from "./qb-vendor-bill-cost-truncation-guard";
+import { resolveVendorIdentityForBill } from "./vendor-bill-vendor-identity";
 
 export type EnqueueKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
@@ -85,6 +86,7 @@ interface BillRow {
   document_date: string | null;
   due_date: string | null;
   purchase_order_id: string | null;
+  vendor_id: string | null;
   vendor_qb_list_id_snapshot: string | null;
   vendor_name_snapshot: string | null;
   qb_source: string | null;
@@ -134,7 +136,7 @@ export async function enqueueQbVendorBillAdd(
 
   const billResult = await knex.raw(
     `SELECT vb.id, vb.number, vb.bill_type, vb.reference_id, vb.document_date, vb.due_date,
-            vb.purchase_order_id, vb.vendor_qb_list_id_snapshot,
+            vb.purchase_order_id, vb.vendor_id, vb.vendor_qb_list_id_snapshot,
             vb.vendor_name_snapshot, vb.qb_source,
             vb.tax_amount_cents, vb.tax_account_list_id,
             vb.freight_included, vb.freight_amount_cents,
@@ -167,6 +169,17 @@ export async function enqueueQbVendorBillAdd(
   // bill-drift.ts for the sibling guards (owner rule 2026-07-23).
   if (bill.qb_source === "adopted") {
     return { queued: false, reason: "adopted_bill_readonly" };
+  }
+
+  // Resolved HERE, not at create time (VB-1148, Error 3000): a vendor
+  // created moments before this bill can still be carrying its `pending_`
+  // placeholder ListID when confirm fires. Re-checking against the LIVE
+  // vendor at the moment of dispatch — instead of trusting whatever the
+  // snapshot froze — is what lets a bill confirmed inside that sync window
+  // still queue successfully once QuickBooks has assigned the real id.
+  const vendorIdentity = await resolveVendorIdentityForBill(knex, bill);
+  if (!vendorIdentity.resolved) {
+    return { queued: false, reason: vendorIdentity.reason };
   }
   // NO PURCHASE ORDER IS A DOCUMENT SHAPE, NOT DAMAGE (generalised 2026-08-31).
   //
@@ -558,8 +571,8 @@ export async function enqueueQbVendorBillAdd(
     memo: po
       ? `EcoPowerTech ${bill.number ?? bill.id} / ${po.number ?? bill.purchase_order_id}`
       : `EcoPowerTech ${bill.number ?? bill.id}`,
-    vendor_qb_list_id: bill.vendor_qb_list_id_snapshot,
-    vendor_name: bill.vendor_name_snapshot,
+    vendor_qb_list_id: vendorIdentity.list_id,
+    vendor_name: vendorIdentity.name,
     txn_date: toDateOnly(bill.document_date),
     due_date: toDateOnly(bill.due_date),
     rebuild_generation: bill.rebuild_generation,

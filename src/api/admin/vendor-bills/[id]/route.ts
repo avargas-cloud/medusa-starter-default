@@ -28,6 +28,7 @@ import {
   type RemainingPoLine,
 } from "../../../../lib/purchase-orders/po-billed-quantities";
 import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
+import { isUsableQbListId } from "../../../../lib/purchase-orders/vendor-bill-vendor-identity";
 import {
   deriveClearingDrift,
   type ClearingDrift,
@@ -1094,8 +1095,11 @@ export async function PATCH(
     patch.vendor_id = vendor.id;
     (patch as typeof patch & { vendor_name_snapshot?: string }).vendor_name_snapshot =
       vendor.company_name ?? vendor.full_name ?? vendor.name ?? vendor.id;
+    // Same guard as the create route: a `pending_...` placeholder ListID
+    // must never be frozen into the snapshot (VB-1148/Error 3000) — leave it
+    // NULL and let the enqueue resolve the live vendor at confirm time.
     (patch as typeof patch & { vendor_qb_list_id_snapshot?: string | null }).vendor_qb_list_id_snapshot =
-      vendor.qb_list_id;
+      isUsableQbListId(vendor.qb_list_id) ? vendor.qb_list_id : null;
   }
 
   if (patch.bill_type && patch.bill_type !== bill.bill_type) {
