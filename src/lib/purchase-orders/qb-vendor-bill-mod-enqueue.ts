@@ -698,7 +698,12 @@ async function enqueueOneBillMod(
       );
     }
 
-    if (!regular.purchase_order_id && regular.bill_type !== "expense") {
+    // Same rule as the Add (qb-vendor-bill-enqueue.ts): only a REGULAR bill
+    // genuinely needs a purchase order — its item lines are PO-linked goods and
+    // `LinkToTxn` has nothing to point at without one. For every other type, no
+    // PO is a document SHAPE, not damage. See the note on the single-bill guard
+    // below for what the asymmetry cost.
+    if (!regular.purchase_order_id && regular.bill_type === "regular") {
       throw new Error(`${regular.number ?? regular.id}: missing purchase order`);
     }
     const orderPayload = {
@@ -706,8 +711,8 @@ async function enqueueOneBillMod(
       qb_vendor_bill_pipeline_id: vendorBillPipelineId,
     };
     const operation = await enqueuePurchaseQbOperation(db, {
-      // Expense bills chain by their own bill id — same key their Add used,
-      // so Add → Mod on the same document stays serial.
+      // A bill with no purchase order chains by its OWN id — the same key its
+      // Add used — so Add → Mod on the same document stays serial.
       purchaseOrderId: regular.purchase_order_id ?? regular.id,
       referenceId: bill.id,
       referenceType: "vendor_bill",
@@ -772,16 +777,37 @@ export async function enqueueVendorBillModSingle(
   if (!bill.qb_txn_id) {
     return { queued: false, reason: "bill is not linked to QuickBooks" };
   }
-  // An expense bill never has a purchase order — that is its shape, and its
-  // Mod chains off its own bill id (same key its Add used). For every other
-  // type a missing PO is data damage and stays a refusal.
-  if (!bill.purchase_order_id && bill.bill_type !== "expense") {
-    return { queued: false, reason: "bill has no purchase order" };
-  }
+  // NO PURCHASE ORDER IS A DOCUMENT SHAPE, NOT DAMAGE — and this guard is the
+  // half that was left behind (2026-09-03).
+  //
+  // `bdfbecaf` (2026-08-31) generalised exactly this rule, and its own commit
+  // message says so: "sólo un regular exige PO". But it applied the rule to the
+  // ADD alone — `git show bdfbecaf -- <this file>` is EMPTY. So a service bill
+  // with no purchase order could be created in QuickBooks and then never
+  // corrected again: the Add went through, the bill came back with a TxnID, and
+  // every later edit hit this refusal forever.
+  //
+  // Two real shapes live here, both named by the owner: a SERVICE bill for a
+  // sales commission, and an outsourced-services (subcontractor) bill. Neither
+  // has anything to purchase. Measured the day this was found: VB-1146, 1147,
+  // 1148 and 1149 were already in QuickBooks and all four were uneditable.
+  //
+  // And the same commit made the standalone confirm transactional and LOUD, so
+  // the leftover carve-out stopped being a silent skip and became a 500 in the
+  // operator's face — which is the only reason it surfaced at all.
+  //
+  // The rule that replaces it is structural and identical to the Add's: a bill
+  // with no purchase order has no regular bill that could absorb or clear it,
+  // so it is its own document, and `enqueueOneBillMod` keys its dependency
+  // chain by its own id. Only `regular` truly cannot exist without a PO — and
+  // a regular bill NEVER reaches this line, because the check above already
+  // sends it to the group Mod. So there is deliberately no PO check here: the
+  // one that still bites lives in `enqueueOneBillMod`, where both paths meet.
+  // Re-adding a copy here would only be a second place for it to drift.
 
   const groupId = randomUUID();
   // `bill` is its own context: buildPayload reads `regular.purchase_order_id`
-  // only, and this bill either has one or (expense) chains by its own id.
+  // only, and this bill either has one or chains by its own id.
   await enqueueOneBillMod(db, bill, bill, groupId);
   return { queued: true, groupId, billIds: [bill.id] };
 }

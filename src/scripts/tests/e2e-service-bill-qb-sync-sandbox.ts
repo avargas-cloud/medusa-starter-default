@@ -53,7 +53,11 @@ let seq = 0;
 async function plant(
   db: Client,
   billType: "service" | "freight" | "tariff",
-  opts: { synced: boolean }
+  // `withPo: false` plants the shape the owner actually has in production — a
+  // sales-commission or outsourced-services bill, which has nothing to purchase.
+  // The purchase_order row is still created (it costs nothing and keeps cleanup
+  // uniform); what changes is that the BILL does not point at it.
+  opts: { synced: boolean; withPo?: boolean }
 ): Promise<Fx> {
   const n = `${++seq}-${randomUUID().slice(0, 6)}`;
   const f: Fx = {
@@ -83,7 +87,7 @@ async function plant(
      VALUES ($1, $2, 'draft', $3, $4, $5, 'QBVND-SFT', 'SFT Vendor', $6, $7, NOW())`,
     [
       f.billId,
-      f.poId,
+      opts.withPo === false ? null : f.poId,
       billType,
       `VB-SFT-${n}`,
       `REF-${n}`,
@@ -114,10 +118,14 @@ async function plant(
 
 async function cleanup(db: Client, all: Fx[]): Promise<void> {
   for (const f of all) {
-    await db.query(`DELETE FROM qb_order_pipeline WHERE order_id = $1`, [f.poId]);
+    // A bill with no purchase order keys its chain by its OWN id, so both keys
+    // have to be swept or the no-PO fixture leaks rows into the next run.
+    await db.query(`DELETE FROM qb_order_pipeline WHERE order_id = ANY($1)`, [
+      [f.poId, f.billId],
+    ]);
     await db.query(
-      `DELETE FROM qb_purchase_dependency_chain WHERE purchase_order_id = $1`,
-      [f.poId]
+      `DELETE FROM qb_purchase_dependency_chain WHERE purchase_order_id = ANY($1)`,
+      [[f.poId, f.billId]]
     );
     await db.query(
       `DELETE FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = $1`,
@@ -230,6 +238,57 @@ async function main(): Promise<void> {
       "la fila es vendor_bill_mod",
       modRow.rows.length === 1 && modRow.rows[0].step === "vendor_bill_mod",
       modRow.rows.map((r) => r.step).join(", ")
+    );
+
+    // ── MOD sin purchase order: comisión de venta / subcontrato ─────────────
+    //
+    // EL CASO QUE FALTABA. El Add se generalizó el 2026-08-31 (bdfbecaf: "sólo
+    // un regular exige PO") pero el Mod nunca se tocó, así que un service bill
+    // sin PO ENTRABA a QuickBooks y después no se podía corregir NUNCA: cada
+    // edición contestaba 500 "bill has no purchase order". Medido en producción
+    // el 2026-09-03: VB-1146, 1147, 1148 y 1149 ya en QB y los cuatro trabados.
+    //
+    // Que el Add funcione no cubre esto — son dos guards distintos en dos
+    // archivos distintos, y ahí estuvo la brecha durante tres días.
+    console.log("\nMOD — service bill SIN purchase order (comisión / subcontrato)");
+    const noPo = await plant(db, "service", { synced: true, withPo: false });
+    planted.push(noPo);
+    const modNoPo = await enqueueVendorBillModSingle(knexLike as never, noPo.billId);
+    check(
+      "el Mod de un bill sin PO se encola (antes: 'bill has no purchase order')",
+      modNoPo.queued === true,
+      `reason=${(modNoPo as { reason?: string }).reason}`
+    );
+    check(
+      "y toca UN SOLO bill",
+      modNoPo.queued === true &&
+        modNoPo.billIds.length === 1 &&
+        modNoPo.billIds[0] === noPo.billId,
+      JSON.stringify(modNoPo.queued === true ? modNoPo.billIds : null)
+    );
+    // La aserción que prueba que la cadena no quedó huérfana: sin PO, la
+    // operación se serializa por el id del PROPIO bill — la misma clave que usó
+    // su Add, que es lo que mantiene Add → Mod en orden sobre un mismo documento.
+    const noPoChain = await db.query<{ step: string; order_id: string }>(
+      `SELECT step, order_id FROM qb_order_pipeline WHERE order_id = $1`,
+      [noPo.billId]
+    );
+    check(
+      "la cadena se keyea por el id del bill, no por un PO inexistente",
+      noPoChain.rows.length === 1 && noPoChain.rows[0].step === "vendor_bill_mod",
+      JSON.stringify(noPoChain.rows)
+    );
+    const noPoPipe = await db.query<{ intent: string; purchase_order_id: string | null }>(
+      `SELECT intent, purchase_order_id FROM qb_vendor_bill_pipeline
+        WHERE vendor_bill_id = $1 AND deleted_at IS NULL`,
+      [noPo.billId]
+    );
+    check(
+      "la fila de pipeline queda intent='mod' con purchase_order_id NULL",
+      noPoPipe.rows.length === 1 &&
+        noPoPipe.rows[0].intent === "mod" &&
+        noPoPipe.rows[0].purchase_order_id === null,
+      JSON.stringify(noPoPipe.rows)
     );
 
     // ── Controles negativos ────────────────────────────────────────────────

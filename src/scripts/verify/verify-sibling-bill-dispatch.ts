@@ -146,6 +146,54 @@ async function main(): Promise<void> {
     "computing modBills and then looping `bills` would be a filter that does nothing"
   );
 
+  // THE ADD AND THE MOD MUST AGREE ON WHO NEEDS A PURCHASE ORDER (2026-09-03).
+  //
+  // `bdfbecaf` (2026-08-31) replaced "only an expense bill may lack a PO" with
+  // the structural rule "only a REGULAR bill requires one" — and wrote it in
+  // the Add alone. The Mod kept the old carve-out, so a sales-commission or
+  // outsourced-services bill went INTO QuickBooks through the generalised Add
+  // and then could never be corrected: every edit 500'd with "bill has no
+  // purchase order". VB-1146/1147/1148/1149 sat uneditable for three days.
+  //
+  // Asserted as a PAIR because that is the actual failure mode. A check on the
+  // Mod alone would have gone green the moment someone fixed the Mod and
+  // regressed the Add — the two guards are one rule living in two files, and
+  // this is the only place that says so.
+  const codeOnly = (s: string) =>
+    s
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+  const addCode = codeOnly(
+    bodyWithoutImports("lib/purchase-orders/qb-vendor-bill-enqueue.ts")
+  );
+  const modCode = codeOnly(modEnqueue);
+  const PO_RULE = /!\w+\.purchase_order_id\s*&&\s*\w+\.bill_type\s*===\s*"regular"/;
+  check(
+    PO_RULE.test(addCode),
+    "the ADD refuses a missing PO only for a REGULAR bill"
+  );
+  check(
+    PO_RULE.test(modCode),
+    "the MOD applies the SAME rule — no PO is a document shape, not damage",
+    "this is the guard that made VB-1146 uneditable"
+  );
+  const CARVE_OUT = /bill_type\s*!==\s*"expense"/;
+  check(
+    !CARVE_OUT.test(addCode) && !CARVE_OUT.test(modCode),
+    "neither path still carves out `expense` by name",
+    "the carve-out is what the structural rule replaced"
+  );
+  // The other half of "no PO is a shape": without a purchase order there is no
+  // chain to serialize against, so the operation keys off the bill's OWN id.
+  // Drop this fallback and the enqueue writes a NULL key.
+  const OWN_ID_CHAIN = /purchase_order_id\s*\?\?\s*\w+\.id/;
+  check(
+    OWN_ID_CHAIN.test(addCode) && OWN_ID_CHAIN.test(modCode),
+    "both key a PO-less bill's dependency chain by its own id",
+    "Add → Mod on the same document has to stay serial"
+  );
+
   console.log("\n§2 — the invariant, against live data\n");
 
   const knex = Knex({ client: "pg", connection: url, pool: { min: 0, max: 3 } });

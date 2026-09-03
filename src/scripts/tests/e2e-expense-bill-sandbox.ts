@@ -25,8 +25,12 @@
  *  6. ADD enqueue: queued with purchase_order_id NULL, po_txn_id null,
  *     item_lines empty, one expense line — and the dependency chain keyed by
  *     the BILL's own id.
- *  7. A service bill without a PO is STILL refused by the ADD enqueue
- *     ("bill has no purchase order") — the exemption is expense-only.
+ *  7. A service bill without a PO is ACCEPTED by the ADD enqueue. It used to
+ *     assert the opposite — the carve-out was expense-only — and `bdfbecaf`
+ *     (2026-08-31) replaced that with "only a REGULAR bill requires a PO"
+ *     without updating this check, so it sat red asserting a rule the code no
+ *     longer had. A sales commission and an outsourced service are exactly
+ *     this shape.
  *  8. MOD enqueue (edit after sync): queued, and its operation depends on the
  *     ADD in the same bill-scoped chain (Add → Mod stays serial).
  *
@@ -399,7 +403,17 @@ async function main(): Promise<void> {
       JSON.stringify(addOp.rows[0] ?? {})
     );
 
-    // 7 — un service SIN PO sigue rechazado por el ADD
+    // 7 — un service SIN PO lo ACEPTA el ADD (comisión de venta / subcontrato)
+    //
+    // Esta aserción decía lo contrario y estaba ROJA desde el 2026-08-31:
+    // `bdfbecaf` generalizó la regla a "sólo un regular exige PO" y no la
+    // actualizó. Un check que afirma la regla vieja no es neutro — le enseña
+    // al próximo lector justo lo que causó el bug de VB-1146.
+    //
+    // Y lleva UNA LÍNEA a propósito: sin líneas el Add rechaza por
+    // "bill has no lines to send", que es otra valla. Un fixture que muere en
+    // la valla anterior no mide la que el check dice medir — así este check
+    // seguía "rojo por el motivo correcto" sin probar nada.
     const svcNoPoId = randomUUID();
     billIds.push(svcNoPoId);
     await db.query(
@@ -410,11 +424,20 @@ async function main(): Promise<void> {
                NOW(), NOW(), NOW())`,
       [svcNoPoId, `VB-E2E-SVC-${n}`, `REF-SVC-NOPO-${n}`, f.vendorId, f.vendorQbListId]
     );
+    await db.query(
+      `INSERT INTO vendor_bill_line
+         (id, vendor_bill_id, line_type, qb_account_list_id, qb_account_full_name,
+          qb_account_type, sku, description, qty, unit_cost_cents,
+          landed_unit_cost_cents, created_at, updated_at)
+       VALUES ($1, $2, 'qb_account', $3, 'Office Supplies E2E', 'Expense',
+               'Office Supplies E2E', 'sales commission', 1, 24500, 24500,
+               NOW(), NOW())`,
+      [`vbl_${randomUUID().replace(/-/g, "")}`, svcNoPoId, f.expenseAccountId]
+    );
     const svcAdd = await enqueueQbVendorBillAdd(knexLike as never, svcNoPoId);
     check(
-      "service sin PO sigue rechazado por el ADD (exención expense-only)",
-      (svcAdd as { queued: boolean }).queued === false &&
-        (svcAdd as { reason?: string }).reason === "bill has no purchase order",
+      "un service SIN PO lo acepta el ADD — sólo un regular exige PO",
+      (svcAdd as { queued: boolean }).queued === true,
       `reason=${(svcAdd as { reason?: string }).reason}`
     );
 
