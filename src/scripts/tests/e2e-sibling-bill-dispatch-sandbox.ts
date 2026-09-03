@@ -73,6 +73,12 @@ interface PlantOpts {
   /**
    * Give the regular the CHINA-AGENT shape: persisted negative clearing lines
    * cancelling both siblings. That is the shape whose group Mod deadlocked.
+   *
+   * The commission is planted STALE on purpose (−$333.00 against a sibling of
+   * −$328.60), reproducing VB-1128: QuickBooks held one figure and the sibling
+   * had since been corrected to another. A fixture whose column already agreed
+   * with its siblings could not tell a Mod that refreshes the column from one
+   * that copies it unchanged.
    */
   regularClearing?: boolean;
 }
@@ -211,9 +217,11 @@ async function plant(db: Client, o: PlantOpts): Promise<Fx> {
           f.regularId,
           JSON.stringify([
             { kind: "commission", vendor_bill_id: f.serviceId, account_list_id: `ACC-COMM-SD-${n}`,
-              account_full_name: "Commission for Purchase:Test", amount_cents: -32860 },
+              account_full_name: "Commission for Purchase:Test", amount_cents: -33300,
+              qb_txn_line_id: `QBCLR-COMM-SD-${n}` },
             { kind: "freight", vendor_bill_id: f.freightId, account_list_id: `ACC-FRT-SD-${n}`,
-              account_full_name: "Freight and Shipping Costs", amount_cents: -85400 },
+              account_full_name: "Freight and Shipping Costs", amount_cents: -85400,
+              qb_txn_line_id: `QBCLR-FRT-SD-${n}` },
           ]),
         ]
       );
@@ -500,6 +508,58 @@ async function main(): Promise<void> {
         stepsH[2].step === "vendor_bill_mod" &&
         stepsH[2].reference_id === h.regularId,
       stepsH.map((r) => `${r.step}:${r.reference_id === h.regularId ? "REG" : "sib"}`).join(" → "));
+
+    // ── §6 · El Mod deja constancia de lo que manda ───────────────────────────
+    //
+    // `vendor_bill.qb_clearing_lines` es lo que la pantalla y
+    // `verify-clearing-drift` tratan como "lo que tiene QuickBooks". Sólo el
+    // ADD la escribía: el Mod mandaba montos frescos y dejaba la columna
+    // citando los viejos, así que corregir un hermano y reconfirmar el grupo
+    // dejaba el bill marcado "needs review" PARA SIEMPRE contra un documento
+    // que, para entonces, estaba bien. Medido en VB-1128: QuickBooks −$380,68,
+    // columna −$388,87, cartel trabado.
+    //
+    // El payload lleva el snapshot; el confirm lo aplica (poll-submitted-rows).
+    console.log("\n§6 — el Mod lleva en su payload lo que QuickBooks va a tener");
+    const payloadRow = await db.query(
+      `SELECT payload FROM qb_vendor_bill_pipeline
+        WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+      [h.regularId]
+    );
+    const modPayload = payloadRow.rows[0]?.payload as Record<string, unknown> | undefined;
+    const sentClearing = (modPayload?.clearing_lines ?? []) as Array<{
+      kind: string; amount_cents: number; account_list_id: string; qb_txn_line_id?: string;
+    }>;
+    check("el payload del Mod lleva las clearing lines", sentClearing.length === 2,
+      JSON.stringify(sentClearing));
+
+    const commissionSent = sentClearing.find((l) => l.kind === "commission");
+    const freightSent = sentClearing.find((l) => l.kind === "freight");
+    // EL CHECK QUE IMPORTA: el monto es el VIVO del hermano (−328,60), no el
+    // desactualizado que la columna traía (−333,00).
+    check("la comisión va por el monto VIVO del hermano, no por el guardado",
+      commissionSent?.amount_cents === -32860, String(commissionSent?.amount_cents));
+    check("el freight, que no cambió, va igual", freightSent?.amount_cents === -85400,
+      String(freightSent?.amount_cents));
+    // Control NEGATIVO de identidad: refrescar el monto no puede perder la
+    // línea de QuickBooks ni la cuenta — sin TxnLineID el Mod la agregaría de
+    // nuevo en vez de modificarla, duplicando el cargo en el Bill.
+    check("conserva el TxnLineID de la línea en QuickBooks",
+      Boolean(commissionSent?.qb_txn_line_id) && Boolean(freightSent?.qb_txn_line_id),
+      JSON.stringify([commissionSent?.qb_txn_line_id, freightSent?.qb_txn_line_id]));
+    check("y su cuenta", Boolean(commissionSent?.account_list_id) && Boolean(freightSent?.account_list_id));
+
+    // La columna TODAVÍA no cambió: se escribe en el confirm, no al encolar.
+    // Un Mod que nunca aterriza tiene que dejar el cartel prendido, porque el
+    // documento de QuickBooks sigue estando viejo de verdad.
+    const stillStale = await db.query(
+      `SELECT qb_clearing_lines AS c FROM vendor_bill WHERE id = $1`,
+      [h.regularId]
+    );
+    const staleCommission = (stillStale.rows[0]?.c as Array<{ kind: string; amount_cents: number }>)
+      ?.find((l) => l.kind === "commission");
+    check("la columna NO se toca al encolar — falla cerrado si el Mod no aterriza",
+      staleCommission?.amount_cents === -33300, String(staleCommission?.amount_cents));
 
     // Idempotencia: correrlo dos veces no duplica.
     const outAgain = await dispatchConfirmedSiblings(knexLike as never, a.regularId as string);

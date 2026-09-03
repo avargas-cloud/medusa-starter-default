@@ -472,18 +472,27 @@ async function buildPayload(
       };
     });
 
-  const retainedClearing =
+  // THE AMOUNTS ARE DERIVED LIVE; the persisted rows supply only IDENTITY
+  // (which account, which QB line, which sibling). `clearingSnapshot` keeps
+  // every field so the confirm can write the column back verbatim — see
+  // `clearing_lines` in the payload below.
+  const clearingSnapshot: ClearingLine[] =
     bill.bill_type === "regular" && clearingAmounts
       ? (bill.qb_clearing_lines ?? []).map((line) => ({
-          qb_txn_line_id: line.qb_txn_line_id,
-          account_list_id: line.account_list_id,
+          ...line,
           amount_cents:
             line.kind === "other"
               ? Number(line.amount_cents)
               : -clearingAmounts[line.kind],
-          memo: line.account_full_name,
         }))
       : [];
+
+  const retainedClearing = clearingSnapshot.map((line) => ({
+    qb_txn_line_id: line.qb_txn_line_id,
+    account_list_id: line.account_list_id,
+    amount_cents: line.amount_cents,
+    memo: line.account_full_name,
+  }));
 
   // BillMod DELETES BY OMISSION (quickbooks-bridge/src/qbxml/builders/bill.ts
   // §BillMod): every line the caller leaves out is removed from the QB bill.
@@ -511,6 +520,26 @@ async function buildPayload(
     memo: `EcoPowerTech ${bill.number ?? bill.id}`,
     item_lines: itemLines,
     expense_lines: expenseLines,
+    // WHAT QUICKBOOKS WILL HOLD once this Mod confirms (2026-09-03).
+    //
+    // `vendor_bill.qb_clearing_lines` is documented as "how the Mod later knows
+    // what QuickBooks holds", and only the ADD ever wrote it. The Mod read it,
+    // sent FRESH amounts, and left the column quoting the old ones — so after a
+    // sibling was corrected and the group re-confirmed, the column described a
+    // document that no longer existed. `deriveClearingDrift` compares against
+    // that column, so the bill's "needs review" banner became a false positive
+    // with no way to clear, and `verify-clearing-drift` a permanent red.
+    // Measured on VB-1128: QuickBooks −$380.68, column −$388.87, banner stuck.
+    //
+    // Carried in the payload rather than re-derived at confirm time: a sibling
+    // can change again while the Mod is in flight, and this column records what
+    // was SENT, not what would be right now. It is applied on CONFIRM (see
+    // poll-submitted-rows.ts) and not here, so a Mod that never lands leaves the
+    // old amounts in place — the banner stays, telling the truth about a
+    // QuickBooks document that really is still stale.
+    ...(clearingSnapshot.length > 0
+      ? { clearing_lines: clearingSnapshot }
+      : {}),
   };
 }
 

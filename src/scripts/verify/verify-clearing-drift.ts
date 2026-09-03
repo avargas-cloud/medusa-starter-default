@@ -90,7 +90,69 @@ interface CrossRow {
   quickbooks_cents: number;
 }
 
+/**
+ * Source of a file with its `import` lines stripped.
+ *
+ * A "does this file call X" check that scans the whole text is satisfied by the
+ * IMPORT alone — a defect this repo has paid for three times. Dropping the
+ * import block is what makes the assertion mean what it says.
+ */
+function bodyWithoutImports(rel: string): string {
+  const text = readFileSync(join(process.cwd(), "src", rel), "utf8");
+  return text
+    .split("\n")
+    .filter((l) => !/^\s*import\b/.test(l) && !/^\s*}\s*from\s+"/.test(l))
+    .join("\n");
+}
+
+/**
+ * §0 — THE COLUMN THIS WHOLE SCRIPT TRUSTS HAS TO BE MAINTAINED (2026-09-03).
+ *
+ * Every check below compares `vendor_bill.qb_clearing_lines` against the
+ * siblings, on the premise that the column says what QuickBooks holds. For a
+ * year only the BillAdd ever wrote it: the Mod read it, sent FRESH amounts, and
+ * left the column quoting the old ones. So the first time a sibling was
+ * corrected and the group re-confirmed, this verifier and the bill's own banner
+ * both went permanently red against a QuickBooks document that was correct.
+ * Measured on VB-1128: QuickBooks −$380.68, column −$388.87.
+ *
+ * Static, because the write only happens when a real BillMod confirms and there
+ * is no way to reach that from a read-only script.
+ */
+function checkModMaintainsTheColumn(): void {
+  const modEnqueue = bodyWithoutImports(
+    "lib/purchase-orders/qb-vendor-bill-mod-enqueue.ts"
+  );
+  check(
+    "el Mod manda en su payload lo que QuickBooks va a tener",
+    /clearing_lines:\s*clearingSnapshot/.test(modEnqueue),
+    "sin el snapshot, el confirm no tiene con qué actualizar la columna"
+  );
+
+  const poller = bodyWithoutImports(
+    "lib/quickbooks/consolidator/poll-submitted-rows.ts"
+  );
+  // El write tiene que estar DENTRO de la rama del confirm de `vendor_bill_mod`
+  // y apuntar a `qb_clearing_lines`. Afirmar sólo "el archivo menciona
+  // clearing_lines" lo cumpliría un comentario.
+  const confirmBranch = poller.slice(
+    poller.indexOf('row.step === "vendor_bill_mod" && row.reference_id && modifiedBill')
+  );
+  const branchBody = confirmBranch.slice(0, 4000);
+  check(
+    "y el confirm del Mod la escribe en vendor_bill.qb_clearing_lines",
+    confirmBranch.length > 0 &&
+      /qb_clearing_lines\s*=\s*\$2::jsonb/.test(branchBody) &&
+      /\.clearing_lines/.test(branchBody),
+    "el aviso de esta pantalla no tendría forma de apagarse nunca"
+  );
+}
+
 async function main(): Promise<void> {
+  console.log("\n§0 — quién mantiene la columna (estático)\n");
+  checkModMaintainsTheColumn();
+  console.log("");
+
   const db = new Client({ connectionString: resolveDbUrl() });
   await db.connect();
   const knexLike = {

@@ -346,6 +346,30 @@ export async function pollSubmittedRows(
               balanceCents,
             ]
           );
+          // THE CLEARING COLUMN FOLLOWS THE DOCUMENT (2026-09-03).
+          //
+          // `vendor_bill.qb_clearing_lines` is what the screen and
+          // `verify-clearing-drift` treat as "what QuickBooks holds". Only the
+          // BillAdd ever wrote it; the Mod sent fresh amounts and left it
+          // quoting the old ones, so correcting a sibling and re-confirming the
+          // group left the bill flagged "needs review" forever — against a
+          // QuickBooks document that was, by then, correct.
+          //
+          // Written HERE and not at enqueue time so it can only ever describe a
+          // Mod that actually landed. The value is the snapshot the payload
+          // carried (see qb-vendor-bill-mod-enqueue.ts) — never re-derived,
+          // because a sibling may have moved again while this was in flight and
+          // the column must record what was SENT.
+          const clearingSent = (row.payload as Record<string, unknown> | null)
+            ?.clearing_lines;
+          if (Array.isArray(clearingSent) && clearingSent.length > 0) {
+            await pool.query(
+              `UPDATE vendor_bill
+                  SET qb_clearing_lines = $2::jsonb, updated_at = NOW()
+                WHERE id = $1 AND deleted_at IS NULL`,
+              [row.reference_id, JSON.stringify(clearingSent)]
+            );
+          }
           logger.info(
             `${LOG_PREFIX} ✅ Vendor Bill ${row.reference_id} modified in QuickBooks`
           );
