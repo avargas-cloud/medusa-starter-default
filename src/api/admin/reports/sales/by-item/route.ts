@@ -23,11 +23,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        gross AS (
          SELECT
            pii.variant_id,
-           pii.sku,
+           MIN(pii.sku)                                                    AS sku,
            MIN(pii.description)                                            AS description,
            MIN(p.title)                                                    AS product_title,
            MIN(COALESCE(pt.category, 'Uncategorized'))                     AS category,
-           SUM(pii.quantity - pii.refunded_quantity)::int                  AS qty_sold,
+           SUM(pii.quantity)::int                                          AS qty_sold,
            SUM(${NET_ITEM_REVENUE})::bigint                                AS gross_revenue,
            SUM(${COST_DOLLARS})::bigint                                    AS cogs,
            COUNT(DISTINCT pii.invoice_id)::int                             AS invoice_count
@@ -39,13 +39,22 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          LEFT JOIN product p ON p.id = pv.product_id
          LEFT JOIN product_tier1 pt ON pt.product_id = p.id
          WHERE pii.deleted_at IS NULL AND pii.variant_id IS NOT NULL ${regionWhere}
-         GROUP BY pii.variant_id, pii.sku
+         -- Se agrupa por variant_id SOLO, y el SKU es un rotulo (MIN, igual que la
+         -- descripcion). El JOIN de abajo empareja por variant_id: si el GROUP BY
+         -- agrega una columna mas, una variante vendida bajo dos escrituras de SKU
+         -- produce dos filas y la fila de credit memo se pega a LAS DOS. Medido en
+         -- prod: 6 variantes con 2+ SKU, +96 unidades informadas de mas y $122,29
+         -- de devoluciones restadas dos veces (o sea que abanicaba el DINERO, no
+         -- solo las unidades). La clave del join y la del grouping son la misma
+         -- cosa o el join no es 1:1.
+         GROUP BY pii.variant_id
        ),
        cm_refunds AS (
          SELECT
            cmi.variant_id,
-           cmi.sku,
-           SUM(cmi.line_total)::bigint AS cm_refunded
+           MIN(cmi.sku)                AS sku,
+           SUM(cmi.line_total)::bigint AS cm_refunded,
+           SUM(cmi.quantity)::int      AS cm_qty
          FROM pos_credit_memo cm
          JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
          WHERE cm.deleted_at IS NULL
@@ -54,7 +63,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND cmi.variant_id IS NOT NULL
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
-         GROUP BY cmi.variant_id, cmi.sku
+         GROUP BY cmi.variant_id
        )
        SELECT * FROM (
          SELECT
@@ -63,7 +72,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            g.description,
            g.product_title,
            COALESCE(g.category, 'Uncategorized')           AS category,
-           COALESCE(g.qty_sold, 0)::int                    AS qty_sold,
+         -- Las unidades se netean con el MISMO credit memo que netea el dinero.
+         -- pii.refunded_quantity es acumulativa de por vida (lo dice el modelo:
+         -- "cumulative units refunded via credit memos"), asi que atribuia la
+         -- devolucion al periodo de la VENTA mientras el dinero se atribuye al
+         -- periodo de la DEVOLUCION: dos modelos distintos sobre la misma tabla.
+         -- Efecto: un mes cerrado perdia unidades solo al pasar el tiempo, y el
+         -- precio promedio por unidad quedaba mal en los SKU con devolucion
+         -- cruzada. Restar cm_qty hereda gratis los dos filtros correctos del
+         -- CTE: la ventana del periodo y la exclusion de write-offs de fraude
+         -- (un write-off no es una devolucion y no devuelve mercaderia).
+           (COALESCE(g.qty_sold, 0) - COALESCE(r.cm_qty, 0))::int AS qty_sold,
            (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
            (COALESCE(g.cogs, 0) - COALESCE(rc.returned_cost_dollars, 0))::numeric AS cogs,
            COALESCE(g.invoice_count, 0)::int               AS invoice_count

@@ -24,7 +24,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            COALESCE(pt.category, 'Uncategorized')                        AS category,
            pt.category_id                                                 AS category_id,
-           SUM(pii.quantity - pii.refunded_quantity)::int                 AS qty_sold,
+           SUM(pii.quantity)::int                                         AS qty_sold,
            SUM(${NET_ITEM_REVENUE})::bigint                               AS gross_revenue,
            SUM(${COST_DOLLARS})::bigint                                   AS cogs,
            COUNT(DISTINCT pii.invoice_id)::int                            AS invoice_count
@@ -43,6 +43,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(pt.category, 'Uncategorized')                        AS category,
            pt.category_id                                                 AS category_id,
            SUM(cmi.line_total)::bigint                                   AS cm_refunded,
+           SUM(cmi.quantity)::int                                        AS cm_qty,
            -- El costo de lo devuelto vuelve al estante: se resta del COGS.
            -- Se usa quantity menos damaged_qty porque lo dañado se reembolsa
            -- pero NO se restockea: su costo sigue siendo gasto real.
@@ -63,7 +64,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            COALESCE(g.category, r.category)                              AS category,
            COALESCE(g.category_id, r.category_id)                        AS category_id,
-           COALESCE(g.qty_sold, 0)::int                                  AS qty_sold,
+         -- Las unidades se netean con el MISMO credit memo que netea el dinero.
+         -- pii.refunded_quantity es acumulativa de por vida (lo dice el modelo:
+         -- "cumulative units refunded via credit memos"), asi que atribuia la
+         -- devolucion al periodo de la VENTA mientras el dinero se atribuye al
+         -- periodo de la DEVOLUCION: dos modelos distintos sobre la misma tabla.
+         -- Efecto: un mes cerrado perdia unidades solo al pasar el tiempo, y el
+         -- precio promedio por unidad quedaba mal en los SKU con devolucion
+         -- cruzada. Restar cm_qty hereda gratis los dos filtros correctos del
+         -- CTE: la ventana del periodo y la exclusion de write-offs de fraude
+         -- (un write-off no es una devolucion y no devuelve mercaderia).
+           (COALESCE(g.qty_sold, 0) - COALESCE(r.cm_qty, 0))::int        AS qty_sold,
            (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
            (COALESCE(g.cogs, 0) - COALESCE(r.returned_cost, 0))::numeric AS cogs,
            COALESCE(g.invoice_count, 0)::int                             AS invoice_count

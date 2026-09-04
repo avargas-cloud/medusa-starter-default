@@ -28,6 +28,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       `WITH cm_by_sku AS (
          SELECT cmi.sku,
                 SUM(cmi.line_total)::bigint AS cm_refunded,
+                SUM(cmi.quantity)::int      AS cm_qty,
                 SUM(COALESCE(cmi.average_unit_cost, 0)
                     * GREATEST(0, cmi.quantity - COALESCE(cmi.damaged_qty, 0))) AS returned_cost
          FROM pos_credit_memo cm
@@ -41,8 +42,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        gross AS (
          SELECT
            pii.sku,
-           pii.description,
-           SUM(pii.quantity - pii.refunded_quantity)::int    AS qty_sold,
+           MIN(pii.description)                              AS description,
+           SUM(pii.quantity)::int                            AS qty_sold,
            SUM(${NET_ITEM_REVENUE})::bigint                  AS revenue,
            SUM(${COST_DOLLARS})::bigint                      AS cogs
          FROM pos_invoice_item pii
@@ -51,9 +52,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND i.issued_at >= ? AND i.issued_at < ?
          ${COGS_JOIN}
          WHERE pii.deleted_at IS NULL AND ${HAS_COST}
-         GROUP BY pii.sku, pii.description
+         -- Se agrupa por sku SOLO: el JOIN de abajo empareja por sku, y agregar
+         -- description al GROUP BY hace que un SKU con dos descripciones (16 en
+         -- prod) duplique su fila y reste su devolucion dos veces.
+         GROUP BY pii.sku
        )
-       SELECT g.sku, g.description, g.qty_sold,
+       -- Las unidades se netean con el MISMO credit memo que netea el dinero.
+       -- pii.refunded_quantity es acumulativa de por vida (lo dice el modelo:
+       -- "cumulative units refunded via credit memos"), asi que atribuia la
+       -- devolucion al periodo de la VENTA mientras el dinero se atribuye al
+       -- periodo de la DEVOLUCION: dos modelos distintos sobre la misma tabla.
+       -- Efecto: un mes cerrado perdia unidades solo al pasar el tiempo, y el
+       -- precio promedio por unidad quedaba mal en los SKU con devolucion
+       -- cruzada. Restar cm_qty hereda gratis los dos filtros correctos del
+       -- CTE: la ventana del periodo y la exclusion de write-offs de fraude
+       -- (un write-off no es una devolucion y no devuelve mercaderia).
+       SELECT g.sku, g.description,
+              (g.qty_sold - COALESCE(c.cm_qty, 0))::int         AS qty_sold,
               (g.revenue - COALESCE(c.cm_refunded, 0))::bigint  AS revenue,
               (g.cogs - COALESCE(c.returned_cost, 0))::numeric  AS cogs
        FROM gross g

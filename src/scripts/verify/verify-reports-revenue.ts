@@ -133,6 +133,94 @@ async function main(): Promise<void> {
       !/\bpii\.total::numeric\s*\*/.test(NET_ITEM_REVENUE)
   );
 
+  // ── UNIDADES (2026-09-04) ─────────────────────────────────────────────────
+  //
+  // Las unidades y el dinero neteaban la misma devolución con DOS modelos de
+  // atribución distintos. `pos_invoice_item.refunded_quantity` es acumulativa de
+  // por vida (el modelo lo dice: "cumulative units refunded via credit memos"),
+  // así que restaba en el período de la VENTA; el dinero se resta con un CTE
+  // scopeado al período de la DEVOLUCIÓN. Consecuencias medidas: un mes cerrado
+  // perdía unidades solo con que pasara el tiempo (julio 2026: −116), y el
+  // precio y el costo por unidad del tab By Item quedaban mal en todo SKU con
+  // devolución cruzada de mes.
+  //
+  // Las rutas se afirman por NOMBRE, no por lo que su texto mencione: una ruta
+  // que deba netear y no nombre nada nunca entraría en un barrido por patrón y
+  // saldría limpia — es el defecto que ya costó una ruta sin gate en
+  // `verify-pin-enforcement`.
+  const MUST_NET_QTY_BY_CM = [
+    "sales/by-item/route.ts",
+    "sales/by-category/route.ts",
+    "sales/profit-summary/route.ts",
+  ];
+
+  // Las líneas de comentario se descuentan antes de buscar: los tres archivos
+  // EXPLICAN por qué ya no usan `refunded_quantity`, y un check que mira el
+  // texto crudo se dispararía con su propia documentación.
+  const sqlOf = (file: string): string =>
+    readFileSync(resolve(REPORTS, file), "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|--|\*|\/\*)/.test(l.trim()) && !/^\s*import\b/.test(l))
+      .join("\n");
+
+  for (const file of MUST_NET_QTY_BY_CM) {
+    let sql: string;
+    try {
+      sql = sqlOf(file);
+    } catch {
+      check(`${file} existe y es auditable`, false, "no se pudo leer — ¿renombrada?");
+      continue;
+    }
+    check(
+      `${file}: NO netea unidades con refunded_quantity`,
+      !/\brefunded_quantity\b/.test(sql),
+      /\brefunded_quantity\b/.test(sql) ? "sigue usándola en SQL" : ""
+    );
+    check(
+      `${file}: su CTE de credit memos expone SUM(cmi.quantity) AS cm_qty`,
+      /SUM\(\s*cmi\.quantity\s*\)\s*::int\s+AS\s+cm_qty/.test(sql)
+    );
+    check(
+      `${file}: resta cm_qty de las unidades`,
+      /-\s*COALESCE\(\s*[a-z]\.cm_qty\s*,\s*0\s*\)/.test(sql)
+    );
+  }
+  // Sin esto, borrar la lista dejaría el bloque entero pasando en vacío.
+  check(
+    "la lista de rutas que netean unidades no está vacía",
+    MUST_NET_QTY_BY_CM.length === 3,
+    `${MUST_NET_QTY_BY_CM.length} rutas`
+  );
+
+  // ── FAN-OUT DEL JOIN (2026-09-04) ─────────────────────────────────────────
+  //
+  // La clave con la que se AGRUPA tiene que ser la clave con la que se JOINEA.
+  // `by-item` agrupaba por (variant_id, sku) y emparejaba por variant_id: una
+  // variante vendida bajo dos escrituras de SKU producía dos filas y la fila de
+  // credit memo se pegaba a las DOS. Medido en prod: 6 variantes, +96 unidades
+  // informadas de más y $122,29 de devoluciones restadas dos veces — o sea que
+  // abanicaba el DINERO (revenue y gross profit), no sólo las unidades. Vivió
+  // invisible porque una suma absorbe lo que una división por unidad delata.
+  // `profit-summary` tenía la forma gemela con (sku, description): 16 SKUs.
+  //
+  // El check es ESTRECHO —la línea del GROUP BY, anclada a fin de línea— porque
+  // "aparecen las dos columnas cerca" marcaría rutas sanas, y un check ruidoso
+  // se termina ignorando.
+  const groupJoinKeys: [string, RegExp[]][] = [
+    ["sales/by-item/route.ts", [/GROUP BY pii\.variant_id\s*$/m, /GROUP BY cmi\.variant_id\s*$/m]],
+    ["sales/profit-summary/route.ts", [/GROUP BY pii\.sku\s*$/m, /GROUP BY cmi\.sku\s*$/m]],
+  ];
+  for (const [file, pats] of groupJoinKeys) {
+    const src = readFileSync(resolve(REPORTS, file), "utf8");
+    check(
+      `${file}: agrupa por la MISMA clave con la que joinea (sin fan-out)`,
+      pats.every((re) => re.test(src)),
+      pats.every((re) => re.test(src))
+        ? ""
+        : "un GROUP BY tiene columnas de más — la fila de credit memo se pega a varias filas de venta"
+    );
+  }
+
   // ── DATOS ─────────────────────────────────────────────────────────────────
   console.log("\nDatos (invariantes contra la base):");
   const db = new Client({ connectionString: url });
@@ -158,6 +246,42 @@ async function main(): Promise<void> {
       "Σ ingreso por línea = i.subtotal en TODA factura activa",
       malas === 0,
       `${malas} factura(s) fuera de cuadre`
+    );
+
+    // 4b. La PREMISA del neteo de unidades por credit memo: toda unidad marcada
+    //     como devuelta en una factura tiene una línea de credit memo que la
+    //     respalda. Medido al shipear: 170 líneas / 1.397 unidades, 0 sin
+    //     respaldo. Si algún día aparece un camino que suba `refunded_quantity`
+    //     sin crear un `pos_credit_memo_item`, esas unidades dejarían de
+    //     restarse y las tres rutas sobreinformarían ventas EN SILENCIO. Este
+    //     check es lo único que puede avisarlo: los estáticos miran la forma del
+    //     SQL, no de dónde salen los datos.
+    const orph = await db.query(
+      `WITH inv AS (
+         SELECT pii.invoice_id, pii.variant_id, SUM(pii.refunded_quantity)::int AS q
+         FROM pos_invoice_item pii
+         JOIN pos_invoice i ON i.id = pii.invoice_id AND ${ACTIVE}
+         WHERE pii.deleted_at IS NULL AND pii.refunded_quantity > 0
+           AND pii.variant_id IS NOT NULL
+         GROUP BY 1, 2
+       ), cm AS (
+         SELECT c.invoice_id, cmi.variant_id
+         FROM pos_credit_memo c
+         JOIN pos_credit_memo_item cmi
+           ON cmi.credit_memo_id = c.id AND cmi.deleted_at IS NULL
+         WHERE c.deleted_at IS NULL AND c.status = 'completed'
+         GROUP BY 1, 2
+       )
+       SELECT COUNT(*)::int AS n, COALESCE(SUM(inv.q), 0)::int AS unidades
+       FROM inv
+       LEFT JOIN cm ON cm.invoice_id = inv.invoice_id AND cm.variant_id = inv.variant_id
+       WHERE cm.invoice_id IS NULL`
+    );
+    const orphN = Number(orph.rows[0].n);
+    check(
+      "toda unidad refundeada tiene su línea de credit memo (premisa del neteo por CM)",
+      orphN === 0,
+      orphN === 0 ? "0 huérfanas" : `${orphN} línea(s) / ${orph.rows[0].unidades} unidad(es) sin credit memo`
     );
 
     // 5. El fallback legacy no puede estar tapando un descuento de ítem: una
