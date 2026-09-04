@@ -6,6 +6,7 @@ import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_VARIANT_CTE } from "../../_li
 import { parseRegion, regionClause } from "../../_lib/region-filter"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { TIER1_CTE } from "../../_lib/category-tier1"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -49,6 +50,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
          WHERE cm.deleted_at IS NULL
            AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
            AND cmi.variant_id IS NOT NULL
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?

@@ -2,6 +2,7 @@
 // pos_invoice.total / pos_invoice_item.total are in cents — divide by 100 in JS before returning.
 // COST_DOLLARS returns cost already in dollars so no extra division needed.
 import { avgCostDollars } from "../../../../lib/cost/cost-sql"
+import { cmNotFraudWriteoffSql } from "../../../../lib/reports/fraud-writeoff"
 
 export const COGS_JOIN = `LEFT JOIN product_variant pv ON pv.id = pii.variant_id`
 
@@ -51,6 +52,7 @@ export async function fetchReturnedProductCostDollars(
      JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
      LEFT JOIN product_variant pv ON pv.id = cmi.variant_id AND pv.deleted_at IS NULL
      WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+       AND ${cmNotFraudWriteoffSql("cm")}
        AND COALESCE(cm.completed_at, cm.created_at) >= ?
        AND COALESCE(cm.completed_at, cm.created_at) <  ?`,
     [from, to]
@@ -98,6 +100,7 @@ const RETURNED_COST_FROM = `
   JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
   LEFT JOIN product_variant pv ON pv.id = cmi.variant_id AND pv.deleted_at IS NULL
   WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+       AND ${cmNotFraudWriteoffSql("cm")}
     AND COALESCE(cm.completed_at, cm.created_at) >= ?
     AND COALESCE(cm.completed_at, cm.created_at) <  ?`;
 

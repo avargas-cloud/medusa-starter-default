@@ -14,6 +14,8 @@
 //
 // Any report that displays "revenue for period X" MUST source it here.
 
+import { cmNotFraudWriteoffSql } from "../../../../lib/reports/fraud-writeoff"
+
 export const SALES_ACTIVE_STATUSES_SQL = `i.status NOT IN ('draft','voided')`
 
 export const SALES_DATE_COL = `issued_at`
@@ -42,8 +44,15 @@ export const CM_REFUND_CENTS_EXPR = `COALESCE(cm.subtotal,
 
 export const CM_REFUND_DATE_COL = `COALESCE(cm.completed_at, cm.created_at)`
 
+/**
+ * Un write-off por fraude NO es una devolución: la mercadería no volvió y en QB
+ * la pérdida va a una cuenta de gasto, sin tocar las ventas. Excluirlo acá es lo
+ * que evita que nuestros reportes resten de las ventas una plata que QuickBooks
+ * cuenta como gasto. Detalle: `lib/reports/fraud-writeoff.ts`.
+ */
 export const CM_REFUND_SCOPE_SQL = `cm.deleted_at IS NULL
-       AND cm.status = 'completed'`
+       AND cm.status = 'completed'
+       AND ${cmNotFraudWriteoffSql("cm")}`
 
 /**
  * Fetch completed credit memo refund $ for refunds processed in [from, to).
@@ -63,6 +72,36 @@ export async function fetchCmRefundsCentsForPeriod(
     [from, to]
   )
   return Number(result.rows[0]?.refund_cents ?? 0)
+}
+
+/**
+ * Pérdida por write-off de fraude / bad debt en [from, to), en centavos.
+ *
+ * Es el COMPLEMENTO exacto de lo que `CM_REFUND_SCOPE_SQL` excluye: mismo
+ * scope, misma expresión de monto, misma fecha. Escrito así a propósito — si la
+ * pérdida se midiera distinto que la exclusión, la plata desaparecería entre las
+ * dos definiciones y nadie lo vería, que es precisamente el problema que este
+ * módulo existe para evitar.
+ *
+ * No es una devolución y no toca `net_revenue`: es un GASTO, y se reporta al
+ * lado de la comisión liquidada, debajo del gross profit.
+ */
+export async function fetchFraudWriteoffCentsForPeriod(
+  pg: any,
+  from: string,
+  to: string
+): Promise<number> {
+  const result = await pg.raw(
+    `SELECT COALESCE(SUM(${CM_REFUND_CENTS_EXPR}), 0)::bigint AS loss_cents
+     FROM pos_credit_memo cm
+     WHERE cm.deleted_at IS NULL
+       AND cm.status = 'completed'
+       AND NOT (${cmNotFraudWriteoffSql("cm")})
+       AND ${CM_REFUND_DATE_COL} >= ?
+       AND ${CM_REFUND_DATE_COL} <  ?`,
+    [from, to]
+  )
+  return Number(result.rows[0]?.loss_cents ?? 0)
 }
 
 /**

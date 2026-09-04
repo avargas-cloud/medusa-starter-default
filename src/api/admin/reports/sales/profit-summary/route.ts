@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS, HAS_COST, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -32,6 +33,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          FROM pos_credit_memo cm
          JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
          WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
          GROUP BY cmi.sku
@@ -71,6 +73,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                     GREATEST(cm.total - COALESCE(cm.tax,0) - COALESCE(cm.shipping,0), 0)))::bigint AS cm_refunded
          FROM pos_credit_memo cm
          WHERE cm.deleted_at IS NULL AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
            AND cm.customer_id IS NOT NULL
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?

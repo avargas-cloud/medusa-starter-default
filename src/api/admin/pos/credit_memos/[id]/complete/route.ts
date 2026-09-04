@@ -27,6 +27,10 @@ import {
 } from "../../../../orders/[id]/_lib/web-edit-attestation";
 import { USA_LOC } from "../../../../../../lib/locations";
 import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
+import {
+  classifyCreditMemoLines,
+  fraudWriteoffMetadata,
+} from "../../../../../../lib/reports/fraud-writeoff";
 
 export async function POST(
   req: MedusaRequest,
@@ -80,6 +84,31 @@ export async function POST(
       refundMethodBody === "refund" ? "refund" : "store_credit";
     const isRefund = refundMethod === "refund";
 
+    // ── Tratamiento para reportes ────────────────────────────────────────────
+    // Un memo cuyas líneas son TODAS el item de write-off por fraude no es una
+    // devolución comercial: la mercadería no volvió y en QB la pérdida va a una
+    // cuenta de gasto. Se clasifica acá, en la transición a `completed`, porque
+    // es el único estado que los reportes miran.
+    //
+    // Corre ANTES del lock: un memo mixto se rechaza sin haber mutado nada, y
+    // así el cajero puede separarlo en dos memos sin quedar con uno a medias.
+    const cmClassification = await classifyCreditMemoLines(
+      req.scope.resolve("__pg_connection__") as never,
+      id
+    );
+    if (cmClassification.isMixed) {
+      res.status(409).json({
+        message:
+          "This credit memo mixes returned products with a bad-debt / fraud write-off line. " +
+          "Reporting classifies the whole memo, so the two cannot share one document — " +
+          "issue the product return and the write-off as separate credit memos.",
+        fraud_lines: cmClassification.fraudLines,
+        total_lines: cmClassification.totalLines,
+      });
+      return;
+    }
+    const reportingMetadata = fraudWriteoffMetadata(cmClassification);
+
     // Lock immediately to prevent duplicate completions from concurrent requests
     // (QB sync can take 1-2 min; without this, a second click passes the guard above)
     const updateMethodName =
@@ -98,6 +127,9 @@ export async function POST(
       status: "completed",
       completed_at: new Date(),
       refund_method: refundMethod,
+      // Medusa DEEP-MERGEA metadata jsonb, así que esto agrega la clave sin
+      // pisar lo que el memo ya tuviera. Se omite cuando no aplica.
+      ...(reportingMetadata ? { metadata: reportingMetadata } : {}),
     });
 
     // Restock Inventory for every variant in the credit memo

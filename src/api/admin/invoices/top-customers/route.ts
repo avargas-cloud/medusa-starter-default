@@ -4,6 +4,7 @@
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { cmNotFraudWriteoffSql } from "../../../../lib/reports/fraud-writeoff"
 
 export async function GET(
   req: MedusaRequest,
@@ -37,6 +38,7 @@ export async function GET(
         SUM(pcm.total) AS refund_cents
       FROM pos_credit_memo pcm
       WHERE pcm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("pcm")}
         AND pcm.created_at >= ?
         AND pcm.created_at <= ?
         AND pcm.customer_id IS NOT NULL

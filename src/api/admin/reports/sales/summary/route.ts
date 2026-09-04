@@ -8,8 +8,10 @@ import {
   SALES_ACTIVE_STATUSES_SQL,
   SALES_DATE_FILTER_SQL,
   fetchCmRefundsCentsForPeriod,
+  fetchFraudWriteoffCentsForPeriod,
 } from "../../_lib/sales-revenue"
 import { fetchSettledCommissionCentsForPeriod } from "../../_lib/commission-expr"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 const ACTIVE = SALES_ACTIVE_STATUSES_SQL
 
@@ -44,6 +46,7 @@ async function fetchUnitsReturnedForPeriod(pg: any, from: string, to: string): P
      FROM pos_credit_memo cm
      JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
      WHERE cm.deleted_at IS NULL AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
        AND COALESCE(cm.completed_at, cm.created_at) >= ?
        AND COALESCE(cm.completed_at, cm.created_at) <  ?`,
     [from, to]
@@ -107,7 +110,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       currUnitsRet,
       prevUnitsRet,
       currCommissionCents,
-      prevCommissionCents
+      prevCommissionCents,
+      currFraudLossCents,
+      prevFraudLossCents
     ] = await Promise.all([
       fetchPeriodStats(pg, range.from, range.to),
       fetchPeriodStats(pg, prior.from, prior.to),
@@ -121,6 +126,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       fetchUnitsReturnedForPeriod(pg, prior.from, prior.to),
       fetchSettledCommissionCentsForPeriod(pg, range.from, range.to),
       fetchSettledCommissionCentsForPeriod(pg, prior.from, prior.to),
+      fetchFraudWriteoffCentsForPeriod(pg, range.from, range.to),
+      fetchFraudWriteoffCentsForPeriod(pg, prior.from, prior.to),
     ])
 
     // GAAP-correct definitions:
@@ -142,6 +149,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // gross_profit NO cambia de definición: la comisión es una línea nueva.
     const commission              = currCommissionCents / 100
     const profit_after_commissions = gross_profit - commission
+
+    // Pérdida por fraude / bad debt. NO está en `refunded` — un write-off no es
+    // una devolución (la mercadería no volvió) y QuickBooks lo lleva a una
+    // cuenta de gasto sin tocar las ventas. Se muestra acá para que la pérdida
+    // siga siendo visible ahora que dejó de restarse del ingreso.
+    const fraud_loss              = currFraudLossCents / 100
+    const profit_after_fraud_loss = profit_after_commissions - fraud_loss
 
     const prevGrossRevenue = Number(prev.revenue) / 100
     const prevRefunded     = prevRefundCents / 100
@@ -169,6 +183,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       gross_profit,
       commission,
       profit_after_commissions,
+      fraud_loss,
+      profit_after_fraud_loss,
       margin_pct:  Math.round(margin_pct  * 10) / 10,
       aov: curr.invoice_count > 0 ? gross_revenue / Number(curr.invoice_count) : 0,
       units_sold,
@@ -186,6 +202,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         gross_profit: prevGrossProfit,
         commission: prevCommission,
         profit_after_commissions: prevProfitAfterCommissions,
+        fraud_loss: prevFraudLossCents / 100,
+        profit_after_fraud_loss:
+          prevProfitAfterCommissions - prevFraudLossCents / 100,
         aov: prev.invoice_count > 0 ? prevGrossRevenue / Number(prev.invoice_count) : 0,
         units_sold: prevUnitsSold,
         units_returned: prevUnitsReturned,

@@ -6,6 +6,7 @@ import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { parseRegion, regionClause } from "../../_lib/region-filter"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { TIER1_CTE } from "../../_lib/category-tier1"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -53,6 +54,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          LEFT JOIN product_tier1 pt ON pt.product_id = pv.product_id
          WHERE cm.deleted_at IS NULL
            AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
          GROUP BY 1, 2

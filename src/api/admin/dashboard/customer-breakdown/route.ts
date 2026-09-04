@@ -5,6 +5,7 @@
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { cmNotFraudWriteoffSql } from "../../../../lib/reports/fraud-writeoff"
 
 const ACTIVE_INVOICE_STATUSES_SQL = `
   'issued',
@@ -92,6 +93,7 @@ export async function GET(
         ))) AS return_cents
       FROM pos_credit_memo pcm
       WHERE pcm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("pcm")}
         AND pcm.created_at >= ?
         AND pcm.created_at <= ?
         AND pcm.deleted_at IS NULL

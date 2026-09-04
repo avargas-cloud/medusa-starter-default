@@ -10,6 +10,7 @@ import {
   fetchCmRefundsCentsForPeriod,
 } from "../../_lib/sales-revenue"
 import { COGS_JOIN, COST_DOLLARS, fetchReturnedProductCostDollars } from "../../_lib/cogs-join"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 // Same canonical warehouse ids as backend/src/lib/locations.ts — inlined
 // (matches the existing pattern in purchasing/snapshot, purchasing/alternatives,
@@ -156,6 +157,7 @@ async function fetchMiamiInventoryValueAtDate(pg: any, targetDate: string): Prom
        FROM pos_credit_memo cm
        JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
        WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
          AND COALESCE(cm.completed_at, cm.created_at) >= ?
        GROUP BY cmi.variant_id
      ),
@@ -599,6 +601,7 @@ async function fetchMiamiPeriodLedger(
        FROM pos_credit_memo cm
        JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
        WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
          AND COALESCE(cm.completed_at, cm.created_at) >= ?
        GROUP BY cmi.variant_id
      ),

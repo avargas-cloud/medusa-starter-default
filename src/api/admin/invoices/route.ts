@@ -54,6 +54,7 @@ import {
 } from "./_lib/unfulfilled-predicate";
 import { getFiniteMoney, getNum } from "./payment-balance";
 import { registerMedusaPayment } from "./register-medusa-payment";
+import { findFraudWriteoffVariantIds } from "../../../lib/reports/fraud-writeoff";
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 /**
@@ -433,6 +434,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return res
       .status(400)
       .json({ error: "order_id, customer_id, and items are required" });
+  }
+
+  // El item de write-off por fraude apunta a una cuenta de EXPENSE en
+  // QuickBooks: venderlo la ACREDITA, o sea que borra pérdidas por fraude ya
+  // registradas en vez de generar ingreso — y del lado nuestro se vería como
+  // venta con COGS cero y margen de 100%. Sólo es válido como línea de un
+  // credit memo. El guard vive acá porque la factura es donde una venta se
+  // vuelve un hecho contable; ocultarlo del buscador sería una pantalla, y las
+  // pantallas se saltean.
+  const fraudLineVariants = await findFraudWriteoffVariantIds(
+    req.scope.resolve("__pg_connection__") as never,
+    (body.items ?? []).map((it) => it.variant_id ?? "")
+  );
+  if (fraudLineVariants.length > 0) {
+    return res.status(409).json({
+      error:
+        "The bad-debt / fraud write-off item cannot be sold on an invoice — " +
+        "it books to an expense account, so selling it erases recorded fraud " +
+        "losses instead of producing revenue. Use it only as a Quick Credit line.",
+      variant_ids: fraudLineVariants,
+    });
   }
 
   // Codex audit finding #5: amount_paid feeds balance_due (derivedTotal -

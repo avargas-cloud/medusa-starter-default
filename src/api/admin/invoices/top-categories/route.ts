@@ -9,6 +9,7 @@
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { cmNotFraudWriteoffSql } from "../../../../lib/reports/fraud-writeoff"
 
 export async function GET(
   req: MedusaRequest,
@@ -64,6 +65,7 @@ export async function GET(
       FROM pos_credit_memo_item pcmi
       JOIN pos_credit_memo pcm ON pcm.id = pcmi.credit_memo_id
       WHERE pcm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("pcm")}
         AND pcm.created_at >= ?
         AND pcm.created_at <= ?
         AND pcmi.variant_id IS NOT NULL

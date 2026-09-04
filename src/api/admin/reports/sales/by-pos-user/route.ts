@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 // Revenue per sales rep is NET (gross − credit memos completed in the period).
 // Gross is attributed to the order's assigned sales rep (order.metadata.sales_rep),
@@ -44,6 +45,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
          WHERE cm.deleted_at IS NULL
            AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
          GROUP BY 1
@@ -57,6 +59,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          FROM pos_credit_memo cm
          WHERE cm.deleted_at IS NULL
            AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")}
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
          GROUP BY 1

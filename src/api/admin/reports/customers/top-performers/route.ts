@@ -3,6 +3,7 @@ import { parseDateRange } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
 import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
+import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -19,7 +20,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT cm.customer_id, SUM(COALESCE(cm.subtotal,
                   GREATEST(cm.total - COALESCE(cm.tax,0) - COALESCE(cm.shipping,0), 0)))::bigint AS cm_refunded
          FROM pos_credit_memo cm
-         WHERE cm.deleted_at IS NULL AND cm.status = 'completed' AND cm.customer_id IS NOT NULL
+         WHERE cm.deleted_at IS NULL AND cm.status = 'completed'
+        AND ${cmNotFraudWriteoffSql("cm")} AND cm.customer_id IS NOT NULL
          GROUP BY cm.customer_id
        ),
        period_cte AS (
