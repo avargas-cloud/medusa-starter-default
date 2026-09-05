@@ -45,6 +45,9 @@ export async function POST(
     original_unit_price,
     custom_title,
     custom_description,
+    source_app,
+    source_project_id,
+    source_key,
   } = req.body as {
     variant_id: string;
     quantity?: number;
@@ -54,6 +57,9 @@ export async function POST(
     original_unit_price?: number | null; // pre-discount price for POS rehydration
     custom_title?: string; // User-edited title for "Special Items"
     custom_description?: string; // User-edited description for "Special Items"
+    source_app?: string; // provenance: originating app ('bl' | 'll')
+    source_project_id?: string; // provenance: originating project id
+    source_key?: string; // provenance: BOM row identity (SKU)
   };
 
   if (!variant_id) {
@@ -233,6 +239,9 @@ export async function POST(
           ...(sort_order !== undefined ? { sort_order } : {}),
           ...(line_discount ? { line_discount } : {}),
           ...(original_unit_price != null ? { original_unit_price } : {}),
+          ...(source_app ? { source_app } : {}),
+          ...(source_project_id ? { source_project_id } : {}),
+          ...(source_key ? { source_key } : {}),
         },
       },
     ])) as any[];

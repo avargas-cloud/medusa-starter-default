@@ -30,6 +30,9 @@ export async function POST(
     custom_title,
     custom_description,
     attached_image,
+    source_app,
+    source_project_id,
+    source_key,
   } = req.body as {
     variant_id: string;
     quantity?: number;
@@ -42,6 +45,9 @@ export async function POST(
     custom_title?: string; // User-edited title for "Special Items"
     custom_description?: string; // User-edited description for "Special Items"
     attached_image?: string | null; // base64 JPEG — per-document temp image (does not modify product)
+    source_app?: string; // provenance: originating app ('bl' | 'll')
+    source_project_id?: string; // provenance: originating project id
+    source_key?: string; // provenance: BOM row identity (SKU)
   };
 
   if (!variant_id) {
@@ -228,6 +234,9 @@ export async function POST(
           ...(price_list_id ? { price_list_id } : {}),
           ...(price_list_label ? { price_list_label } : {}),
           ...(attached_image ? { attached_image } : {}),
+          ...(source_app ? { source_app } : {}),
+          ...(source_project_id ? { source_project_id } : {}),
+          ...(source_key ? { source_key } : {}),
         },
       },
     ]);

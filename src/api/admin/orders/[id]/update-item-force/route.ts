@@ -2,6 +2,8 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
 import { Modules } from "@medusajs/utils";
+import { getDbPool } from "../../../../utils/db-pool";
+import { floorDenial, loadLineFloors } from "../_lib/line-floors";
 
 /**
  * POST /admin/draft-orders/:id/update-item-force
@@ -43,6 +45,9 @@ export async function POST(
     original_unit_price,
     custom_title,
     custom_description,
+    source_app,
+    source_project_id,
+    source_key,
   } = req.body as {
     line_item_id: string;
     quantity?: number;
@@ -52,6 +57,9 @@ export async function POST(
     original_unit_price?: number | null; // pre-discount price for POS rehydration
     custom_title?: string; // User-edited title for "Special Items"
     custom_description?: string; // User-edited description for "Special Items"
+    source_app?: string | null; // provenance: originating app ('bl' | 'll')
+    source_project_id?: string | null; // provenance: originating project id
+    source_key?: string | null; // provenance: BOM row identity (SKU)
   };
 
   if (!line_item_id) {
@@ -66,12 +74,29 @@ export async function POST(
     line_discount === undefined &&
     original_unit_price === undefined &&
     custom_title === undefined &&
-    custom_description === undefined
+    custom_description === undefined &&
+    source_app === undefined &&
+    source_project_id === undefined &&
+    source_key === undefined
   ) {
     res
       .status(400)
       .json({ message: "At least one field to update is required" });
     return;
+  }
+
+  // La cantidad no puede bajar de lo facturado/entregado (regla del operador
+  // 2026-09-05). Se evalua el EFECTO, no el estado: una edicion que no toca la
+  // cantidad —titulo, precio, descuento, provenance— nunca se bloquea, y una
+  // linea que YA estaba bajo su piso (14 en produccion, dato roto anterior)
+  // sigue siendo editable en todo lo que no la baje mas.
+  if (quantity !== undefined) {
+    const floors = await loadLineFloors(getDbPool(), String(req.params.id));
+    const denial = floorDenial(floors.get(line_item_id), quantity);
+    if (denial) {
+      res.status(409).json(denial);
+      return;
+    }
   }
 
   try {
@@ -91,7 +116,10 @@ export async function POST(
       sort_order !== undefined ||
       line_discount !== undefined ||
       original_unit_price !== undefined ||
-      custom_description !== undefined;
+      custom_description !== undefined ||
+      source_app !== undefined ||
+      source_project_id !== undefined ||
+      source_key !== undefined;
     if (needsMetadataUpdate) {
       let existingMeta: Record<string, any> = {};
       if (typeof orderModule.retrieveOrderLineItem === "function") {
@@ -116,6 +144,11 @@ export async function POST(
         ...(original_unit_price !== undefined
           ? { original_unit_price: original_unit_price ?? null }
           : {}),
+        ...(source_app !== undefined ? { source_app: source_app ?? null } : {}),
+        ...(source_project_id !== undefined
+          ? { source_project_id: source_project_id ?? null }
+          : {}),
+        ...(source_key !== undefined ? { source_key: source_key ?? null } : {}),
       };
     }
     if (typeof orderModule.updateOrderLineItems === "function") {

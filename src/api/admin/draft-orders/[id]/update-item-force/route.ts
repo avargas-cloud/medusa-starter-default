@@ -1,5 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+import { getDbPool } from "../../../../utils/db-pool";
+import { floorDenial, loadLineFloors } from "../../../orders/[id]/_lib/line-floors";
 
 /**
  * POST /admin/draft-orders/:id/update-item-force
@@ -30,6 +32,9 @@ export async function POST(
     custom_title,
     custom_description,
     attached_image,
+    source_app,
+    source_project_id,
+    source_key,
   } = req.body as {
     line_item_id: string;
     quantity?: number;
@@ -42,6 +47,9 @@ export async function POST(
     custom_title?: string; // User-edited title for "Special Items"
     custom_description?: string; // User-edited description for "Special Items"
     attached_image?: string | null; // base64 JPEG — per-document temp image (does not modify product)
+    source_app?: string | null; // provenance: originating app ('bl' | 'll')
+    source_project_id?: string | null; // provenance: originating project id
+    source_key?: string | null; // provenance: BOM row identity (SKU)
   };
 
   if (!line_item_id) {
@@ -58,12 +66,38 @@ export async function POST(
     price_list_id === undefined &&
     price_list_label === undefined &&
     custom_title === undefined &&
-    custom_description === undefined
+    custom_description === undefined &&
+    source_app === undefined &&
+    source_project_id === undefined &&
+    source_key === undefined
   ) {
     res
       .status(400)
       .json({ message: "At least one field to update is required" });
     return;
+  }
+
+  // Gemela de `orders/[id]/update-item-force`. Mismo cierre que su hermana de
+  // borrado: hasta hoy esta ruta no leía `req.params.id` ni miraba
+  // `is_draft_order`, y el middleware no la alcanza — el piso se salteaba
+  // cambiando un segmento del path. El guard se aplica SIEMPRE (no sólo cuando
+  // cambia la cantidad) para poder afirmar la pertenencia de la línea; el piso
+  // en sí sólo mira la cantidad.
+  const floors = await loadLineFloors(getDbPool(), String(req.params.id));
+  if (!floors.has(line_item_id)) {
+    res.status(409).json({
+      error: "Esa línea no pertenece a este documento.",
+      code: "LINE_NOT_IN_ORDER",
+      line_item_id,
+    });
+    return;
+  }
+  if (quantity !== undefined) {
+    const denial = floorDenial(floors.get(line_item_id), quantity);
+    if (denial) {
+      res.status(409).json(denial);
+      return;
+    }
   }
 
   try {
@@ -86,7 +120,10 @@ export async function POST(
       price_list_id !== undefined ||
       price_list_label !== undefined ||
       custom_description !== undefined ||
-      attached_image !== undefined;
+      attached_image !== undefined ||
+      source_app !== undefined ||
+      source_project_id !== undefined ||
+      source_key !== undefined;
     if (needsMetadataUpdate) {
       let existingMeta: Record<string, any> = {};
       if (typeof orderModule.retrieveOrderLineItem === "function") {
@@ -120,6 +157,11 @@ export async function POST(
         ...(attached_image !== undefined
           ? { attached_image: attached_image ?? null }
           : {}),
+        ...(source_app !== undefined ? { source_app: source_app ?? null } : {}),
+        ...(source_project_id !== undefined
+          ? { source_project_id: source_project_id ?? null }
+          : {}),
+        ...(source_key !== undefined ? { source_key: source_key ?? null } : {}),
       };
     }
     if (typeof orderModule.updateOrderLineItems === "function") {

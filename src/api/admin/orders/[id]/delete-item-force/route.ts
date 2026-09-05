@@ -4,10 +4,12 @@ import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
 import { Modules } from "@medusajs/utils";
 
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
+import { getDbPool } from "../../../../utils/db-pool";
+import { floorDenial, loadLineFloors } from "../_lib/line-floors";
 
 /**
- * DELETE /admin/draft-orders/:id/delete-item-force
- * POST   /admin/draft-orders/:id/delete-item-force  (POS compat alias)
+ * DELETE /admin/orders/:id/delete-item-force
+ * POST   /admin/orders/:id/delete-item-force  (POS compat alias)
  *
  * Hard-deletes a line item — physically removes the record from the DB.
  *
@@ -38,6 +40,17 @@ async function handleDelete(
 
   if (!line_item_id) {
     res.status(400).json({ message: "line_item_id is required" });
+    return;
+  }
+
+  // Una linea con unidades ya facturadas o entregadas NO se borra: borrar es
+  // reducir a 0, y la cantidad no puede bajar del piso (regla del operador
+  // 2026-09-05). Sin esto la factura quedaba apuntando a una linea inexistente
+  // y las reservas se soltaban igual, unas lineas mas abajo.
+  const floors = await loadLineFloors(getDbPool(), String(req.params.id));
+  const denial = floorDenial(floors.get(line_item_id), null, { deleting: true });
+  if (denial) {
+    res.status(409).json(denial);
     return;
   }
 

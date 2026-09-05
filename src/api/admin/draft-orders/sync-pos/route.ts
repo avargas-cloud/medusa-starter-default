@@ -108,6 +108,9 @@ export async function POST(
             custom_description: item.salesDescription,
             sort_order: item.sortOrder,
             attached_image: item.attachedImage ?? null,
+            source_app: item.sourceApp ?? null,
+            source_project_id: item.sourceProjectId ?? null,
+            source_key: item.sourceKey ?? null,
           }),
         });
       }
@@ -298,7 +301,12 @@ export async function POST(
             item.salesDescription !== existing.metadata?.sales_description ||
             (hasAttachedImage &&
               (item.attachedImage ?? null) !==
-                (existing.metadata?.attached_image ?? null));
+                (existing.metadata?.attached_image ?? null)) ||
+            (item.sourceApp ?? null) !==
+              (existing.metadata?.source_app ?? null) ||
+            (item.sourceProjectId ?? null) !==
+              (existing.metadata?.source_project_id ?? null) ||
+            (item.sourceKey ?? null) !== (existing.metadata?.source_key ?? null);
 
           if (changed) {
             await localFetch(
@@ -321,6 +329,9 @@ export async function POST(
                   ...(hasAttachedImage
                     ? { attached_image: item.attachedImage ?? null }
                     : {}),
+                  source_app: item.sourceApp ?? null,
+                  source_project_id: item.sourceProjectId ?? null,
+                  source_key: item.sourceKey ?? null,
                 }),
               }
             );
@@ -343,6 +354,9 @@ export async function POST(
               custom_title: item.title,
               custom_description: item.salesDescription,
               attached_image: item.attachedImage ?? null,
+              source_app: item.sourceApp ?? null,
+              source_project_id: item.sourceProjectId ?? null,
+              source_key: item.sourceKey ?? null,
             }),
           });
           itemsChanged = true;
