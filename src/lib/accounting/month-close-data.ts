@@ -10,6 +10,7 @@ import {
   SALES_DATE_FILTER_SQL,
   fetchCmRefundsCentsForPeriod,
 } from "../../api/admin/reports/_lib/sales-revenue";
+import { fetchShippingCentsForPeriod } from "../../api/admin/reports/_lib/shipping-revenue";
 
 export interface SqlClient {
   raw: (
@@ -91,6 +92,7 @@ export async function loadMonthSummary(
     priorPeriodAdjustments,
     returnsCents,
     customers,
+    shippingCents,
   ] = await Promise.all([
     db.raw(
       `SELECT COUNT(DISTINCT i.id)::int AS invoices,
@@ -160,10 +162,13 @@ export async function loadMonthSummary(
         AND ${SALES_DATE_FILTER_SQL}`,
       [range.from, range.to, range.from, range.to]
     ),
+    fetchShippingCentsForPeriod(db as never, range.from, range.to),
   ]);
 
   const row = sales.rows[0] ?? {};
-  const grossSales = Number(row.revenue ?? 0) / 100;
+  // El flete es ingreso de ventas en QuickBooks: sin él el cierre de mes queda
+  // por debajo del *Sales by Customer Summary* con el que se concilia.
+  const grossSales = (Number(row.revenue ?? 0) + Number(shippingCents)) / 100;
   const returns = Number(returnsCents) / 100;
   const inventoryAdjustments = Number(adjustments.rows[0]?.amount ?? 0);
   const priorPeriodAdjustment = Number(

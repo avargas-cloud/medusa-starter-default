@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 // Revenue per customer is NET (gross − credit memos completed in the period),
@@ -46,7 +47,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
          GROUP BY cm.customer_id
-       )
+       ),
+       ${SHIPPING_BY_CUSTOMER_CTE}
        SELECT
          COALESCE(g.customer_id, r.customer_id)            AS customer_id,
          NULLIF(TRIM(COALESCE(c.company_name, '')), '')    AS company_name,
@@ -56,20 +58,26 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          c.metadata->>'qb_price_level'                     AS price_level,
          COALESCE(g.invoice_count, 0)                      AS invoice_count,
          COALESCE(g.gross_revenue, 0)::bigint              AS gross_revenue,
+         COALESCE(s.shipping_cents, 0)::bigint             AS shipping_cents,
          COALESCE(g.item_refunded, 0)::bigint              AS item_refunded,
          COALESCE(r.cm_refunded, 0)::bigint                AS cm_refunded,
          COALESCE(g.cogs, 0)::bigint                       AS cogs,
          COALESCE(rc.returned_cost_dollars, 0)             AS returned_cost
        FROM gross g
        FULL OUTER JOIN cm_refunds r ON r.customer_id = g.customer_id
+       LEFT JOIN ship s ON s.axis_key = COALESCE(g.customer_id, r.customer_id)
        LEFT JOIN returned_cost rc ON rc.customer_id = COALESCE(g.customer_id, r.customer_id)
        LEFT JOIN customer c ON c.id = COALESCE(g.customer_id, r.customer_id)
-       ORDER BY (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0)) DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to]
+       ORDER BY (COALESCE(g.gross_revenue, 0) + COALESCE(s.shipping_cents, 0)
+                 - COALESCE(r.cm_refunded, 0)) DESC`,
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {
-      const gross_revenue = Number(r.gross_revenue) / 100
+      // El flete es INGRESO: el item `SHIPPING & HANDLING` de QuickBooks va a
+      // una cuenta de Sales, así que sin esto el reporte queda por debajo de QB.
+      const gross_revenue = (Number(r.gross_revenue) + Number(r.shipping_cents ?? 0)) / 100
       const cm_refunded   = Number(r.cm_refunded) / 100
       const revenue       = gross_revenue - cm_refunded
       // El costo de lo devuelto vuelve al estante: no es COGS de este período.

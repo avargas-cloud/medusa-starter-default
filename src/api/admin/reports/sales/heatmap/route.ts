@@ -1,11 +1,23 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/sales-revenue"
+import { shippingByAxisCte } from "../../_lib/shipping-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
   if (!range) return res.status(400).json({ error: "from and to are required" })
 
+  // El eje del heatmap son DOS columnas (día de semana, hora). El generador
+  // toma una sola expresión, así que se compone la clave `dow*100 + hour` y se
+  // deshace en el JOIN. Misma zona horaria que el ingreso, o el flete cae en
+  // otra celda.
+  const shipCte = shippingByAxisCte(
+    "ship",
+    `EXTRACT(DOW  FROM i.issued_at AT TIME ZONE 'America/New_York')::int * 100
+     + EXTRACT(HOUR FROM i.issued_at AT TIME ZONE 'America/New_York')::int`,
+    `EXTRACT(DOW  FROM COALESCE(cm.completed_at, cm.created_at) AT TIME ZONE 'America/New_York')::int * 100
+     + EXTRACT(HOUR FROM COALESCE(cm.completed_at, cm.created_at) AT TIME ZONE 'America/New_York')::int`
+  )
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
@@ -16,23 +28,29 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COUNT(*)::int             AS day_count
          FROM generate_series(?::date, ?::date - interval '1 day', interval '1 day') AS gs
          GROUP BY 1
-       )
+       ),
+       ${shipCte}
        SELECT
          EXTRACT(DOW  FROM i.issued_at AT TIME ZONE 'America/New_York')::int AS day,
          EXTRACT(HOUR FROM i.issued_at AT TIME ZONE 'America/New_York')::int AS hour,
-         SUM(${NET_ITEM_REVENUE})::bigint     AS revenue,
+         (SUM(${NET_ITEM_REVENUE}) + COALESCE(MAX(s.shipping_cents), 0))::bigint AS revenue,
          COUNT(DISTINCT i.id)::int            AS invoice_count,
          wc.day_count
        FROM pos_invoice i
        JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
        JOIN weekday_counts wc
          ON wc.day = EXTRACT(DOW FROM i.issued_at AT TIME ZONE 'America/New_York')::int
+       LEFT JOIN ship s
+         ON s.axis_key = EXTRACT(DOW  FROM i.issued_at AT TIME ZONE 'America/New_York')::int * 100
+                       + EXTRACT(HOUR FROM i.issued_at AT TIME ZONE 'America/New_York')::int
        WHERE i.deleted_at IS NULL
          AND i.status NOT IN ('draft','voided')
          AND i.issued_at >= ? AND i.issued_at < ?
        GROUP BY 1, 2, wc.day_count
        ORDER BY 1, 2`,
-      [range.from, range.to, range.from, range.to]
+      [range.from, range.to,
+       range.from, range.to, range.from, range.to,
+       range.from, range.to]
     )
 
     const cells = (result.rows as any[]).map((r) => {

@@ -1,0 +1,8 @@
+{"at": "2026-09-05T00:59:14.361Z", "step": "recon_customer_created", "customer_id": "cus_01M1QH79YGA9QHKCJ313C8DWYW"}
+{"at": "2026-09-05T00:59:14.663Z", "step": "adj_item_created", "product_id": "prod_01M1QH7A4M57NT5Y9RSGXNYZ7V", "variant_id": "variant_01M1QH7A4MM68G6W05JJ2BM6WG"}
+{"at": "2026-09-05T00:59:15.584Z", "step": "adjustment_invoice", "compensates": "19506", "invoice_id": "01M1QH7AZ7XVSX1X3GBCT301JW", "invoice_number": "21701", "cents": -18790}
+{"at": "2026-09-05T00:59:15.953Z", "step": "adjustment_credit_memo", "compensates": "19519", "credit_memo_id": "01M1QH7BC7SFZACWCZQYJSZ3BC", "number": "CM-1147", "cents": 2295}
+{"at": "2026-09-05T00:59:16.316Z", "step": "adjustment_credit_memo", "compensates": "19538", "credit_memo_id": "01M1QH7BQVCRD2PVKGN9EP3B8S", "number": "CM-1148", "cents": -668}
+{"at": "2026-09-05T00:59:17.207Z", "step": "adjustment_invoice", "compensates": "18810", "invoice_id": "01M1QH7CJ5DJJHNP0TH9TS09B4", "invoice_number": "21702", "cents": -7410}
+{"at": "2026-09-05T00:59:17.568Z", "step": "adjustment_credit_memo", "compensates": "18921", "credit_memo_id": "01M1QH7CYXHMH7E4YFNSQAZGXV", "number": "CM-1149", "cents": -12880}
+{"at": "2026-09-05T00:59:17.927Z", "step": "adjustment_credit_memo", "compensates": "18974", "credit_memo_id": "01M1QH7DA6QTXVHY1K67H4Z5DK", "number": "CM-1150", "cents": -12351}

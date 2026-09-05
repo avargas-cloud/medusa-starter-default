@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -12,6 +13,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const result = await pg.raw(
       `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       ${SHIPPING_BY_CUSTOMER_CTE},
        customer_stats AS (
          SELECT
            i.customer_id,
@@ -29,7 +31,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            cs.customer_id,
            cs.orders_in_period,
-           cs.revenue_in_period - COALESCE(r.cm_refunded, 0) AS revenue_in_period,
+           cs.revenue_in_period - COALESCE(r.cm_refunded, 0)
+             + COALESCE(s.shipping_cents, 0) AS revenue_in_period,
            CASE
              WHEN cs.orders_in_period > 0
                AND cs.first_purchase_ever >= ? AND cs.first_purchase_ever < ?
@@ -45,6 +48,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          FROM customer_stats cs
          JOIN customer c ON c.id = cs.customer_id
          LEFT JOIN cm_refunds r ON r.customer_id = cs.customer_id
+         LEFT JOIN ship s ON s.axis_key = cs.customer_id
        )
        SELECT
          segment,
@@ -57,6 +61,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        ORDER BY CASE segment WHEN 'new' THEN 1 WHEN 'active' THEN 2 WHEN 'at_risk' THEN 3 ELSE 4 END`,
       [
         range.from, range.to,   // cm_refunds: ventana de devoluciones
+        range.from, range.to,   // ship: ventana de FACTURAS
+        range.from, range.to,   // ship: ventana de DEVOLUCIONES
         range.from,             // last_before_period: issued_at < from
         range.from, range.to,   // orders_in_period COUNT
         range.from, range.to,   // revenue_in_period SUM

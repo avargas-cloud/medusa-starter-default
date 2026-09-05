@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS, HAS_COST, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -12,6 +13,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     // Top profitable items
+    //
+    // Acá el flete NO entra, a diferencia del resto de los reportes de ventas.
+    // Este ranking es POR SKU y el flete no tiene SKU; meterlo como fila
+    // sintética sería una línea con ingreso y COGS cero, o sea margen 100%,
+    // compitiendo por el podio contra productos reales. Y no rompe ninguna
+    // conciliación: es un `LIMIT 20` por margen, no un total que alguien
+    // compare contra QuickBooks. Donde el flete SÍ va como fila propia es en
+    // `by-item` / `by-category`, que sí totalizan. Ver `_lib/shipping-revenue.ts`.
     const items = await pg.raw(
       // Tres cosas que esta query no hacía, y las tres movían el ranking:
       //
@@ -108,17 +117,22 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND i.status NOT IN ('draft','voided')
            AND i.issued_at >= ? AND i.issued_at < ?
          GROUP BY i.customer_id, c.first_name, c.last_name, c.email
-       )
+       ),
+       ${SHIPPING_BY_CUSTOMER_CTE}
        SELECT g.customer_id, g.name,
-              (g.revenue - COALESCE(m.cm_refunded, 0))::bigint       AS revenue,
+              (g.revenue - COALESCE(m.cm_refunded, 0)
+               + COALESCE(s.shipping_cents, 0))::bigint              AS revenue,
               (g.cogs - COALESCE(rc.returned_cost_dollars, 0))::numeric AS cogs
        FROM gross g
        LEFT JOIN cm_by_customer m ON m.customer_id = g.customer_id
+       LEFT JOIN ship s ON s.axis_key = g.customer_id
        LEFT JOIN returned_cost rc ON rc.customer_id = g.customer_id
-       ORDER BY ((g.revenue - COALESCE(m.cm_refunded, 0)) / 100.0
+       ORDER BY ((g.revenue - COALESCE(m.cm_refunded, 0)
+                  + COALESCE(s.shipping_cents, 0)) / 100.0
                  - (g.cogs - COALESCE(rc.returned_cost_dollars, 0))) DESC
        LIMIT 20`,
-      [range.from, range.to, range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       range.from, range.to, range.from, range.to]
     )
 
     const mapItem = (r: any) => {

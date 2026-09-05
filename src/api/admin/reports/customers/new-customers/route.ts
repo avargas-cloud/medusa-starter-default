@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -13,6 +14,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const result = await pg.raw(
       `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       ${SHIPPING_BY_CUSTOMER_CTE},
        ${RETURNED_COST_BY_CUSTOMER_CTE},
        first_purchase AS (
          SELECT customer_id, MIN(issued_at) AS first_purchase_at
@@ -43,9 +45,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        ),
        net_stats AS (
          SELECT ps.customer_id, ps.order_count, ps.cogs - COALESCE(rc.returned_cost_dollars, 0) AS cogs,
-                ps.revenue - COALESCE(r.cm_refunded, 0) AS revenue
+                ps.revenue - COALESCE(r.cm_refunded, 0)
+                  + COALESCE(s.shipping_cents, 0) AS revenue
          FROM period_stats ps
          LEFT JOIN cm_refunds r ON r.customer_id = ps.customer_id
+         LEFT JOIN ship s ON s.axis_key = ps.customer_id
          LEFT JOIN returned_cost rc ON rc.customer_id = ps.customer_id
        )
        SELECT
@@ -64,7 +68,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        JOIN customer c ON c.id = nci.customer_id
        LEFT JOIN net_stats ps ON ps.customer_id = nci.customer_id
        ORDER BY nci.first_purchase_at DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

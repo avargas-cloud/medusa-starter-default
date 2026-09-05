@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 import { COGS_JOIN, COST_DOLLARS, RETURNED_COST_BY_CUSTOMER_CTE } from "../../_lib/cogs-join"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -13,6 +14,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const result = await pg.raw(
       `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       ${SHIPPING_BY_CUSTOMER_CTE},
        ${RETURNED_COST_BY_CUSTOMER_CTE},
        first_purchase AS (
          SELECT customer_id, MIN(issued_at) AS first_purchase_at
@@ -32,6 +34,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                 SUM(r.cm_refunded)::bigint AS cm_refunded
          FROM cm_refunds r
          JOIN customer c ON c.id = r.customer_id
+         GROUP BY 1
+       ),
+       ship_at_grain AS (
+         SELECT COALESCE(NULLIF(TRIM(c.metadata->>'qb_customer_type'), ''), 'Unknown') AS customer_type,
+                SUM(s.shipping_cents)::bigint AS shipping_cents
+         FROM ship s
+         JOIN customer c ON c.id = s.axis_key
          GROUP BY 1
        ),
        gross AS (
@@ -57,18 +66,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        GROUP BY 1
        )
        SELECT g.*, COALESCE(rt.cm_refunded, 0)::bigint AS cm_refunded,
+              COALESCE(sg.shipping_cents, 0)::bigint AS shipping_cents,
               COALESCE(rg2.returned_cost, 0) AS returned_cost
        FROM gross g
        LEFT JOIN refunds_by_type rt ON rt.customer_type = g.customer_type
+       LEFT JOIN ship_at_grain sg ON sg.customer_type = g.customer_type
        LEFT JOIN returned_at_grain rg2 ON rg2.customer_type = g.customer_type
        ORDER BY g.revenue DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {
-      // Ingreso NETO de devoluciones — misma convención que sales/by-customer,
-      // que es lo que permite que las dos familias den el mismo número.
-      const revenue = (Number(r.revenue) - Number(r.cm_refunded)) / 100
+      // Ingreso NETO de devoluciones y CON flete — misma convención que
+      // sales/by-customer, que es lo que permite que las dos familias den el
+      // mismo número, y ahora también el mismo que QuickBooks.
+      const revenue =
+        (Number(r.revenue) - Number(r.cm_refunded) + Number(r.shipping_cents ?? 0)) / 100
       // El costo de lo devuelto vuelve al estante: no es COGS de este período.
       const cogs    = Number(r.cogs) - Number(r.returned_cost ?? 0)
       const profit  = revenue - cogs

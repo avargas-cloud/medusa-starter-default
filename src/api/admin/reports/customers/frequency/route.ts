@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -12,6 +13,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const result = await pg.raw(
       `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       ${SHIPPING_BY_CUSTOMER_CTE},
        customer_orders AS (
          SELECT
            i.customer_id,
@@ -26,9 +28,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        ),
        net_orders AS (
          SELECT co.customer_id, co.order_count,
-                co.revenue - COALESCE(r.cm_refunded, 0) AS revenue
+                co.revenue - COALESCE(r.cm_refunded, 0)
+                  + COALESCE(s.shipping_cents, 0) AS revenue
          FROM customer_orders co
          LEFT JOIN cm_refunds r ON r.customer_id = co.customer_id
+         LEFT JOIN ship s ON s.axis_key = co.customer_id
        ),
        bucketed AS (
          SELECT
@@ -46,7 +50,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        FROM bucketed
        GROUP BY bucket, bucket_sort
        ORDER BY bucket_sort`,
-      [range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => ({

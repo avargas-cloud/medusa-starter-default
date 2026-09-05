@@ -133,6 +133,56 @@ async function main(): Promise<void> {
       !/\bpii\.total::numeric\s*\*/.test(NET_ITEM_REVENUE)
   );
 
+  // ── FLETE (2026-09-04) ────────────────────────────────────────────────────
+  //
+  // El flete es INGRESO en QuickBooks: el item `SHIPPING & HANDLING` apunta a
+  // `Sales:Shipping and Delivery Income`. Los reportes no lo contaban y por eso
+  // quedaban $310,00 por debajo de QB en agosto 2026. Los tres checks que
+  // siguen protegen las DOS reglas que hacen que agregarlo no rompa nada.
+
+  // 3b. El flete NO puede entrar en la expresión por LÍNEA.
+  //     `commission-expr.ts` usa `NET_ITEM_REVENUE` como PESO para prorratear
+  //     comisiones entre las facturas de una orden. Meterle el flete redistribuye
+  //     centavos de comisiones YA LIQUIDADAS a gente real — plata de otro.
+  const commissionExpr = readFileSync(resolve(REPORTS, "_lib/commission-expr.ts"), "utf8");
+  check(
+    "el flete NO entra en NET_ITEM_REVENUE ni en el peso de comisiones",
+    !/shipping/i.test(NET_ITEM_REVENUE) && !/\bi\.shipping\b/.test(commissionExpr)
+  );
+
+  // 3c. Ninguna RUTA suma el flete a mano.
+  //     Toda ruta hace `JOIN pos_invoice_item`; un `SUM(i.shipping)` ahí
+  //     multiplica el flete por la cantidad de líneas de la factura. El único
+  //     lugar donde `i.shipping` puede aparecer es `_lib/shipping-revenue.ts`,
+  //     que reduce por factura ANTES de cualquier join.
+  //     Se descuentan las líneas de `import` antes de buscar: un check que mira
+  //     el archivo entero se conforma con que el símbolo esté importado, que es
+  //     el defecto que ya costó una ruta sin gate en `verify-pin-enforcement`.
+  const handRolled = files
+    .filter((f) => f.endsWith("route.ts"))
+    .filter((f) =>
+      readFileSync(f, "utf8")
+        .split("\n")
+        .filter((l) => !/^\s*import\b/.test(l))
+        .some((l) => /\bi\.shipping\b/.test(l))
+    )
+    .map((f) => f.replace(`${REPORTS}/`, ""));
+  check(
+    "ninguna ruta suma i.shipping a mano (fan-out por cantidad de líneas)",
+    handRolled.length === 0,
+    handRolled.length ? handRolled.join(", ") : "0 rutas"
+  );
+
+  // 3d. El ciclo de imports, otra vez — ahora con el módulo nuevo.
+  //     `shipping-revenue` importa DE `sales-revenue`; el inverso cierra el
+  //     ciclo y Medusa muere al registrar rutas. type-check y build pasan los
+  //     dos con el ciclo puesto: sólo lo caza arrancar el servidor.
+  const salesRev = readFileSync(resolve(REPORTS, "_lib/sales-revenue.ts"), "utf8");
+  check(
+    "sales-revenue no importa shipping-revenue (ciclo que rompe el boot)",
+    !/from\s+["']\.\/shipping-revenue["']/.test(salesRev)
+  );
+
   // ── UNIDADES (2026-09-04) ─────────────────────────────────────────────────
   //
   // Las unidades y el dinero neteaban la misma devolución con DOS modelos de
@@ -220,6 +270,7 @@ async function main(): Promise<void> {
         : "un GROUP BY tiene columnas de más — la fila de credit memo se pega a varias filas de venta"
     );
   }
+
 
   // ── DATOS ─────────────────────────────────────────────────────────────────
   console.log("\nDatos (invariantes contra la base):");
@@ -350,6 +401,83 @@ async function main(): Promise<void> {
         ? cmBal.rows.map((r: { nro: string; sub: string; lineas: string }) =>
             `${r.nro} (subtotal ${r.sub} vs líneas ${r.lineas})`).join(", ")
         : `${0} descuadrada(s)`
+    );
+
+    // 7b. Los DOS supuestos sobre los que descansan todos los LEFT JOIN del
+    //     flete. Si alguno se rompe, la plata desaparece en silencio: una
+    //     factura con flete y sin cliente se cae de `by-customer`, y una sin
+    //     líneas se cae de `trend` y del `heatmap` (esas agregan sobre el join
+    //     a `pos_invoice_item`). Medidos en cero el 2026-09-04.
+    const supuestos = await db.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE i.customer_id IS NULL)::int AS sin_cliente,
+         COUNT(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM pos_invoice_item x
+           WHERE x.invoice_id = i.id AND x.deleted_at IS NULL))::int AS sin_lineas
+       FROM pos_invoice i
+       WHERE ${ACTIVE} AND COALESCE(i.shipping, 0) <> 0`
+    );
+    const { sin_cliente, sin_lineas } = supuestos.rows[0];
+    check(
+      "toda factura con flete tiene cliente Y tiene líneas (o el flete se pierde)",
+      Number(sin_cliente) === 0 && Number(sin_lineas) === 0,
+      `${sin_cliente} sin cliente · ${sin_lineas} sin líneas`
+    );
+
+    // 7c. `refunded_shipping` es el espejo invoice-level de `refunded_quantity`
+    //     y se ignora A PROPÓSITO: las devoluciones acá son CM-autoritativas, y
+    //     restar las dos cosas contaría la misma devolución dos veces. La
+    //     decisión se tomó con la columna en CERO en toda la historia. El día
+    //     que deje de estarlo hay que volver a decidir, no seguir ignorándola.
+    const refShip = await db.query(
+      `SELECT COUNT(*)::int AS n FROM pos_invoice
+       WHERE deleted_at IS NULL AND COALESCE(refunded_shipping, 0) <> 0`
+    );
+    const refShipN = Number(refShip.rows[0].n);
+    check(
+      "refunded_shipping sigue en cero (la simetría del flete se decidió así)",
+      refShipN === 0,
+      `${refShipN} factura(s) — si esto se pone rojo, releer _lib/shipping-revenue.ts`
+    );
+
+    // 7d. LA invariante del flete: el bruto que publican los reportes tiene que
+    //     ser `Σ(subtotal + shipping)`, que es exactamente el `Subtotal` que
+    //     devuelve `InvoiceRet` de QuickBooks (ya incluye la línea de flete y
+    //     excluye el impuesto). Es la afirmación entera de la paridad, en SQL.
+    const bruto = await db.query(
+      `WITH lineas AS (
+         SELECT ROUND(SUM(${NET_ITEM_REVENUE}))::bigint AS c
+         FROM pos_invoice_item pii
+         JOIN pos_invoice i ON i.id = pii.invoice_id AND ${ACTIVE}
+         WHERE pii.deleted_at IS NULL
+       ), docs AS (
+         SELECT SUM(i.subtotal)::bigint AS sub,
+                SUM(COALESCE(i.shipping, 0))::bigint AS ship
+         FROM pos_invoice i WHERE ${ACTIVE}
+       )
+       SELECT l.c AS lineas, d.sub, d.ship,
+              (l.c + d.ship) = (d.sub + d.ship) AS cuadra
+       FROM lineas l, docs d`
+    );
+    const b = bruto.rows[0];
+    check(
+      "ingreso por línea + flete = Σ(subtotal + shipping) — el Subtotal de QB",
+      b.cuadra === true,
+      `líneas ${b.lineas} + flete ${b.ship} vs subtotal ${b.sub} + flete ${b.ship}`
+    );
+
+    // 7e. Control negativo del flete: sin el término, el total NO llega al de
+    //     QuickBooks. Sin esto, 7d podría estar pasando porque el flete es cero
+    //     —que es como estuvo hasta abril 2026— en vez de porque se sumó.
+    const ctrl = await db.query(
+      `SELECT SUM(COALESCE(i.shipping, 0))::bigint AS ship
+       FROM pos_invoice i WHERE ${ACTIVE}`
+    );
+    const shipTotal = Number(ctrl.rows[0].ship);
+    check(
+      "control negativo: hay flete que contar (si no, 7d es vacuo)",
+      shipTotal > 0,
+      `$${(shipTotal / 100).toFixed(2)} de flete histórico`
     );
 
     // 8. Control negativo: la fórmula VIEJA tiene que romper la invariante 4.

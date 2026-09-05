@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange, priorPeriod } from "../../_lib/date-range"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 import { CM_REFUNDS_BY_CUSTOMER_CTE } from "../../_lib/sales-revenue"
+import { SHIPPING_BY_CUSTOMER_CTE } from "../../_lib/shipping-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -14,6 +15,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const [curr, prev] = await Promise.all([
       pg.raw(
         `WITH ${CM_REFUNDS_BY_CUSTOMER_CTE},
+       ${SHIPPING_BY_CUSTOMER_CTE},
          first_purchase AS (
            SELECT customer_id, MIN(issued_at) AS first_purchase_at
            FROM pos_invoice
@@ -33,9 +35,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          ),
          net_stats AS (
            SELECT ps.customer_id, ps.order_count,
-                  ps.revenue - COALESCE(r.cm_refunded, 0) AS revenue
+                  ps.revenue - COALESCE(r.cm_refunded, 0)
+                    + COALESCE(s.shipping_cents, 0) AS revenue
            FROM period_stats ps
            LEFT JOIN cm_refunds r ON r.customer_id = ps.customer_id
+           LEFT JOIN ship s ON s.axis_key = ps.customer_id
          )
          SELECT
            COUNT(*)::int AS total_customers,
@@ -48,7 +52,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          FROM net_stats ps
          JOIN customer c ON c.id = ps.customer_id
          JOIN first_purchase fp ON fp.customer_id = ps.customer_id`,
-        [range.from, range.to, range.from, range.to, range.from, range.to, range.from, range.to]
+        [range.from, range.to, range.from, range.to, range.from, range.to,
+         range.from, range.to, range.from, range.to, range.from, range.to]
       ),
       pg.raw(
         `SELECT COUNT(DISTINCT customer_id)::int AS total_customers

@@ -10,6 +10,7 @@ import {
   fetchCmRefundsCentsForPeriod,
   fetchFraudWriteoffCentsForPeriod,
 } from "../../_lib/sales-revenue"
+import { fetchShippingCentsForPeriod } from "../../_lib/shipping-revenue"
 import { fetchSettledCommissionCentsForPeriod } from "../../_lib/commission-expr"
 import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
@@ -112,7 +113,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       currCommissionCents,
       prevCommissionCents,
       currFraudLossCents,
-      prevFraudLossCents
+      prevFraudLossCents,
+      currShippingCents,
+      prevShippingCents,
     ] = await Promise.all([
       fetchPeriodStats(pg, range.from, range.to),
       fetchPeriodStats(pg, prior.from, prior.to),
@@ -128,6 +131,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       fetchSettledCommissionCentsForPeriod(pg, prior.from, prior.to),
       fetchFraudWriteoffCentsForPeriod(pg, range.from, range.to),
       fetchFraudWriteoffCentsForPeriod(pg, prior.from, prior.to),
+      fetchShippingCentsForPeriod(pg, range.from, range.to),
+      fetchShippingCentsForPeriod(pg, prior.from, prior.to),
     ])
 
     // GAAP-correct definitions:
@@ -135,7 +140,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     //   net_revenue   = gross_revenue − returns
     //   gross_profit  = net_revenue − COGS  ← clave: usa NET, no gross
     //   margin_pct    = gross_profit / net_revenue
-    const gross_revenue = Number(curr.revenue) / 100   // cents → dollars
+    // El flete es INGRESO en QuickBooks (el item `SHIPPING & HANDLING` va a
+    // `Sales:Shipping and Delivery Income`). Va como término a nivel FACTURA,
+    // nunca dentro de NET_ITEM_REVENUE — ésa es el peso del prorrateo de
+    // comisiones ya liquidadas. Detalle: `_lib/shipping-revenue.ts`.
+    const gross_revenue = (Number(curr.revenue) + currShippingCents) / 100
+    const shipping      = currShippingCents / 100
     const refunded      = currRefundCents / 100         // CM-authoritative refunds
     const net_revenue   = gross_revenue - refunded
     // El costo de lo devuelto vuelve al estante: no es COGS de este período.
@@ -157,7 +167,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const fraud_loss              = currFraudLossCents / 100
     const profit_after_fraud_loss = profit_after_commissions - fraud_loss
 
-    const prevGrossRevenue = Number(prev.revenue) / 100
+    const prevGrossRevenue = (Number(prev.revenue) + prevShippingCents) / 100
     const prevRefunded     = prevRefundCents / 100
     const prevNetRevenue   = prevGrossRevenue - prevRefunded
     const prevCogs         = Number(prev.cogs) + prevAdjCogs
@@ -177,6 +187,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     return res.json({
       invoice_count: Number(curr.invoice_count),
       gross_revenue,
+      // Se expone SEPARADO para que la pantalla pueda mostrar de dónde sale la
+      // diferencia contra un reporte viejo, en vez de dejarla escondida dentro
+      // del total. Ya está SUMADO en gross_revenue: no volver a sumarlo.
+      shipping,
       refunded,
       net_revenue,
       refund_pct:  Math.round(refund_pct  * 10) / 10,
@@ -197,6 +211,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       prior: {
         invoice_count: Number(prev.invoice_count),
         gross_revenue: prevGrossRevenue,
+        shipping: prevShippingCents / 100,
         refunded: prevRefunded,
         net_revenue: prevNetRevenue,
         gross_profit: prevGrossProfit,

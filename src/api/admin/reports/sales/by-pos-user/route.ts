@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { shippingByAxisCte } from "../../_lib/shipping-revenue"
 import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 // Revenue per sales rep is NET (gross − credit memos completed in the period).
@@ -15,6 +16,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   if (!range) return res.status(400).json({ error: "from and to are required" })
 
   const pg = req.scope.resolve("__pg_connection__") as any
+
+  // El flete se atribuye al MISMO vendedor que el ingreso: el rep asignado a la
+  // orden del lado factura, `cm.sales_rep` del lado devolución. Verificado
+  // contra producción: ninguna factura con flete tiene `order_id` NULL, así que
+  // el LEFT JOIN a `order` no manda plata a 'Unassigned Agent'.
+  const shipCte = shippingByAxisCte(
+    "ship",
+    `COALESCE(NULLIF(TRIM(o.metadata->'sales_rep'->>'name'), ''), 'Unassigned Agent')`,
+    `COALESCE(NULLIF(TRIM(cm.sales_rep->>'name'), ''), 'Unassigned Agent')`,
+    `LEFT JOIN "order" o ON o.id = i.order_id`
+  )
 
   try {
     const result = await pg.raw(
@@ -63,24 +75,29 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND COALESCE(cm.completed_at, cm.created_at) >= ?
            AND COALESCE(cm.completed_at, cm.created_at) <  ?
          GROUP BY 1
-       )
+       ),
+       ${shipCte}
        SELECT
          COALESCE(g.pos_user, r.pos_user)                  AS pos_user,
          COALESCE(g.invoice_count, 0)                      AS invoice_count,
          COALESCE(g.customer_count, 0)                     AS customer_count,
          COALESCE(g.gross_revenue, 0)::bigint              AS gross_revenue,
+         COALESCE(s.shipping_cents, 0)::bigint             AS shipping_cents,
          COALESCE(g.item_refunded, 0)::bigint              AS item_refunded,
          COALESCE(r.cm_refunded, 0)::bigint                AS cm_refunded,
          (COALESCE(g.cogs, 0) - COALESCE(ru.returned_cost, 0))::numeric AS cogs
        FROM gross g
        FULL OUTER JOIN cm_refunds r ON r.pos_user = g.pos_user
+       LEFT JOIN ship s ON s.axis_key = COALESCE(g.pos_user, r.pos_user)
        LEFT JOIN returned_by_user ru ON ru.pos_user = COALESCE(g.pos_user, r.pos_user)
-       ORDER BY (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0)) DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to]
+       ORDER BY (COALESCE(g.gross_revenue, 0) + COALESCE(s.shipping_cents, 0)
+                 - COALESCE(r.cm_refunded, 0)) DESC`,
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {
-      const gross_revenue = Number(r.gross_revenue) / 100
+      const gross_revenue = (Number(r.gross_revenue) + Number(r.shipping_cents ?? 0)) / 100
       const cm_refunded   = Number(r.cm_refunded) / 100
       const revenue       = gross_revenue - cm_refunded
       const cogs          = Number(r.cogs)

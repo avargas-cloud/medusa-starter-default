@@ -5,6 +5,7 @@ import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { parseRegion, regionClause } from "../../_lib/region-filter"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { NET_SHIPPING_ROW_SQL, SHIPPING_LINE_LABEL } from "../../_lib/shipping-revenue"
 import { TIER1_CTE } from "../../_lib/category-tier1"
 import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
@@ -16,6 +17,25 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   const region = parseRegion(req)
   const regionWhere = regionClause(region)
+
+  // El flete no tiene producto, así que no cae ni en 'usa' ni en 'china': con un
+  // filtro de región puesto la fila NO se emite, o estaríamos metiendo plata sin
+  // filtrar dentro de una vista filtrada. `region === 'all'` es el único caso en
+  // que el total de esta pantalla se compara contra QuickBooks.
+  const shipRow = region !== 'all' ? '' : `
+         UNION ALL
+         SELECT '${SHIPPING_LINE_LABEL}'         AS category,
+                NULL::text                     AS category_id,
+                0::int                         AS qty_sold,
+                s.cents                        AS revenue,
+                0::numeric                     AS cogs,
+                s.invoices                     AS invoice_count
+         FROM (${NET_SHIPPING_ROW_SQL}
+         ) s
+         WHERE s.cents <> 0`
+  const shipBindings = region !== 'all'
+    ? []
+    : [range.from, range.to, range.from, range.to]
 
   try {
     const result = await pg.raw(
@@ -101,9 +121,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          WHERE ic.deleted_at IS NULL AND ic.voided_at IS NULL
            AND ic.status IN ('approved', 'partially_applied')
            AND ic.applied_at >= ? AND ic.applied_at < ?
+       ${shipRow}
        ) t
        ORDER BY revenue DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to,
+       ...shipBindings]
     )
 
     const rows = (result.rows as any[]).map((r) => {

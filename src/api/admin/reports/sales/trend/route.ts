@@ -10,6 +10,7 @@ import {
   SALES_ACTIVE_STATUSES_SQL,
   SALES_DATE_FILTER_SQL,
 } from "../../_lib/sales-revenue"
+import { shippingByAxisCte } from "../../_lib/shipping-revenue"
 import { mergeTrendPoints, type RefundRow, type SalesRow } from "../../_lib/trend-points"
 
 /**
@@ -47,6 +48,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const label = bucketLabel(bucket, etIssuedAt)
   const refundTrunc = bucketTrunc(bucket, etRefundedAt)
   const refundLabel = bucketLabel(bucket, etRefundedAt)
+  // El flete, por el MISMO balde y la MISMA zona horaria que el ingreso: si se
+  // truncara distinto caería en otro mes y la corrección sería peor que el bug.
+  const shipCte = shippingByAxisCte("flete", trunc, refundTrunc)
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
@@ -88,14 +92,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
              AND ${CM_REFUND_DATE_COL} >= ?
              AND ${CM_REFUND_DATE_COL} <  ?
            GROUP BY ${refundTrunc}
-         )
+         ),
+         ${shipCte}
          SELECT v.bucket,
-                v.revenue,
+                (v.revenue + COALESCE(f.shipping_cents, 0))::bigint AS revenue,
                 (v.cogs - COALESCE(d.returned_cost, 0))::numeric AS cogs
          FROM ventas v
          LEFT JOIN devuelto d ON d.b = v.b
+         LEFT JOIN flete f ON f.axis_key = v.b
          ORDER BY v.b`,
-        [range.from, range.to, range.from, range.to]
+        [range.from, range.to, range.from, range.to,
+         range.from, range.to, range.from, range.to]
       ),
       pg.raw(
         `SELECT
