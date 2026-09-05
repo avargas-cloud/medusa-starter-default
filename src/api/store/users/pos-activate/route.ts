@@ -15,7 +15,20 @@ import jwt from "jsonwebtoken";
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { token, password } = req.body as { token?: string; password?: string };
   const logger = req.scope.resolve("logger") as any;
-  const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
+  // SIN fallback. El valor por defecto era la cadena PUBLICA "supersecret":
+  // faltando la env var, cualquiera podia firmar un token valido con ella y —
+  // por `pos-activate`, que es publica— crearse una cuenta admin de Medusa.
+  //
+  // El chequeo va ACA, en el primer uso, y no en el import: un throw a nivel de
+  // modulo tumba tambien el build, las migraciones y los workers, que no
+  // necesitan este secreto para nada.
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) {
+    logger.error(
+      "[POS activate] JWT_SECRET no esta configurado - operacion rechazada"
+    );
+    return res.status(500).json({ error: "Server misconfiguration" });
+  }
 
   if (!token || !password) {
     return res.status(400).json({ error: "token and password are required" });

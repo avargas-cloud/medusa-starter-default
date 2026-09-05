@@ -2,6 +2,10 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { USA_LOC } from "../../../../../../lib/locations";
+import {
+  withPublicProductMetadata,
+  withPublicVariantMetadata,
+} from "../../../../../../lib/product-metadata/public-keys";
 
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
@@ -277,7 +281,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
           return {
             ...product,
-            variants: variantsWithPrices,
+            // Filtrado ACÁ además del `.map(withPublicProductMetadata)` del
+            // return: que la corrección dependa de una llamada río abajo es
+            // como se pierde en la próxima edición.
+            variants: variantsWithPrices.map(withPublicVariantMetadata),
           };
         });
       }
@@ -286,12 +293,16 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     // 4. Return consolidated response
     return res.json({
       product: {
-        ...mainProduct,
-        variants: mainVariantsWithPrices,
+        ...withPublicProductMetadata(mainProduct),
+        // Esta clave PISA las variantes que el helper ya filtró: `mainVariantsWithPrices`
+        // se arma aparte, así que sin esto el costo por SKU seguía saliendo.
+        variants: mainVariantsWithPrices.map(withPublicVariantMetadata),
         attributes: attributes || [],
         breadcrumbs,
       },
-      related_products: relatedProducts,
+      // Los relacionados son productos igual que el principal: el mismo filtro
+      // o el catálogo se sigue publicando por esta puerta.
+      related_products: relatedProducts.map(withPublicProductMetadata),
       customer_context: {
         customer_id: customerId || "anonymous",
         customer_groups: pricingContext.customer_group_id || [],

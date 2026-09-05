@@ -1,5 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+import {
+  pickPublicProductMetadata,
+  withPublicVariantMetadata,
+} from "../../../../../lib/product-metadata/public-keys";
 
 /**
  * GET /store/products/:id/with-prices
@@ -140,7 +144,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.json({
       product: {
         ...originalProduct,
-        variants: variantsWithPrices,
+        // Acá va el helper de CAMPO y no el de objeto: `originalProduct` es
+        // `Product | undefined` para tsc (el chequeo de `length` de arriba no lo
+        // estrecha), y encima ya se estaba spreadeando.
+        metadata: pickPublicProductMetadata(originalProduct?.metadata),
+        // Las variantes se filtran acá y no por el helper de producto porque
+        // esta clave PISA el spread: `variantsWithPrices` se arma aparte, y sin
+        // esto seguía publicando `average_cost`/`purchase_cost` por SKU.
+        variants: variantsWithPrices.map(withPublicVariantMetadata),
         attributes: attributes || [],
         breadcrumbs,
         customer_context: {

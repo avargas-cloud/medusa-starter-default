@@ -152,7 +152,14 @@ export async function POST(
     `<?qbxml version="10.0"?>`,
     `<QBXML><QBXMLMsgsRq onError="stopOnError">`,
     `<${cfg.queryElement} requestID="1">`,
-    `<RefNumber>${ref}</RefNumber>`,
+    // escapeXml OBLIGATORIO: `ref` viene crudo de `req.body.refNumber`. Sin él,
+    // un valor con `</RefNumber></...Rq>` cierra el elemento e inyecta un nodo
+    // de request HERMANO en el sobre que va al bridge de QuickBooks Desktop —
+    // y `onError="stopOnError"` sólo frena en el PRIMER fallo, así que un nodo
+    // bien formado se ejecuta. Este archivo ya escapaba en sus otros tres
+    // sitios de interpolación (`handleCustomerLookup`, `handleItemLookup`);
+    // éste era el único que se había quedado afuera.
+    `<RefNumber>${escapeXml(ref)}</RefNumber>`,
     `</${cfg.queryElement}>`,
     `</QBXMLMsgsRq></QBXML>`,
   ].join("");

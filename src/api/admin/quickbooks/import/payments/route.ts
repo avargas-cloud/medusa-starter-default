@@ -263,7 +263,17 @@ export async function POST(
     txn_id?: string;
   };
   const { action, txn_id } = body;
-  const year = body.year ?? new Date().getFullYear();
+  // `body.year` viene de JSON: la anotación `year?: number` de arriba es un cast
+  // de COMPILACIÓN y no coacciona nada en runtime, así que un string llega tal
+  // cual hasta `syncFromQB`, donde se interpola en `<FromTxnDate>` sin escapar —
+  // o sea inyección de un nodo QBXML hermano contra el bridge de producción.
+  // El `GET` hermano de este mismo archivo ya validaba así; el POST no.
+  const year =
+    body.year === undefined ? new Date().getFullYear() : Number(body.year);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    res.status(400).json({ error: "Invalid year parameter" });
+    return;
+  }
 
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   try {

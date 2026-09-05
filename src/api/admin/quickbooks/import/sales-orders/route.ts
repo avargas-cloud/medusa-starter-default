@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+import { escapeXml } from "../../../../../lib/quickbooks/qbxml-escape";
 
 import {
   bridgeFetch,
@@ -34,7 +35,10 @@ export async function POST(
       `<?qbxml version="10.0"?>`,
       `<QBXML><QBXMLMsgsRq onError="stopOnError">`,
       `<SalesOrderQueryRq requestID="1">`,
-      `<RefNumber>${refNumber.trim()}</RefNumber>`,
+      // `refNumber` viene crudo del body. Sin escapar, un `</RefNumber></...Rq>`
+      // inyecta un nodo de request hermano en el sobre que el bridge reenvía
+      // VERBATIM a QuickBooks Desktop (`/api/sync/direct-query` no agrega sobre).
+      `<RefNumber>${escapeXml(refNumber.trim())}</RefNumber>`,
       `</SalesOrderQueryRq>`,
       `</QBXMLMsgsRq></QBXML>`,
     ].join("");

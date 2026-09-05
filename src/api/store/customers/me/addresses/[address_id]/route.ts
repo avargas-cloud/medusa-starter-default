@@ -179,7 +179,29 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
     return;
   }
 
-  // Delete the address - Medusa handles everything
+  // Ownership ANTES de borrar. `deleteCustomerAddressesWorkflow` borra por id
+  // PELADO — su step (`@medusajs/core-flows/.../delete-addresses`) no filtra por
+  // dueño — así que sin esto cualquier cliente autenticado borraba la dirección
+  // de OTRO conociendo su `caaddr_...`. El `POST` de este mismo archivo ya
+  // scopeaba bien (`selector: { id, customer_id }`); sólo el DELETE se quedó sin
+  // el filtro.
+  //
+  // Va como verificación previa y no dentro del delete porque el workflow no
+  // acepta selector; una dirección no cambia de dueño, así que no hay carrera
+  // real entre el chequeo y el borrado.
+  const ownershipQuery = req.scope.resolve("query");
+  const { data: ownedAddresses } = await ownershipQuery.graph({
+    entity: "customer_address",
+    fields: ["id"],
+    filters: { id: addressId, customer_id: customerId },
+  });
+
+  if (!ownedAddresses?.length) {
+    // Mismo cuerpo que una dirección inexistente: no confirma que el id exista.
+    res.status(404).json({ message: "Address not found" });
+    return;
+  }
+
   await deleteCustomerAddressesWorkflow(req.scope).run({
     input: { ids: [addressId] },
   });

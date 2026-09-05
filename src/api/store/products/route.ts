@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { withPublicProductMetadata } from "../../../lib/product-metadata/public-keys";
 
 /**
  * GET /store/products with attributes injection
@@ -75,7 +76,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     if (allLinks.length === 0) {
       console.log(`[PRODUCT-ATTRS] ℹ️  No attributes found`);
-      return res.json({ products });
+      return res.json({ products: products.map(withPublicProductMetadata) });
     }
 
     // Get unique attribute value IDs
@@ -213,7 +214,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       `[PRODUCT-ATTRS] ✅ Returning ${products.length} products with attributes and prices`
     );
 
-    return res.json({ products });
+    return res.json({ products: products.map(withPublicProductMetadata) });
   } catch (error: any) {
     console.error("[PRODUCT-ATTRS] ❌ Error:", (error as Error).message);
     return res.status(500).json({

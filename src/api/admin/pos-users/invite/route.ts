@@ -30,7 +30,20 @@ export async function POST(
   const { email, first_name, last_name } = req.body;
   const logger = req.scope.resolve("logger") as any;
   const POS_URL = process.env.POS_URL || "https://pos.ecopowertech.com";
-  const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
+  // SIN fallback. El valor por defecto era la cadena PUBLICA "supersecret":
+  // faltando la env var, cualquiera podia firmar un token valido con ella y —
+  // por `pos-activate`, que es publica— crearse una cuenta admin de Medusa.
+  //
+  // El chequeo va ACA, en el primer uso, y no en el import: un throw a nivel de
+  // modulo tumba tambien el build, las migraciones y los workers, que no
+  // necesitan este secreto para nada.
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) {
+    logger.error(
+      "[POS invite] JWT_SECRET no esta configurado - operacion rechazada"
+    );
+    return res.status(500).json({ error: "Server misconfiguration" });
+  }
 
   if (!email) return res.status(400).json({ error: "email is required" });
 

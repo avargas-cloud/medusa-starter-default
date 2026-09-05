@@ -1,3 +1,4 @@
+import { authenticate } from "@medusajs/framework/http";
 import type {
   MedusaNextFunction,
   MedusaRequest,
@@ -229,10 +230,30 @@ export default defineMiddlewares({
       bodyParser: { sizeLimit: "2mb" },
       middlewares: [],
     },
-    // CORS for POS-specific routes (no Medusa auth gating — validated in-route)
+    // POS-specific routes: CORS **y autenticación**.
+    //
+    // Hasta el 2026-09-05 acá sólo estaba `posCorsMiddleware`, con el comentario
+    // "no Medusa auth gating — validated in-route". Esa validación in-route no
+    // existía en ningún handler: `grep -rn "auth_context" src/api/pos/` no
+    // devolvía una sola coincidencia real. El malentendido está escrito en
+    // `pos/document-templates/route.ts`: "POS users authenticate with pos_user
+    // tokens which satisfy storeCors auth". **CORS no autentica.** Es una
+    // instrucción para navegadores; `curl` la ignora, y por eso
+    // `GET /pos/document-templates` contestaba 200 con 390 KB sin un solo
+    // header, mientras `/admin/document-templates` contestaba 401.
+    //
+    // El actor es `user` (admin de Medusa): el POS loguea contra
+    // `/auth/user/emailpass` y ya manda el Bearer en cada llamada
+    // (`store-pos/hooks/useDocumentTemplates.ts` vía `medusaFetch`, con
+    // `enabled: !!token`), así que esto NO requiere ningún cambio de frontend.
+    //
+    // El ORDEN importa dos veces: `posCorsMiddleware` corta el preflight OPTIONS
+    // con 204 antes de que `authenticate` lo vea, y deja puestas las cabeceras
+    // CORS antes de que un 401 salga — si no, el navegador reportaría un error
+    // de CORS en vez del 401 real y el síntoma sería indescifrable.
     {
       matcher: "/pos/*",
-      middlewares: [posCorsMiddleware],
+      middlewares: [posCorsMiddleware, authenticate("user", ["bearer", "session"])],
     },
     // Open CORS for public endpoints (no publishable key required)
     {

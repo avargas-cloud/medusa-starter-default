@@ -1,5 +1,6 @@
 // @ts-nocheck - Dynamic attributes injection not in Product type definition
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { withPublicProductMetadata } from "../../../../lib/product-metadata/public-keys";
 
 /**
  * GET /store/products/:id with attributes injection
@@ -58,7 +59,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     if (allLinks.length === 0) {
       console.log(`[PRODUCT-ATTRS] ℹ️  No attributes found for this product`);
       product.attributes = [];
-      return res.json({ product });
+      return res.json({ product: withPublicProductMetadata(product) });
     }
 
     // Get unique attribute value IDs
@@ -107,7 +108,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       `[PRODUCT-ATTRS] ✅ Returning product with ${attributes.length} attributes`
     );
 
-    return res.json({ product });
+    return res.json({ product: withPublicProductMetadata(product) });
   } catch (error: any) {
     console.error("[PRODUCT-ATTRS] ❌ Error:", (error as Error).message);
     return res.status(500).json({
