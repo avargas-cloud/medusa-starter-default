@@ -32,7 +32,7 @@ interface AccountOut {
 }
 
 const accountKey = (r: PeriodCostAccountRow): string =>
-  `${r.bucket}|${r.account_list_id ?? `name:${r.account_full_name ?? ""}`}`
+  `${r.bucket}|${r.account_type}|${r.account_list_id ?? `name:${r.account_full_name ?? ""}`}`
 
 function totalsOut(s: PeriodCostSummary) {
   return {

@@ -69,6 +69,11 @@
  * AccountsPayable, …) en una línea de bill tampoco se descarta a ciegas: se
  * suma en `excluded_balance_sheet_cents` para que se vea.
  *
+ * Signo: en `cost`, positivo = costo. Una línea de bill contra una cuenta de
+ * INGRESO se guarda NEGATIVA (el bill debita la cuenta: es menos ingreso); el
+ * redondeo trae su propio signo por `direction`. Un regular `cancelled`,
+ * `voided` o `deleted` no capitaliza nada: su referencia no oculta al sibling.
+ *
  * Bindings: knex (`__pg_connection__`) usa `?`, no `$1`.
  */
 import {
@@ -134,6 +139,7 @@ export const VENDOR_BILL_PERIOD_COST_SCOPE_SQL = `
      AND NOT EXISTS (
        SELECT 1 FROM vendor_bill r
         WHERE r.deleted_at IS NULL
+          AND r.status NOT IN ('cancelled', 'voided', 'deleted')
           AND (r.service_vendor_bill_id = vb.id
                OR r.freight_vendor_bill_id = vb.id
                OR r.tariff_vendor_bill_id = vb.id)
@@ -155,7 +161,7 @@ export const VENDOR_BILL_PENDING_LINK_SQL = `
  * que leer sólo la columna reportaría $0 — misma trampa que documenta
  * `purchases/supply-chain`.
  */
-export const VENDOR_BILL_LINE_CENTS = `COALESCE(l.amount_cents, ROUND(l.qty * l.unit_cost_cents))::bigint`
+export const VENDOR_BILL_LINE_CENTS = `COALESCE(l.amount_cents, ROUND((l.qty * l.unit_cost_cents)::numeric))::bigint`
 
 const COST_TYPES: ReadonlySet<string> = new Set(PNL_COST_ACCOUNT_TYPES)
 const INCOME_TYPES: ReadonlySet<string> = new Set(PNL_INCOME_ACCOUNT_TYPES)
@@ -210,6 +216,8 @@ export async function fetchVendorBillPeriodCostLines(
   )
   return result.rows.map((r) => {
     const accountType = str(r.account_type) ?? ""
+    const bucket: PeriodCostBucket =
+      r.pending_link === true ? "pending_link" : bucketForAccountType(accountType)
     return {
       source: "vendor_bill",
       document_id: String(r.document_id),
@@ -220,8 +228,10 @@ export async function fetchVendorBillPeriodCostLines(
       account_list_id: str(r.account_list_id),
       account_full_name: str(r.account_full_name),
       account_type: accountType || UNCLASSIFIED_ACCOUNT_TYPE,
-      bucket: r.pending_link === true ? "pending_link" : bucketForAccountType(accountType),
-      amount_cents: Number(r.amount_cents ?? 0),
+      bucket,
+      // Un bill DEBITA la cuenta: contra una cuenta de resultados de INGRESO
+      // eso es menos ingreso, no más. El redondeo trae su propio signo.
+      amount_cents: bucket === "income" ? -Number(r.amount_cents ?? 0) : Number(r.amount_cents ?? 0),
       description: str(r.description),
       document_status: String(r.document_status ?? ""),
       qb_synced: r.qb_synced === true,
@@ -390,11 +400,12 @@ export function summarizePeriodCosts(lines: readonly PeriodCostLine[]): PeriodCo
   }
   const incomeByType: Record<PnlIncomeAccountType, number> = { Income: 0, OtherIncome: 0 }
   let unclassified = 0
+  let unclassifiedLines = 0
   let balance = 0
   let pendingLink = 0
 
   for (const line of lines) {
-    const key = `${line.bucket}|${line.account_list_id ?? `name:${line.account_full_name ?? ""}`}`
+    const key = `${line.bucket}|${line.account_type}|${line.account_list_id ?? `name:${line.account_full_name ?? ""}`}`
     const row =
       byAccount.get(key) ??
       {
@@ -419,6 +430,7 @@ export function summarizePeriodCosts(lines: readonly PeriodCostLine[]): PeriodCo
         break
       case "unclassified":
         unclassified += line.amount_cents
+        unclassifiedLines += 1
         break
       case "balance_sheet":
         balance += line.amount_cents
@@ -445,7 +457,8 @@ export function summarizePeriodCosts(lines: readonly PeriodCostLine[]): PeriodCo
     unclassified_cents: unclassified,
     excluded_balance_sheet_cents: balance,
     pending_link_cents: pendingLink,
-    incomplete: unclassified !== 0,
+    // Por CANTIDAD, no por suma: dos líneas sin tipo que se cancelan siguen sin clasificar.
+    incomplete: unclassifiedLines > 0,
     accounts,
     line_count: lines.length,
   }

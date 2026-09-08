@@ -101,7 +101,7 @@ async function independentBillClassification(client: Client) {
   const referenced = new Set<string>();
   for (const b of await client.query(
     `SELECT service_vendor_bill_id s, freight_vendor_bill_id f, tariff_vendor_bill_id t
-       FROM vendor_bill WHERE deleted_at IS NULL`
+       FROM vendor_bill WHERE deleted_at IS NULL AND status NOT IN ('cancelled','voided','deleted')`
   ).then((r) => r.rows)) {
     for (const id of [b.s, b.f, b.t]) if (id) referenced.add(String(id));
   }
@@ -142,7 +142,7 @@ async function independentBillClassification(client: Client) {
     if (sibling && agentVendors.has(String(b.vendor_id))) { totals.pending_link += cents; continue; }
     if (!type) totals.unclassified += cents;
     else if (COST_TYPES.has(type)) { totals.cost += cents; costBillIds.add(String(b.id)); }
-    else if (INCOME_TYPES.has(type)) totals.income += cents;
+    else if (INCOME_TYPES.has(type)) totals.income -= cents; // un bill debita la cuenta de ingreso
     else totals.balance_sheet += cents;
   }
   return { totals, costBillIds, referenced, billsById: byBill };
@@ -179,13 +179,14 @@ async function main(): Promise<void> {
     mk({ document_id: "b", account_list_id: "L2", account_type: "Expense", amount_cents: 250 }),
     mk({ document_id: "c", account_list_id: "L3", account_type: "CostOfGoodsSold", bucket: "pending_link", amount_cents: 9999 }),
     mk({ document_id: "d", account_list_id: null, account_type: "Unclassified", bucket: "unclassified", amount_cents: 77 }),
+    mk({ document_id: "d2", account_list_id: null, account_type: "Unclassified", bucket: "unclassified", amount_cents: -77 }),
     mk({ document_id: "e", account_list_id: "L5", account_type: "Bank", bucket: "balance_sheet", amount_cents: 5 }),
     mk({ document_id: "f", source: "rounding", account_list_id: "L6", account_type: "Income", bucket: "income", amount_cents: -2 }),
   ];
   const pure = summarizePeriodCosts(pureLines);
   check("summary: cost_cents suma sólo el bucket cost", pure.cost_cents === 1250, `got ${pure.cost_cents}`);
   check("summary: pending_link fuera de los totales pero visible", pure.pending_link_cents === 9999 && pure.cost_cents_by_type.CostOfGoodsSold === 1000);
-  check("summary: unclassified marca incomplete", pure.incomplete === true && pure.unclassified_cents === 77);
+  check("summary: unclassified marca incomplete aunque las líneas se cancelen", pure.incomplete === true && pure.unclassified_cents === 0);
   check("summary: balance sheet excluido y contado", pure.excluded_balance_sheet_cents === 5);
   check("summary: income con signo", pure.income_cents === -2);
 
@@ -200,7 +201,7 @@ async function main(): Promise<void> {
   check("assemble: income incluye el redondeo con signo", stmt.income.lines.some((l) => l.key === "income:L6" && l.amount === -0.02));
   check("assemble: gross_profit = income − cogs", Math.abs(stmt.gross_profit - (stmt.income.total - stmt.cogs.total)) < 0.005);
   check("assemble: product_margin = net revenue − COGS neto de producto", Math.abs(stmt.product_margin - (1000 + 10 - 50 - (400 + 10 - 50))) < 0.005, `got ${stmt.product_margin}`);
-  check("assemble: memo no suma (pending_link, unclassified) y declara surcharge", stmt.memo.pending_link === 99.99 && stmt.memo.unclassified === 0.77 && stmt.memo.surcharge_excluded === true);
+  check("assemble: memo no suma (pending_link, unclassified) y declara surcharge", stmt.memo.pending_link === 99.99 && stmt.memo.unclassified === 0 && stmt.memo.incomplete === true && stmt.memo.surcharge_excluded === true);
 
   // ── Datos ────────────────────────────────────────────────────────────────────
   const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -259,9 +260,14 @@ async function main(): Promise<void> {
     check("5. pending_link sólo para vendors con is_china_agent", badPending.length === 0, badPending.map((l) => l.document_number).join(","));
 
     // 6. Expenses == P&L cost lines
-    const pnlCostAccounts = [...stmtData.cogs.lines, ...stmtData.expense.lines, ...stmtData.other.lines]
-      .filter((l) => l.account_list_id !== undefined)
-      .reduce((s, l) => s + Math.abs(Math.round(l.amount * 100)), 0);
+    const costCentsOf = (st: ReturnType<typeof assemble>): number =>
+      [...st.cogs.lines, ...st.expense.lines]
+        .filter((l) => l.account_list_id !== undefined)
+        .reduce((s, l) => s + Math.round(l.amount * 100), 0) +
+      st.other.lines
+        .filter((l) => l.account_type === "OtherExpense")
+        .reduce((s, l) => s - Math.round(l.amount * 100), 0); // en Other va negado
+    const pnlCostAccounts = costCentsOf(stmtData);
     check("6. Expenses (cost por tipo) == líneas de cuenta del P&L", pnlCostAccounts === summary.cost_cents, `pnl=${pnlCostAccounts} expenses=${summary.cost_cents}`);
 
     // 7. paridad HTTP con sales/summary
@@ -279,12 +285,13 @@ async function main(): Promise<void> {
       const pnl = (await (await fetch(`${api}/admin/reports/profit-loss/statement?${q}`, { headers: h })).json()) as { current: ReturnType<typeof assemble> };
       const exp = (await (await fetch(`${api}/admin/reports/expenses/summary?${q}`, { headers: h })).json()) as { totals: { cost_total: number } };
       const c = pnl.current;
-      check("7a. P&L income.total == Sales net_revenue", Math.abs(c.income.total - sales.net_revenue) < 0.011, `pnl=${c.income.total} sales=${sales.net_revenue}`);
+      const incomeBucket = c.income.lines.filter((l) => l.account_list_id !== undefined).reduce((s, l) => s + l.amount, 0);
+      check("7a. P&L income.total − líneas de cuenta (redondeo) == Sales net_revenue", Math.abs(c.income.total - incomeBucket - sales.net_revenue) < 0.011, `pnl=${c.income.total} rounding=${incomeBucket} sales=${sales.net_revenue}`);
       check("7b. P&L product_margin == Sales gross_profit (±$1 por el ::bigint de Sales)", Math.abs(c.product_margin - sales.gross_profit) <= 1, `pnl=${c.product_margin} sales=${sales.gross_profit}`);
       check("7c. P&L memo.commission_settled_basis == Sales commission", Math.abs(c.memo.commission_settled_basis - sales.commission) < 0.011);
       check("7d. P&L Expense fraude == Sales fraud_loss", Math.abs((c.expense.lines.find((l) => l.account_list_id === FRAUD_WRITEOFF_QB_ACCOUNT.list_id)?.amount ?? 0) - sales.fraud_loss) < 0.011, `sales=${sales.fraud_loss}`);
-      const pnlCost = [...c.cogs.lines, ...c.expense.lines, ...c.other.lines].filter((l) => l.account_list_id !== undefined).reduce((s, l) => s + Math.abs(l.amount), 0);
-      check("7e. Expenses cost_total == líneas de cuenta del P&L (HTTP)", Math.abs(pnlCost - exp.totals.cost_total) < 0.011, `pnl=${pnlCost} expenses=${exp.totals.cost_total}`);
+      const pnlCost = costCentsOf(c) / 100;
+      check("7e. Expenses cost_total == líneas de cuenta del P&L (HTTP, con signo)", Math.abs(pnlCost - exp.totals.cost_total) < 0.011, `pnl=${pnlCost} expenses=${exp.totals.cost_total}`);
     }
   } finally {
     await client.end();
