@@ -47,6 +47,19 @@
 /** ListID del item OtherCharge "Bad Debt Write-Off / Fraud Loss" en QuickBooks. */
 export const FRAUD_WRITEOFF_QB_LIST_ID = "80001C6E-1788546289";
 
+/**
+ * La CUENTA de gasto a la que apunta ese item en QuickBooks. Es la identidad
+ * contable del write-off para los reportes de Expenses / P&L: el item es lo que
+ * se factura, la cuenta es donde QB registra la pérdida (tipo Expense). Viven
+ * juntos acá para que nadie confunda un ListID con el otro — el del item NO
+ * clasifica el gasto, y el de la cuenta NO identifica el memo.
+ */
+export const FRAUD_WRITEOFF_QB_ACCOUNT = {
+  list_id: "8000018C-1788546064",
+  full_name: "Bad Debt / Fraud / Chargeback",
+  account_type: "Expense",
+} as const;
+
 /** Clave en `pos_credit_memo.metadata`. */
 export const CM_REPORTING_TREATMENT_KEY = "reporting_treatment";
 
