@@ -39,6 +39,7 @@ import { avgCostDollars } from "../../../../lib/cost/cost-sql"
 import { cmNotFraudWriteoffSql } from "../../../../lib/reports/fraud-writeoff"
 import { COGS_JOIN, COST_DOLLARS, fetchReturnedProductCostDollars } from "./cogs-join"
 import { fetchSettledCommissionCentsForPeriod } from "./commission-expr"
+import { PAYROLL_LINE_KEY, PAYROLL_LINE_LABEL, fetchRecognizedPayrollCents } from "./monthly-payroll"
 import type { DateRange } from "./date-range"
 import {
   type PeriodCostAccountRow,
@@ -95,6 +96,8 @@ export interface PnlStatement {
     excluded_balance_sheet: number
     /** Siblings del agente de China sin enlazar: landed cost en espera, no sumado. */
     pending_link: number
+    /** Nómina MANUAL reconocida en el período (ya sumada en Expense); nunca viene de QB. */
+    payroll_manual: number
     incomplete: boolean
     surcharge_excluded: true
   }
@@ -205,7 +208,7 @@ const sumLines = (lines: readonly PnlLine[]): number => round2(lines.reduce((s, 
 
 export async function buildPnlStatementForRange(pg: RawPg, range: DateRange): Promise<PnlStatement> {
   const { from, to } = range
-  const [core, shippingCents, refundCents, returnedCostDollars, adjCogsDollars, damagedDollars, commissionSettledCents, costLines] =
+  const [core, shippingCents, refundCents, returnedCostDollars, adjCogsDollars, damagedDollars, commissionSettledCents, costLines, payrollCents] =
     await Promise.all([
       fetchSalesCore(pg, from, to),
       fetchShippingCentsForPeriod(pg, from, to),
@@ -215,8 +218,9 @@ export async function buildPnlStatementForRange(pg: RawPg, range: DateRange): Pr
       fetchDamagedReturnsCostDollars(pg, from, to),
       fetchSettledCommissionCentsForPeriod(pg, from, to),
       fetchPeriodCostLines(pg, from, to),
+      fetchRecognizedPayrollCents(pg, from, to),
     ])
-  return assemble(range, core, shippingCents, refundCents, returnedCostDollars, adjCogsDollars, damagedDollars, commissionSettledCents, costLines)
+  return assemble(range, core, shippingCents, refundCents, returnedCostDollars, adjCogsDollars, damagedDollars, commissionSettledCents, costLines, payrollCents)
 }
 
 /** Puro: separa el ensamblado de las queries para que el verificador lo pruebe con fixtures. */
@@ -229,7 +233,9 @@ export function assemble(
   adjCogsDollars: number,
   damagedDollars: number,
   commissionSettledCents: number,
-  costLines: readonly PeriodCostLine[]
+  costLines: readonly PeriodCostLine[],
+  /** Nómina manual reconocida en el período (mitad el 15, mitad a fin de mes). */
+  payrollCents = 0
 ): PnlStatement {
   const costs = summarizePeriodCosts(costLines)
 
@@ -259,7 +265,15 @@ export function assemble(
 
   const grossProfit = round2(income.total - cogs.total)
 
-  const expenseLines = accountLines(costs.accounts, "Expense", "expense")
+  // La nómina no tiene documento ni cuenta: es una línea PROPIA de Expense
+  // (sin `account_list_id`, como las de producto en COGS), así el gate que
+  // cruza Expenses contra las líneas de cuenta del P&L no la cuenta dos veces.
+  const expenseLines: PnlLine[] = [
+    ...accountLines(costs.accounts, "Expense", "expense"),
+    ...(payrollCents > 0
+      ? [{ key: PAYROLL_LINE_KEY, label: PAYROLL_LINE_LABEL, amount: dollars(payrollCents) }]
+      : []),
+  ]
   const expense: PnlSection = { label: "Expense", lines: expenseLines, total: sumLines(expenseLines) }
   const netOperatingIncome = round2(grossProfit - expense.total)
 
@@ -292,6 +306,7 @@ export function assemble(
       unclassified: dollars(costs.unclassified_cents),
       excluded_balance_sheet: dollars(costs.excluded_balance_sheet_cents),
       pending_link: dollars(costs.pending_link_cents),
+      payroll_manual: dollars(payrollCents),
       incomplete: costs.incomplete,
       surcharge_excluded: true,
     },

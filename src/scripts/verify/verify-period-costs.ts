@@ -54,6 +54,12 @@ import {
 } from "../../api/admin/reports/_lib/period-costs";
 import { assemble } from "../../api/admin/reports/_lib/pnl-statement";
 import {
+  PAYROLL_LINE_KEY,
+  fetchPayrollRows,
+  payrollHalves,
+  recognizedPayrollCents,
+} from "../../api/admin/reports/_lib/monthly-payroll";
+import {
   fetchCmRefundsCentsForPeriod,
   fetchFraudWriteoffCentsForPeriod,
 } from "../../api/admin/reports/_lib/sales-revenue";
@@ -203,6 +209,25 @@ async function main(): Promise<void> {
   check("assemble: product_margin = net revenue − COGS neto de producto", Math.abs(stmt.product_margin - (1000 + 10 - 50 - (400 + 10 - 50))) < 0.005, `got ${stmt.product_margin}`);
   check("assemble: memo no suma (pending_link, unclassified) y declara surcharge", stmt.memo.pending_link === 99.99 && stmt.memo.unclassified === 0 && stmt.memo.incomplete === true && stmt.memo.surcharge_excluded === true);
 
+  // ── Puros: nómina bisemanal — mitad el 15, mitad el último día, en ET ──────────
+  const halves = payrollHalves("2026-09", 800001);
+  check("payroll: dos mitades que suman el total, centavo impar en la segunda", halves.length === 2 && halves[0]?.cents === 400000 && halves[1]?.cents === 400001);
+  check("payroll: fechas de pago = 15 y 30 de septiembre a medianoche ET (04:00Z)", halves[0]?.at.toISOString() === "2026-09-15T04:00:00.000Z" && halves[1]?.at.toISOString() === "2026-09-30T04:00:00.000Z");
+  const febHalves = payrollHalves("2026-02", 100);
+  check("payroll: febrero no llega al 30 → último día (28), en horario EST (05:00Z)", febHalves[1]?.at.toISOString() === "2026-02-28T05:00:00.000Z");
+  const augHalves = payrollHalves("2026-08", 100);
+  check("payroll: en un mes de 31 días el segundo pago es el 30, no el 31", augHalves[1]?.at.toISOString() === "2026-08-30T04:00:00.000Z");
+  check("payroll: del 31 de agosto en adelante no queda nada por reconocer", recognizedPayrollCents([{ month: "2026-08", amount_cents: 100 }], "2026-08-31T04:00:00.000Z", "2026-09-01T04:00:00.000Z") === 0);
+  const rows = [{ month: "2026-09", amount_cents: 800001 }];
+  check("payroll: mes entero reconoce todo", recognizedPayrollCents(rows, "2026-09-01T04:00:00.000Z", "2026-10-01T04:00:00.000Z") === 800001);
+  check("payroll: del 1 al 14 reconoce cero", recognizedPayrollCents(rows, "2026-09-01T04:00:00.000Z", "2026-09-15T03:59:59.999Z") === 0);
+  check("payroll: del 1 al 15 reconoce la primera mitad", recognizedPayrollCents(rows, "2026-09-01T04:00:00.000Z", "2026-09-16T03:59:59.999Z") === 400000);
+  check("payroll: del 16 al 30 reconoce la segunda mitad", recognizedPayrollCents(rows, "2026-09-16T04:00:00.000Z", "2026-10-01T04:00:00.000Z") === 400001);
+  const stmtPay = assemble({ from: FROM, to: TO }, { invoiceCount: 1, revenueCents: 100000, cogsDollars: 0 }, 0, 0, 0, 0, 0, 0, [], 12345);
+  const payLine = stmtPay.expense.lines.find((l) => l.key === PAYROLL_LINE_KEY);
+  check("assemble: la nómina es una línea de Expense sin account_list_id y baja el neto", !!payLine && payLine.amount === 123.45 && payLine.account_list_id === undefined && stmtPay.net_income === 1000 - 123.45);
+  check("assemble: sin nómina no hay línea", !assemble({ from: FROM, to: TO }, { invoiceCount: 1, revenueCents: 100000, cogsDollars: 0 }, 0, 0, 0, 0, 0, 0, []).expense.lines.some((l) => l.key === PAYROLL_LINE_KEY));
+
   // ── Datos ────────────────────────────────────────────────────────────────────
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
@@ -290,6 +315,11 @@ async function main(): Promise<void> {
       check("7b. P&L product_margin == Sales gross_profit (±$1 por el ::bigint de Sales)", Math.abs(c.product_margin - sales.gross_profit) <= 1, `pnl=${c.product_margin} sales=${sales.gross_profit}`);
       check("7c. P&L memo.commission_settled_basis == Sales commission", Math.abs(c.memo.commission_settled_basis - sales.commission) < 0.011);
       check("7d. P&L Expense fraude == Sales fraud_loss", Math.abs((c.expense.lines.find((l) => l.account_list_id === FRAUD_WRITEOFF_QB_ACCOUNT.list_id)?.amount ?? 0) - sales.fraud_loss) < 0.011, `sales=${sales.fraud_loss}`);
+      const httpFrom = process.env.VERIFY_HTTP_FROM ?? "2026-09-01T04:00:00.000Z";
+      const httpTo = process.env.VERIFY_HTTP_TO ?? "2026-10-01T04:00:00.000Z";
+      const expectedPayroll = recognizedPayrollCents(await fetchPayrollRows(pg), httpFrom, httpTo) / 100;
+      const gotPayroll = c.expense.lines.find((l) => l.key === PAYROLL_LINE_KEY)?.amount ?? 0;
+      check("7f. P&L línea de nómina == reconocido desde pos_monthly_payroll para la ventana", Math.abs(gotPayroll - expectedPayroll) < 0.011, `pnl=${gotPayroll} table=${expectedPayroll}`);
       const pnlCost = costCentsOf(c) / 100;
       check("7e. Expenses cost_total == líneas de cuenta del P&L (HTTP, con signo)", Math.abs(pnlCost - exp.totals.cost_total) < 0.011, `pnl=${pnlCost} expenses=${exp.totals.cost_total}`);
     }

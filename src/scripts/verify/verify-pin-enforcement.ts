@@ -275,6 +275,10 @@ const MUST_GATE_ROUTES: {
     what: "escribe el precio retail y el wholesale de un ítem",
   },
   {
+    rel: "api/admin/reports/profit-loss/payroll/route.ts",
+    what: "escribe el costo de nómina mensual manual que baja la utilidad del P&L",
+  },
+  {
     rel: "api/admin/pos/products/[id]/route.ts",
     what:
       "escribe discontinued, el Product Source (USA/CHINA) y el retail_price " +
