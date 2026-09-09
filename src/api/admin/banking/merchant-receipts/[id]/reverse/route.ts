@@ -1,0 +1,8 @@
+import type { AuthenticatedMedusaRequest,MedusaResponse } from "@medusajs/framework/http";
+import { reverseMerchantReceipt } from "../../../../../../lib/banking/merchant-receipts";
+import { reviewCommandRequest } from "../../../_lib/review-http";
+import { bankFailure } from "../../../_lib/http";
+export async function POST(req:AuthenticatedMedusaRequest,res:MedusaResponse) {
+  try {const {id,actorId,key,canPost}=await reviewCommandRequest(req,"post");return res.json({...await reverseMerchantReceipt(id,actorId,key,req.body),can_post:canPost});}
+  catch(error) {return bankFailure(res,error);}
+}

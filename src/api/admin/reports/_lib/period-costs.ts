@@ -6,7 +6,7 @@
  *
  * Una plata que el POS originó y que QuickBooks lleva a una cuenta de
  * RESULTADOS (CostOfGoodsSold / Expense / OtherExpense) en la fecha del
- * documento, y que NO está ya dentro del costo promedio de los ítems. Tres
+ * documento, y que NO está ya dentro del costo promedio de los ítems. Cuatro
  * fuentes, cada una con su propia query (nunca un JOIN entre fuentes: reducir
  * cada lado a una fila por documento ANTES de juntar es lo que evita el
  * fan-out que ya costó $122,29 en by-item):
@@ -17,6 +17,9 @@
  *      (`lib/reports/fraud-writeoff.ts`), por `completed_at`.
  *   3. Ajustes de redondeo (`pos_rounding_adjustment`) — centavos, pero
  *      conciliables: van a cuentas Income de QB con signo.
+ *   4. Asientos locales de gastos directos bancarios (`bank_journal_line`),
+ *      sólo su línea de Expense/OtherExpense, con reversas por su propia fecha.
+ *      No se crean ni duplican bills; revisar un movimiento no lo contabiliza.
  *
  * ## La regla de capitalización (lo que NO es gasto del período)
  *
@@ -81,6 +84,7 @@ import {
   cmNotFraudWriteoffSql,
 } from "../../../../lib/reports/fraud-writeoff"
 import { CM_REFUND_CENTS_EXPR, CM_REFUND_DATE_COL } from "./sales-revenue"
+import { fetchBankExpenseCostLines } from "./bank-expense-costs"
 
 type RawPg = {
   raw: (sql: string, bindings: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>
@@ -92,14 +96,14 @@ export type PnlCostAccountType = (typeof PNL_COST_ACCOUNT_TYPES)[number]
 export type PnlIncomeAccountType = (typeof PNL_INCOME_ACCOUNT_TYPES)[number]
 export const UNCLASSIFIED_ACCOUNT_TYPE = "Unclassified"
 
-export type PeriodCostSource = "vendor_bill" | "fraud_writeoff" | "rounding"
+export type PeriodCostSource = "vendor_bill" | "fraud_writeoff" | "rounding" | "bank_expense"
 export type PeriodCostBucket = "cost" | "income" | "balance_sheet" | "unclassified" | "pending_link"
 
 export interface PeriodCostLine {
   source: PeriodCostSource
   document_id: string
   document_number: string | null
-  document_kind: "Vendor bill" | "Credit memo" | "Rounding adjustment"
+  document_kind: "Vendor bill" | "Credit memo" | "Rounding adjustment" | "Bank expense" | "Bank deposit fee" | "Bank movement expense" | "Merchant settlement fee"
   /** Instante ISO de la fecha contable del documento. */
   document_date: string
   counterparty: string | null
@@ -350,18 +354,19 @@ export async function fetchRoundingLines(
   })
 }
 
-/** Las tres fuentes, cada una con su query, concatenadas. */
+/** Fuentes independientes, cada una con su query, concatenadas sin duplicar documentos. */
 export async function fetchPeriodCostLines(
   pg: RawPg,
   from: string,
   to: string
 ): Promise<PeriodCostLine[]> {
-  const [bills, fraud, rounding] = await Promise.all([
+  const [bills, fraud, rounding, bankExpenses] = await Promise.all([
     fetchVendorBillPeriodCostLines(pg, from, to),
     fetchFraudWriteoffLines(pg, from, to),
     fetchRoundingLines(pg, from, to),
+    fetchBankExpenseCostLines(pg, from, to),
   ])
-  return [...bills, ...fraud, ...rounding]
+  return [...bills, ...fraud, ...rounding, ...bankExpenses]
 }
 
 export interface PeriodCostAccountRow {
