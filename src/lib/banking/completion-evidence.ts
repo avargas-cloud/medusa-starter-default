@@ -4,7 +4,7 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { bankId } from "./store";
 import { runReviewCommand } from "./review-common";
 import { validateReviewAttachment } from "./review-attachments";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled } from "./security";
 import { completionEvidenceSchema } from "./movement-types";
 
 export const COMPLETION_EVIDENCE_COLUMNS = "id,original_name,mime_type,size_bytes,sha256,version,uploaded_by,created_at";
@@ -35,12 +35,12 @@ export async function addCompletionEvidence(actorId: string, key: string, input:
   });
 }
 export async function listCompletionEvidence() {
-  requireBankingSandbox();
+  requireBankingEnabled();
   return { evidence: (await getDbPool().query(`SELECT ${COMPLETION_EVIDENCE_COLUMNS} FROM bank_evidence_document
     WHERE deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 100`)).rows };
 }
 export async function downloadCompletionEvidence(id: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const row = (await getDbPool().query<{ original_name: string; content_base64: string; sha256: string }>(
     "SELECT original_name,content_base64,sha256 FROM bank_evidence_document WHERE id=$1 AND deleted_at IS NULL", [id])).rows[0];
   if (!row) throw new BankingError("BANKING_EVIDENCE_NOT_FOUND", 404);

@@ -9,6 +9,11 @@ import { withReviewLock } from "../../lib/banking/review-common";
 
 export const connection = "bconn_e2e_accounting_v8";
 export const account = "bacc_e2e_accounting_v8";
+/** Cuenta acompanante SIN configurar: la regla bajo prueba es que un dia no cierra
+ *  mientras alguna cuenta aplicable carezca de setup. Antes dependia de una cuenta
+ *  ambiental (la conexion Plaid Sandbox de v3) que el bootstrap de esquema vacio borro,
+ *  y el check quedaba vacuo/rojo segun la maquina. El fixture ahora la crea. */
+export const companionAccount = "bacc_e2e_accounting_v8_companion";
 export const prefix = "btx_e2e_accounting_v8_";
 export const actor = "e2e_accounting_v8_actor";
 export const day = "2026-08-17";
@@ -72,7 +77,7 @@ export async function seedAccount(client: PoolClient) {
     assert(!(await client.query("SELECT 1 FROM bank_connection WHERE id=$1", [connection])).rowCount);
     const caps = (await client.query(`SELECT (SELECT count(*) FROM bank_connection)::int AS c,
       (SELECT count(*) FROM bank_account)::int AS a`)).rows[0];
-    assert(caps.c < 3 && caps.a < 10, "Owned fixtures respect connection/account caps");
+    assert(caps.c < 3 && caps.a < 9, "Owned fixtures respect connection/account caps for both owned accounts");
     const bank = (await client.query(`SELECT qb_list_id FROM qb_account WHERE is_active AND deleted_at IS NULL
       AND account_type='Bank' AND currency IN ('USD','US Dollar') ORDER BY qb_list_id LIMIT 1`)).rows[0];
     assert(bank, "Existing active USD Bank mapping is required");
@@ -82,6 +87,11 @@ export async function seedAccount(client: PoolClient) {
       review_start_date,opening_bank_balance,opening_balance_date,opening_reference,setup_revision)
       VALUES($1,$2,$1,'EPT Accounting v8 verification','depository','USD',true,$3,'2000-01-01','0','1999-12-31','Synthetic v8 opening',1)`,
     [account, connection, bank.qb_list_id]);
+    // Sin review_start_date/opening_*: es aplicable a cualquier dia y bloquea el cierre.
+    // qb_list_id NULL a proposito (cuenta aun no mapeada), asi no toca uq_bank_account_active_qb
+    // ni consume otra cuenta Bank del catalogo QB.
+    await client.query(`INSERT INTO bank_account(id,connection_id,provider_account_id,name,type,currency,is_selected,setup_revision)
+      VALUES($1,$2,$1,'EPT Accounting v8 unconfigured companion','depository','USD',true,0)`, [companionAccount, connection]);
   });
 }
 

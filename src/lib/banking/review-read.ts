@@ -1,12 +1,12 @@
 import { openingClearProjection } from "./opening-guards";
 import { getDbPool } from "../../api/utils/db-pool";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { REVIEW_JOINS, REVIEW_SELECT_SQL } from "./review-projection";
 import { ATTACHMENT_COLUMNS, type ReviewAttachment } from "./review-attachments";
 import type { BankTransactionView } from "./views";
 
 export async function readTransactionReview(id: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const client = await getDbPool().connect();
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -14,7 +14,7 @@ export async function readTransactionReview(id: string) {
       FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id
       JOIN bank_connection c ON c.id=a.connection_id ${REVIEW_JOINS}
       WHERE t.id=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND c.deleted_at IS NULL AND c.environment='sandbox'`, [id]);
+      AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()}`, [id]);
     const tx = result.rows[0];
     if (!tx) throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
     const attachments = await client.query<ReviewAttachment>(`SELECT ${ATTACHMENT_COLUMNS}

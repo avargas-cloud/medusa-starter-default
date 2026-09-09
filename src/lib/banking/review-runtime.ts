@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { getDbPool } from "../../api/utils/db-pool";
 import { configureBankSandbox } from "./sandbox-runtime";
-import { requireBankingSandbox } from "./security";
+import { requireBankingEnabled } from "./security";
 import { Migration20260908223000 } from "../../modules/banking/migrations/Migration20260908223000";
 
 const workspace = resolve(__dirname, "../../../..");
@@ -13,7 +13,7 @@ const financialTables = ["customer_payment", "payment_application", "pos_invoice
 
 async function setup(): Promise<void> {
   configureBankSandbox();
-  requireBankingSandbox();
+  requireBankingEnabled();
   const snapshot = resolve(workspace, "sandbox-artifacts/snapshots/pre-bank-review-20260908.dump");
   if (!existsSync(snapshot)) execFileSync("bash", [resolve(workspace, "scripts/sandbox/snapshot.sh"),
     "pre-bank-review-20260908", "Before banking daily review schema and fixtures"],

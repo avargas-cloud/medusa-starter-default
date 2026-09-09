@@ -1,7 +1,7 @@
 import { depositSuggestions } from "./deposit-matching";
 import { z } from "zod";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { reviewDate } from "./review-date";
 import { MATCH_FROM_SQL, MATCH_RANK_FIELDS_SQL, MATCH_SELECT_SQL, MATCH_VALID_SQL } from "./review-matching";
 
@@ -33,14 +33,14 @@ export async function matchSuggestions(input: { ids?: string[]; date?: string })
     || new Set(input.ids).size !== input.ids.length || input.ids.some(id => !/^[A-Za-z0-9_-]{1,128}$/.test(id))))
     || (input.date !== undefined && !reviewDate.safeParse(input.date).success)) throw new BankingError("BANKING_INVALID_REQUEST");
   if (!bankingConfig().enabled) return { suggestions: [] };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<SuggestionRow>(`WITH bank_scope AS (
     SELECT t.id FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id
     JOIN bank_connection bc ON bc.id=a.connection_id
     LEFT JOIN bank_transaction_review r ON r.transaction_id=t.id AND r.deleted_at IS NULL
     LEFT JOIN bank_day_close dc ON dc.day=t.transaction_date AND dc.deleted_at IS NULL
     WHERE (($1::text[] IS NOT NULL AND t.id=ANY($1::text[])) OR ($2::text IS NOT NULL AND t.transaction_date=$2::text))
-      AND t.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment='sandbox'
+      AND t.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}
       AND a.type='depository' AND t.status='posted' AND t.amount::numeric<0 AND t.currency IS NOT NULL
       AND a.review_start_date IS NOT NULL AND t.transaction_date>=a.review_start_date
       AND COALESCE(r.status,'draft') NOT IN ('confirmed','excluded') AND COALESCE(dc.status,'open')<>'closed'

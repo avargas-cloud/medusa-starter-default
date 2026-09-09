@@ -1,6 +1,7 @@
 import { openingClearProjection } from "./opening-guards";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
+import { readBankingControl } from "./control";
 import { REVIEW_JOINS, REVIEW_SELECT_SQL } from "./review-projection";
 import type { Review } from "./review-types";
 
@@ -57,10 +58,11 @@ export interface BankTransactionView {
 
 /** Explicit DTOs keep provider payloads, cursors and token material server-side. */
 export async function bankingOverview(canManage: boolean, canReview = canManage, canClose = canManage) {
-  const config = { ...bankingConfig(), can_manage: canManage, can_review: canReview, can_close: canClose };
-  if (!config.enabled) return { config, connections: [], accounts: [] };
-  requireBankingSandbox();
+  const base = { ...bankingConfig(), can_manage: canManage, can_review: canReview, can_close: canClose };
+  if (!base.enabled) return { config: { ...base, control_enabled: false }, connections: [], accounts: [] };
+  requireBankingEnabled();
   const pool = getDbPool();
+  const config = { ...base, control_enabled: (await readBankingControl(pool)).enabled };
   const [connections, accounts] = await Promise.all([
     pool.query<BankConnectionView>(
       `SELECT id, COALESCE(institution_name, 'Bank connection') AS institution_name,
@@ -75,7 +77,7 @@ export async function bankingOverview(canManage: boolean, canReview = canManage,
                (refresh_completed_at IS NULL OR refresh_requested_at > refresh_completed_at))
                 AS refresh_request_pending
          FROM bank_connection
-        WHERE deleted_at IS NULL AND environment = 'sandbox'
+        WHERE deleted_at IS NULL AND environment=${bankingEnvSql()}
         ORDER BY created_at, id`,
     ),
     pool.query<BankAccountView>(
@@ -88,7 +90,7 @@ export async function bankingOverview(canManage: boolean, canReview = canManage,
          FROM bank_account a
          JOIN bank_connection c ON c.id = a.connection_id
         WHERE a.deleted_at IS NULL AND c.deleted_at IS NULL
-          AND c.environment = 'sandbox'
+          AND c.environment=${bankingEnvSql()}
         ORDER BY a.connection_id, a.name, a.id`,
     ),
   ]);
@@ -110,7 +112,7 @@ export interface TransactionFilters {
 /** Count and page share one Postgres statement snapshot, including empty pages. */
 export async function bankingTransactions(filters: TransactionFilters) {
   if (!bankingConfig().enabled) return { transactions: [], count: 0 };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<{
     account_exists: boolean;
     count: string;
@@ -120,7 +122,7 @@ export async function bankingTransactions(filters: TransactionFilters) {
        SELECT a.id,a.review_start_date FROM bank_account a
          JOIN bank_connection c ON c.id = a.connection_id
         WHERE a.id = $1 AND a.deleted_at IS NULL AND c.deleted_at IS NULL
-          AND c.environment = 'sandbox'
+          AND c.environment=${bankingEnvSql()}
      ), projected AS NOT MATERIALIZED (
        SELECT ${REVIEW_SELECT_SQL}
          FROM bank_transaction t

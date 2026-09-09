@@ -1,4 +1,5 @@
 import { BankingError } from "./security";
+import { bankingLimits, limitCode } from "./limits";
 import { date, decimal, nullableString, object, plaidRequest, string } from "./plaid";
 import type { FeedBatch, FeedTransaction } from "./sync-store";
 
@@ -42,8 +43,8 @@ export async function fetchFeedBatch(accessToken: string, originalCursor: string
           if (accountId !== null && !accountId.trim()) throw new BankingError("BANKING_PROVIDER_INVALID_RESPONSE", 502);
           return { transaction_id: string(row.transaction_id), ...(accountId !== null ? { account_id: accountId } : {}) };
         }));
-        if (batch.added.length + batch.modified.length + batch.removed.length > 10000) {
-          throw new BankingError("BANKING_SANDBOX_BATCH_LIMIT", 409);
+        if (batch.added.length + batch.modified.length + batch.removed.length > bankingLimits().batch) {
+          throw new BankingError(limitCode("BATCH"), 409);
         }
         batch.cursor = response.next_cursor;
         batch.historicalComplete = response.transactions_update_status === "HISTORICAL_UPDATE_COMPLETE";

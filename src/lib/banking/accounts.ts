@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
+import { bankingLimits, limitCode } from "./limits";
 import { decimal, nullableString, object, string } from "./plaid";
 import { bankId } from "./store";
 import { withReviewLock } from "./review-common";
@@ -19,7 +20,7 @@ export async function saveAccounts(client: PoolClient, connectionId: string, inp
     if (persistentId) {
       const existing = await client.query<{ id: string; connection_id: string }>(
         `SELECT a.id,a.connection_id FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-         WHERE a.persistent_account_id=$1 AND c.environment='sandbox' AND c.status <> 'disconnected'`, [persistentId]);
+         WHERE a.persistent_account_id=$1 AND c.environment=${bankingEnvSql()} AND c.status <> 'disconnected'`, [persistentId]);
       if (existing.rows.some((account) => account.connection_id !== connectionId)) {
         throw new BankingError("BANKING_DUPLICATE_CONNECTION", 409);
       }
@@ -48,8 +49,8 @@ export async function saveAccounts(client: PoolClient, connectionId: string, inp
   }
   await client.query(`UPDATE bank_account SET is_active=false,updated_at=now()
     WHERE connection_id=$1 AND NOT(provider_account_id=ANY($2::text[]))`, [connectionId, providerIds]);
-  const count = await client.query<{ count: string }>("SELECT count(*) FROM bank_account");
-  if (Number(count.rows[0]?.count) > 10) throw new BankingError("BANKING_SANDBOX_ACCOUNT_LIMIT", 409);
+  const count = await client.query<{ count: string }>("SELECT count(*) FROM bank_account WHERE is_active AND deleted_at IS NULL");
+  if (Number(count.rows[0]?.count) > bankingLimits().accounts) throw new BankingError(limitCode("ACCOUNT"), 409);
 }
 
 export async function selectedAccountRows(client: PoolClient, connectionId: string) {

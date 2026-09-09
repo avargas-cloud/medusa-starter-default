@@ -1,7 +1,7 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { getDbPool } from "../../api/utils/db-pool";
 import { bankIdentity } from "./auth";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled } from "./security";
 import { appendReviewEvent, reviewCapacity, runReviewCommand } from "./review-common";
 import { bankId } from "./store";
 
@@ -12,7 +12,7 @@ export async function reviewAccess(req: AuthenticatedMedusaRequest, capability: 
   let canClose = identity.canManage;
   let canPost = identity.canManage;
   if (!identity.canManage && bankingConfig().enabled) {
-    requireBankingSandbox();
+    requireBankingEnabled();
     const result = await getDbPool().query<{ can_review: boolean; can_close: boolean; can_post: boolean }>(
       `SELECT can_review,can_close,can_post FROM bank_review_permission WHERE user_id=$1 AND deleted_at IS NULL`,
       [identity.actorId]);
@@ -29,7 +29,7 @@ export async function reviewAccess(req: AuthenticatedMedusaRequest, capability: 
 
 export async function listReviewPermissions() {
   if (!bankingConfig().enabled) return { users: [] };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<{ id: string; email: string; can_review: boolean; can_close: boolean; can_post: boolean }>(
     `SELECT u.id,u.email,COALESCE(p.can_review,false) AS can_review,COALESCE(p.can_close,false) AS can_close,
       COALESCE(p.can_post,false) AS can_post

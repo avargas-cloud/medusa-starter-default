@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { reviewHash } from "./review-common";
 import { openingMapping } from "./opening-read";
 import { reviewToday } from "./review-date";
@@ -25,7 +25,7 @@ export async function statementLineFacts(client: PoolClient, line: StatementInpu
     day: string; source_version: number; deleted: boolean; account_list_id: string; active: boolean }>(`SELECT t.id,
     (-t.amount::numeric*100)::float8 AS amount_cents,t.currency,t.status,t.transaction_date AS day,t.source_version,
     (t.deleted_at IS NOT NULL OR a.deleted_at IS NOT NULL OR c.deleted_at IS NOT NULL) AS deleted,a.qb_list_id AS account_list_id,
-    (a.is_active AND a.is_selected AND a.type='depository' AND a.currency='USD' AND c.environment='sandbox') AS active
+    (a.is_active AND a.is_selected AND a.type='depository' AND a.currency='USD' AND c.environment=${bankingEnvSql()}) AS active
     FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
     WHERE t.id=$1 FOR SHARE OF t,a,c`, [line.transaction_id])).rows[0];
   if (!source || source.deleted || !source.active || source.account_list_id !== accountListId

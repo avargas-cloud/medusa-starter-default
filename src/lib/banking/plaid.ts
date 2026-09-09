@@ -1,4 +1,7 @@
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled } from "./security";
+
+/** Closed host table: the environment is chosen by configuration, never by a request. */
+const HOSTS = { sandbox: "https://sandbox.plaid.com", production: "https://production.plaid.com" } as const;
 
 const PATHS = new Set([
   "/link/token/create", "/item/public_token/exchange", "/accounts/get", "/item/get",
@@ -6,16 +9,16 @@ const PATHS = new Set([
   "/item/remove", "/webhook_verification_key/get",
 ]);
 
-/** Fixed host and endpoint allowlist; no route can select Production or initiate payments. */
+/** Host from the closed table above and a fixed endpoint allowlist; no route can initiate payments. */
 export async function plaidRequest(path: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  requireBankingSandbox();
+  const environment = requireBankingEnabled();
   if (!PATHS.has(path)) throw new BankingError("BANKING_ENDPOINT_NOT_ALLOWED");
   const clientId = process.env.PLAID_CLIENT_ID;
-  const secret = process.env.PLAID_SANDBOX_SECRET;
+  const secret = environment === "production" ? process.env.PLAID_PRODUCTION_SECRET : process.env.PLAID_SANDBOX_SECRET;
   if (!clientId || !secret) throw new BankingError("BANKING_PLAID_NOT_CONFIGURED", 503);
   let response: Response;
   try {
-    response = await fetch(`https://sandbox.plaid.com${path}`, {
+    response = await fetch(`${HOSTS[environment]}${path}`, {
       method: "POST", headers: { "Content-Type": "application/json", "Plaid-Version": "2020-09-14" },
       body: JSON.stringify({ ...payload, client_id: clientId, secret }),
       signal: AbortSignal.timeout(25_000),

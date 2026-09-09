@@ -1,14 +1,14 @@
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
 import { transaction } from "./store";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled } from "./security";
 import { reviewToday } from "./review-date";
 import { reviewCapacity, runReviewCommand, withReviewLock } from "./review-common";
 import { bankAccountingCurrency, type AccountingAccount } from "./accounting-types";
 import { receiptSetupSchema, type ReceiptSetup, type ReceiptSetupContext, type ReceiptSetupInput } from "./receipts-types";
 
 export async function receiptRead<T>(read: (client: PoolClient) => Promise<T>): Promise<T> {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const client = await getDbPool().connect();
   try { return await transaction(client, async () => { await withReviewLock(client); return read(client); }); }
   finally { client.release(); }

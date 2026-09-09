@@ -1,5 +1,5 @@
 import { selectedAccountRows, saveAccounts } from "./accounts";
-import { BankingError, decryptBankToken, sandboxTokenKey } from "./security";
+import { BankingError, bankingEnvSql, decryptBankToken, bankingTokenKey } from "./security";
 import { plaidRequest } from "./plaid";
 import { connectionRow, transaction, withBankLock } from "./store";
 import { syncBank } from "./sync";
@@ -27,7 +27,7 @@ export async function selectBankAccounts(connectionId: string, accountIds: strin
 }
 
 export async function refreshBank(connectionId: string) {
-  const key = sandboxTokenKey();
+  const key = bankingTokenKey();
   await withBankLock(connectionId, async (client) => {
     const row = await connectionRow(client, connectionId);
     if (!row.access_token_encrypted || row.status === "disconnected") throw new BankingError("BANKING_CONNECTION_DISCONNECTED", 409);
@@ -43,7 +43,7 @@ export async function refreshBank(connectionId: string) {
 }
 
 export async function reconnectBank(connectionId: string) {
-  const key = sandboxTokenKey();
+  const key = bankingTokenKey();
   return withBankLock(connectionId, async (client) => {
     const row = await connectionRow(client, connectionId);
     if (!row.access_token_encrypted || row.status === "disconnected") throw new BankingError("BANKING_CONNECTION_DISCONNECTED", 409);
@@ -62,7 +62,7 @@ export async function reconnectBank(connectionId: string) {
 }
 
 export async function disconnectBank(connectionId: string) {
-  const key = sandboxTokenKey();
+  const key = bankingTokenKey();
   return withBankLock(connectionId, async (client) => {
     const row = await connectionRow(client, connectionId);
     if (row.status === "disconnected") return { status: "disconnected" };
@@ -83,10 +83,10 @@ export async function disconnectBank(connectionId: string) {
 }
 
 export async function mapBankAccount(accountId: string, qbListId: string | null) {
-  sandboxTokenKey();
+  bankingTokenKey();
   const result = await getDbPool().query<{ connection_id: string }>(
     `SELECT a.connection_id FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-     WHERE a.id=$1 AND c.environment='sandbox' AND a.deleted_at IS NULL`, [accountId]);
+     WHERE a.id=$1 AND c.environment=${bankingEnvSql()} AND a.deleted_at IS NULL`, [accountId]);
   const row = result.rows[0];
   if (!row) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
   return withBankLock(row.connection_id, async (client) => transaction(client, async () => {

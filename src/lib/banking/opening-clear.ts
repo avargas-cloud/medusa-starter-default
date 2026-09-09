@@ -1,7 +1,7 @@
 import { assertOpeningClearMapping } from "./opening-clear-mapping";
 import type { PoolClient } from "pg";
 import type { z } from "zod";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { bankId } from "./store";
 import { receiptRead } from "./receipts-setup";
 import { reviewToday } from "./review-date";
@@ -19,7 +19,7 @@ const CANDIDATES_SQL = `SELECT t.id,t.name,t.transaction_date AS day,(-t.amount:
   FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection conn ON conn.id=a.connection_id
   WHERE a.qb_list_id=$1 AND t.transaction_date>=$2 AND t.transaction_date<=$3 AND t.currency='USD' AND t.status='posted'
     AND t.amount::numeric*100=$4::numeric AND t.deleted_at IS NULL AND a.deleted_at IS NULL AND a.is_active AND a.is_selected
-    AND conn.deleted_at IS NULL AND conn.environment='sandbox' AND a.currency='USD' AND a.type='depository'
+    AND conn.deleted_at IS NULL AND conn.environment=${bankingEnvSql()} AND a.currency='USD' AND a.type='depository'
     AND EXISTS(SELECT 1 FROM qb_account mapped WHERE mapped.qb_list_id=a.qb_list_id AND mapped.is_active
       AND mapped.deleted_at IS NULL AND mapped.account_type='Bank' AND mapped.currency IN ('USD','US Dollar'))
     AND NOT EXISTS(SELECT 1 FROM bank_opening_clear c WHERE c.transaction_id=t.id AND c.kind='clear'

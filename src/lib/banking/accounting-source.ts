@@ -1,6 +1,6 @@
 import { OPENING_TRANSACTION_CLAIM_SQL } from "./opening-guards";
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { reviewHash } from "./review-common";
 import { reviewDate, reviewToday } from "./review-date";
 import { bankAccountingCurrency, bankExpenseCents, type AccountingAccount, type AccountingSource } from "./accounting-types";
@@ -36,7 +36,7 @@ export async function accountingSource(client: PoolClient, id: string): Promise<
     LEFT JOIN bank_transaction_review r ON r.transaction_id=t.id AND r.deleted_at IS NULL
     LEFT JOIN bank_review_rule rr ON rr.id=r.rule_id AND rr.deleted_at IS NULL
     LEFT JOIN bank_day_close dc ON dc.day=t.transaction_date AND dc.deleted_at IS NULL
-    WHERE t.id=$1 AND c.environment='sandbox' FOR SHARE OF t,a,c`, [id])).rows[0];
+    WHERE t.id=$1 AND c.environment=${bankingEnvSql()} FOR SHARE OF t,a,c`, [id])).rows[0];
   if (!row) throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
   const accounts = (await client.query<AccountingAccount>(`SELECT qb_list_id AS id,full_name AS name,account_type,currency
     FROM qb_account WHERE qb_list_id=ANY($1::text[]) AND is_active AND deleted_at IS NULL ORDER BY qb_list_id FOR SHARE`,

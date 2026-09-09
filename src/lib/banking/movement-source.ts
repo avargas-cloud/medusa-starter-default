@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { receiptRead } from "./receipts-setup";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { bankAccountingCurrency, bankExpenseCents, type AccountingAccount } from "./accounting-types";
 import { reviewHash } from "./review-common";
 import { completionEvidence } from "./completion-evidence";
@@ -33,7 +33,7 @@ export const listMovementAccounts = () => receiptRead(async client => ({ account
 export async function movementBank(client: PoolClient, id: string, day: string) {
   const bank = (await client.query<{ id: string; qb_list_id: string; review_start_date: string | null }>(`SELECT a.id,a.qb_list_id,a.review_start_date
     FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id WHERE a.id=$1 AND a.is_active AND a.is_selected
-    AND a.currency='USD' AND a.type='depository' AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment='sandbox' FOR SHARE OF a,c`, [id])).rows[0];
+    AND a.currency='USD' AND a.type='depository' AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`, [id])).rows[0];
   const account = bank?.qb_list_id ? (await movementAccounts(client, [bank.qb_list_id]))[0] : undefined;
   if (!bank || !account || account.account_type !== "Bank" || account.currency !== "USD") throw new BankingError("BANKING_MOVEMENT_BANK_INVALID", 409);
   if (!bank.review_start_date || day < bank.review_start_date) throw new BankingError("BANKING_MOVEMENT_BEFORE_CUT", 409);

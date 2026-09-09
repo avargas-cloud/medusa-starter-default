@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { reviewHash } from "./review-common";
 import { reviewDate, reviewToday } from "./review-date";
 import { bankAccountingCurrency } from "./accounting-types";
@@ -17,7 +17,7 @@ async function bankMapping(client: PoolClient, id: string, blockers: string[]) {
     (a.deleted_at IS NULL AND c.deleted_at IS NULL AND a.is_active AND a.is_selected
       AND a.type='depository' AND a.currency='USD') AS valid
     FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-    WHERE a.id=$1 AND c.environment='sandbox' FOR SHARE OF a,c`, [id])).rows[0];
+    WHERE a.id=$1 AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`, [id])).rows[0];
   const bank = account?.qb_list_id ? (await receiptAccounts(client, [account.qb_list_id]))[0] : undefined;
   if (!account?.valid || !bank || bank.account_type !== "Bank" || bankAccountingCurrency(bank.account_type, bank.currency) !== "USD") {
     blockers.push("BANKING_RECEIPT_BANK_MAPPING_INVALID"); return null;

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { runReviewCommand } from "./review-common";
 import { openingAmount, reviewDate, reviewToday } from "./review-date";
 import { applyRulesForAccounts } from "./review-rule-apply";
@@ -30,7 +30,7 @@ export async function saveAccountSetup(actorId: string, accountId: string, key: 
     if (body.review_start_date > reviewToday()) throw new BankingError("BANKING_FUTURE_START_DATE", 400);
     const row = (await client.query<{ setup_revision: number; currency: string | null }>(
       `SELECT a.setup_revision,a.currency FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-       WHERE a.id=$1 AND a.deleted_at IS NULL AND c.environment='sandbox' AND c.deleted_at IS NULL FOR UPDATE OF a`, [accountId])).rows[0];
+       WHERE a.id=$1 AND a.deleted_at IS NULL AND c.environment=${bankingEnvSql()} AND c.deleted_at IS NULL FOR UPDATE OF a`, [accountId])).rows[0];
     if (!row) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
     if (row.setup_revision !== body.expected_revision) throw new BankingError("BANKING_REVIEW_CONFLICT", 409);
     if (!row.currency) throw new BankingError("BANKING_CURRENCY_REQUIRED", 409);

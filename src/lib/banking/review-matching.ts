@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { PAYMENT_ELIGIBLE_SQL, PAYMENT_FINGERPRINT_SQL, LEGACY_PAYMENT_FINGERPRINT_SQL,
   paymentReservedCentsSql, matchesPaymentFingerprint } from "./payment-evidence";
 
@@ -22,7 +22,7 @@ export const MATCH_FROM_SQL = `FROM bank_transaction t JOIN bank_account a ON a.
   JOIN customer_payment mp ON mp.amount::numeric=(-t.amount::numeric)*100 AND upper(mp.currency)=upper(t.currency)
   JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL`;
 export const MATCH_VALID_SQL = `t.deleted_at IS NULL AND a.deleted_at IS NULL
-  AND bc.deleted_at IS NULL AND bc.environment='sandbox'
+  AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}
   AND a.type='depository' AND t.status='posted' AND t.amount::numeric<0
   AND NOT EXISTS(SELECT 1 FROM bank_opening_clear claim WHERE claim.transaction_id=t.id AND claim.kind='clear'
     AND NOT EXISTS(SELECT 1 FROM bank_opening_clear undo WHERE undo.reverses_clear_id=claim.id))
@@ -52,13 +52,13 @@ export async function validateMatchedPayment(client: PoolClient, transactionId: 
 
 export async function matchCandidates(transactionId: string, q: string) {
   if (!bankingConfig().enabled) return { candidates: [], count: 0, supported: false, reason: "BANKING_SANDBOX_ONLY" };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const pool = getDbPool();
   const scope = await pool.query<{ supported: boolean }>(`SELECT
     (a.type='depository' AND t.status='posted' AND t.amount::numeric<0 AND t.currency IS NOT NULL) AS supported
     FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection bc ON bc.id=a.connection_id
     WHERE t.id=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND bc.deleted_at IS NULL AND bc.environment='sandbox'`, [transactionId]);
+      AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`, [transactionId]);
   if (!scope.rows[0]) throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
   if (!scope.rows[0].supported) return { candidates: [], count: 0, supported: false, reason: "BANKING_MATCH_DIRECT_RECEIPTS_ONLY" };
   const result = await pool.query<{ candidates: MatchCandidate[]; count: string }>(`WITH eligible AS (

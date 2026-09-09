@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
+import { bankingLimits, limitCode } from "./limits";
 import { withReviewLock } from "./review-common";
 import { invalidateBankSource } from "./review-source";
 import { applyRulesForAccounts } from "./review-rule-apply";
@@ -202,7 +203,8 @@ export async function applyFeedBatch(
   const total = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM bank_transaction");
   const count = total.rows[0]?.count;
   if (count === undefined) throw new BankingError("BANKING_TRANSACTION_COUNT_FAILED", 503);
-  if (BigInt(count) > 2000n) throw new BankingError("BANKING_SANDBOX_TRANSACTION_LIMIT", 409);
+  const cap = bankingLimits().transactions;
+  if (cap !== null && BigInt(count) > BigInt(cap)) throw new BankingError(limitCode("TRANSACTION"), 409);
   await applyRulesForAccounts(client, accounts.rows.map(row => row.id));
 
   const updated = await client.query(
@@ -211,7 +213,7 @@ export async function applyFeedBatch(
        historical_sync_complete = historical_sync_complete OR ($3::boolean AND $4::boolean),
        last_successful_sync_at = CASE WHEN $3::boolean THEN now() ELSE last_successful_sync_at END,
        last_error_code = NULL, last_error_message = NULL, updated_at = now()
-     WHERE id = $1 AND environment = 'sandbox' AND deleted_at IS NULL`,
+     WHERE id = $1 AND environment=${bankingEnvSql()} AND deleted_at IS NULL`,
     [connectionId, batch.cursor, batch.initialComplete, batch.historicalComplete],
   );
   if (updated.rowCount !== 1) throw new BankingError("BANKING_CONNECTION_MISSING", 409);

@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { DEPOSIT_SELECT_SQL } from "./deposit-projection";
 import type { BankDeposit } from "./deposit-types";
 import { DEPOSIT_PAYMENT_ELIGIBLE_SQL, NO_DIRECT_RESERVATION_SQL, PAYMENT_FINGERPRINT_SQL, LEGACY_PAYMENT_FINGERPRINT_SQL, depositReservedSql } from "./payment-evidence";
@@ -20,7 +20,7 @@ export const DEPOSIT_RECEIPT_SQL = `mp.id,mp.display_id,mp.customer_id,
 export async function depositAccount(client: Reader, id: string) {
   const result = await client.query<{ currency: string; review_start_date: string | null }>(`SELECT upper(a.currency) AS currency,a.review_start_date
     FROM bank_account a JOIN bank_connection bc ON bc.id=a.connection_id WHERE a.id=$1 AND a.deleted_at IS NULL
-    AND bc.deleted_at IS NULL AND bc.environment='sandbox' AND a.type='depository' AND a.currency IS NOT NULL`, [id]);
+    AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()} AND a.type='depository' AND a.currency IS NOT NULL`, [id]);
   if (!result.rows[0]) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
   if (!result.rows[0].review_start_date) throw new BankingError("BANKING_ACCOUNT_SETUP_REQUIRED", 409);
   return result.rows[0];
@@ -28,20 +28,20 @@ export async function depositAccount(client: Reader, id: string) {
 export async function loadBankDeposit(client: Reader, id: string): Promise<BankDeposit> {
   const result = await client.query<BankDeposit>(`SELECT ${DEPOSIT_SELECT_SQL} FROM bank_deposit d
     JOIN bank_account a ON a.id=d.account_id JOIN bank_connection bc ON bc.id=a.connection_id
-    WHERE d.id=$1 AND d.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment='sandbox'`, [id]);
+    WHERE d.id=$1 AND d.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`, [id]);
   if (!result.rows[0]) throw new BankingError("BANKING_DEPOSIT_NOT_FOUND", 404);
   return result.rows[0];
 }
 export async function readBankDeposit(id: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   return { deposit: await loadBankDeposit(getDbPool(), id) };
 }
 export async function listBankDeposits(input: { account_id?: string; q?: string; status?: string }) {
   if (!bankingConfig().enabled) return { deposits: [], count: 0 };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<BankDeposit>(`SELECT ${DEPOSIT_SELECT_SQL} FROM bank_deposit d
     JOIN bank_account a ON a.id=d.account_id JOIN bank_connection bc ON bc.id=a.connection_id
-    WHERE d.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment='sandbox'
+    WHERE d.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}
       AND ($1::text IS NULL OR d.account_id=$1) AND ($2::text IS NULL OR d.status=$2)
       AND ($3::text='' OR concat_ws(' ',d.reference,d.memo) ILIKE '%'||$3||'%') ORDER BY d.deposit_date DESC,d.id`,
   [input.account_id ?? null, input.status ?? null, input.q ?? ""]);
@@ -49,7 +49,7 @@ export async function listBankDeposits(input: { account_id?: string; q?: string;
 }
 export async function depositCandidates(input: { account_id: string; q?: string; deposit_id?: string }) {
   if (!bankingConfig().enabled) return { candidates: [], count: 0 };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const pool = getDbPool();
   const account = await depositAccount(pool, input.account_id);
   if (input.deposit_id) await loadBankDeposit(pool, input.deposit_id);

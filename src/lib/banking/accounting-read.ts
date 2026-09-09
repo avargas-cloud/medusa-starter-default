@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
 import { transaction } from "./store";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { withReviewLock } from "./review-common";
 import { accountingSource } from "./accounting-source";
 import { expenseCandidates } from "./accounting-candidates";
@@ -37,7 +37,7 @@ export async function accountingContext(client: PoolClient, id: string) {
 }
 
 export async function readAccountingTransaction(id: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const client = await getDbPool().connect();
   try { return await transaction(client, async () => {
     await withReviewLock(client);
@@ -47,7 +47,7 @@ export async function readAccountingTransaction(id: string) {
 
 export type AccountingFilters = { account_id?: string; from?: string; to?: string; offset: number; limit: number };
 export async function listAccountingTransactions(filters: AccountingFilters) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const client = await getDbPool().connect();
   try { return await transaction(client, async () => {
     await withReviewLock(client);
@@ -56,7 +56,7 @@ export async function listAccountingTransactions(filters: AccountingFilters) {
       SELECT t.id,t.amount,t.transaction_date FROM bank_transaction t
         JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
       WHERE ($1::text IS NULL OR a.id=$1) AND t.deleted_at IS NULL AND a.deleted_at IS NULL AND c.deleted_at IS NULL
-        AND c.environment='sandbox' AND ($2::text IS NULL OR t.transaction_date >= $2)
+        AND c.environment=${bankingEnvSql()} AND ($2::text IS NULL OR t.transaction_date >= $2)
         AND ($3::text IS NULL OR t.transaction_date <= $3)
     ), paged AS (SELECT * FROM matching ORDER BY transaction_date DESC,id DESC LIMIT $4 OFFSET $5),
     projected AS (SELECT p.*,d.source_hash AS draft_hash,e.source_hash AS posting_hash,

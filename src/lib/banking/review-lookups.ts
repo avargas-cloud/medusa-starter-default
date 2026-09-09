@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 
 export type Category = { id: string; name: string; account_type: string };
 export type Counterparty = { id: string; type: "vendor" | "customer"; name: string };
@@ -12,7 +12,7 @@ const PARTY_SQL = `SELECT id,'vendor'::text AS type,full_name AS name FROM qb_ve
 const USAGE_FROM = `FROM bank_transaction_review r JOIN bank_transaction t ON t.id=r.transaction_id
   JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
   WHERE r.deleted_at IS NULL AND r.status<>'excluded' AND t.deleted_at IS NULL
-    AND t.status<>'removed' AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment='sandbox'`;
+    AND t.status<>'removed' AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()}`;
 
 export async function validateCategory(client: PoolClient, listId: string): Promise<Category> {
   const result = await client.query<Category>(`SELECT qb_list_id AS id,full_name AS name,account_type
@@ -39,7 +39,7 @@ export async function validateCounterparty(client: PoolClient, type: "vendor" | 
 
 export async function lookupAccounts(q: string) {
   if (!bankingConfig().enabled) return { accounts: [], count: 0 };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<{ accounts: Category[]; count: string }>(`WITH usage_counts AS (
     SELECT r.category_list_id,COUNT(*)::integer AS usage_count,MAX(r.updated_at) AS last_used
     ${USAGE_FROM} AND r.mode='categorize' AND r.category_list_id IS NOT NULL GROUP BY r.category_list_id
@@ -58,7 +58,7 @@ export async function lookupAccounts(q: string) {
 
 export async function lookupParties(q: string) {
   if (!bankingConfig().enabled) return { parties: [], count: 0 };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<{ parties: Counterparty[]; count: string }>(`WITH usage_counts AS (
     SELECT r.counterparty_type,r.counterparty_id,COUNT(*)::integer AS usage_count,MAX(r.updated_at) AS last_used
     ${USAGE_FROM} AND r.counterparty_id IS NOT NULL GROUP BY r.counterparty_type,r.counterparty_id

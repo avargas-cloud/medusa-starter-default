@@ -1,7 +1,7 @@
 import { openingClearProjection } from "./opening-guards";
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { transaction } from "./store";
 import { stableReviewHash, withReviewLock } from "./review-common";
 import { reviewDate, reviewToday } from "./review-date";
@@ -69,19 +69,19 @@ export async function loadDailyInputs(client: PoolClient, date: string) {
     a.opening_book_balance,a.setup_revision,c.historical_sync_complete AS history_complete,
     c.last_successful_sync_at AS last_synced_at,c.status AS connection_status
     FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-    WHERE a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment='sandbox'
+    WHERE a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()}
     ORDER BY a.connection_id,a.name,a.id`)).rows;
   const rows = (await client.query<BankTransactionView>(`SELECT ${REVIEW_SELECT_SQL}
     FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id
     JOIN bank_connection c ON c.id=a.connection_id ${REVIEW_JOINS}
     WHERE t.transaction_date=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND c.deleted_at IS NULL AND c.environment='sandbox' ORDER BY t.account_id,t.id`, [date])).rows;
+      AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} ORDER BY t.account_id,t.id`, [date])).rows;
   const attachments = (await client.query<AttachmentEvidence>(`SELECT att.id,att.transaction_id,
     att.original_name,att.mime_type,att.size_bytes,att.sha256,att.uploaded_by
     FROM bank_review_attachment att JOIN bank_transaction t ON t.id=att.transaction_id
     JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
     WHERE t.transaction_date=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND c.deleted_at IS NULL AND c.environment='sandbox' AND att.deleted_at IS NULL
+      AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} AND att.deleted_at IS NULL
       AND att.detached_at IS NULL ORDER BY att.id`, [date])).rows;
   // SUM in numeric preserves cents and separate currencies; no attachment/event join multiplies money.
   const totals = (await client.query<DailyTotal & { account_id: string }>(`SELECT t.account_id,t.currency,
@@ -90,7 +90,7 @@ export async function loadDailyInputs(client: PoolClient, date: string) {
     SUM(-t.amount::numeric)::text AS net FROM bank_transaction t
     JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
     WHERE t.transaction_date=$1 AND t.status='posted' AND t.deleted_at IS NULL
-      AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment='sandbox'
+      AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()}
       AND t.currency IS NOT NULL GROUP BY t.account_id,t.currency ORDER BY t.account_id,t.currency`, [date])).rows;
   const blockers: string[] = [];
   if (date > reviewToday()) blockers.push("Future days cannot be closed.");
@@ -129,7 +129,7 @@ export async function loadDailyInputs(client: PoolClient, date: string) {
 }
 
 export async function readDailyReview(date: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   if (!reviewDate.safeParse(date).success) throw new BankingError("BANKING_DATE_INVALID", 400);
   const client = await getDbPool().connect();
   try {

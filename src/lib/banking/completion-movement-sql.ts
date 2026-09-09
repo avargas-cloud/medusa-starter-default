@@ -1,3 +1,4 @@
+import { bankingEnvSql } from "./security";
 import { movementExistingExpenseSql } from "./movement-existing-expense";
 
 /** Deferred V11 contract: a balanced journal must also represent its persisted typed document. */
@@ -29,7 +30,7 @@ BEGIN
  SELECT ba.qb_list_id INTO bank_list FROM bank_account ba JOIN bank_connection c ON c.id=ba.connection_id
    JOIN qb_account q ON q.qb_list_id=ba.qb_list_id WHERE ba.id=p->>'bank_account_id' AND ba.deleted_at IS NULL
    AND ba.is_active AND ba.is_selected AND ba.type='depository' AND ba.currency='USD' AND ba.review_start_date<=p->>'day'
-   AND c.environment='sandbox' AND c.deleted_at IS NULL AND q.is_active AND q.deleted_at IS NULL
+   AND c.environment=${bankingEnvSql()} AND c.deleted_at IS NULL AND q.is_active AND q.deleted_at IS NULL
    AND q.account_type='Bank' AND q.currency IN ('USD','US Dollar');
  IF bank_list IS NULL THEN RAISE EXCEPTION 'BANKING_MOVEMENT_BANK_INVALID'; END IF;
  SELECT sha256,version INTO doc_sha,doc_version FROM bank_evidence_document WHERE id=p->>'evidence_id' AND deleted_at IS NULL;
@@ -42,7 +43,7 @@ BEGIN
    SELECT ba.qb_list_id INTO destination_list FROM bank_account ba JOIN bank_connection c ON c.id=ba.connection_id
      JOIN qb_account q ON q.qb_list_id=ba.qb_list_id WHERE ba.id=p->>'destination_bank_account_id'
      AND ba.deleted_at IS NULL AND ba.is_active AND ba.is_selected AND ba.type='depository' AND ba.currency='USD'
-     AND ba.review_start_date<=e.day AND c.environment='sandbox' AND c.deleted_at IS NULL
+     AND ba.review_start_date<=e.day AND c.environment=${bankingEnvSql()} AND c.deleted_at IS NULL
      AND q.is_active AND q.deleted_at IS NULL AND q.account_type='Bank' AND q.currency IN ('USD','US Dollar');
    IF allocations<>0 OR destination_list IS NULL OR destination_list=bank_list
      OR NOT EXISTS(SELECT 1 FROM qb_account WHERE qb_list_id=p->>'transit_account_list_id' AND is_active

@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { decodeProtectedHeader, importJWK, jwtVerify, type JWK } from "jose";
 import { getDbPool } from "../../api/utils/db-pool";
-import { BankingError, bankingErrorCode, requireBankingSandbox } from "./security";
+import { BankingError, bankingConfig, bankingEnvSql, bankingErrorCode, requireBankingEnabled } from "./security";
+import { bankingLimits, limitCode } from "./limits";
 import { object, plaidRequest, string } from "./plaid";
 import { bankId, transaction } from "./store";
 
@@ -26,9 +27,9 @@ export async function verifyBankWebhook(raw: Buffer, signature: string,
 }
 
 export async function receiveBankWebhook(raw: Buffer, signature: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const payload = await verifyBankWebhook(raw, signature);
-  if (payload.environment !== "sandbox") throw new BankingError("BANKING_WEBHOOK_ENVIRONMENT_MISMATCH", 400);
+  if (payload.environment !== bankingConfig().environment) throw new BankingError("BANKING_WEBHOOK_ENVIRONMENT_MISMATCH", 400);
   const itemId = string(payload.item_id);
   const eventType = `${string(payload.webhook_type)}:${string(payload.webhook_code)}`;
   const digest = createHash("sha256").update(signature).update(raw).digest("hex");
@@ -38,11 +39,14 @@ export async function receiveBankWebhook(raw: Buffer, signature: string) {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended('banking-sandbox-cap', 7241))");
       const duplicate = await client.query("SELECT id FROM bank_webhook_event WHERE event_digest=$1", [digest]);
       if (duplicate.rowCount) return;
-      const count = await client.query<{ count: string }>("SELECT count(*) FROM bank_webhook_event");
-      if (Number(count.rows[0]?.count) >= 2000) throw new BankingError("BANKING_SANDBOX_WEBHOOK_LIMIT", 409);
+      const cap = bankingLimits().webhookEvents;
+      if (cap !== null) {
+        const count = await client.query<{ count: string }>("SELECT count(*) FROM bank_webhook_event");
+        if (Number(count.rows[0]?.count) >= cap) throw new BankingError(limitCode("WEBHOOK"), 409);
+      }
       await client.query(`INSERT INTO bank_webhook_event(id,provider,environment,connection_id,event_digest,event_type,payload,received_at)
-        VALUES($1,'plaid','sandbox',(SELECT id FROM bank_connection WHERE provider_item_id=$2
-          AND environment='sandbox' AND deleted_at IS NULL),$3,$4,$5::jsonb,now())`,
+        VALUES($1,'plaid',${bankingEnvSql()},(SELECT id FROM bank_connection WHERE provider_item_id=$2
+          AND environment=${bankingEnvSql()} AND deleted_at IS NULL),$3,$4,$5::jsonb,now())`,
       [bankId("bwevt"), itemId, digest, eventType, JSON.stringify(payload)]);
     });
   } finally { client.release(); }
@@ -52,7 +56,7 @@ export async function receiveBankWebhook(raw: Buffer, signature: string) {
 
 /** A durable inbox makes a crash after acknowledgement recoverable. */
 export async function drainBankWebhooks() {
-  requireBankingSandbox();
+  requireBankingEnabled();
   for (let i = 0; i < 50; i++) {
     const client = await getDbPool().connect();
     let eventId: string | undefined;
@@ -60,7 +64,7 @@ export async function drainBankWebhooks() {
       const processed = await transaction(client, async () => {
         const result = await client.query<{ id: string; connection_id: string | null; event_type: string; payload: Record<string, unknown> }>(
           `SELECT id,connection_id,event_type,payload FROM bank_webhook_event
-           WHERE environment='sandbox' AND status IN ('pending','failed') AND attempts<6
+           WHERE environment=${bankingEnvSql()} AND status IN ('pending','failed') AND attempts<6
            AND (status='pending' OR updated_at<now()-interval '1 minute')
            ORDER BY received_at,id FOR UPDATE SKIP LOCKED LIMIT 1`);
         const event = result.rows[0];
@@ -68,7 +72,7 @@ export async function drainBankWebhooks() {
         eventId = event.id;
         const itemId = typeof event.payload.item_id === "string" ? event.payload.item_id : "";
         const connection = await client.query<{ id: string }>(`SELECT id FROM bank_connection
-          WHERE provider_item_id=$1 AND environment='sandbox' AND deleted_at IS NULL`, [itemId]);
+          WHERE provider_item_id=$1 AND environment=${bankingEnvSql()} AND deleted_at IS NULL`, [itemId]);
         const connectionId = connection.rows[0]?.id;
         if (!connectionId) throw new BankingError("BANKING_WEBHOOK_ITEM_UNKNOWN", 409);
         // Same key as the session lock held by sync/actions. If busy, commit

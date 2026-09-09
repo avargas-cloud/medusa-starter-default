@@ -2,12 +2,13 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { saveAccounts } from "./accounts";
 import { fetchFeedBatch } from "./feed";
 import { nullableString, object, plaidRequest } from "./plaid";
-import { BankingError, bankingErrorCode, decryptBankToken, requireBankingSandbox, sandboxTokenKey } from "./security";
+import { BankingError, bankingErrorCode, decryptBankToken, requireBankingEnabled, bankingTokenKey, bankingEnvSql } from "./security";
 import { applyFeedBatch } from "./sync-store";
+import { bankingLimits, limitCode } from "./limits";
 import { bankId, connectionRow, transaction, withBankLock } from "./store";
 
 export async function syncBank(connectionId: string, trigger: "initial" | "manual" | "scheduled" | "webhook" = "scheduled") {
-  const key = sandboxTokenKey();
+  const key = bankingTokenKey();
   return withBankLock(connectionId, async (client) => {
     const row = await connectionRow(client, connectionId);
     if (row.status === "disconnected" || !row.access_token_encrypted) throw new BankingError("BANKING_CONNECTION_DISCONNECTED", 409);
@@ -17,8 +18,11 @@ export async function syncBank(connectionId: string, trigger: "initial" | "manua
     const runId = bankId("bsync");
     await transaction(client, async () => {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended('banking-sandbox-cap', 7241))");
-      const count = await client.query<{ count: string }>("SELECT count(*) FROM bank_sync_run");
-      if (Number(count.rows[0]?.count) >= 100) throw new BankingError("BANKING_SANDBOX_RUN_LIMIT", 409);
+      const cap = bankingLimits().syncRuns;
+      if (cap !== null) {
+        const count = await client.query<{ count: string }>("SELECT count(*) FROM bank_sync_run");
+        if (Number(count.rows[0]?.count) >= cap) throw new BankingError(limitCode("RUN"), 409);
+      }
       await client.query(`UPDATE bank_sync_run SET status='failed',finished_at=now(),error_code='BANKING_SYNC_INTERRUPTED'
         WHERE connection_id=$1 AND status='running'`, [connectionId]);
       await client.query(`INSERT INTO bank_sync_run(id,connection_id,trigger,status,started_at,cursor_before)
@@ -60,9 +64,9 @@ export async function syncBank(connectionId: string, trigger: "initial" | "manua
 
 /** Recovery polls existing Plaid data; it does not charge a /transactions/refresh per tick. */
 export async function syncPendingBanks() {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const candidates = await getDbPool().query<{ id: string }>(`SELECT c.id FROM bank_connection c
-    WHERE c.environment='sandbox' AND c.deleted_at IS NULL AND c.access_token_encrypted IS NOT NULL
+    WHERE c.environment=${bankingEnvSql()} AND c.deleted_at IS NULL AND c.access_token_encrypted IS NOT NULL
       AND c.status IN ('active','error') AND EXISTS(SELECT 1 FROM bank_account a
         WHERE a.connection_id=c.id AND a.is_selected AND a.is_active)
       AND (c.sync_requested_at IS NOT NULL OR NOT c.historical_sync_complete

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
 import { bankId, transaction } from "./store";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled } from "./security";
 
 export async function withReviewLock(client: PoolClient): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended('banking-review', 7241))");
@@ -55,7 +55,7 @@ export type ReviewCommand = {
 /** Receipt and business effects commit together; retries never repeat mutations. */
 export async function runReviewCommand<T>(command: ReviewCommand,
   callback: (client: PoolClient) => Promise<T>): Promise<T> {
-  requireBankingSandbox();
+  requireBankingEnabled();
   if (typeof command.key !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(command.key)) {
     throw new BankingError("BANKING_IDEMPOTENCY_KEY_REQUIRED");
   }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
 import { bankId as bankIdSchema } from "../../api/admin/banking/_lib/http";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { appendReviewEvent, runReviewCommand, stableReviewHash, withReviewLock } from "./review-common";
 import { validateCategory, validateCounterparty } from "./review-lookups";
 import { applyRuleChanges, planRuleChanges, type ReviewRule } from "./review-rule-apply";
@@ -28,7 +28,7 @@ async function prepare(client: PoolClient, actorId: string, input: RuleInput) {
   if (existing && existing.version !== input.expected_version) throw new BankingError("BANKING_REVIEW_CONFLICT", 409);
   const account = (await client.query<{ currency: string | null; review_start_date: string | null }>(
     `SELECT a.currency,a.review_start_date FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-     WHERE a.id=$1 AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment='sandbox'`, [input.account_id])).rows[0];
+     WHERE a.id=$1 AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()}`, [input.account_id])).rows[0];
   if (!account) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
   if (!account.review_start_date) throw new BankingError("BANKING_SETUP_REQUIRED", 409);
   if (account.currency?.toUpperCase() !== input.currency) throw new BankingError("BANKING_CURRENCY_MISMATCH", 409);
@@ -50,7 +50,7 @@ async function prepare(client: PoolClient, actorId: string, input: RuleInput) {
 }
 
 export async function listReviewRules() {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const rules = (await getDbPool().query(`SELECT r.*,q.full_name AS category_name,q.account_type,
     a.name AS account_name FROM bank_review_rule r JOIN bank_account a ON a.id=r.account_id
     LEFT JOIN qb_account q ON q.qb_list_id=r.category_list_id AND q.deleted_at IS NULL
@@ -59,7 +59,7 @@ export async function listReviewRules() {
 }
 
 export async function previewReviewRule(actorId: string, input: RuleInput) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const client = await getDbPool().connect();
   try {
     return await transaction(client, async () => {

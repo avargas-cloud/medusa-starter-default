@@ -3,7 +3,7 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { bankId } from "./store";
 import { reviewCapacity, runReviewCommand } from "./review-common";
 import { validateReviewAttachment } from "./review-attachments";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled } from "./security";
 import { openingEvidenceSchema, type OpeningEvidence } from "./opening-types";
 
 export const OPENING_EVIDENCE_COLUMNS = "id,original_name,mime_type,size_bytes,sha256,uploaded_by,created_at";
@@ -20,7 +20,7 @@ export async function addOpeningEvidence(actorId: string, key: string, input: { 
   });
 }
 export async function downloadOpeningEvidence(id: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const evidence = (await getDbPool().query<OpeningEvidence & { content_base64: string }>(`SELECT ${OPENING_EVIDENCE_COLUMNS},
     content_base64 FROM bank_opening_evidence WHERE id=$1 AND deleted_at IS NULL`, [id])).rows[0];
   if (!evidence) throw new BankingError("BANKING_OPENING_EVIDENCE_NOT_FOUND", 404);

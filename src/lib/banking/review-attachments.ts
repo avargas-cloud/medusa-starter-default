@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { getDbPool } from "../../api/utils/db-pool";
-import { BankingError, requireBankingSandbox } from "./security";
+import { BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { reviewCapacity, runReviewCommand } from "./review-common";
 import { loadReviewContext, persistReview } from "./review-core";
 import type { ReviewVersions } from "./review-types";
@@ -81,12 +81,12 @@ export async function detachReviewAttachment(attachmentId: string, actorId: stri
 }
 
 export async function downloadReviewAttachment(id: string) {
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<ReviewAttachment & { content_base64: string }>(`SELECT
     att.id,att.transaction_id,att.original_name,att.mime_type,att.size_bytes,att.sha256,att.uploaded_by,
     att.created_at,att.detached_at,att.content_base64 FROM bank_review_attachment att
     JOIN bank_transaction t ON t.id=att.transaction_id JOIN bank_connection c ON c.id=t.connection_id
-    WHERE att.id=$1 AND att.deleted_at IS NULL AND c.environment='sandbox'`, [id]);
+    WHERE att.id=$1 AND att.deleted_at IS NULL AND c.environment=${bankingEnvSql()}`, [id]);
   const attachment = result.rows[0];
   if (!attachment) throw new BankingError("BANKING_ATTACHMENT_NOT_FOUND", 404);
   const bytes = validateReviewAttachment({ name: attachment.original_name, mime_type: attachment.mime_type,

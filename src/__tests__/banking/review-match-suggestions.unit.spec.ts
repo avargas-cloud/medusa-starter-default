@@ -7,6 +7,8 @@ jest.mock("../../lib/banking/security", () => ({
   ...jest.requireActual("../../lib/banking/security"),
   bankingConfig: () => ({ enabled: true, environment: "sandbox" }),
   requireBankingSandbox: jest.fn(),
+  requireBankingEnabled: jest.fn(() => "sandbox"),
+  bankingEnvSql: () => "'sandbox'",
 }));
 
 const sourceHash = "a".repeat(32);

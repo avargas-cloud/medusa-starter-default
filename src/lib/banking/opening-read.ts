@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { reviewHash } from "./review-common";
 import { reviewToday } from "./review-date";
 import { receiptAccounts, receiptMapping, receiptRead, receiptSetup } from "./receipts-setup";
@@ -34,7 +34,7 @@ export async function openingMapping(client: PoolClient, kind: "bank" | "clearin
   }
   const bank = (await client.query<{ qb_list_id: string }>(`SELECT a.qb_list_id FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
     WHERE a.id=$1 AND a.is_active AND a.is_selected AND a.currency='USD' AND a.type='depository'
-      AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment='sandbox' FOR SHARE OF a,c`, [accountId])).rows[0];
+      AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`, [accountId])).rows[0];
   const account = bank?.qb_list_id ? (await receiptAccounts(client, [bank.qb_list_id]))[0] : null;
   if (!account || account.account_type !== "Bank" || bankAccountingCurrency(account.account_type, account.currency) !== "USD") {
     throw new BankingError("BANKING_OPENING_ACCOUNT_INVALID", 409);

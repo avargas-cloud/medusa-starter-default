@@ -12,7 +12,13 @@ export async function runCompletionRegressions() {
   const suites=[
     ["tests/e2e-bank-openings-sandbox.ts",/PASS bank openings integration: (\d+) checks/,198],
     ["tests/e2e-bank-receipts-sandbox.ts",/PASS bank receipts integration: (\d+) checks/,292],
-    ["tests/e2e-bank-accounting-sandbox.ts",/PASS bank accounting integration: (\d+) checks/,197],
+    // 193, no 197: la suite tiene una CARRERA real entre contabilizacion y cierre de mes.
+    // Cuando gana el cierre corren 4 checks extra (la contabilizacion posterior a la
+    // reapertura) y reporta 197; cuando gana la contabilizacion reporta 193. Las dos ramas
+    // PASAN — documentado en BANK_ACCOUNTING_FOUNDATION_PLAN.md:203/210 ("193 y 197 controles
+    // PASS ... Ambas secuencias pasan") y BANK_RECEIPTS_ACCOUNTING_PLAN.md:152. El piso estaba
+    // fijado en el numero de la rama afortunada, asi que rechazaba corridas verdes.
+    ["tests/e2e-bank-accounting-sandbox.ts",/PASS bank accounting integration: (\d+) checks/,193],
     ["verify/verify-bank-deposits.ts",/PASS bank deposits integration: (\d+) checks/,54],
     ["tests/e2e-bank-matches-sandbox.ts",/PASS bank matches: (\d+) checks/,60],
   ] as const;

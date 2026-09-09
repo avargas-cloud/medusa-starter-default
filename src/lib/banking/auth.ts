@@ -1,6 +1,7 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { POS_USER_MODULE } from "../../modules/pos-user";
 import { BankingError } from "./security";
+import { assertBankingControl } from "./control";
 
 /** Every cashier is a Medusa user; user authentication alone is insufficient. */
 export async function bankIdentity(req: AuthenticatedMedusaRequest) {
@@ -25,5 +26,7 @@ export async function bankAccess(req: AuthenticatedMedusaRequest, manage = false
   if (!canReadAccounting || (manage && !canManage)) {
     throw new BankingError("BANKING_ACCESS_DENIED", 403);
   }
+  // Kill switch: reads keep working so the pause is visible; every mutating request stops here.
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method ?? "")) await assertBankingControl();
   return { actorId, canManage };
 }

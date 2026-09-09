@@ -1,3 +1,4 @@
+import { bankingEnvSql } from "./security";
 import { movementExistingExpenseSql } from "./movement-existing-expense";
 
 /** V12 SQL independently verifies the economic source and each typed settlement allocation. */
@@ -82,7 +83,7 @@ BEGIN
  SELECT ba.qb_list_id INTO bank_list FROM bank_account ba JOIN bank_connection c ON c.id=ba.connection_id
    JOIN qb_account qb ON qb.qb_list_id=ba.qb_list_id WHERE ba.id=payload->>'bank_account_id' AND ba.deleted_at IS NULL
    AND ba.is_active AND ba.is_selected AND ba.type='depository' AND ba.currency='USD' AND ba.review_start_date<=e.day
-   AND c.environment='sandbox' AND c.deleted_at IS NULL AND qb.is_active AND qb.deleted_at IS NULL
+   AND c.environment=${bankingEnvSql()} AND c.deleted_at IS NULL AND qb.is_active AND qb.deleted_at IS NULL
    AND qb.account_type='Bank' AND qb.currency IN ('USD','US Dollar');
  IF bank_list IS NULL OR (net<>0 AND NOT EXISTS(SELECT 1 FROM bank_journal_line WHERE entry_id=e.id AND role='bank'
    AND account_list_id=bank_list AND debit_cents=GREATEST(net,0) AND credit_cents=GREATEST(-net,0)))

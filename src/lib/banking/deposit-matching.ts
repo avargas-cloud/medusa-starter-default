@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingSandbox } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
 import { depositAccount, loadBankDeposit } from "./deposit-read";
 import { validateDepositFee, validateDepositFunding } from "./deposit-validation";
 import { DEPOSIT_SELECT_SQL, DEPOSIT_SOURCE_HASH_SQL, DEPOSIT_STALE_SQL } from "./deposit-projection";
@@ -10,7 +10,7 @@ export const DEPOSIT_MATCH_FROM_SQL = `FROM bank_transaction t JOIN bank_account
   JOIN bank_connection bc ON bc.id=a.connection_id JOIN bank_deposit d ON d.account_id=t.account_id
     AND d.currency=upper(t.currency) AND d.net_amount::numeric=-t.amount::numeric`;
 export const DEPOSIT_MATCH_VALID_SQL = `t.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL
-  AND bc.environment='sandbox' AND a.type='depository' AND t.status='posted' AND t.amount::numeric<0
+  AND bc.environment=${bankingEnvSql()} AND a.type='depository' AND t.status='posted' AND t.amount::numeric<0
   AND NOT EXISTS(SELECT 1 FROM bank_opening_clear claim WHERE claim.transaction_id=t.id AND claim.kind='clear'
     AND NOT EXISTS(SELECT 1 FROM bank_opening_clear undo WHERE undo.reverses_clear_id=claim.id))
   AND d.deleted_at IS NULL AND d.status='ready' AND NOT ${DEPOSIT_STALE_SQL}
@@ -41,7 +41,7 @@ export async function validateMatchedDeposit(client: PoolClient, transactionId: 
 }
 export async function transactionDepositCandidates(id: string) {
   if (!bankingConfig().enabled) return { deposits: [], count: 0 };
-  requireBankingSandbox();
+  requireBankingEnabled();
   const result = await getDbPool().query<BankDeposit>(`SELECT ${DEPOSIT_SELECT_SQL} ${DEPOSIT_MATCH_FROM_SQL}
     WHERE t.id=$1 AND ${DEPOSIT_MATCH_VALID_SQL} ORDER BY abs(d.deposit_date::date-t.transaction_date::date),d.id`, [id]);
   return { deposits: result.rows, count: result.rows.length };

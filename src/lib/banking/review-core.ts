@@ -2,7 +2,7 @@ import { assertNoOpeningClear } from "./opening-guards";
 import { assertDepositSourceHash, validateMatchedDeposit } from "./deposit-matching";
 import type { PoolClient } from "pg";
 import { bankId } from "./store";
-import { BankingError } from "./security";
+import { BankingError, bankingEnvSql } from "./security";
 import { appendReviewEvent, requireOpenReviewDay, reviewCapacity, runReviewCommand } from "./review-common";
 import { validateCategory, validateCounterparty } from "./review-lookups";
 import { assertMatchSourceHash, validateMatchedPayment } from "./review-matching";
@@ -15,7 +15,7 @@ export async function loadReviewContext(client: PoolClient, id: string, versions
     a.review_start_date,a.opening_bank_balance,a.opening_reference FROM bank_transaction t
     JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
     WHERE t.id=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND c.deleted_at IS NULL AND c.environment='sandbox' FOR UPDATE OF t`, [id]);
+      AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} FOR UPDATE OF t`, [id]);
   const tx = result.rows[0];
   if (!tx) throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
   const previous = await client.query<Review>(`SELECT ${REVIEW_COLUMNS}
