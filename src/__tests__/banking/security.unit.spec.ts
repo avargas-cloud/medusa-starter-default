@@ -172,8 +172,12 @@ function requestFixture(
   const query = jest.fn().mockResolvedValue({
     rows: [
       {
-        in_pos_user: options.staff !== false,
-        pos_is_admin: false,
+        // `staff: false` significaba "pos_user.is_admin", que hasta el
+        // 2026-09-09 era la forma de ser admin. Esa regla se eliminó: ahora
+        // TODO usuario vivo tiene fila (Migration20260910010000) y admin es el
+        // flag explícito `pos_user.is_admin`. El fixture modela eso.
+        in_pos_user: true,
+        pos_is_admin: options.staff === false,
         has_grant: options.accounting === true,
       },
     ],
@@ -204,7 +208,7 @@ describe("bank access requires an accounting grant, not merely a Medusa admin", 
     expect(retrieveUser).toHaveBeenCalledWith("usr_bank_unit");
     expect(query.mock.calls[0]?.[1]).toEqual(["usr_bank_unit", "accountant@example.invalid"]);
   });
-  it.each([false, true])("Accounting + Admin (fuera de pos_user) habilita lectura Y manejo con manage=%s", async (manage) => {
+  it.each([false, true])("Accounting + Admin (pos_user.is_admin) habilita lectura Y manejo con manage=%s", async (manage) => {
     const { req } = requestFixture({ accounting: true, staff: false });
     await expect(bankAccess(req, manage)).resolves.toEqual({ actorId: "usr_bank_unit", canManage: true });
   });

@@ -10,10 +10,13 @@ const saved: Record<string, string | undefined> = {};
 const keys = ["ECOPOWERTECH_ENV", "DATABASE_URL", "POS_OWNER_EMAILS"] as const;
 
 /**
- * REGLA NUEVA (2026-09-10): `accounting` ahora significa "tiene grant vivo en
- * `pos_accounting_grant`", y `admin` (ausente de `pos_user`) ya NO otorga nada
- * — esa era exactamente la regla que se eliminó, así que los casos que la
- * afirmaban se reescribieron para exigir lo contrario.
+ * REGLA NUEVA (2026-09-10): `accounting` significa "tiene grant vivo en
+ * `pos_accounting_grant`". Y `admin` YA NO se modela como "ausente de
+ * `pos_user`": el operador eliminó esa regla el 2026-09-09 porque un permiso
+ * que se cumple por AUSENCIA no se audita ni se revoca. Admin es ahora el
+ * dato explícito `pos_user.is_admin`, así que el fixture pone la FILA con el
+ * flag en vez de quitar la fila (Migration20260910010000 hizo lo mismo en la
+ * base: le dio fila a todo usuario vivo).
  *
  * La primera consulta que dispara `reviewAccess` es la de la identidad
  * (`access-level.ts`); la segunda, si llega, es la de `bank_review_permission`.
@@ -21,7 +24,7 @@ const keys = ["ECOPOWERTECH_ENV", "DATABASE_URL", "POS_OWNER_EMAILS"] as const;
 function request(accounting = false, admin = false): AuthenticatedMedusaRequest {
   query.mockImplementation(async (sql: string) => {
     if (sql.includes("bank_review_permission")) return grains;
-    return { rows: [{ in_pos_user: !admin, pos_is_admin: false, has_grant: accounting }] };
+    return { rows: [{ in_pos_user: true, pos_is_admin: admin, has_grant: accounting }] };
   });
   return { auth_context: { actor_id: "staff-fixture" }, scope: {
     resolve: () => ({ retrieveUser: async () => ({ email: "staff@example.test" }) }),
@@ -70,7 +73,7 @@ describe("Bank review permissions enforce separate accounting responsibilities",
     }
   });
   test.each<ReviewCapability>(["read", "review", "close", "manage"])(
-    "REGLA NUEVA: ausente de pos_user (el viejo \"full admin\") ya no puede %s sin grant",
+    "REGLA NUEVA: un admin (pos_user.is_admin) ya no puede %s sin grant",
     async capability => {
       await expect(reviewAccess(request(false, true), capability)).rejects.toMatchObject({ status: 403 });
     });

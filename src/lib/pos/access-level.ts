@@ -7,7 +7,10 @@
  * hacía que cada alta de admin regalara contabilidad. Ahora hay cuatro niveles
  * y dos flags INDEPENDIENTES:
  *
- *   - `canAdmin`      → Owner, o fuera de `pos_user`, o `pos_user.is_admin`.
+ *   - `canAdmin`      → Owner, o `pos_user.is_admin`. Estar FUERA de `pos_user`
+ *                       ya no otorga nada (decisión del operador, 2026-09-09):
+ *                       una regla que se cumple por AUSENCIA no se audita ni se
+ *                       revoca. Migration20260910010000 le dio fila a todos.
  *                       NO abre Admin Tools (esas pantallas son owner-only):
  *                       significa que el usuario puede confirmar una operación
  *                       con PIN escribiendo la palabra `confirm` en vez del PIN
@@ -83,7 +86,7 @@ export function deriveAccess(facts: AccessFacts): {
   canAccounting: boolean;
 } {
   const canAccounting = facts.isOwner || facts.hasActiveGrant;
-  const canAdmin = facts.isOwner || !facts.inPosUser || facts.posIsAdmin;
+  const canAdmin = facts.isOwner || facts.posIsAdmin;
   const level: AccessLevel = facts.isOwner
     ? "owner"
     : canAccounting

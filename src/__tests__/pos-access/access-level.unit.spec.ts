@@ -1,9 +1,13 @@
 /**
  * Tabla de decisión de `resolveAccessLevel`.
  *
- * La regla que murió el 2026-09-10 —"usuario de Medusa ausente de `pos_user`
- * ⇒ puede TODO"— se prueba acá al revés: ausente de `pos_user` da `canAdmin`
- * (confirmar con la palabra `confirm`) y NADA de contabilidad.
+ * La regla que murió —"usuario de Medusa ausente de `pos_user` ⇒ puede TODO"—
+ * se prueba acá al revés, y en DOS pasos: el 2026-09-10 dejó de dar
+ * contabilidad, y el 2026-09-09 el operador le sacó también el `canAdmin`.
+ * Hoy la ausencia no otorga NADA: Admin es `pos_user.is_admin`, un dato
+ * explícito que se puede auditar y revocar (Migration20260910010000 le dio
+ * fila a todo usuario vivo, con `is_admin=true`, para que nadie perdiera lo
+ * que ya tenía).
  */
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 
@@ -58,7 +62,7 @@ describe("owner sale de POS_OWNER_EMAILS y falla cerrado", () => {
   it("sin la env var NADIE es owner", async () => {
     await expect(resolveAccessLevel(request())).resolves.toMatchObject({
       isOwner: false,
-      level: "admin",
+      level: "cashier",
     });
     expect(isOwnerEmail("staff@example.test")).toBe(false);
   });
@@ -114,9 +118,17 @@ describe("el grant vivo es la única fuente de Accounting", () => {
 });
 
 describe("admin y accounting son independientes", () => {
-  it("fuera de pos_user ⇒ admin, sin contabilidad", () => {
+  // REGLA NUEVA (decisión del operador, 2026-09-09): la AUSENCIA no otorga.
+  // Antes este mismo caso devolvía admin/canAdmin:true — un permiso que nadie
+  // había decidido, que no se veía en ninguna fila y que no se podía revocar.
+  it("fuera de pos_user ⇒ cashier: la ausencia ya no otorga nada", () => {
     expect(deriveAccess({ isOwner: false, inPosUser: false, posIsAdmin: false, hasActiveGrant: false }))
-      .toEqual({ level: "admin", canAdmin: true, canAccounting: false });
+      .toEqual({ level: "cashier", canAdmin: false, canAccounting: false });
+  });
+
+  it("fuera de pos_user pero con grant ⇒ accounting, y sigue sin ser admin", () => {
+    expect(deriveAccess({ isOwner: false, inPosUser: false, posIsAdmin: false, hasActiveGrant: true }))
+      .toEqual({ level: "accounting", canAdmin: false, canAccounting: true });
   });
 
   it("pos_user.is_admin ⇒ admin", () => {
@@ -173,6 +185,7 @@ describe("los assert* rechazan con su código", () => {
   });
 
   it("resuelve una sola vez por request", async () => {
+    query.mockResolvedValue(facts({ inPosUser: true, posIsAdmin: true }));
     const req = request();
     await resolveAccessLevel(req);
     await assertAdmin(req);
