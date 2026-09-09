@@ -1,6 +1,11 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import type { TreasuryBucketView } from "../daily/types";
 import type { TreasuryBucketCode } from "../_lib/compute-splits";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 interface BucketRow {
   id: string;
@@ -23,6 +28,11 @@ interface BucketRow {
  * bank mappings. Returned in display_order for stable UI rendering.
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pg = req.scope.resolve("__pg_connection__") as any;
 

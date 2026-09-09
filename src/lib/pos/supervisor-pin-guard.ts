@@ -26,10 +26,22 @@
  * Fail-OPEN sólo ante fallas del CACHE, nunca del PIN: si Redis no responde, el
  * PIN se sigue verificando contra Postgres y lo único que se pierde es el conteo.
  * Un cache caído no puede dejar a la tienda sin poder autorizar nada.
+ *
+ * ── Confirmación de admin (2026-09-10) ────────────────────────────────────────
+ * Un usuario con `canAdmin` (owner, fuera de `pos_user`, o `pos_user.is_admin`)
+ * puede autorizar escribiendo la palabra literal `confirm` en lugar del PIN.
+ * NO es un bypass del PIN: es una credencial distinta para una identidad que ya
+ * está probada por el JWT, y vive acá —un solo chokepoint— para que ninguna
+ * ruta invente su propia versión. Para un cajero, `confirm` es simplemente un
+ * PIN equivocado: 403 y suma al throttle, igual que cualquier otro intento.
  */
 import { Modules } from "@medusajs/utils";
 
 import { verifySupervisorPin, type PinConn } from "./verify-supervisor-pin";
+import { resolveAccessByUserId } from "./access-level";
+
+/** La palabra que un admin escribe en vez del PIN. Case-sensitive a propósito. */
+export const ADMIN_CONFIRMATION_WORD = "confirm";
 
 /** Intentos fallidos permitidos antes de bloquear. */
 export const MAX_PIN_ATTEMPTS = 8;
@@ -37,8 +49,9 @@ export const MAX_PIN_ATTEMPTS = 8;
 /** Cuánto dura el bloqueo (y la ventana de conteo), en segundos. */
 export const PIN_LOCKOUT_SECONDS = 15 * 60;
 
+/** `via` deja registrado CÓMO se autorizó, sin guardar la credencial. */
 export type PinGuardResult =
-  | { ok: true }
+  | { ok: true; via: "pin" | "admin-confirmation" }
   | { ok: false; reason: "invalid"; attemptsLeft: number }
   | { ok: false; reason: "locked"; retryAfterSeconds: number };
 
@@ -129,6 +142,22 @@ export async function guardSupervisorPin(input: {
     };
   }
 
+  // Confirmación de admin: la palabra exacta, y sólo si el actor es admin.
+  // Un fallo de base al resolver la identidad NO habilita nada (fail-closed):
+  // cae al camino normal del PIN.
+  if (pin === ADMIN_CONFIRMATION_WORD) {
+    let canAdmin = false;
+    try {
+      canAdmin = (await resolveAccessByUserId(actorId))?.canAdmin === true;
+    } catch {
+      canAdmin = false;
+    }
+    if (canAdmin) {
+      if (cache) await cache.invalidate(key).catch(() => {});
+      return { ok: true, via: "admin-confirmation" };
+    }
+  }
+
   const valid = await verifySupervisorPin(db, pin);
 
   if (valid) {
@@ -137,7 +166,7 @@ export async function guardSupervisorPin(input: {
       // castigar a quien se equivocó una vez y después acertó.
       await cache.invalidate(key).catch(() => {});
     }
-    return { ok: true };
+    return { ok: true, via: "pin" };
   }
 
   const next = failures + 1;

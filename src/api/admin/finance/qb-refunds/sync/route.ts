@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
@@ -16,6 +17,10 @@ import {
   writeCheckIdempotencyKey,
 } from "../../../../../lib/quickbooks/pipeline/claim-write-check";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -36,6 +41,11 @@ const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
  *   - Legacy:    separate record with type='refund'
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const { customer_payment_id, qb_bank_account_id, refund_date } = req.body as {
     customer_payment_id: string;
     qb_bank_account_id: string;

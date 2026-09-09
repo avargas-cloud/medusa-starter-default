@@ -2,16 +2,21 @@
  * src/api/admin/inventory-counts/_lib/auth.ts
  *
  * Manager-only guard. Approve / reject / preview-approval endpoints call
- * `requireManager(req)` to assert the authenticated admin user is on the
- * POS whitelist with `can_view_accounting=true`.
+ * `requireManager(req)`.
  *
- * The pos_user table is keyed by email (no user_id FK), so the lookup is:
- *   actor_id → user.email → pos_user (by email) → can_view_accounting
+ * Regla (2026-09-10): delega en `lib/pos/access-level.ts`. La regla vieja
+ * —"un usuario de Medusa ausente de `pos_user` es un admin de backoffice y por
+ * eso siempre es manager"— convertía cada alta en un aprobador de conteos.
+ * Ahora manager = acceso a Accounting: owner o grant vivo en
+ * `pos_accounting_grant`.
  */
 
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 
-import { POS_USER_MODULE } from "../../../../modules/pos-user";
+import {
+  assertAccounting,
+  PosAccessError,
+} from "../../../../lib/pos/access-level";
 
 export class ManagerRoleRequiredError extends Error {
   status = 403;
@@ -31,17 +36,6 @@ export class UnauthenticatedError extends Error {
   }
 }
 
-interface UserModuleService {
-  retrieveUser: (id: string) => Promise<{ email: string }>;
-}
-
-interface PosUserModuleService {
-  listPosUsers: (
-    filters: Record<string, unknown>,
-    options?: { take?: number }
-  ) => Promise<Array<{ email: string; can_view_accounting: boolean }>>;
-}
-
 /**
  * Resolve the user_id of the authenticated admin. Medusa v2 places this in
  * `req.auth_context.actor_id` (the canonical actor id for `user`-actor JWTs).
@@ -58,37 +52,18 @@ export function getActorUserId(req: AuthenticatedMedusaRequest): string {
 }
 
 /**
- * Throws ManagerRoleRequiredError unless the actor is a non-POS admin user
- * (full Medusa admin) OR a pos_user with can_view_accounting=true.
+ * Throws ManagerRoleRequiredError unless the actor has Accounting access.
  * Returns the verified user_id on success.
- *
- * Rationale: a Medusa admin user not present in the pos_users whitelist is
- * a "real" backoffice admin (not a cashier) — these always have manager
- * privileges. Cashiers (pos_users) require the explicit accounting flag.
  */
 export async function requireManager(
   req: AuthenticatedMedusaRequest
 ): Promise<string> {
-  const userId = getActorUserId(req);
-
-  const userModule = req.scope.resolve("user") as unknown as UserModuleService;
-  const user = await userModule.retrieveUser(userId);
-
-  const posUserService = req.scope.resolve(
-    POS_USER_MODULE
-  ) as unknown as PosUserModuleService;
-  const matches = await posUserService.listPosUsers(
-    { email: user.email.toLowerCase() },
-    { take: 1 }
-  );
-
-  const posUser = matches[0];
-  // Non-pos admin → full backoffice user, allowed.
-  if (!posUser) return userId;
-  // Pos cashier → must have explicit accounting flag.
-  if (!posUser.can_view_accounting) {
+  try {
+    return (await assertAccounting(req)).userId;
+  } catch (error) {
+    if (error instanceof PosAccessError && error.status === 401) {
+      throw new UnauthenticatedError();
+    }
     throw new ManagerRoleRequiredError();
   }
-
-  return userId;
 }

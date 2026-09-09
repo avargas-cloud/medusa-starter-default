@@ -314,6 +314,37 @@ const MUST_GATE_ROUTES: {
     rel: "api/admin/purchase-orders/[id]/factory-order-mirror/route.ts",
     what: "crea o sincroniza el Factory Order espejo de un PO",
   },
+  // "Manage connections" del panel de Banking. No mueven plata por sí solas,
+  // pero deciden de qué banco entra el feed, qué cuentas se ven, contra qué
+  // cuenta de QuickBooks se mapea cada una, desde cuándo y con qué saldo de
+  // apertura arranca la revisión, y quién puede revisar, cerrar el día y
+  // postear. Todo eso es la base de la contabilidad que sí mueve plata, y
+  // `reviewAccess(req, "manage")` sólo dice QUIÉN administra: como todo cajero
+  // es usuario admin, sin PIN cualquiera de esos cambios sale con un POST.
+  {
+    rel: "api/admin/banking/accounts/[id]/route.ts",
+    what: "mapea la cuenta bancaria contra una cuenta de QuickBooks",
+  },
+  {
+    rel: "api/admin/banking/accounts/[id]/setup/route.ts",
+    what: "fija la fecha de inicio de revisión y el saldo de apertura de la cuenta",
+  },
+  {
+    rel: "api/admin/banking/permissions/route.ts",
+    what: "otorga permisos de revisión, cierre diario y posteo contable",
+  },
+  {
+    rel: "api/admin/banking/connections/[id]/reconnect/route.ts",
+    what: "reconecta un banco y reanuda el feed automático",
+  },
+  {
+    rel: "api/admin/banking/connections/[id]/accounts/route.ts",
+    what: "elige qué cuentas de la conexión se muestran y se sincronizan",
+  },
+  {
+    rel: "api/admin/banking/connections/[id]/disconnect/route.ts",
+    what: "desconecta el banco y corta las actualizaciones automáticas",
+  },
   {
     rel: "api/admin/reports/sales/revenue-baseline/route.ts",
     what:
@@ -381,9 +412,48 @@ if (!failures.some((f) => MUST_GATE_ROUTES.some(({ rel }) => f.startsWith(rel)))
  * se apaga sin que nadie se entere.
  */
 if (posExists) {
-  /** `api/admin/pos/prices/[productId]/route.ts` → /\/admin\/pos\/prices\/\$\{[^}]+\}/ */
-  function routeToPathRegex(rel: string): RegExp {
-    const httpPath = rel.replace(/^api/, "").replace(/\/route\.ts$/, "");
+  /**
+   * Wrappers de cliente que ponen el header `x-supervisor-pin`.
+   *
+   * `medusaFetch` es el crudo y lleva la URL completa. Los módulos con prefijo
+   * propio la envuelven: `bankingPost('/permissions', …)` termina pegándole a
+   * `/admin/banking/permissions`, así que en el callsite la ruta aparece SIN su
+   * prefijo y con el método implícito en el nombre de la función — buscar el
+   * path completo ahí no encuentra nada y el chequeo pasaría en vacío, que es
+   * exactamente la forma en que un gate se apaga sin que nadie se entere.
+   *
+   * `strict` marca al wrapper que además DENUNCIA las apariciones del path que
+   * no estén dentro de una llamada suya: con la URL completa escrita a mano, un
+   * `fetch` pelado no tiene dónde poner el header. Para los wrappers con
+   * prefijo no aplica, porque su path recortado también matchea llamadas de sus
+   * hermanos de lectura (`bankingGet`), que no gatean nada.
+   */
+  const CLIENT_WRAPPERS: {
+    fn: string;
+    prefix: string;
+    method: string | null;
+    strict: boolean;
+  }[] = [
+    { fn: "medusaFetch", prefix: "", method: null, strict: true },
+    {
+      fn: "bankingPost",
+      prefix: "/admin/banking",
+      method: "POST",
+      strict: false,
+    },
+  ];
+
+  /**
+   * `api/admin/pos/prices/[productId]/route.ts` → /\/admin\/pos\/prices\/\$\{[^}]+\}/
+   *
+   * Con `prefix`, devuelve el path recortado que escribe el wrapper — o `null`
+   * si la ruta no vive bajo ese prefijo y por lo tanto ese wrapper no la puede
+   * llamar.
+   */
+  function routeToPathRegex(rel: string, prefix: string): RegExp | null {
+    const full = rel.replace(/^api/, "").replace(/\/route\.ts$/, "");
+    if (prefix && !full.startsWith(`${prefix}/`)) return null;
+    const httpPath = prefix ? full.slice(prefix.length) : full;
     const source = httpPath
       .split("/")
       .map((seg) =>
@@ -396,16 +466,22 @@ if (posExists) {
   }
 
   /**
-   * Devuelve el texto de la llamada a `medusaFetch` que contiene `idx`.
+   * Devuelve el texto de la llamada a `fn` que CONTIENE `idx`.
    *
    * Cuenta paréntesis salteando strings, que es lo mínimo para no cortar la
    * llamada en un `)` que vive adentro de un template literal.
+   *
+   * La containment check no es cosmética: sin ella, el `lastIndexOf` puede
+   * enganchar el nombre del wrapper en una LÍNEA DE IMPORT y devolver la
+   * primera llamada que venga después —cualquier cosa, un `useState(false)`—
+   * como si fuera el callsite. Ese falso callsite no manda el PIN, así que el
+   * chequeo acusaría a una pantalla que hace todo bien.
    */
-  function enclosingFetchCall(src: string, idx: number): string | null {
-    const before = src.lastIndexOf("medusaFetch", idx);
+  function enclosingCall(src: string, idx: number, fn: string): string | null {
+    const before = src.lastIndexOf(fn, idx);
     if (before === -1 || idx - before > 400) return null;
     const open = src.indexOf("(", before);
-    if (open === -1) return null;
+    if (open === -1 || open > idx) return null;
     let depth = 0;
     let quote: string | null = null;
     for (let i = open; i < src.length; i++) {
@@ -422,7 +498,7 @@ if (posExists) {
       if (c === "(") depth++;
       else if (c === ")") {
         depth--;
-        if (depth === 0) return src.slice(open, i + 1);
+        if (depth === 0) return i > idx ? src.slice(open, i + 1) : null;
       }
     }
     return null;
@@ -438,52 +514,60 @@ if (posExists) {
       notes.push(`⏭️  ${rel}: gate por campo, no por ruta — ${fieldGated}`);
       continue;
     }
-    const re = routeToPathRegex(rel);
     let callsites = 0;
     let missing = 0;
     let viaBody = 0;
-    for (const { file, src } of posSources) {
-      re.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(src)) !== null) {
-        const call = enclosingFetchCall(src, m.index);
-        if (!call) {
-          failures.push(
-            `${path.relative(POS_ROOT, file)} le pega a ${rel} fuera de ` +
-              `medusaFetch(): el PIN viaja en el header y este wrapper es el ` +
-              `único lugar que lo pone.`
-          );
-          continue;
-        }
-        // El guard vive en el handler que MUTA. `medusaFetch` sin `method` es un
-        // GET, y varias de estas rutas exponen un GET de lectura al lado del POST
-        // gateado (el mirror PO→FO, sin ir más lejos): exigirle PIN a esa lectura
-        // sería el verificador inventando una regla que el backend no tiene.
-        const method = /method\s*:\s*['"`](\w+)['"`]/.exec(call)?.[1] ?? "GET";
-        if (method.toUpperCase() === "GET") continue;
+    for (const wrapper of CLIENT_WRAPPERS) {
+      const re = routeToPathRegex(rel, wrapper.prefix);
+      if (!re) continue;
+      for (const { file, src } of posSources) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(src)) !== null) {
+          const call = enclosingCall(src, m.index, wrapper.fn);
+          if (!call) {
+            if (!wrapper.strict) continue;
+            failures.push(
+              `${path.relative(POS_ROOT, file)} le pega a ${rel} fuera de ` +
+                `${wrapper.fn}(): el PIN viaja en el header y este wrapper es el ` +
+                `único lugar que lo pone.`
+            );
+            continue;
+          }
+          // El guard vive en el handler que MUTA. `medusaFetch` sin `method` es un
+          // GET, y varias de estas rutas exponen un GET de lectura al lado del POST
+          // gateado (el mirror PO→FO, sin ir más lejos): exigirle PIN a esa lectura
+          // sería el verificador inventando una regla que el backend no tiene. Un
+          // wrapper con método fijo en el nombre (`bankingPost`) lo declara.
+          const method =
+            wrapper.method ??
+            /method\s*:\s*['"`](\w+)['"`]/.exec(call)?.[1] ??
+            "GET";
+          if (method.toUpperCase() === "GET") continue;
 
-        callsites++;
-        // Dos formas válidas, porque el guard del backend acepta las dos:
-        //   · header  → `supervisorPin` en las opciones de medusaFetch (fuerte:
-        //     se ve en la llamada misma). Se busca el identificador pelado, no
-        //     `supervisorPin:` — el shorthand de ES6 es la forma más común y
-        //     exigir los dos puntos daba un falso positivo en el mirror PO→FO.
-        //   · body    → `supervisor_pin` como campo del payload (más débil: el
-        //     payload se arma en otro lado, así que lo único que se puede
-        //     afirmar es que el ARCHIVO lo maneja)
-        if (/\bsupervisorPin\b/.test(call)) continue;
-        if (/supervisor_pin/.test(src)) {
-          viaBody++;
-          continue;
+          callsites++;
+          // Dos formas válidas, porque el guard del backend acepta las dos:
+          //   · header  → `supervisorPin` en las opciones de medusaFetch (fuerte:
+          //     se ve en la llamada misma). Se busca el identificador pelado, no
+          //     `supervisorPin:` — el shorthand de ES6 es la forma más común y
+          //     exigir los dos puntos daba un falso positivo en el mirror PO→FO.
+          //   · body    → `supervisor_pin` como campo del payload (más débil: el
+          //     payload se arma en otro lado, así que lo único que se puede
+          //     afirmar es que el ARCHIVO lo maneja)
+          if (/\bsupervisorPin\b/.test(call)) continue;
+          if (/supervisor_pin/.test(src)) {
+            viaBody++;
+            continue;
+          }
+          missing++;
+          failures.push(
+            `${path.relative(POS_ROOT, file)} llama a ${rel} (${what}) sin ` +
+              `mandar el PIN por ninguna de las dos vías (header supervisorPin ` +
+              `ni campo supervisor_pin en el body). Esa ruta exige PIN, así que ` +
+              `el llamado contesta 403 SIEMPRE y encima quema un intento del ` +
+              `throttle — la operación queda imposible de hacer desde la pantalla.`
+          );
         }
-        missing++;
-        failures.push(
-          `${path.relative(POS_ROOT, file)} llama a ${rel} (${what}) sin ` +
-            `mandar el PIN por ninguna de las dos vías (header supervisorPin ` +
-            `ni campo supervisor_pin en el body). Esa ruta exige PIN, así que ` +
-            `el llamado contesta 403 SIEMPRE y encima quema un intento del ` +
-            `throttle — la operación queda imposible de hacer desde la pantalla.`
-        );
       }
     }
     if (callsites === 0 && !noFrontendCaller) {

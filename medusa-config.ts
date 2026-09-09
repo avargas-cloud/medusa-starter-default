@@ -307,6 +307,10 @@ module.exports = defineConfig({
     {
       resolve: "./src/modules/finance",
     },
+    // Outside sandbox, banking requires explicit activation after its tables exist.
+    ...(process.env.ECOPOWERTECH_ENV === "sandbox" || process.env.BANKING_ENABLED === "true"
+      ? [{ resolve: "./src/modules/banking" }]
+      : []),
     {
       resolve: "./src/modules/document-templates",
     },

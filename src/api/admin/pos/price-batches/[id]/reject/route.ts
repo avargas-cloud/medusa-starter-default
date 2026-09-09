@@ -9,12 +9,22 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { resolveActorIdentity } from "../../_lib/actor";
 import { getPriceChangeService } from "../../_lib/service-resolver";
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 interface RejectBody {
   reason?: string;
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const logger = req.scope.resolve("logger");
   const id = req.params.id as string;
   const body = req.body as RejectBody;

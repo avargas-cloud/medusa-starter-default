@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -26,6 +31,11 @@ const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
  * the latest value — same convergence model as payment_txndate_change.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const { customer_payment_id, refund_date, qb_bank_account_id } = req.body as {
     customer_payment_id: string;
     refund_date?: string;

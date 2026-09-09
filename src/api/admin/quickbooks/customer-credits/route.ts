@@ -9,6 +9,11 @@ import {
   runDirectQuery,
   type QbCustomerCredit,
 } from "./_lib/qb-credit-query";
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../lib/pos/access-level";
 
 interface CustomerCreditRow extends QbCustomerCredit {
   /** true when a POS store-credit already points at this QB TxnID. */
@@ -29,6 +34,11 @@ export async function GET(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const customerId = String(req.query.customer_id ?? "").trim();
   if (!customerId) {
     res.status(400).json({ error: "customer_id is required" });

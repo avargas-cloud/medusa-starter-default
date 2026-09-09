@@ -37,6 +37,11 @@ import { resolveActorIdentity } from "../../_lib/actor";
 import { loadLiveVariantSnapshots } from "../../_lib/live-variant-snapshot";
 import { getPriceChangeService } from "../../_lib/service-resolver";
 import type { PriceChangeLineRow } from "../../_lib/types";
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 class BatchNotPendingError extends Error {}
 
@@ -47,6 +52,11 @@ interface LineFailure {
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const logger = req.scope.resolve("logger");
   const id = req.params.id as string;
   const service = getPriceChangeService(req);

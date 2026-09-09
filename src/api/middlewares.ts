@@ -203,6 +203,47 @@ export default defineMiddlewares({
       method: "POST",
       middlewares: [rejectClosedEffectiveDate],
     },
+    // Private bank-review attachment: decoded limit is 5 MiB, base64 fits 8 MiB JSON.
+    {
+      matcher: "/admin/banking/transactions/:id/attachments",
+      method: "POST",
+      bodyParser: { sizeLimit: "8mb" },
+      middlewares: [],
+    },
+    // Verified opening PDFs: decoded 5 MiB; JSON/base64 fits 8 MiB.
+    {
+      matcher: "/admin/banking/accounting/openings/evidence",
+      method: "POST",
+      bodyParser: { sizeLimit: "8mb" },
+      middlewares: [],
+    },
+    // Private movement, merchant and statement PDFs share the same decoded 5 MiB limit.
+    {
+      matcher: "/admin/banking/evidence",
+      method: "POST",
+      bodyParser: { sizeLimit: "8mb" },
+      middlewares: [],
+    },
+    // Each movement allocation has bounded documentary provenance (maximum 100).
+    {
+      matcher: "/admin/banking/movements",
+      method: "POST",
+      bodyParser: { sizeLimit: "1mb" },
+      middlewares: [],
+    },
+    // Up to 200 documented opening items, each with a bounded description.
+    {
+      matcher: "/admin/banking/settlements",
+      method: "POST",
+      bodyParser: { sizeLimit: "1mb" },
+      middlewares: [],
+    },
+    {
+      matcher: "/admin/banking/accounting/openings",
+      method: "POST",
+      bodyParser: { sizeLimit: "1mb" },
+      middlewares: [],
+    },
     // Increase body parser limit for send-email routes — extra attachments arrive as base64
     {
       matcher: "/admin/draft-orders/:id/send-email",
@@ -266,6 +307,12 @@ export default defineMiddlewares({
       matcher: "/pub/webhooks/uber",
       method: "POST",
       bodyParser: { preserveRawBody: true },
+      middlewares: [],
+    },
+    {
+      matcher: "/pub/banking/webhook",
+      method: "POST",
+      bodyParser: { preserveRawBody: true, sizeLimit: "64kb" },
       middlewares: [],
     },
     {

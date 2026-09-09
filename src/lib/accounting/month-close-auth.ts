@@ -1,43 +1,39 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 
-import { POS_USER_MODULE } from "../../modules/pos-user";
+import {
+  assertAccounting,
+  PosAccessError,
+} from "../pos/access-level";
 
+/**
+ * Cerrar o reabrir un mes contable exige acceso a Accounting (owner o grant
+ * vivo en `pos_accounting_grant`).
+ *
+ * El nombre `requireFullAdmin` se conserva por sus cinco callsites, pero la
+ * regla que codificaba —"ausente de `pos_user` ⇒ full admin ⇒ puede cerrar el
+ * mes"— murió el 2026-09-10: era el permiso más caro del POS regalado con cada
+ * alta de usuario de Medusa. La autoridad ahora es `lib/pos/access-level.ts`.
+ */
 export class FullAdminRequiredError extends Error {
   status = 403;
   code = "full_admin_required";
 
   constructor() {
-    super("Only a full administrator can close or reopen an accounting month.");
+    super("Only an accounting user can close or reopen an accounting month.");
   }
 }
 
 export async function requireFullAdmin(
   req: AuthenticatedMedusaRequest
 ): Promise<string> {
-  const actorId = req.auth_context?.actor_id;
-  if (!actorId) {
-    const error = new FullAdminRequiredError();
-    error.status = 401;
-    error.code = "unauthenticated";
-    throw error;
+  try {
+    return (await assertAccounting(req)).userId;
+  } catch (error) {
+    const denied = new FullAdminRequiredError();
+    if (error instanceof PosAccessError && error.status === 401) {
+      denied.status = 401;
+      denied.code = "unauthenticated";
+    }
+    throw denied;
   }
-
-  const userModule = req.scope.resolve("user") as {
-    retrieveUser: (id: string) => Promise<{ email?: string | null }>;
-  };
-  const user = await userModule.retrieveUser(actorId);
-  if (!user.email) throw new FullAdminRequiredError();
-
-  const posUserService = req.scope.resolve(POS_USER_MODULE) as {
-    listPosUsers: (
-      filters: Record<string, unknown>,
-      options?: { take?: number }
-    ) => Promise<Array<{ id: string }>>;
-  };
-  const posUsers = await posUserService.listPosUsers(
-    { email: user.email.toLowerCase() },
-    { take: 1 }
-  );
-  if (posUsers.length > 0) throw new FullAdminRequiredError();
-  return actorId;
 }

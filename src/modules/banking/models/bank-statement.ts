@@ -1,0 +1,7 @@
+import { model } from "@medusajs/utils";
+export const BankStatement = model.define("bank_statement", {
+  id: model.id({ prefix: "bst" }).primaryKey(), revision: model.number(), status: model.text(), bank_account_id: model.text(),
+  account_list_id: model.text(), opening_id: model.text(), predecessor_id: model.text().nullable(), from_day: model.text(), to_day: model.text(),
+  payload: model.json(), evidence_id: model.text(), closed_by: model.text().nullable(), closed_at: model.dateTime().nullable(),
+  input_hash: model.text().nullable(), closed_snapshot: model.json().nullable(), history: model.json(), created_by: model.text(),
+});

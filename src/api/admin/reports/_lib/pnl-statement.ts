@@ -31,6 +31,8 @@
  *   subcuenta de COGS. Mismo total de sección, distinta línea:
  *   `memo.damaged_returns_cost_retained_in_cogs` lo muestra sin sumarlo.
  * - Surcharge de tarjeta: excluido, pendiente de conciliación contable.
+ * - Gastos bancarios directos: sólo líneas de asientos explícitamente posteados;
+ *   reversas reconocidas en su propia fecha, nunca drafts ni revisión diaria.
  *
  * Bindings knex `?`. Todo lo que devuelve va en DÓLARES (como Sales); los
  * centavos se convierten al final, nunca a mitad de una suma.

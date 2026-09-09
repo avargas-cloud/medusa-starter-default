@@ -1,8 +1,13 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
 import { queryVendorBills } from "../_lib/bill-query";
 import { classifyMismatch, classifyQbLinkState } from "../_lib/classify";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * GET /admin/quickbooks/bill-match/candidates?po_id=&from=&to=
@@ -19,6 +24,11 @@ function fmtUtc(dt: Date): string {
 }
 
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const poId = String((req.query.po_id as string) ?? "").trim();
   if (!poId) {
     res.status(400).json({ error: "po_id is required" });

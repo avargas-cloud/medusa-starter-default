@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../../../../utils/db-pool";
@@ -6,6 +7,10 @@ import {
   skipOpenRefundPipelineRows,
 } from "../../../../../../lib/finance/revert-refund";
 import { verifySupervisorPin } from "../../../../../../lib/pos/verify-supervisor-pin";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/finance/qb-refunds/:id/confirm-qb-cleanup
@@ -22,6 +27,11 @@ import { verifySupervisorPin } from "../../../../../../lib/pos/verify-supervisor
  * the Medusa revert, and stamps qb.status='voided'.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const id = req.params.id as string;
   const { supervisor_pin } = (req.body ?? {}) as { supervisor_pin?: string };
 

@@ -1,9 +1,14 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../modules/quickbooks-catalog";
 import type QuickbooksCatalogModuleService from "../../../../../modules/quickbooks-catalog/service";
 import { syncVendorsToMeiliWorkflow } from "../../../../../workflows/sync-vendors-meilisearch";
 import { VENDORS_INDEX } from "../../../../../lib/meilisearch/vendor-doc";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/search/vendors/sync
@@ -21,6 +26,11 @@ import { VENDORS_INDEX } from "../../../../../lib/meilisearch/vendor-doc";
  * the manual escape hatch.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const { MeiliSearch } = await import("meilisearch");
     const client = new MeiliSearch({

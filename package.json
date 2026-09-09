@@ -66,6 +66,7 @@
     "dotenv": "^17.2.3",
     "fast-xml-parser": "^5.7.2",
     "glob": "^13.0.0",
+    "jose": "^4.15.4",
     "google-auth-library": "^10.6.2",
     "meilisearch": "^0.55.0",
     "multer": "^2.0.2",

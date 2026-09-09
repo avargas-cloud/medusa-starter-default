@@ -2,7 +2,7 @@
  * GET /admin/reports/expenses/documents?from&to[&account_list_id=…][&bucket=cost|income|unclassified|balance_sheet|pending_link]
  *
  * Drill-down del reporte Expenses: una fila por línea de cuenta (bill, credit
- * memo de fraude o ajuste de redondeo) con el importe imputado a ESA cuenta.
+ * memo de fraude, ajuste de redondeo o asiento de gasto bancario) con el importe imputado a ESA cuenta.
  * Un bill con líneas en dos cuentas aparece dos veces, una por cuenta; el
  * filtro por `account_list_id` deja sólo la porción de esa cuenta.
  *

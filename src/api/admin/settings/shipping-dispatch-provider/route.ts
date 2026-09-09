@@ -30,15 +30,24 @@ import { getDbPool } from "../../../utils/db-pool";
 import { resolveDispatchProvider } from "../../../../lib/shipping-dispatch/default-provider";
 import { listConfiguredProviders } from "../../../../lib/shipping-dispatch/registry";
 import type { DeliveryProvider } from "../../../../lib/shipping-dispatch/types";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 // Regular parcel-label engines only — Uber Direct is a per-order method
 // (see file header), never a global default here.
 const KNOWN_PROVIDERS: DeliveryProvider[] = ["shippo", "ups", "fedex"];
 
 export async function GET(
-  _req: AuthenticatedMedusaRequest,
+  req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const pool = getDbPool();
     const provider = await resolveDispatchProvider(pool);
@@ -52,6 +61,11 @@ export async function PUT(
   req: AuthenticatedMedusaRequest<{ provider?: string }>,
   res: MedusaResponse
 ) {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const provider = req.body.provider?.trim().toLowerCase();
   if (!provider || !KNOWN_PROVIDERS.includes(provider as DeliveryProvider)) {
     return res.status(400).json({
