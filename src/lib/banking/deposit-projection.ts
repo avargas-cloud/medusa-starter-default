@@ -1,5 +1,8 @@
-import { DEPOSIT_PAYMENT_ELIGIBLE_SQL, paymentFingerprintSql } from "./payment-evidence";
 import { OPENING_ITEM_STALE_SQL } from "./opening-sql";
+import {
+  DEPOSIT_PAYMENT_ELIGIBLE_SQL,
+  paymentFingerprintSql,
+} from "./payment-evidence";
 
 const PAYMENT_FINGERPRINT_SQL = paymentFingerprintSql("dl.payment_snapshot");
 

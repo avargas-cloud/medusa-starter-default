@@ -36,13 +36,15 @@ export class Migration20260909040000 extends Migration {
         FOR EACH ROW EXECUTE FUNCTION bank_journal_immutable();
       CREATE TRIGGER bank_receipt_accounting_immutable BEFORE UPDATE OR DELETE ON bank_receipt_accounting
         FOR EACH ROW EXECUTE FUNCTION bank_journal_immutable();`);
-    this.addSql(`CREATE OR REPLACE FUNCTION bank_accounting_setup_frozen() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    this
+      .addSql(`CREATE OR REPLACE FUNCTION bank_accounting_setup_frozen() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
       PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
       IF EXISTS(SELECT 1 FROM bank_receipt_accounting) THEN RAISE EXCEPTION 'BANKING_RECEIPT_SETUP_FROZEN'; END IF;
       IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW; END $$;
       CREATE TRIGGER bank_accounting_setup_frozen BEFORE UPDATE OR DELETE ON bank_accounting_setup
         FOR EACH ROW EXECUTE FUNCTION bank_accounting_setup_frozen();`);
-    this.addSql(`CREATE OR REPLACE FUNCTION bank_journal_claim_source() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE OR REPLACE FUNCTION bank_journal_claim_source() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE source_id text; original bank_journal_entry%ROWTYPE; effective_kind text;
       BEGIN
         PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
@@ -85,7 +87,8 @@ export class Migration20260909040000 extends Migration {
         THEN RAISE EXCEPTION 'BANKING_ALREADY_POSTED'; END IF;
         RETURN NEW;
       END $$;`);
-    this.addSql(`CREATE OR REPLACE FUNCTION bank_journal_check_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE OR REPLACE FUNCTION bank_journal_check_balance() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE entry bank_journal_entry%ROWTYPE; original bank_journal_entry%ROWTYPE; target text;
         n integer; deb numeric; cred numeric; effective_kind text; expected_roles text[];
       BEGIN
@@ -125,7 +128,8 @@ export class Migration20260909040000 extends Migration {
         END IF;
         RETURN NULL;
       END $$;`);
-    this.addSql(`CREATE OR REPLACE FUNCTION bank_receipt_check_consumption() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE OR REPLACE FUNCTION bank_receipt_check_consumption() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE entry bank_journal_entry%ROWTYPE; receipt bank_journal_entry%ROWTYPE; source_id text; consumed numeric;
       BEGIN
         PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
@@ -150,6 +154,8 @@ export class Migration20260909040000 extends Migration {
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION bank_journal_check_balance();`);
   }
   override async down(): Promise<void> {
-    throw new Error("Banking v9 rollback requires explicit reviewed migration; reverse posted entries instead.");
+    throw new Error(
+      "Banking v9 rollback requires explicit reviewed migration; reverse posted entries instead."
+    );
   }
 }

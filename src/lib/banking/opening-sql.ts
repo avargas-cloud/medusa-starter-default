@@ -14,7 +14,9 @@ export const OPENING_ITEM_STALE_SQL = `(oi.payment_id IS NOT NULL AND NOT EXISTS
     AND ${OPENING_PAYMENT_FINGERPRINT_SQL}=oi.source_snapshot->>'payment_fingerprint'))`;
 export const OPENING_ACTIVE_CLEAR_SQL = `SELECT oc.id,oc.transaction_id FROM bank_opening_clear oc WHERE oc.item_id=oi.id
   AND oc.kind='clear' AND NOT EXISTS(SELECT 1 FROM bank_opening_clear undo WHERE undo.reverses_clear_id=oc.id)`;
-export function openingFundingReservedSql(excludeDeposit: "$2::text" | "NULL::text" = "NULL::text") {
+export function openingFundingReservedSql(
+  excludeDeposit: "$2::text" | "NULL::text" = "NULL::text"
+): string {
   return `COALESCE((SELECT SUM(funding.cents) FROM (
     SELECT consumption.amount_cents::numeric AS cents FROM bank_receipt_consumption consumption
       WHERE consumption.opening_item_id=oi.id

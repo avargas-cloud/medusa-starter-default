@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+
 import { BankAccount } from "./bank-account";
 import { BankTransactionReview } from "./bank-transaction-review";
 

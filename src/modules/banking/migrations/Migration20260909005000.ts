@@ -26,19 +26,27 @@ export class Migration20260909005000 extends Migration {
       created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz NULL,
       UNIQUE(deposit_id,payment_id)
     );`);
-    this.addSql(`CREATE INDEX IF NOT EXISTS idx_bank_deposit_line_payment ON bank_deposit_line(payment_id)
+    this
+      .addSql(`CREATE INDEX IF NOT EXISTS idx_bank_deposit_line_payment ON bank_deposit_line(payment_id)
       WHERE deleted_at IS NULL;`);
-    this.addSql(`ALTER TABLE bank_transaction_review ADD COLUMN IF NOT EXISTS matched_deposit_id text NULL
+    this
+      .addSql(`ALTER TABLE bank_transaction_review ADD COLUMN IF NOT EXISTS matched_deposit_id text NULL
       REFERENCES bank_deposit(id) ON DELETE RESTRICT,ADD COLUMN IF NOT EXISTS deposit_snapshot jsonb NULL;`);
-    this.addSql(`ALTER TABLE bank_transaction_review DROP CONSTRAINT IF EXISTS bank_transaction_review_mode_check;`);
-    this.addSql(`ALTER TABLE bank_transaction_review ADD CONSTRAINT bank_transaction_review_mode_check
+    this.addSql(
+      `ALTER TABLE bank_transaction_review DROP CONSTRAINT IF EXISTS bank_transaction_review_mode_check;`
+    );
+    this
+      .addSql(`ALTER TABLE bank_transaction_review ADD CONSTRAINT bank_transaction_review_mode_check
       CHECK(mode IN ('categorize','match','deposit'));`);
-    this.addSql(`CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_review_active_deposit ON bank_transaction_review(matched_deposit_id)
+    this
+      .addSql(`CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_review_active_deposit ON bank_transaction_review(matched_deposit_id)
       WHERE matched_deposit_id IS NOT NULL AND status<>'excluded' AND deleted_at IS NULL;`);
   }
   override async down(): Promise<void> {
     this.addSql("DROP INDEX IF EXISTS uq_bank_review_active_deposit;");
-    this.addSql("ALTER TABLE bank_transaction_review DROP COLUMN IF EXISTS matched_deposit_id,DROP COLUMN IF EXISTS deposit_snapshot;");
+    this.addSql(
+      "ALTER TABLE bank_transaction_review DROP COLUMN IF EXISTS matched_deposit_id,DROP COLUMN IF EXISTS deposit_snapshot;"
+    );
     this.addSql("DROP TABLE IF EXISTS bank_deposit_line;");
     this.addSql("DROP TABLE IF EXISTS bank_deposit;");
   }

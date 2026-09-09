@@ -1,6 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { getDbPool } from "../../../utils/db-pool";
 import {
   extractSupervisorPin,
   resolveActorId,
@@ -8,6 +7,7 @@ import {
   type PinGuardResult,
 } from "../../../../lib/pos/supervisor-pin-guard";
 import { pgAsPinConn } from "../../../../lib/pos/verify-supervisor-pin";
+import { getDbPool } from "../../../utils/db-pool";
 
 /**
  * Cableado del guard de PIN para las rutas de "Manage connections".
@@ -41,7 +41,7 @@ export function pinGuardInput(req: MedusaRequest): {
 export function pinGuardFailure(
   res: MedusaResponse,
   guard: Exclude<PinGuardResult, { ok: true }>
-) {
+): MedusaResponse {
   const { status, body } = pinGuardResponse(guard);
   return res.status(status).json(body);
 }

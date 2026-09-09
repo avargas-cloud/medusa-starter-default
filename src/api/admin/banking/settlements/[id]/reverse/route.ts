@@ -1,8 +1,25 @@
-import type { AuthenticatedMedusaRequest,MedusaResponse } from "@medusajs/framework/http";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework/http";
+
 import { reverseSettlement } from "../../../../../../lib/banking/settlement-core";
-import { reviewCommandRequest } from "../../../_lib/review-http";
 import { bankFailure } from "../../../_lib/http";
-export async function POST(req:AuthenticatedMedusaRequest,res:MedusaResponse) {
-  try {const {id,actorId,key,canPost}=await reviewCommandRequest(req,"post");return res.json({...await reverseSettlement(id,actorId,key,req.body),can_post:canPost});}
-  catch(error) {return bankFailure(res,error);}
+import { reviewCommandRequest } from "../../../_lib/review-http";
+export async function POST(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+): Promise<MedusaResponse> {
+  try {
+    const { id, actorId, key, canPost } = await reviewCommandRequest(
+      req,
+      "post"
+    );
+    return res.json({
+      ...(await reverseSettlement(id, actorId, key, req.body)),
+      can_post: canPost,
+    });
+  } catch (error) {
+    return bankFailure(res, error);
+  }
 }

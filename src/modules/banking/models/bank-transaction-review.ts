@@ -1,6 +1,7 @@
 import { model } from "@medusajs/utils";
-import { BankTransaction } from "./bank-transaction";
+
 import { BankReviewRule } from "./bank-review-rule";
+import { BankTransaction } from "./bank-transaction";
 
 /** Current preparation decision; previous decisions survive in bank_review_event. */
 export const BankTransactionReview = model.define("bank_transaction_review", {
@@ -21,7 +22,9 @@ export const BankTransactionReview = model.define("bank_transaction_review", {
   deposit_snapshot: model.json().nullable(),
   category_snapshot: model.json().nullable(),
   origin: model.enum(["manual", "rule"]).default("manual"),
-  rule: model.belongsTo(() => BankReviewRule, { mappedBy: "reviews" }).nullable(),
+  rule: model
+    .belongsTo(() => BankReviewRule, { mappedBy: "reviews" })
+    .nullable(),
   rule_version: model.number().nullable(),
   manual_override: model.boolean().default(false),
   confirmed_by: model.text().nullable(),

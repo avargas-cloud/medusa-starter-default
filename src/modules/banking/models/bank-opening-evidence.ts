@@ -6,5 +6,5 @@ export const BankOpeningEvidence = model.define("bank_opening_evidence", {
   size_bytes: model.number(),
   sha256: model.text(),
   content_base64: model.text(),
-  uploaded_by: model.text()
+  uploaded_by: model.text(),
 });

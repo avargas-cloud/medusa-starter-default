@@ -1,8 +1,8 @@
 import { model } from "@medusajs/utils";
 
 import { BankConnection } from "./bank-connection";
-import { BankTransaction } from "./bank-transaction";
 import { BankReviewRule } from "./bank-review-rule";
+import { BankTransaction } from "./bank-transaction";
 
 /** A provider account. QB mapping is a reference only, with no finance-module link. */
 export const BankAccount = model.define("bank_account", {

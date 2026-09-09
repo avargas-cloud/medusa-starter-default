@@ -1,13 +1,31 @@
-import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework/http";
+
 import { reverseAccountingExpense } from "../../../../../../../lib/banking/accounting-core";
 import { accountingReverseSchema } from "../../../../../../../lib/banking/accounting-types";
 import { bankBody, bankFailure } from "../../../../_lib/http";
 import { reviewCommandRequest } from "../../../../_lib/review-http";
-export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
+export async function POST(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+): Promise<MedusaResponse> {
   try {
-    const { id, actorId, key, canPost } = await reviewCommandRequest(req, "post");
-    return res.json({ ...await reverseAccountingExpense(id, actorId, key,
-      bankBody(accountingReverseSchema, req.body)), can_post: canPost });
-  } catch (error) { return bankFailure(res, error); }
+    const { id, actorId, key, canPost } = await reviewCommandRequest(
+      req,
+      "post"
+    );
+    return res.json({
+      ...(await reverseAccountingExpense(
+        id,
+        actorId,
+        key,
+        bankBody(accountingReverseSchema, req.body)
+      )),
+      can_post: canPost,
+    });
+  } catch (error) {
+    return bankFailure(res, error);
+  }
 }
-

@@ -2,14 +2,16 @@ import { model } from "@medusajs/utils";
 
 import { BankAccount } from "./bank-account";
 import { BankConnection } from "./bank-connection";
-import { BankTransactionReview } from "./bank-transaction-review";
-import { BankReviewEvent } from "./bank-review-event";
 import { BankReviewAttachment } from "./bank-review-attachment";
+import { BankReviewEvent } from "./bank-review-event";
+import { BankTransactionReview } from "./bank-transaction-review";
 
 /** Bank evidence only: ingestion does not create a payment or accounting posting. */
 export const BankTransaction = model.define("bank_transaction", {
   id: model.id({ prefix: "btxn" }).primaryKey(),
-  connection: model.belongsTo(() => BankConnection, { mappedBy: "transactions" }),
+  connection: model.belongsTo(() => BankConnection, {
+    mappedBy: "transactions",
+  }),
   account: model.belongsTo(() => BankAccount, { mappedBy: "transactions" }),
   provider_transaction_id: model.text(),
   pending_transaction_id: model.text().nullable(),
@@ -31,7 +33,13 @@ export const BankTransaction = model.define("bank_transaction", {
   first_seen_at: model.dateTime(),
   last_seen_at: model.dateTime(),
   removed_at: model.dateTime().nullable(),
-  reviews: model.hasMany(() => BankTransactionReview, { mappedBy: "transaction" }),
-  review_events: model.hasMany(() => BankReviewEvent, { mappedBy: "transaction" }),
-  review_attachments: model.hasMany(() => BankReviewAttachment, { mappedBy: "transaction" }),
+  reviews: model.hasMany(() => BankTransactionReview, {
+    mappedBy: "transaction",
+  }),
+  review_events: model.hasMany(() => BankReviewEvent, {
+    mappedBy: "transaction",
+  }),
+  review_attachments: model.hasMany(() => BankReviewAttachment, {
+    mappedBy: "transaction",
+  }),
 });

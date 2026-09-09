@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
-import { BankingError } from "../banking/security";
+
 import { reviewDate } from "../banking/review-date";
+import { BankingError } from "../banking/security";
+
 import type { SqlClient } from "./month-close-data";
 
 /** The same key is used by pg banking commands and knex Month Close writers. */

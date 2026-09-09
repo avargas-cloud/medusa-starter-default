@@ -1,4 +1,5 @@
 import { Migration } from "@medusajs/framework/mikro-orm/migrations";
+
 import { statementGuardSql } from "../../../lib/banking/statement-guard-sql";
 import { statementMatchSql } from "../../../lib/banking/statement-match-sql";
 
@@ -34,5 +35,7 @@ export class Migration20260909200000 extends Migration {
     this.addSql(statementGuardSql);
     this.addSql(statementMatchSql);
   }
-  override async down(): Promise<void> { throw new Error("Statement history requires explicit reviewed rollback."); }
+  override async down(): Promise<void> {
+    throw new Error("Statement history requires explicit reviewed rollback.");
+  }
 }

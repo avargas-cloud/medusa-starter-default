@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+
 import { BankTransaction } from "./bank-transaction";
 
 /** Private immutable bytes. Replacing or detaching hard-deletes the row (operator
@@ -6,7 +7,9 @@ import { BankTransaction } from "./bank-transaction";
  * `detached_at` is kept for schema compatibility but is no longer written. */
 export const BankReviewAttachment = model.define("bank_review_attachment", {
   id: model.id({ prefix: "batt" }).primaryKey(),
-  transaction: model.belongsTo(() => BankTransaction, { mappedBy: "review_attachments" }),
+  transaction: model.belongsTo(() => BankTransaction, {
+    mappedBy: "review_attachments",
+  }),
   original_name: model.text(),
   mime_type: model.enum(["image/png", "image/jpeg", "application/pdf"]),
   size_bytes: model.number(),

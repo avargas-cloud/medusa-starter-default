@@ -13,7 +13,9 @@ export const BankWebhookEvent = model.define("bank_webhook_event", {
   event_digest: model.text(),
   event_type: model.text(),
   payload: model.json(),
-  status: model.enum(["pending", "processing", "processed", "failed"]).default("pending"),
+  status: model
+    .enum(["pending", "processing", "processed", "failed"])
+    .default("pending"),
   attempts: model.number().default(0),
   received_at: model.dateTime(),
   processed_at: model.dateTime().nullable(),

@@ -1,5 +1,5 @@
-import { bankingEnvSql } from "./security";
 import { movementExistingExpenseSql } from "./movement-existing-expense";
+import { bankingEnvSql } from "./security";
 
 /** Deferred V11 contract: a balanced journal must also represent its persisted typed document. */
 export const completionMovementSql = `

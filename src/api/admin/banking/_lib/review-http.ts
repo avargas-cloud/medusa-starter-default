@@ -1,7 +1,12 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { z } from "zod";
-import { reviewAccess, type ReviewCapability } from "../../../../lib/banking/review-permissions";
+
+import {
+  reviewAccess,
+  type ReviewCapability,
+} from "../../../../lib/banking/review-permissions";
 import { BankingError } from "../../../../lib/banking/security";
+
 import { bankBody, bankId } from "./http";
 
 export const reviewVersions = z.object({
@@ -16,9 +21,16 @@ export function reviewKey(req: AuthenticatedMedusaRequest): string {
   }
   return key;
 }
-export async function reviewCommandRequest(req: AuthenticatedMedusaRequest,
-  capability: ReviewCapability = "review") {
+export async function reviewCommandRequest(
+  req: AuthenticatedMedusaRequest,
+  capability: ReviewCapability = "review"
+): Promise<
+  Awaited<ReturnType<typeof reviewAccess>> & { id: string; key: string }
+> {
   const access = await reviewAccess(req, capability);
-  return { ...access, id: bankBody(bankId, req.params.id), key: reviewKey(req) };
+  return {
+    ...access,
+    id: bankBody(bankId, req.params.id),
+    key: reviewKey(req),
+  };
 }
-

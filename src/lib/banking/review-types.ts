@@ -1,13 +1,27 @@
 export type Review = {
-  id: string; transaction_id: string; revision: number; source_version: number;
-  status: "draft" | "confirmed" | "excluded"; mode: "categorize" | "match" | "deposit";
-  category_list_id: string | null; counterparty_type: "vendor" | "customer" | null;
-  counterparty_id: string | null; counterparty_name: string | null; comment: string;
-  matched_payment_id: string | null; match_snapshot: Record<string, unknown> | null;
-  matched_deposit_id: string | null; deposit_snapshot: Record<string, unknown> | null;
-  category_snapshot: Record<string, unknown> | null; origin: "manual" | "rule";
-  rule_id: string | null; rule_version: number | null; manual_override: boolean;
-  confirmed_by: string | null; confirmed_at: Date | null; exclusion_reason: string | null;
+  id: string;
+  transaction_id: string;
+  revision: number;
+  source_version: number;
+  status: "draft" | "confirmed" | "excluded";
+  mode: "categorize" | "match" | "deposit";
+  category_list_id: string | null;
+  counterparty_type: "vendor" | "customer" | null;
+  counterparty_id: string | null;
+  counterparty_name: string | null;
+  comment: string;
+  matched_payment_id: string | null;
+  match_snapshot: Record<string, unknown> | null;
+  matched_deposit_id: string | null;
+  deposit_snapshot: Record<string, unknown> | null;
+  category_snapshot: Record<string, unknown> | null;
+  origin: "manual" | "rule";
+  rule_id: string | null;
+  rule_version: number | null;
+  manual_override: boolean;
+  confirmed_by: string | null;
+  confirmed_at: Date | null;
+  exclusion_reason: string | null;
 };
 export const REVIEW_COLUMNS = `id,transaction_id,revision,source_version,status,mode,
   category_list_id,counterparty_type,counterparty_id,counterparty_name,comment,
@@ -29,9 +43,21 @@ export const REVIEW_JSON = `jsonb_build_object(
   'confirmed_by',r.confirmed_by,'confirmed_at',r.confirmed_at,'exclusion_reason',r.exclusion_reason)`;
 
 export type ReviewTransaction = {
-  id: string; account_id: string; transaction_date: string; source_version: number;
-  amount: string; currency: string | null; status: string; name: string;
-  merchant_name: string | null; account_type: string; review_start_date: string | null;
-  opening_bank_balance: string | null; opening_reference: string | null;
+  id: string;
+  account_id: string;
+  transaction_date: string;
+  source_version: number;
+  amount: string;
+  currency: string | null;
+  status: string;
+  name: string;
+  merchant_name: string | null;
+  account_type: string;
+  review_start_date: string | null;
+  opening_bank_balance: string | null;
+  opening_reference: string | null;
 };
-export type ReviewVersions = { expected_revision: number; expected_source_version: number };
+export type ReviewVersions = {
+  expected_revision: number;
+  expected_source_version: number;
+};

@@ -48,7 +48,8 @@ export class Migration20260909060000 extends Migration {
         ADD CONSTRAINT bank_consumption_funding_source CHECK((receipt_id IS NOT NULL AND payment_id IS NOT NULL AND opening_item_id IS NULL)
           OR (receipt_id IS NULL AND payment_id IS NULL AND opening_item_id IS NOT NULL)),
         ADD CONSTRAINT bank_consumption_opening_unique UNIQUE(entry_id,opening_item_id);`);
-    this.addSql(`CREATE FUNCTION bank_opening_reserved(source_id text,excluded_deposit text) RETURNS numeric LANGUAGE sql STABLE AS $$
+    this
+      .addSql(`CREATE FUNCTION bank_opening_reserved(source_id text,excluded_deposit text) RETURNS numeric LANGUAGE sql STABLE AS $$
       SELECT COALESCE((SELECT SUM(funding.cents) FROM (
     SELECT consumption.amount_cents::numeric AS cents FROM bank_receipt_consumption consumption
       WHERE consumption.opening_item_id=$1::text
@@ -61,7 +62,8 @@ export class Migration20260909060000 extends Migration {
           AND consumption.origin_kind='deposit' AND consumption.origin_id=deposit.id
           AND NOT EXISTS(SELECT 1 FROM bank_journal_entry reversal WHERE reversal.reverses_entry_id=consumption.entry_id))
     ) funding),0) $$;`);
-    this.addSql(`CREATE FUNCTION bank_opening_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE FUNCTION bank_opening_guard() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE parent bank_opening_balance%ROWTYPE; total numeric; plus numeric; minus numeric;
       BEGIN
         PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
@@ -126,7 +128,8 @@ export class Migration20260909060000 extends Migration {
         FOR EACH ROW EXECUTE FUNCTION bank_opening_guard();
       CREATE TRIGGER bank_opening_clear_immutable BEFORE UPDATE OR DELETE ON bank_opening_clear FOR EACH ROW EXECUTE FUNCTION bank_journal_immutable();
       CREATE TRIGGER bank_opening_evidence_immutable BEFORE UPDATE OR DELETE ON bank_opening_evidence FOR EACH ROW EXECUTE FUNCTION bank_journal_immutable();`);
-    this.addSql(`CREATE FUNCTION bank_opening_claim_clear() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE FUNCTION bank_opening_claim_clear() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE item bank_opening_item%ROWTYPE; parent bank_opening_balance%ROWTYPE; tx bank_transaction%ROWTYPE; original bank_opening_clear%ROWTYPE; mapped text;
       BEGIN
         PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
@@ -166,7 +169,8 @@ export class Migration20260909060000 extends Migration {
         THEN RAISE EXCEPTION 'BANKING_OPENING_PAYMENT_CLAIMED'; END IF;
         RETURN NEW; END $$;
       CREATE TRIGGER bank_opening_journal_claim BEFORE INSERT ON bank_journal_entry FOR EACH ROW EXECUTE FUNCTION bank_opening_journal_claim();`);
-    this.addSql(`CREATE FUNCTION bank_opening_setup_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    this
+      .addSql(`CREATE FUNCTION bank_opening_setup_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
       PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
       IF TG_TABLE_NAME='bank_accounting_setup' THEN
         IF EXISTS(SELECT 1 FROM bank_opening_balance WHERE status='adopted' AND setup_id=OLD.id)
@@ -209,7 +213,8 @@ export class Migration20260909060000 extends Migration {
         END IF; RETURN NEW; END $$;
       CREATE TRIGGER bank_opening_deposit_guard BEFORE INSERT OR UPDATE ON bank_deposit_line
         FOR EACH ROW EXECUTE FUNCTION bank_opening_deposit_guard();`);
-    this.addSql(`CREATE OR REPLACE FUNCTION bank_receipt_check_consumption() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE OR REPLACE FUNCTION bank_receipt_check_consumption() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE entry bank_journal_entry%ROWTYPE; receipt bank_journal_entry%ROWTYPE; source_id text; consumed numeric;
         item bank_opening_item%ROWTYPE; parent bank_opening_balance%ROWTYPE;
       BEGIN
@@ -243,5 +248,9 @@ export class Migration20260909060000 extends Migration {
         RETURN NULL;
       END $$;`);
   }
-  override async down(): Promise<void> { throw new Error("Opening history requires explicit reviewed rollback, never implicit removal."); }
+  override async down(): Promise<void> {
+    throw new Error(
+      "Opening history requires explicit reviewed rollback, never implicit removal."
+    );
+  }
 }

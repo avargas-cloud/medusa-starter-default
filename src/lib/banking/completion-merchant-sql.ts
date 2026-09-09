@@ -1,5 +1,5 @@
-import { bankingEnvSql } from "./security";
 import { movementExistingExpenseSql } from "./movement-existing-expense";
+import { bankingEnvSql } from "./security";
 
 /** V12 SQL independently verifies the economic source and each typed settlement allocation. */
 export const completionMerchantSql = `

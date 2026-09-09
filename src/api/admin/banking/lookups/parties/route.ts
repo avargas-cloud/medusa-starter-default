@@ -1,12 +1,20 @@
-import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework/http";
+
 import { lookupParties } from "../../../../../lib/banking/review-lookups";
 import { reviewAccess } from "../../../../../lib/banking/review-permissions";
 import { bankBody, bankFailure } from "../../_lib/http";
 import { lookupQuery } from "../../_lib/review-http";
-export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
+export async function GET(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+): Promise<MedusaResponse> {
   try {
     await reviewAccess(req);
     return res.json(await lookupParties(bankBody(lookupQuery, req.query).q));
-  } catch (error) { return bankFailure(res, error); }
+  } catch (error) {
+    return bankFailure(res, error);
+  }
 }
-

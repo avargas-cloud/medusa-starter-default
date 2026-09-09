@@ -1,8 +1,9 @@
 import type { PoolClient } from "pg";
+
 import { BankingError } from "./security";
 
 /** Only explicit document identities establish prior ownership; amounts/names alone do not. */
-export function movementExistingExpenseSql(reference = "$1::text") {
+export function movementExistingExpenseSql(reference = "$1::text"): string {
   const ref = `lower(${reference})`;
   return `SELECT id FROM bank_journal_entry WHERE kind<>'reversal'
       AND (${ref}=lower(id) OR ${ref}=lower('journal:'||id) OR ${ref}=lower(expense_id) OR ${ref}=lower('expense:'||expense_id))
@@ -14,7 +15,10 @@ export function movementExistingExpenseSql(reference = "$1::text") {
     UNION ALL SELECT id FROM customer_payment WHERE deleted_at IS NULL AND
       (type='refund' OR status IN ('refunded','partial_refunded')) AND (${ref}=lower(id) OR ${ref}=lower('refund:'||id)) LIMIT 1`;
 }
-export async function assertMovementNewExpense(client: PoolClient, reference: string) {
+export async function assertMovementNewExpense(
+  client: PoolClient,
+  reference: string
+): Promise<void> {
   if ((await client.query(movementExistingExpenseSql(), [reference])).rowCount)
     throw new BankingError("BANKING_MOVEMENT_EXPENSE_ALREADY_RECOGNIZED", 409);
 }

@@ -16,7 +16,13 @@ export const BankConnection = model.define("bank_connection", {
   institution_id: model.text().nullable(),
   institution_name: model.text().nullable(),
   status: model
-    .enum(["awaiting_selection", "active", "reauth_required", "disconnected", "error"])
+    .enum([
+      "awaiting_selection",
+      "active",
+      "reauth_required",
+      "disconnected",
+      "error",
+    ])
     .default("awaiting_selection"),
   // Only advance after all pages and their revisions have committed.
   cursor: model.text().nullable(),
@@ -35,7 +41,11 @@ export const BankConnection = model.define("bank_connection", {
   linked_public_token_hash: model.text().nullable(),
   metadata: model.json().nullable(),
   accounts: model.hasMany(() => BankAccount, { mappedBy: "connection" }),
-  transactions: model.hasMany(() => BankTransaction, { mappedBy: "connection" }),
+  transactions: model.hasMany(() => BankTransaction, {
+    mappedBy: "connection",
+  }),
   sync_runs: model.hasMany(() => BankSyncRun, { mappedBy: "connection" }),
-  webhook_events: model.hasMany(() => BankWebhookEvent, { mappedBy: "connection" }),
+  webhook_events: model.hasMany(() => BankWebhookEvent, {
+    mappedBy: "connection",
+  }),
 });

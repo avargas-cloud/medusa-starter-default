@@ -1,15 +1,41 @@
 import type { PoolClient } from "pg";
+
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
-import { PAYMENT_ELIGIBLE_SQL, PAYMENT_FINGERPRINT_SQL, LEGACY_PAYMENT_FINGERPRINT_SQL,
-  paymentReservedCentsSql, matchesPaymentFingerprint } from "./payment-evidence";
+
+import {
+  PAYMENT_ELIGIBLE_SQL,
+  PAYMENT_FINGERPRINT_SQL,
+  LEGACY_PAYMENT_FINGERPRINT_SQL,
+  paymentReservedCentsSql,
+  matchesPaymentFingerprint,
+} from "./payment-evidence";
+import {
+  bankingConfig,
+  BankingError,
+  requireBankingEnabled,
+  bankingEnvSql,
+} from "./security";
 
 export type MatchSnapshot = {
-  id: string; display_id: number | null; customer_id: string; customer_name: string;
-  amount: string; currency: string; date: string; method: string; reference: string | null; source_hash: string;
-  fingerprint_version: 2; legacy_source_hash?: string;
+  id: string;
+  display_id: number | null;
+  customer_id: string;
+  customer_name: string;
+  amount: string;
+  currency: string;
+  date: string;
+  method: string;
+  reference: string | null;
+  source_hash: string;
+  fingerprint_version: 2;
+  legacy_source_hash?: string;
 };
-export type MatchInvoice = { id: string; number: string; status: string; applied_amount: string };
+export type MatchInvoice = {
+  id: string;
+  number: string;
+  status: string;
+  applied_amount: string;
+};
 export type MatchCandidate = MatchSnapshot & { invoices: MatchInvoice[] };
 export const MATCH_SELECT_SQL = `mp.id,mp.display_id,mp.customer_id,
   COALESCE(NULLIF(c.company_name,''),NULLIF(trim(concat_ws(' ',c.first_name,c.last_name)),''),c.email,c.id) AS customer_name,
@@ -29,39 +55,88 @@ export const MATCH_VALID_SQL = `t.deleted_at IS NULL AND a.deleted_at IS NULL
   AND ${PAYMENT_ELIGIBLE_SQL} AND ${paymentReservedCentsSql({ transaction: "t.id" })}=0`;
 
 /** Normalize punctuation identically and require whole words, never numeric substrings. */
-const NORMALIZED_REFERENCE = "btrim(regexp_replace(upper(COALESCE(mp.reference,'')),'[^A-Z0-9]+',' ','g'))";
-const NORMALIZED_BANK_TEXT = "btrim(regexp_replace(upper(concat_ws(' ',t.name,t.merchant_name)),'[^A-Z0-9]+',' ','g'))";
+const NORMALIZED_REFERENCE =
+  "btrim(regexp_replace(upper(COALESCE(mp.reference,'')),'[^A-Z0-9]+',' ','g'))";
+const NORMALIZED_BANK_TEXT =
+  "btrim(regexp_replace(upper(concat_ws(' ',t.name,t.merchant_name)),'[^A-Z0-9]+',' ','g'))";
 export const MATCH_RANK_FIELDS_SQL = `(length(replace(${NORMALIZED_REFERENCE},' ',''))>=4
   AND position(' ' || ${NORMALIZED_REFERENCE} || ' ' IN ' ' || ${NORMALIZED_BANK_TEXT} || ' ')>0) AS reference_match,
   abs(t.transaction_date::date-(mp.received_at AT TIME ZONE 'America/New_York')::date) AS date_distance`;
 
-export function assertMatchSourceHash(expected: string | null | undefined, actual: string, legacy?: string): void {
-  if (!expected || !/^[a-f0-9]{32}$/.test(expected)) throw new BankingError("BANKING_MATCH_SOURCE_HASH_REQUIRED");
-  if (!matchesPaymentFingerprint(expected, { source_hash: actual, legacy_source_hash: legacy })) {
+export function assertMatchSourceHash(
+  expected: string | null | undefined,
+  actual: string,
+  legacy?: string
+): void {
+  if (!expected || !/^[a-f0-9]{32}$/.test(expected))
+    throw new BankingError("BANKING_MATCH_SOURCE_HASH_REQUIRED");
+  if (
+    !matchesPaymentFingerprint(expected, {
+      source_hash: actual,
+      legacy_source_hash: legacy,
+    })
+  ) {
     throw new BankingError("BANKING_MATCH_STALE", 409);
   }
 }
 
-export async function validateMatchedPayment(client: PoolClient, transactionId: string,
-  paymentId: string): Promise<MatchSnapshot> {
-  const result = await client.query<MatchSnapshot>(`SELECT ${MATCH_SELECT_SQL} ${MATCH_FROM_SQL}
-    WHERE t.id=$1 AND ${MATCH_VALID_SQL} AND mp.id=$2 FOR SHARE OF mp,c`, [transactionId, paymentId]);
-  if (!result.rows[0]) throw new BankingError("BANKING_MATCH_INVALID_OR_RESERVED", 409);
+export async function validateMatchedPayment(
+  client: PoolClient,
+  transactionId: string,
+  paymentId: string
+): Promise<MatchSnapshot> {
+  const result = await client.query<MatchSnapshot>(
+    `SELECT ${MATCH_SELECT_SQL} ${MATCH_FROM_SQL}
+    WHERE t.id=$1 AND ${MATCH_VALID_SQL} AND mp.id=$2 FOR SHARE OF mp,c`,
+    [transactionId, paymentId]
+  );
+  if (!result.rows[0])
+    throw new BankingError("BANKING_MATCH_INVALID_OR_RESERVED", 409);
   return result.rows[0];
 }
 
-export async function matchCandidates(transactionId: string, q: string) {
-  if (!bankingConfig().enabled) return { candidates: [], count: 0, supported: false, reason: "BANKING_SANDBOX_ONLY" };
+type MatchCandidatesResult = {
+  candidates: MatchCandidate[];
+  count: number;
+  supported: boolean;
+  reason?: string;
+};
+
+export async function matchCandidates(
+  transactionId: string,
+  q: string
+): Promise<MatchCandidatesResult> {
+  if (!bankingConfig().enabled)
+    return {
+      candidates: [],
+      count: 0,
+      supported: false,
+      reason: "BANKING_SANDBOX_ONLY",
+    };
   requireBankingEnabled();
   const pool = getDbPool();
-  const scope = await pool.query<{ supported: boolean }>(`SELECT
+  const scope = await pool.query<{ supported: boolean }>(
+    `SELECT
     (a.type='depository' AND t.status='posted' AND t.amount::numeric<0 AND t.currency IS NOT NULL) AS supported
     FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection bc ON bc.id=a.connection_id
     WHERE t.id=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`, [transactionId]);
-  if (!scope.rows[0]) throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
-  if (!scope.rows[0].supported) return { candidates: [], count: 0, supported: false, reason: "BANKING_MATCH_DIRECT_RECEIPTS_ONLY" };
-  const result = await pool.query<{ candidates: MatchCandidate[]; count: string }>(`WITH eligible AS (
+      AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`,
+    [transactionId]
+  );
+  if (!scope.rows[0])
+    throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
+  if (!scope.rows[0].supported)
+    return {
+      candidates: [],
+      count: 0,
+      supported: false,
+      reason: "BANKING_MATCH_DIRECT_RECEIPTS_ONLY",
+    };
+  const result = await pool.query<{
+    candidates: MatchCandidate[];
+    count: string;
+  }>(
+    `WITH eligible AS (
     SELECT ${MATCH_SELECT_SQL},${MATCH_RANK_FIELDS_SQL} ${MATCH_FROM_SQL} WHERE t.id=$1 AND ${MATCH_VALID_SQL}
   ), matching AS (SELECT id,display_id,customer_id,customer_name,amount,currency,date,method,reference,source_hash,fingerprint_version,
       reference_match,date_distance
@@ -86,6 +161,14 @@ export async function matchCandidates(transactionId: string, q: string) {
       'customer_id',p.customer_id,'customer_name',p.customer_name,'amount',p.amount,'currency',p.currency,
       'date',p.date,'method',p.method,'reference',p.reference,'source_hash',p.source_hash,'fingerprint_version',p.fingerprint_version,
       'invoices',COALESCE(ic.invoices,'[]'::jsonb)) ORDER BY p.reference_match DESC,p.date_distance,p.id)
-      FROM page p LEFT JOIN invoice_context ic ON ic.payment_id=p.id),'[]'::jsonb) AS candidates`, [transactionId, q]);
-  return { candidates: result.rows[0]!.candidates, count: Number(result.rows[0]!.count), supported: true };
+      FROM page p LEFT JOIN invoice_context ic ON ic.payment_id=p.id),'[]'::jsonb) AS candidates`,
+    [transactionId, q]
+  );
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- query sin FROM/GROUP BY (subselects escalares) siempre devuelve exactamente una fila
+    candidates: result.rows[0]!.candidates,
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- misma fila única garantizada que arriba
+    count: Number(result.rows[0]!.count),
+    supported: true,
+  };
 }

@@ -125,7 +125,8 @@ export class Migration20260908223000 extends Migration {
       ON bank_review_event (entity_type, entity_id, created_at, id);`);
     this.addSql(`CREATE INDEX IF NOT EXISTS idx_bank_review_event_transaction
       ON bank_review_event (transaction_id, created_at, id) WHERE transaction_id IS NOT NULL;`);
-    this.addSql(`CREATE INDEX IF NOT EXISTS idx_bank_review_attachment_transaction
+    this
+      .addSql(`CREATE INDEX IF NOT EXISTS idx_bank_review_attachment_transaction
       ON bank_review_attachment (transaction_id, created_at, id);`);
   }
 
@@ -136,8 +137,11 @@ export class Migration20260908223000 extends Migration {
     this.addSql("DROP TABLE IF EXISTS bank_review_event;");
     this.addSql("DROP TABLE IF EXISTS bank_transaction_review;");
     this.addSql("DROP TABLE IF EXISTS bank_review_rule;");
-    this.addSql("ALTER TABLE bank_transaction DROP COLUMN IF EXISTS source_version;");
-    this.addSql(`ALTER TABLE bank_account DROP COLUMN IF EXISTS review_start_date,
+    this.addSql(
+      "ALTER TABLE bank_transaction DROP COLUMN IF EXISTS source_version;"
+    );
+    this
+      .addSql(`ALTER TABLE bank_account DROP COLUMN IF EXISTS review_start_date,
       DROP COLUMN IF EXISTS opening_bank_balance, DROP COLUMN IF EXISTS opening_balance_date,
       DROP COLUMN IF EXISTS opening_reference, DROP COLUMN IF EXISTS opening_book_balance,
       DROP COLUMN IF EXISTS setup_revision;`);

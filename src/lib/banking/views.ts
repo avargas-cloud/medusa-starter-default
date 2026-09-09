@@ -1,9 +1,16 @@
-import { openingClearProjection } from "./opening-guards";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql, manualRefreshAllowed } from "./security";
+
 import { readBankingControl } from "./control";
+import { openingClearProjection } from "./opening-guards";
 import { REVIEW_JOINS, REVIEW_SELECT_SQL } from "./review-projection";
 import type { Review } from "./review-types";
+import {
+  bankingConfig,
+  BankingError,
+  requireBankingEnabled,
+  bankingEnvSql,
+  manualRefreshAllowed,
+} from "./security";
 
 export interface BankConnectionView {
   id: string;
@@ -57,12 +64,44 @@ export interface BankTransactionView {
 }
 
 /** Explicit DTOs keep provider payloads, cursors and token material server-side. */
-export async function bankingOverview(canManage: boolean, canReview = canManage, canClose = canManage) {
-  const base = { ...bankingConfig(), can_manage: canManage, can_review: canReview, can_close: canClose };
-  if (!base.enabled) return { config: { ...base, control_enabled: false, manual_refresh: false }, connections: [], accounts: [] };
+export async function bankingOverview(
+  canManage: boolean,
+  canReview = canManage,
+  canClose = canManage
+): Promise<{
+  config: {
+    enabled: boolean;
+    environment: "sandbox" | "production";
+    unavailable_reason: string | null;
+    config_error: string | null;
+    can_manage: boolean;
+    can_review: boolean;
+    can_close: boolean;
+    control_enabled: boolean;
+    manual_refresh: boolean;
+  };
+  connections: BankConnectionView[];
+  accounts: BankAccountView[];
+}> {
+  const base = {
+    ...bankingConfig(),
+    can_manage: canManage,
+    can_review: canReview,
+    can_close: canClose,
+  };
+  if (!base.enabled)
+    return {
+      config: { ...base, control_enabled: false, manual_refresh: false },
+      connections: [],
+      accounts: [],
+    };
   requireBankingEnabled();
   const pool = getDbPool();
-  const config = { ...base, control_enabled: (await readBankingControl(pool)).enabled, manual_refresh: manualRefreshAllowed() };
+  const config = {
+    ...base,
+    control_enabled: (await readBankingControl(pool)).enabled,
+    manual_refresh: manualRefreshAllowed(),
+  };
   const [connections, accounts] = await Promise.all([
     pool.query<BankConnectionView>(
       `SELECT id, COALESCE(institution_name, 'Bank connection') AS institution_name,
@@ -78,7 +117,7 @@ export async function bankingOverview(canManage: boolean, canReview = canManage,
                 AS refresh_request_pending
          FROM bank_connection
         WHERE deleted_at IS NULL AND environment=${bankingEnvSql()}
-        ORDER BY created_at, id`,
+        ORDER BY created_at, id`
     ),
     pool.query<BankAccountView>(
       `SELECT a.id, a.connection_id, a.name, a.mask, a.type, a.subtype,
@@ -91,7 +130,7 @@ export async function bankingOverview(canManage: boolean, canReview = canManage,
          JOIN bank_connection c ON c.id = a.connection_id
         WHERE a.deleted_at IS NULL AND c.deleted_at IS NULL
           AND c.environment=${bankingEnvSql()}
-        ORDER BY a.connection_id, a.name, a.id`,
+        ORDER BY a.connection_id, a.name, a.id`
     ),
   ]);
   return { config, connections: connections.rows, accounts: accounts.rows };
@@ -110,7 +149,16 @@ export interface TransactionFilters {
 }
 
 /** Count and page share one Postgres statement snapshot, including empty pages. */
-export async function bankingTransactions(filters: TransactionFilters) {
+export async function bankingTransactions(
+  filters: TransactionFilters
+): Promise<{
+  transactions: Array<
+    BankTransactionView & {
+      opening_clear?: { id: string; item_id: string; reference: string };
+    }
+  >;
+  count: number;
+}> {
   if (!bankingConfig().enabled) return { transactions: [], count: 0 };
   requireBankingEnabled();
   const result = await getDbPool().query<{
@@ -147,12 +195,26 @@ export async function bankingTransactions(filters: TransactionFilters) {
             (SELECT COUNT(*) FROM matching)::text AS count,
             COALESCE((SELECT jsonb_agg(page ORDER BY date DESC, id DESC) FROM page),
                      '[]'::jsonb) AS transactions`,
-    [filters.account_id, filters.status ?? null, filters.limit, filters.offset, filters.history ?? false,
-      filters.date_from ?? null, filters.date_to ?? null, filters.q ?? "", filters.review_status ?? "all"],
+    [
+      filters.account_id,
+      filters.status ?? null,
+      filters.limit,
+      filters.offset,
+      filters.history ?? false,
+      filters.date_from ?? null,
+      filters.date_to ?? null,
+      filters.q ?? "",
+      filters.review_status ?? "all",
+    ]
   );
   const row = result.rows[0];
-  if (!row?.account_exists) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
+  if (!row?.account_exists)
+    throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
   const count = Number(row.count);
-  if (!Number.isSafeInteger(count)) throw new BankingError("BANKING_COUNT_INVALID", 500);
-  return { transactions: await openingClearProjection(getDbPool(), row.transactions), count };
+  if (!Number.isSafeInteger(count))
+    throw new BankingError("BANKING_COUNT_INVALID", 500);
+  return {
+    transactions: await openingClearProjection(getDbPool(), row.transactions),
+    count,
+  };
 }

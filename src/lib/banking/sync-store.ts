@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+
 import type { PoolClient } from "pg";
-import { BankingError, bankingEnvSql } from "./security";
+
 import { bankingLimits, limitCode } from "./limits";
 import { withReviewLock } from "./review-common";
-import { invalidateBankSource } from "./review-source";
 import { applyRulesForAccounts } from "./review-rule-apply";
+import { invalidateBankSource } from "./review-source";
+import { BankingError, bankingEnvSql } from "./security";
 
 export type FeedTransaction = {
   transaction_id: string;
@@ -55,31 +57,44 @@ type StoredTransaction = {
 export async function applyFeedBatch(
   client: PoolClient,
   connectionId: string,
-  batch: FeedBatch,
+  batch: FeedBatch
 ): Promise<{ added: number; modified: number; removed: number }> {
   await withReviewLock(client);
   // The 2,000-row sandbox ceiling is shared across connections: a connection
   // lock alone cannot prevent two concurrent batches from exceeding it.
-  await client.query("SELECT pg_advisory_xact_lock(hashtext('banking:sandbox-transaction-cap'))");
-  const accounts = await client.query<{ id: string; provider_account_id: string }>(
-    `SELECT id, provider_account_id FROM bank_account
-       WHERE connection_id = $1 AND deleted_at IS NULL`, [connectionId],
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtext('banking:sandbox-transaction-cap'))"
   );
-  const accountIds = new Map(accounts.rows.map((account) => [account.provider_account_id, account.id]));
+  const accounts = await client.query<{
+    id: string;
+    provider_account_id: string;
+  }>(
+    `SELECT id, provider_account_id FROM bank_account
+       WHERE connection_id = $1 AND deleted_at IS NULL`,
+    [connectionId]
+  );
+  const accountIds = new Map(
+    accounts.rows.map((account) => [account.provider_account_id, account.id])
+  );
   const stored = await client.query<StoredTransaction>(
     `SELECT id, account_id, provider_transaction_id, pending_transaction_id,
             amount, currency, unofficial_currency, status, transaction_date,
             authorized_date, name, merchant_name, source_data
-       FROM bank_transaction WHERE connection_id = $1 FOR UPDATE`, [connectionId],
+       FROM bank_transaction WHERE connection_id = $1 FOR UPDATE`,
+    [connectionId]
   );
-  const transactions = new Map(stored.rows.map((row) => [row.provider_transaction_id, row]));
+  const transactions = new Map(
+    stored.rows.map((row) => [row.provider_transaction_id, row])
+  );
   const counts = { added: 0, modified: 0, removed: 0 };
   const finalRemovals = new Set(batch.removed.map((row) => row.transaction_id));
   for (const row of stored.rows) {
-    if (row.status === "posted" && row.pending_transaction_id) finalRemovals.add(row.pending_transaction_id);
+    if (row.status === "posted" && row.pending_transaction_id)
+      finalRemovals.add(row.pending_transaction_id);
   }
   for (const row of [...batch.added, ...batch.modified]) {
-    if (!row.pending && row.pending_transaction_id) finalRemovals.add(row.pending_transaction_id);
+    if (!row.pending && row.pending_transaction_id)
+      finalRemovals.add(row.pending_transaction_id);
   }
 
   function accountId(providerId: string): string {
@@ -112,12 +127,14 @@ export async function applyFeedBatch(
       source_data: tx.source,
     };
     const identical = previous && isDeepStrictEqual(previous, next);
-    const removedReplay = previous?.status === "removed" && finalRemovals.has(tx.transaction_id)
-      && isDeepStrictEqual({ ...previous, status: next.status }, next);
+    const removedReplay =
+      previous?.status === "removed" &&
+      finalRemovals.has(tx.transaction_id) &&
+      isDeepStrictEqual({ ...previous, status: next.status }, next);
     if (previous && (identical || removedReplay)) {
       await client.query(
         "UPDATE bank_transaction SET last_seen_at = now() WHERE id = $1 AND connection_id = $2",
-        [previous.id, connectionId],
+        [previous.id, connectionId]
       );
       return;
     }
@@ -128,10 +145,22 @@ export async function applyFeedBatch(
            amount, currency, unofficial_currency, status, transaction_date, authorized_date,
            name, merchant_name, source_data, first_seen_at, last_seen_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,now(),now())`,
-        [next.id, connectionId, next.account_id, next.provider_transaction_id,
-          next.pending_transaction_id, next.amount, next.currency, next.unofficial_currency,
-          next.status, next.transaction_date, next.authorized_date, next.name,
-          next.merchant_name, JSON.stringify(next.source_data)],
+        [
+          next.id,
+          connectionId,
+          next.account_id,
+          next.provider_transaction_id,
+          next.pending_transaction_id,
+          next.amount,
+          next.currency,
+          next.unofficial_currency,
+          next.status,
+          next.transaction_date,
+          next.authorized_date,
+          next.name,
+          next.merchant_name,
+          JSON.stringify(next.source_data),
+        ]
       );
       counts.added++;
     } else {
@@ -146,13 +175,29 @@ export async function applyFeedBatch(
            source_data = $12::jsonb, removed_at = NULL, deleted_at = NULL,
            source_version=source_version+1,last_seen_at = now(), updated_at = now()
          WHERE id = $1 AND connection_id = $2`,
-        [next.id, connectionId, next.pending_transaction_id, next.amount,
-          next.currency, next.unofficial_currency, next.status, next.transaction_date,
-          next.authorized_date, next.name, next.merchant_name, JSON.stringify(next.source_data)],
+        [
+          next.id,
+          connectionId,
+          next.pending_transaction_id,
+          next.amount,
+          next.currency,
+          next.unofficial_currency,
+          next.status,
+          next.transaction_date,
+          next.authorized_date,
+          next.name,
+          next.merchant_name,
+          JSON.stringify(next.source_data),
+        ]
       );
       counts.modified++;
     }
-    await invalidateBankSource(client, next.id, previous?.transaction_date ?? null, next.transaction_date);
+    await invalidateBankSource(
+      client,
+      next.id,
+      previous?.transaction_date ?? null,
+      next.transaction_date
+    );
     transactions.set(tx.transaction_id, next);
   }
 
@@ -166,10 +211,15 @@ export async function applyFeedBatch(
          status = 'removed', removed_at = COALESCE(removed_at, now()),
          source_version=source_version+1,last_seen_at = now(), updated_at = now()
        WHERE id = $1 AND connection_id = $2 AND status <> 'removed'`,
-      [row.id, connectionId],
+      [row.id, connectionId]
     );
     row.status = "removed";
-    await invalidateBankSource(client, row.id, row.transaction_date, row.transaction_date);
+    await invalidateBankSource(
+      client,
+      row.id,
+      row.transaction_date,
+      row.transaction_date
+    );
     counts.removed++;
   }
 
@@ -189,7 +239,9 @@ export async function applyFeedBatch(
   }
 
   for (const removed of batch.removed) {
-    const resolvedAccount = removed.account_id ? accountId(removed.account_id) : null;
+    const resolvedAccount = removed.account_id
+      ? accountId(removed.account_id)
+      : null;
     const row = transactions.get(removed.transaction_id);
     // No source existed locally: there is nothing to delete or fabricate.
     if (!row) continue;
@@ -200,12 +252,19 @@ export async function applyFeedBatch(
   }
 
   // Count removed evidence as well: removal is not a way around the ingest cap.
-  const total = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM bank_transaction");
+  const total = await client.query<{ count: string }>(
+    "SELECT COUNT(*)::text AS count FROM bank_transaction"
+  );
   const count = total.rows[0]?.count;
-  if (count === undefined) throw new BankingError("BANKING_TRANSACTION_COUNT_FAILED", 503);
+  if (count === undefined)
+    throw new BankingError("BANKING_TRANSACTION_COUNT_FAILED", 503);
   const cap = bankingLimits().transactions;
-  if (cap !== null && BigInt(count) > BigInt(cap)) throw new BankingError(limitCode("TRANSACTION"), 409);
-  await applyRulesForAccounts(client, accounts.rows.map(row => row.id));
+  if (cap !== null && BigInt(count) > BigInt(cap))
+    throw new BankingError(limitCode("TRANSACTION"), 409);
+  await applyRulesForAccounts(
+    client,
+    accounts.rows.map((row) => row.id)
+  );
 
   const updated = await client.query(
     `UPDATE bank_connection SET cursor = $2,
@@ -214,8 +273,14 @@ export async function applyFeedBatch(
        last_successful_sync_at = CASE WHEN $3::boolean THEN now() ELSE last_successful_sync_at END,
        last_error_code = NULL, last_error_message = NULL, updated_at = now()
      WHERE id = $1 AND environment=${bankingEnvSql()} AND deleted_at IS NULL`,
-    [connectionId, batch.cursor, batch.initialComplete, batch.historicalComplete],
+    [
+      connectionId,
+      batch.cursor,
+      batch.initialComplete,
+      batch.historicalComplete,
+    ]
   );
-  if (updated.rowCount !== 1) throw new BankingError("BANKING_CONNECTION_MISSING", 409);
+  if (updated.rowCount !== 1)
+    throw new BankingError("BANKING_CONNECTION_MISSING", 409);
   return counts;
 }

@@ -10,14 +10,14 @@
  * owner y esta ruta contesta 403 a todos — falla cerrado a propósito.
  */
 
+import { randomUUID } from "node:crypto";
+
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { getDbPool } from "../../utils/db-pool";
 import {
   accessFailure,
   assertOwner,
@@ -25,6 +25,7 @@ import {
   isOwnerEmail,
   PosAccessError,
 } from "../../../lib/pos/access-level";
+import { getDbPool } from "../../utils/db-pool";
 
 type AccessRow = {
   user_id: string;
@@ -120,7 +121,12 @@ export async function POST(
     await pool.query(
       `INSERT INTO pos_accounting_grant (id, user_id, email, granted_by)
        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-      [`pag_${randomUUID().replace(/-/g, "")}`, userId, target.rows[0].email, actorId]
+      [
+        `pag_${randomUUID().replace(/-/g, "")}`,
+        userId,
+        target.rows[0].email,
+        actorId,
+      ]
     );
   } else {
     await pool.query(
@@ -139,7 +145,8 @@ export async function POST(
   res.json({
     user_id: userId,
     email: target.rows[0].email,
-    can_accounting: active.rows.length > 0 || isOwnerEmail(target.rows[0].email),
+    can_accounting:
+      active.rows.length > 0 || isOwnerEmail(target.rows[0].email),
     granted_at: active.rows[0]?.granted_at ?? null,
     granted_by: active.rows[0]?.granted_by ?? null,
   });

@@ -3,7 +3,9 @@ import { Migration } from "@medusajs/framework/mikro-orm/migrations";
 /** Sandbox banking journal. No existing financial document is restated. */
 export class Migration20260909022000 extends Migration {
   override async up(): Promise<void> {
-    this.addSql(`ALTER TABLE bank_review_permission ADD COLUMN IF NOT EXISTS can_post boolean NOT NULL DEFAULT false;`);
+    this.addSql(
+      `ALTER TABLE bank_review_permission ADD COLUMN IF NOT EXISTS can_post boolean NOT NULL DEFAULT false;`
+    );
     this.addSql(`CREATE TABLE bank_direct_expense (
       id text PRIMARY KEY, transaction_id text NOT NULL UNIQUE REFERENCES bank_transaction(id),
       revision integer NOT NULL CHECK(revision>0), nature text NOT NULL CHECK(nature='new_direct_expense'),
@@ -34,15 +36,18 @@ export class Migration20260909022000 extends Migration {
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz NULL,
       UNIQUE(entry_id,role), CHECK((debit_cents>0 AND credit_cents=0) OR (credit_cents>0 AND debit_cents=0))
     );`);
-    this.addSql(`CREATE INDEX idx_bank_journal_day ON bank_journal_entry(day,id);
+    this
+      .addSql(`CREATE INDEX idx_bank_journal_day ON bank_journal_entry(day,id);
       CREATE INDEX idx_bank_journal_source ON bank_journal_entry(transaction_id,created_at,id);`);
-    this.addSql(`CREATE FUNCTION bank_journal_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE FUNCTION bank_journal_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN RAISE EXCEPTION 'BANKING_JOURNAL_IMMUTABLE'; END $$;
       CREATE TRIGGER bank_journal_entry_immutable BEFORE UPDATE OR DELETE ON bank_journal_entry
         FOR EACH ROW EXECUTE FUNCTION bank_journal_immutable();
       CREATE TRIGGER bank_journal_line_immutable BEFORE UPDATE OR DELETE ON bank_journal_line
         FOR EACH ROW EXECUTE FUNCTION bank_journal_immutable();`);
-    this.addSql(`CREATE FUNCTION bank_journal_claim_source() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE FUNCTION bank_journal_claim_source() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE source_id text; original bank_journal_entry%ROWTYPE;
       BEGIN
         SELECT transaction_id INTO source_id FROM bank_direct_expense WHERE id=NEW.expense_id FOR UPDATE;
@@ -62,7 +67,8 @@ export class Migration20260909022000 extends Migration {
       END $$;
       CREATE TRIGGER bank_journal_source_claim BEFORE INSERT ON bank_journal_entry
         FOR EACH ROW EXECUTE FUNCTION bank_journal_claim_source();`);
-    this.addSql(`CREATE FUNCTION bank_journal_check_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+    this
+      .addSql(`CREATE FUNCTION bank_journal_check_balance() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE entry bank_journal_entry%ROWTYPE; target text; n integer; deb numeric; cred numeric;
       BEGIN
         IF TG_TABLE_NAME='bank_journal_entry' THEN target:=NEW.id; ELSE target:=NEW.entry_id; END IF;

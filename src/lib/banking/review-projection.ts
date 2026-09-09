@@ -1,8 +1,17 @@
+import {
+  DEPOSIT_SOURCE_HASH_SQL,
+  DEPOSIT_STALE_SQL,
+} from "./deposit-projection";
+import {
+  PAYMENT_ELIGIBLE_SQL,
+  paymentFingerprintSql,
+} from "./payment-evidence";
 import { REVIEW_JSON, type Review } from "./review-types";
 
-import { PAYMENT_ELIGIBLE_SQL, paymentFingerprintSql } from "./payment-evidence";
-import { DEPOSIT_SOURCE_HASH_SQL, DEPOSIT_STALE_SQL } from "./deposit-projection";
-export { PAYMENT_ELIGIBLE_SQL, PAYMENT_FINGERPRINT_SQL } from "./payment-evidence";
+export {
+  PAYMENT_ELIGIBLE_SQL,
+  PAYMENT_FINGERPRINT_SQL,
+} from "./payment-evidence";
 export const REVIEW_JOINS = `LEFT JOIN bank_transaction_review r ON r.transaction_id=t.id AND r.deleted_at IS NULL
   LEFT JOIN bank_day_close dc ON dc.day=t.transaction_date AND dc.deleted_at IS NULL
   LEFT JOIN customer_payment mp ON mp.id=r.matched_payment_id
@@ -24,9 +33,17 @@ export const REVIEW_SELECT_SQL = `t.id,t.account_id,t.transaction_date AS date,t
   (SELECT COUNT(*)::integer FROM bank_review_attachment att WHERE att.transaction_id=t.id
     AND att.detached_at IS NULL AND att.deleted_at IS NULL) AS attachment_count`;
 
-export function effectiveReviewStatus(tx: { source_version: number }, review: Review | null,
-  dayClosed: boolean): "closed" | "pending" | "confirmed" | "excluded" {
+export function effectiveReviewStatus(
+  tx: { source_version: number },
+  review: Review | null,
+  dayClosed: boolean
+): "closed" | "pending" | "confirmed" | "excluded" {
   if (dayClosed) return "closed";
-  if (!review || review.source_version !== tx.source_version || review.status === "draft") return "pending";
+  if (
+    !review ||
+    review.source_version !== tx.source_version ||
+    review.status === "draft"
+  )
+    return "pending";
   return review.status;
 }

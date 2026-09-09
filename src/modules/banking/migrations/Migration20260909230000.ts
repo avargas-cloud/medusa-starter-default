@@ -11,5 +11,7 @@ export class Migration20260909230000 extends Migration {
       updated_at timestamptz NOT NULL DEFAULT now());
       INSERT INTO bank_control(id) VALUES('default') ON CONFLICT (id) DO NOTHING;`);
   }
-  override async down(): Promise<void> { this.addSql("DROP TABLE IF EXISTS bank_control;"); }
+  override async down(): Promise<void> {
+    this.addSql("DROP TABLE IF EXISTS bank_control;");
+  }
 }
