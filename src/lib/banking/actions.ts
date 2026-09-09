@@ -1,5 +1,5 @@
 import { selectedAccountRows, saveAccounts } from "./accounts";
-import { BankingError, bankingEnvSql, decryptBankToken, bankingTokenKey } from "./security";
+import { BankingError, bankingEnvSql, decryptBankToken, bankingTokenKey, manualRefreshAllowed } from "./security";
 import { plaidRequest } from "./plaid";
 import { connectionRow, transaction, withBankLock } from "./store";
 import { syncBank } from "./sync";
@@ -27,6 +27,7 @@ export async function selectBankAccounts(connectionId: string, accountIds: strin
 }
 
 export async function refreshBank(connectionId: string) {
+  if (!manualRefreshAllowed()) throw new BankingError("BANKING_MANUAL_REFRESH_DISABLED", 403);
   const key = bankingTokenKey();
   await withBankLock(connectionId, async (client) => {
     const row = await connectionRow(client, connectionId);

@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { bankingConfig, bankingEnvSql, bankingTokenKey, decryptBankToken, encryptBankToken, envelopeKeyId,
-  requireBankingEnabled, requireBankingSandbox, BankingError } from "../../lib/banking/security";
+  requireBankingEnabled, requireBankingSandbox, manualRefreshAllowed, BankingError } from "../../lib/banking/security";
 import { bankingLimits, limitCode } from "../../lib/banking/limits";
 import { assertBankingControl, readBankingControl } from "../../lib/banking/control";
 
-const VARS = ["ECOPOWERTECH_ENV", "DATABASE_URL", "BANKING_ENABLED", "BANKING_ENV", "BANKING_EXPECTED_DB_TARGET",
+const VARS = ["BANKING_MANUAL_REFRESH", "ECOPOWERTECH_ENV", "DATABASE_URL", "BANKING_ENABLED", "BANKING_ENV", "BANKING_EXPECTED_DB_TARGET",
   "PLAID_CLIENT_ID", "PLAID_PRODUCTION_SECRET", "PLAID_SANDBOX_SECRET", "BANKING_WEBHOOK_URL", "BANKING_OAUTH_REDIRECT_URI",
   "BANKING_TOKEN_ACTIVE_KEY_ID", "BANKING_TOKEN_KEYS_JSON", "BANKING_SANDBOX_TOKEN_KEY", "BANKING_MAX_ACTIVE_CONNECTIONS"];
 const saved: Record<string, string | undefined> = {};
@@ -132,5 +132,16 @@ describe("persistent kill switch", () => {
     production();
     await expect(assertBankingControl(client({ regclass: "bank_control", control: { enabled: false } }))).rejects.toMatchObject({ code: "BANKING_PAUSED" });
     await expect(assertBankingControl(client({ regclass: "bank_control", control: { enabled: true } }))).resolves.toBeUndefined();
+  });
+});
+
+describe("paid manual refresh is off in production unless explicitly enabled", () => {
+  it("allows it in sandbox, refuses it in production, honors the explicit override", () => {
+    production({ ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: "postgresql://postgres:sandbox@localhost:5499/medusa" });
+    expect(manualRefreshAllowed()).toBe(true);
+    production();
+    expect(manualRefreshAllowed()).toBe(false);
+    production({ BANKING_MANUAL_REFRESH: "true" });
+    expect(manualRefreshAllowed()).toBe(true);
   });
 });

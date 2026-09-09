@@ -1,6 +1,6 @@
 import { openingClearProjection } from "./opening-guards";
 import { getDbPool } from "../../api/utils/db-pool";
-import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql } from "./security";
+import { bankingConfig, BankingError, requireBankingEnabled, bankingEnvSql, manualRefreshAllowed } from "./security";
 import { readBankingControl } from "./control";
 import { REVIEW_JOINS, REVIEW_SELECT_SQL } from "./review-projection";
 import type { Review } from "./review-types";
@@ -59,10 +59,10 @@ export interface BankTransactionView {
 /** Explicit DTOs keep provider payloads, cursors and token material server-side. */
 export async function bankingOverview(canManage: boolean, canReview = canManage, canClose = canManage) {
   const base = { ...bankingConfig(), can_manage: canManage, can_review: canReview, can_close: canClose };
-  if (!base.enabled) return { config: { ...base, control_enabled: false }, connections: [], accounts: [] };
+  if (!base.enabled) return { config: { ...base, control_enabled: false, manual_refresh: false }, connections: [], accounts: [] };
   requireBankingEnabled();
   const pool = getDbPool();
-  const config = { ...base, control_enabled: (await readBankingControl(pool)).enabled };
+  const config = { ...base, control_enabled: (await readBankingControl(pool)).enabled, manual_refresh: manualRefreshAllowed() };
   const [connections, accounts] = await Promise.all([
     pool.query<BankConnectionView>(
       `SELECT id, COALESCE(institution_name, 'Bank connection') AS institution_name,

@@ -99,6 +99,12 @@ export function requireBankingEnabled(): BankingEnvironment {
   return "production";
 }
 
+/** Operator decision 2026-09-09: the paid /transactions/refresh ($0.12/call) is OFF in production — the team
+ *  reconciles yesterday every morning from Plaid's free automatic updates. Sandbox keeps it (suites exercise it). */
+export function manualRefreshAllowed(): boolean {
+  return bankingConfig().environment !== "production" || process.env.BANKING_MANUAL_REFRESH === "true";
+}
+
 /** Quoted SQL literal of the ACTIVE environment; the only accepted way to filter bank_* rows by environment. */
 export function bankingEnvSql(): "'sandbox'" | "'production'" {
   return bankingConfig().environment === "production" ? "'production'" : "'sandbox'";
