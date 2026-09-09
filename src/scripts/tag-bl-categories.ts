@@ -35,7 +35,17 @@ const LL_TO_BL: Record<string, string> = {
     cable: "cables",
     led_driver_accessory: "led-driver-accessories",
     led_driver: "led-drivers",
+    controller: "controllers",
+    remote: "remotes",
 }
+
+/**
+ * Categorías que NO se barren enteras: sólo entran los SKU nombrados en su
+ * allowlist. Estar acá es la diferencia entre "BL adopta esta familia de LL" y
+ * "BL adopta ESTE producto". Sacar una categoría de este set la convierte en
+ * barrido y da de alta todo lo que LL tenga en ella.
+ */
+const ALLOWLIST_ONLY = new Set(["led_driver", "controller", "remote"])
 
 /**
  * Drivers de LL que BL adopta EXPLÍCITAMENTE (user-requested 2026-09-03: los
@@ -46,6 +56,36 @@ const LL_TO_BL: Record<string, string> = {
  * por nombre, nunca por barrido.
  */
 const LED_DRIVER_SKU_ALLOWLIST = ["XLG-200-24-A", "XLG-320-V-A"]
+
+/**
+ * Controllers y remotos de LL que BL adopta EXPLÍCITAMENTE (user-requested
+ * 2026-09-09). Misma disciplina que los drivers de arriba y por el mismo
+ * motivo: `controller` y `remote` NO se mapean como categoría porque BL ya
+ * tiene su propio set y un barrido daría de alta cada controller de LL en el
+ * próximo Sync Medusa sin que nadie lo haya decidido.
+ *
+ * · ECTSK-RFRC1C15A — el V1-L de 15 A / 360 W. BL sólo tenía Single/RF de 5 A
+ *   (120 W) y la entrada Single/RF de `basicControllerMap` estaba VACÍA; éste
+ *   pasa a ser su default. Su spec y su diagrama ya están autorados en
+ *   `lld_product_spec`, y sus medidas en el PDF del fabricante.
+ * · ECTSK-RM2C1ZW — el remoto CCT. `ECTSK-RFRC2C5A` declara `ECTSK-RM2X` como
+ *   su familia de pareo y BL no tenía NINGÚN remoto de esa familia, así que esa
+ *   compatibilidad no se podía satisfacer.
+ * · ECTSK-RM1C4ZB / ECTSK-RM1C1ZB — Single/RF de 4 y 1 zona. El primero es el
+ *   reemplazo del descontinuado `ECTSK-RM1C4Z`, que queda `disabled` en el
+ *   catálogo de BL (nunca borrado: los proyectos guardados tienen que seguir
+ *   resolviendo su SKU).
+ *
+ * OJO: el SKU de LL es clave de máquina y estos remotos llevan sufijo de
+ * acabado. No fusionar `ECTSK-RM1C4Z` con `ECTSK-RM1C4ZB` — son SKU distintos
+ * y se tratan como productos distintos.
+ */
+const CONTROLLER_REMOTE_SKU_ALLOWLIST = [
+    "ECTSK-RFRC1C15A",
+    "ECTSK-RM2C1ZW",
+    "ECTSK-RM1C4ZB",
+    "ECTSK-RM1C1ZB",
+]
 
 export default async function tagBlCategories({ container }: ExecArgs) {
     void container
@@ -82,9 +122,13 @@ export default async function tagBlCategories({ container }: ExecArgs) {
               JOIN product p ON p.id = s.product_id AND p.deleted_at IS NULL
               JOIN product_variant v ON v.product_id = p.id AND v.deleted_at IS NULL
              WHERE s.spec->>'category' = ANY($1::text[])
-                OR (s.spec->>'category' = 'led_driver' AND v.sku = ANY($2::text[]))
+                OR (s.spec->>'category' = ANY($2::text[]) AND v.sku = ANY($3::text[]))
              ORDER BY 3, 2`,
-            [Object.keys(LL_TO_BL).filter((k) => k !== "led_driver"), LED_DRIVER_SKU_ALLOWLIST],
+            [
+                Object.keys(LL_TO_BL).filter((k) => !ALLOWLIST_ONLY.has(k)),
+                [...ALLOWLIST_ONLY],
+                [...LED_DRIVER_SKU_ALLOWLIST, ...CONTROLLER_REMOTE_SKU_ALLOWLIST],
+            ],
         )
 
         const pending = targets.filter((t) => t.current !== LL_TO_BL[t.ll_category])
