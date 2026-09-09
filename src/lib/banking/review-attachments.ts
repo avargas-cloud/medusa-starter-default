@@ -43,9 +43,9 @@ export async function addReviewAttachment(id: string, actorId: string, key: stri
     if (context.review?.status === "excluded") throw new BankingError("BANKING_RESTORE_REQUIRED", 409);
     await reviewCapacity(client, "bank_review_attachment", 25);
     // Replacement shares the review lock, CAS and transaction with the insert.
-    // Keep old bytes for closed snapshots and audit downloads, never as active files.
-    const replaced = await client.query<ReviewAttachment>(`UPDATE bank_review_attachment
-      SET detached_at=now(),updated_at=now()
+    // Operator decision 2026-09-09: one PDF per movement, no history of superseded
+    // files — the previous row's bytes are hard-deleted, not detached.
+    const replaced = await client.query<ReviewAttachment>(`DELETE FROM bank_review_attachment
       WHERE transaction_id=$1 AND deleted_at IS NULL AND detached_at IS NULL
       RETURNING ${ATTACHMENT_COLUMNS}`, [id]);
     const result = await client.query<ReviewAttachment>(`INSERT INTO bank_review_attachment
@@ -71,7 +71,8 @@ export async function detachReviewAttachment(attachmentId: string, actorId: stri
     const context = await loadReviewContext(client, attachment.transaction_id, body);
     if (context.review?.status === "excluded") throw new BankingError("BANKING_RESTORE_REQUIRED", 409);
     if (attachment.detached_at) throw new BankingError("BANKING_ATTACHMENT_ALREADY_DETACHED", 409);
-    await client.query("UPDATE bank_review_attachment SET detached_at=now(),updated_at=now() WHERE id=$1", [attachmentId]);
+    // Operator decision 2026-09-09: detach hard-deletes the row's bytes, no history kept.
+    await client.query("DELETE FROM bank_review_attachment WHERE id=$1", [attachmentId]);
     return { review: await persistReview(client, context, {
       status: "draft", confirmed_by: null, confirmed_at: null,
       source_version: context.review?.source_version ?? context.tx.source_version,

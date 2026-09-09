@@ -15,7 +15,10 @@ export async function receiptRead<T>(read: (client: PoolClient) => Promise<T>): 
 }
 export function receiptMapping(account: AccountingAccount, attested: boolean): AccountingAccount {
   const known = bankAccountingCurrency(account.account_type, account.currency);
-  const local = attested && account.currency === null && ["AccountsReceivable", "OtherCurrentAsset"].includes(account.account_type);
+  // QuickBooks Desktop without multicurrency reports NO currency on any account (11 of 12 real Bank accounts,
+  // 2026-09-09). The setup's local_usd_attested is the operator's statement that the file is single-currency USD,
+  // so it covers Bank accounts too; an explicit non-USD ref still fails closed above.
+  const local = attested && account.currency === null && ["AccountsReceivable", "OtherCurrentAsset", "Bank"].includes(account.account_type);
   return { ...account, qb_currency_ref: account.currency, currency: known ?? (local ? "USD" : null) };
 }
 export async function receiptAccounts(client: PoolClient, ids?: string[]): Promise<AccountingAccount[]> {

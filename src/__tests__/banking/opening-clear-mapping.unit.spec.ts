@@ -4,15 +4,20 @@ import { assertOpeningClearMapping } from "../../lib/banking/opening-clear-mappi
 const bank = { account_id: "reconnected-feed-account", qb_list_id: "stable-bank-list-id", currency: "USD",
   type: "depository", is_active: true, is_selected: true, deleted: false, environment: "sandbox" };
 const account = { id: bank.qb_list_id, name: "Renamed bank account", account_type: "Bank", currency: "US Dollar" };
-function fixture(changes = {}, qb: Partial<typeof account> | null = {}, missing = false) {
+function fixture(changes = {}, qb: Partial<typeof account> | null = {}, missing = false, attested = true) {
   const query = jest.fn(async (sql: string, _args: unknown[]) => {
     if (sql.includes("FROM bank_transaction t")) return { rows: missing ? [] : [{ ...bank, ...changes }] };
     if (sql.includes("FROM qb_account")) return { rows: qb === null ? [] : [{ ...account, ...qb }] };
+    if (sql.includes("FROM bank_accounting_setup")) return { rows: [{ id: "setup", revision: 1, cut_date: "2000-01-01", currency: "USD", attested, frozen: false }] };
     throw new Error(`Unexpected query ${sql}`);
   });
   return { client: { query } as unknown as PoolClient, query };
 }
 describe("historical clearing resolves the transaction's live bank mapping", () => {
+  it("accepts a Bank account without a currency ref when the operator attested local USD, and not otherwise", async () => {
+    await expect(assertOpeningClearMapping(fixture({}, { currency: null }, false, true).client, "tx", bank.qb_list_id)).resolves.toBeUndefined();
+    await expect(assertOpeningClearMapping(fixture({}, { currency: null }, false, false).client, "tx", bank.qb_list_id)).rejects.toThrow("BANKING_OPENING_MAPPING_STALE");
+  });
   it("accepts a reconnected feed and renamed USD book account with the same ListID", async () => {
     const current = fixture();
     await expect(assertOpeningClearMapping(current.client, "new-feed-transaction", bank.qb_list_id)).resolves.toBeUndefined();

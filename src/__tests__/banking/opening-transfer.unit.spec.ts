@@ -10,7 +10,7 @@ import type { BankDeposit } from "../../lib/banking/deposit-types";
 import type { OpeningItem } from "../../lib/banking/opening-types";
 
 jest.mock("../../lib/banking/deposit-read", () => ({ loadBankDeposit: jest.fn() }));
-jest.mock("../../lib/banking/receipts-setup", () => ({ receiptAccounts: jest.fn(), receiptSetup: jest.fn() }));
+jest.mock("../../lib/banking/receipts-setup", () => ({ receiptAccounts: jest.fn(), receiptSetup: jest.fn(), receiptMapping: jest.requireActual("../../lib/banking/receipts-setup").receiptMapping }));
 jest.mock("../../lib/banking/receipts-source", () => ({ ...jest.requireActual("../../lib/banking/receipts-source"), paymentReceiptSource: jest.fn() }));
 jest.mock("../../lib/banking/opening-funding", () => ({ validateOpeningFunding: jest.fn() }));
 

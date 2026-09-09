@@ -64,11 +64,14 @@ describe("local receipt accounting boundaries", () => {
     expect(receiptPaymentBlockers({ ...payment, batch_day: "1999-12-31" }, setup)).toContain("BANKING_RECEIPT_BEFORE_CUT");
     expect(receiptPaymentBlockers(payment, null)).toContain("BANKING_RECEIPT_SETUP_REQUIRED");
   });
-  it("requires local USD attestation for null AR and UF but never infers Bank currency", () => {
+  it("requires local USD attestation for null AR, UF and Bank; never infers without it or against an explicit ref", () => {
     expect(receiptMapping({ ...ar, currency: null }, false).currency).toBeNull();
     expect(receiptMapping({ ...ar, currency: null }, true)).toMatchObject({ currency: "USD", qb_currency_ref: null });
     expect(receiptMapping({ ...clearing, currency: null }, true).currency).toBe("USD");
-    expect(receiptMapping({ ...ar, account_type: "Bank", currency: null }, true).currency).toBeNull();
+    // QuickBooks Desktop without multicurrency reports NO currency on Bank accounts (11 of 12 real ones, 2026-09-09).
+    expect(receiptMapping({ ...ar, account_type: "Bank", currency: null }, true).currency).toBe("USD");
+    expect(receiptMapping({ ...ar, account_type: "Bank", currency: null }, false).currency).toBeNull();
+    expect(receiptMapping({ ...ar, account_type: "Bank", currency: "CAD" }, true).currency).toBeNull();
     expect(receiptMapping({ ...ar, currency: "CAD" }, true).currency).toBeNull();
     expect(receiptSetupSchema.safeParse({ expected_revision: 0, cut_date: "2000-01-01", ar_account_list_id: "ar",
       clearing_account_list_id: "uf", local_usd_attested: false }).success).toBe(false);

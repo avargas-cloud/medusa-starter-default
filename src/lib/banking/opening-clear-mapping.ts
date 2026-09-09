@@ -1,7 +1,6 @@
 import type { PoolClient } from "pg";
 import { BankingError } from "./security";
-import { receiptAccounts } from "./receipts-setup";
-import { bankAccountingCurrency } from "./accounting-types";
+import { receiptAccounts, receiptMapping, receiptSetup } from "./receipts-setup";
 
 type ClearMapping = { account_id: string; qb_list_id: string | null; currency: string | null; type: string;
   is_active: boolean; is_selected: boolean; deleted: boolean; environment: string };
@@ -15,9 +14,9 @@ export async function assertOpeningClearMapping(client: PoolClient, transactionI
     || row.currency !== "USD" || row.type !== "depository" || row.qb_list_id !== expectedListId) {
     throw new BankingError("BANKING_OPENING_MAPPING_STALE", 409);
   }
-  const account = (await receiptAccounts(client, [expectedListId]))[0];
-  if (!account || account.id !== expectedListId || account.account_type !== "Bank"
-    || bankAccountingCurrency(account.account_type, account.currency) !== "USD") {
+  const live = (await receiptAccounts(client, [expectedListId]))[0];
+  const account = live ? receiptMapping(live, (await receiptSetup(client))?.attested === true) : null;
+  if (!account || account.id !== expectedListId || account.account_type !== "Bank" || account.currency !== "USD") {
     throw new BankingError("BANKING_OPENING_MAPPING_STALE", 409);
   }
 }

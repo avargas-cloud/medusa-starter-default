@@ -8,7 +8,7 @@ import { depositCents, depositSourceKey } from "./deposit-types";
 import { validateOpeningFunding } from "./opening-funding";
 import { paymentReservedCentsSql } from "./payment-evidence";
 import { validateMatchedPayment, assertMatchSourceHash } from "./review-matching";
-import { receiptAccounts, receiptSetup } from "./receipts-setup";
+import { receiptAccounts, receiptMapping, receiptSetup } from "./receipts-setup";
 import { paymentReceiptSource, receiptLine, type ReceiptEvidence } from "./receipts-source";
 import type { ReceiptSource } from "./receipts-types";
 
@@ -18,11 +18,12 @@ async function bankMapping(client: PoolClient, id: string, blockers: string[]) {
       AND a.type='depository' AND a.currency='USD') AS valid
     FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
     WHERE a.id=$1 AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`, [id])).rows[0];
-  const bank = account?.qb_list_id ? (await receiptAccounts(client, [account.qb_list_id]))[0] : undefined;
-  if (!account?.valid || !bank || bank.account_type !== "Bank" || bankAccountingCurrency(bank.account_type, bank.currency) !== "USD") {
+  const live = account?.qb_list_id ? (await receiptAccounts(client, [account.qb_list_id]))[0] : undefined;
+  const bank = live ? receiptMapping(live, (await receiptSetup(client))?.attested === true) : undefined;
+  if (!account?.valid || !bank || bank.account_type !== "Bank" || bank.currency !== "USD") {
     blockers.push("BANKING_RECEIPT_BANK_MAPPING_INVALID"); return null;
   }
-  return { ...bank, qb_currency_ref: bank.currency, currency: "USD" };
+  return bank;
 }
 async function allocate(client: PoolClient, evidence: ReceiptEvidence, paymentId: string, cents: number) {
   const payment = await paymentReceiptSource(client, paymentId);

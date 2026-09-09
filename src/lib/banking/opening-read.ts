@@ -3,7 +3,6 @@ import { BankingError, bankingEnvSql } from "./security";
 import { reviewHash } from "./review-common";
 import { reviewToday } from "./review-date";
 import { receiptAccounts, receiptMapping, receiptRead, receiptSetup } from "./receipts-setup";
-import { bankAccountingCurrency } from "./accounting-types";
 import { openingReadItem } from "./opening-funding";
 import { OPENING_EVIDENCE_COLUMNS } from "./opening-evidence";
 import type { OpeningBalance, OpeningContext, OpeningEvidence, OpeningItem } from "./opening-types";
@@ -35,11 +34,12 @@ export async function openingMapping(client: PoolClient, kind: "bank" | "clearin
   const bank = (await client.query<{ qb_list_id: string }>(`SELECT a.qb_list_id FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
     WHERE a.id=$1 AND a.is_active AND a.is_selected AND a.currency='USD' AND a.type='depository'
       AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`, [accountId])).rows[0];
-  const account = bank?.qb_list_id ? (await receiptAccounts(client, [bank.qb_list_id]))[0] : null;
-  if (!account || account.account_type !== "Bank" || bankAccountingCurrency(account.account_type, account.currency) !== "USD") {
+  const live = bank?.qb_list_id ? (await receiptAccounts(client, [bank.qb_list_id]))[0] : null;
+  const account = live ? receiptMapping(live, setup.attested) : null;
+  if (!account || account.account_type !== "Bank" || account.currency !== "USD") {
     throw new BankingError("BANKING_OPENING_ACCOUNT_INVALID", 409);
   }
-  return { setup, account: { ...account, qb_currency_ref: account.currency, currency: "USD" } };
+  return { setup, account };
 }
 export async function openingContext(client: PoolClient, id: string): Promise<OpeningContext> {
   const opening = await openingRow(client, id);

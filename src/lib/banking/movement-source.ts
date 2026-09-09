@@ -27,7 +27,7 @@ export async function movementAccounts(client: PoolClient, ids?: string[], attes
     AND account_type IN ('Bank','AccountsPayable','AccountsReceivable','OtherCurrentAsset','OtherAsset','CreditCard',
       'LongTermLiability','OtherCurrentLiability','Equity','Expense','OtherExpense') ORDER BY full_name,qb_list_id FOR SHARE`, [ids ?? null])).rows;
   return accounts.map(a => ({ ...a, qb_currency_ref: a.currency,
-    currency: bankAccountingCurrency(a.account_type, a.currency) ?? (attested && a.currency === null && a.account_type !== "Bank" ? "USD" : null) }));
+    currency: bankAccountingCurrency(a.account_type, a.currency) ?? (attested && a.currency === null ? "USD" : null) }));
 }
 export const listMovementAccounts = () => receiptRead(async client => ({ accounts: await movementAccounts(client) }));
 export async function movementBank(client: PoolClient, id: string, day: string) {

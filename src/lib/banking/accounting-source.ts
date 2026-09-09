@@ -3,7 +3,8 @@ import type { PoolClient } from "pg";
 import { BankingError, bankingEnvSql } from "./security";
 import { reviewHash } from "./review-common";
 import { reviewDate, reviewToday } from "./review-date";
-import { bankAccountingCurrency, bankExpenseCents, type AccountingAccount, type AccountingSource } from "./accounting-types";
+import { receiptMapping, receiptSetup } from "./receipts-setup";
+import { bankExpenseCents, type AccountingAccount, type AccountingSource } from "./accounting-types";
 
 type SourceRow = {
   id: string; account_id: string; account_name: string; transaction_date: string; name: string; amount: string;
@@ -38,11 +39,11 @@ export async function accountingSource(client: PoolClient, id: string): Promise<
     LEFT JOIN bank_day_close dc ON dc.day=t.transaction_date AND dc.deleted_at IS NULL
     WHERE t.id=$1 AND c.environment=${bankingEnvSql()} FOR SHARE OF t,a,c`, [id])).rows[0];
   if (!row) throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
+  const attested = (await receiptSetup(client))?.attested === true;
   const accounts = (await client.query<AccountingAccount>(`SELECT qb_list_id AS id,full_name AS name,account_type,currency
     FROM qb_account WHERE qb_list_id=ANY($1::text[]) AND is_active AND deleted_at IS NULL ORDER BY qb_list_id FOR SHARE`,
   [[row.category_list_id, row.qb_list_id].filter((value): value is string => Boolean(value))])).rows
-    .map(account => ({ ...account, qb_currency_ref: account.currency,
-      currency: bankAccountingCurrency(account.account_type, account.currency) }));
+    .map(account => receiptMapping(account, attested));
   const category = accounts.find(a => a.id === row.category_list_id) ?? null;
   const bank = accounts.find(a => a.id === row.qb_list_id) ?? null;
   const blockers: string[] = [];
