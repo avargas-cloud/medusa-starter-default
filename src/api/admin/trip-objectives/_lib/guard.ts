@@ -1,13 +1,14 @@
 /**
  * src/api/admin/trip-objectives/_lib/guard.ts
  *
- * Backend authorization for the trip-objectives routes. The frontend gate is
- * UX only; these helpers enforce the same "accounting" rule server-side so the
- * Decisions data can't be read by hitting the API directly.
+ * Backend authorization for the trip-objectives routes (y, por re-export, para
+ * commissions y outsourced-services). El gate del frontend es UX; acá se
+ * enforcea de verdad.
  *
- * Rule (matches the POS sidebar convention `isAdmin || canViewAccounting`):
- *   - actor is a Medusa user NOT in the pos_users whitelist  → admin → allow
- *   - actor IS a pos_user                                    → allow iff can_view_accounting
+ * Regla (2026-09-10): delega en `lib/pos/access-level.ts`. Ya NO existe el
+ * "ausente de `pos_user` ⇒ admin ⇒ allow": Accounting es owner o grant vivo en
+ * `pos_accounting_grant`. Los nombres exportados se conservan para no tocar
+ * los 17 route files que los usan.
  */
 
 import type {
@@ -15,16 +16,10 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
-import { POS_USER_MODULE } from "../../../../modules/pos-user";
-
-interface UserModuleLike {
-  retrieveUser: (id: string) => Promise<{ email?: string } | null>;
-}
-interface PosUserModuleLike {
-  listPosUsers: (
-    f: Record<string, unknown>
-  ) => Promise<Array<{ can_view_accounting?: boolean }>>;
-}
+import {
+  assertAccounting as assertAccessAccounting,
+  resolveAccessLevel,
+} from "../../../../lib/pos/access-level";
 
 export function getActorUserId(
   req: AuthenticatedMedusaRequest
@@ -35,27 +30,11 @@ export function getActorUserId(
 export async function canViewAccounting(
   req: AuthenticatedMedusaRequest
 ): Promise<boolean> {
-  const actorId = getActorUserId(req);
-  if (!actorId) return false;
-
-  let email: string | undefined;
   try {
-    const userModule = req.scope.resolve("user") as UserModuleLike;
-    const user = await userModule.retrieveUser(actorId);
-    email = user?.email;
+    return (await resolveAccessLevel(req)).canAccounting;
   } catch {
     return false;
   }
-  if (!email) return false;
-
-  const posUserService = req.scope.resolve(
-    POS_USER_MODULE
-  ) as PosUserModuleLike;
-  const posUsers = await posUserService.listPosUsers({ email });
-
-  // Not in the POS whitelist → admin staff → allowed.
-  if (posUsers.length === 0) return true;
-  return Boolean(posUsers[0]?.can_view_accounting);
 }
 
 /**
@@ -66,12 +45,13 @@ export async function assertAccounting(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ): Promise<boolean> {
-  const ok = await canViewAccounting(req);
-  if (!ok) {
+  try {
+    await assertAccessAccounting(req);
+    return true;
+  } catch {
     res
       .status(403)
       .json({ error: "Forbidden: accounting access required." });
     return false;
   }
-  return true;
 }

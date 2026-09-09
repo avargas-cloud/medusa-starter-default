@@ -17,6 +17,11 @@ import {
   runDirectQuery,
   type QbCreditDocType,
 } from "../_lib/qb-credit-query";
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 interface ImportBody {
   customer_id?: string;
@@ -63,6 +68,11 @@ export async function POST(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   // El PIN no se destructura: lo lee `extractSupervisorPin` (header primero, body
   // como fallback para no romper callers viejos).
   const { customer_id, txn_id, doc_type } = (req.body ?? {}) as ImportBody;

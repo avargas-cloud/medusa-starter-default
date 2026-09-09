@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 /**
  * GET /admin/email-marketing/activity?days=30
  *
@@ -10,11 +11,20 @@
  */
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import postgres from "postgres";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 export async function GET(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const daysParam = parseInt(
     String((req.query as { days?: string }).days ?? "30"),
     10

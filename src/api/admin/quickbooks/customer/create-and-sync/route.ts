@@ -1,9 +1,14 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 import { Client } from "pg";
 
 import { ensureCustomerPipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { syncCustomerToMeili } from "../../../../../lib/meilisearch/sync-customer";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 interface Body {
   // Core
@@ -104,6 +109,11 @@ export async function POST(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   if (process.env.QB_ORDER_FLOW_ENABLED !== "true") {
     res.json({
       success: true,

@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
@@ -8,6 +9,10 @@ import {
   resolveActorId,
 } from "../../../../../lib/pos/supervisor-pin-guard";
 import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 interface UndoBody {
   vendor_bill_id?: string;
@@ -23,6 +28,11 @@ interface UndoBody {
  * adopted bills can be undone here (owned bills go through their own lifecycle).
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   // El PIN no se destructura: lo lee `extractSupervisorPin`, que mira el header
   // `x-supervisor-pin` primero y cae al body para no romper callers viejos.
   const { vendor_bill_id, reason } = (req.body ?? {}) as UndoBody;

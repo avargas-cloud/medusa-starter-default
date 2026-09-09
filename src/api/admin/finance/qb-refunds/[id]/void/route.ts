@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/finance/qb-refunds/:id/void
@@ -15,6 +20,11 @@ import { FINANCE_MODULE } from "../../../../../../modules/finance";
  * pipeline row for confirmation.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const id = req.params.id as string;
   const financeService = req.scope.resolve(FINANCE_MODULE);
 

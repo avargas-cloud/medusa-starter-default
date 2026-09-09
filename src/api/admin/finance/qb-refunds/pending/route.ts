@@ -1,6 +1,11 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 import { Client } from "pg";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * GET /admin/finance/qb-refunds/pending
@@ -11,6 +16,11 @@ import { Client } from "pg";
  * Enriched with customer name and pipeline statuses for the accounting page.
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
   const pgClient = new Client({ connectionString: process.env.DATABASE_URL });
 

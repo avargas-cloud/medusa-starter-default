@@ -28,6 +28,8 @@ export function configureBankSandbox() {
     PLAID_CLIENT_ID: credentials.PLAID_CLIENT_ID || "", PLAID_SANDBOX_SECRET: credentials.PLAID_SANDBOX_SECRET || "",
     PLAID_PRODUCTION_SECRET: "", PLAID_SECRET: "", PLAID_ENV: "sandbox", BANKING_SANDBOX_WEBHOOK_URL: "",
     MEDUSA_BACKEND_URL: "http://localhost:9099", PORT: "9099",
+    // Sólo sandbox: el owner de producción se carga en Railway, nunca acá.
+    POS_OWNER_EMAILS: "sandbox@test.com",
     ADMIN_CORS: "http://localhost:3099,http://localhost:3001",
     STORE_CORS: "http://localhost:3099,http://localhost:4399,http://localhost:3001",
     AUTH_CORS: "http://localhost:3099,http://localhost:4399,http://localhost:3001",
@@ -97,6 +99,8 @@ async function start() {
     if (attempt === 89) throw new Error("SANDBOX_BACKEND_START_TIMEOUT");
     await new Promise((done) => setTimeout(done, 1000));
   }
+  // The four access-level test identities (owner = sandbox@test.com via POS_OWNER_EMAILS above). Idempotent.
+  execFileSync("bash", [resolve(workspace, "scripts/sandbox/seed-access-users.sh")], { cwd: workspace, stdio: "inherit" });
   execFileSync("bash", [resolve(workspace, "pos-sb")], { cwd: workspace, stdio: "inherit" });
   console.log("PASS: sandbox backend :9099, POS :3099 and banking-only worker started");
 }

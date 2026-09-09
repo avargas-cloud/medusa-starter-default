@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../../../../utils/db-pool";
@@ -9,6 +10,10 @@ import {
 import { isTreasuryDayLocked } from "../../../../../../lib/finance/treasury-lock";
 import { verifySupervisorPin } from "../../../../../../lib/pos/verify-supervisor-pin";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 const IN_FLIGHT = ["processing", "submitted"];
 
@@ -32,6 +37,11 @@ const IN_FLIGHT = ["processing", "submitted"];
  *    Desktop, then calls POST .../confirm-qb-cleanup to complete the revert.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const id = req.params.id as string;
   const { supervisor_pin, reason } = (req.body ?? {}) as {
     supervisor_pin?: string;

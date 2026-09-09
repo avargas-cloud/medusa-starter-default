@@ -1,6 +1,11 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
 import { loadDailyReport } from "../_lib/load-daily-report";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -25,6 +30,11 @@ const querySchema = z
  * non-zero delta (HTTP 500).
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({

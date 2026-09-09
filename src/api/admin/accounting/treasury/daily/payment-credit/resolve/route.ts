@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
 import { ulid } from "ulid";
 import { loadUnattributedPayments } from "../../../_lib/load-unattributed-payments";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../../lib/pos/access-level";
 
 type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: any[] }> };
 
@@ -37,6 +42,11 @@ const bodySchema = z.object({
  * Re-resolving UPSERTs (one active resolution per payment).
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({

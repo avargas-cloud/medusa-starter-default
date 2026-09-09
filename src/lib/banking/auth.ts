@@ -1,24 +1,36 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
-import { POS_USER_MODULE } from "../../modules/pos-user";
 import { BankingError } from "./security";
 import { assertBankingControl } from "./control";
+import { PosAccessError, resolveAccessLevel } from "../pos/access-level";
 
-/** Every cashier is a Medusa user; user authentication alone is insufficient. */
+/**
+ * Every cashier is a Medusa user; user authentication alone is insufficient.
+ *
+ * Desde 2026-09-10 la autoridad es `lib/pos/access-level.ts`: banking exige
+ * `canAccounting` (owner o grant vivo). La regla vieja —"ausente de `pos_user`
+ * ⇒ puede todo"— convertía cada alta de admin en un permiso de tesorería.
+ */
 export async function bankIdentity(req: AuthenticatedMedusaRequest) {
-  const actorId = req.auth_context?.actor_id;
-  if (!actorId) throw new BankingError("BANKING_AUTH_REQUIRED", 401);
-  const users = req.scope.resolve("user") as {
-    retrieveUser(id: string): Promise<{ email?: string | null }>;
+  let identity;
+  try {
+    identity = await resolveAccessLevel(req);
+  } catch (error) {
+    if (error instanceof PosAccessError) {
+      throw new BankingError(
+        error.status === 401 ? "BANKING_AUTH_REQUIRED" : "BANKING_ACCESS_DENIED",
+        error.status
+      );
+    }
+    throw error;
+  }
+  return {
+    actorId: identity.userId,
+    // Manage (connect banks, mapping, setup, permissions, and the shortcut that grants review/close/post)
+    // needs Accounting AND Admin (or owner). An Accounting user without Admin keeps only the grains the
+    // owner gave in bank_review_permission — otherwise every Accounting grant would silently be full manage.
+    canManage: identity.isOwner || (identity.canAccounting && identity.canAdmin),
+    canReadAccounting: identity.canAccounting,
   };
-  const user = await users.retrieveUser(actorId);
-  if (!user.email) throw new BankingError("BANKING_ACCESS_DENIED", 403);
-  const staff = req.scope.resolve(POS_USER_MODULE) as {
-    listPosUsers(filters: { email: string }, options: { take: number }):
-      Promise<Array<{ can_view_accounting: boolean }>>;
-  };
-  const rows = await staff.listPosUsers({ email: user.email.toLowerCase() }, { take: 1 });
-  const canManage = rows.length === 0;
-  return { actorId, canManage, canReadAccounting: canManage || Boolean(rows[0]?.can_view_accounting) };
 }
 
 export async function bankAccess(req: AuthenticatedMedusaRequest, manage = false) {

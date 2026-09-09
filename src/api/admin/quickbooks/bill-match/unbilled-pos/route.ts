@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
 import { deriveBilledStatus } from "../../../purchase-orders/_lib/billed-status";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * GET /admin/quickbooks/bill-match/unbilled-pos
@@ -46,7 +51,12 @@ interface QueueVendor {
   pos: QueuePo[];
 }
 
-export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<void> {
+export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   try {
     await client.connect();

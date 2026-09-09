@@ -16,6 +16,10 @@ import jwt from "jsonwebtoken";
 import { POS_USER_MODULE } from "../../../../modules/pos-user";
 import { buildActivationEmail } from "../../../../utils/email-templates";
 import { sendMail } from "../../../../utils/mailer";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 type InviteBody = {
   email: string;
@@ -27,6 +31,11 @@ export async function POST(
   req: AuthenticatedMedusaRequest<InviteBody>,
   res: MedusaResponse
 ) {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const { email, first_name, last_name } = req.body;
   const logger = req.scope.resolve("logger") as any;
   const POS_URL = process.env.POS_URL || "https://pos.ecopowertech.com";

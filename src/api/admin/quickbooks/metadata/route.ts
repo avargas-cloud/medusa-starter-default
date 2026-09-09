@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 import { Client } from "pg";
@@ -6,6 +7,10 @@ import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
 import { syncCustomerToMeili } from "../../../../lib/meilisearch/sync-customer";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 type PosDocType =
   | "estimate"
@@ -265,6 +270,11 @@ export async function GET(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const type = req.query.type as string | undefined;
   const id = req.query.id as string | undefined;
 
@@ -680,6 +690,11 @@ export async function PUT(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const {
     type,
     id,

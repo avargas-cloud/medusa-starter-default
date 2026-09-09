@@ -1,8 +1,13 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
 import { deriveBilledStatus } from "../../../purchase-orders/_lib/billed-status";
 import { queryVendorBills } from "../_lib/bill-query";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * GET /admin/quickbooks/bill-match/candidates-by-vendor?vendor_id=&from=&to=
@@ -37,6 +42,11 @@ function fmtUtc(dt: Date): string {
 }
 
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const vendorId = String((req.query.vendor_id as string) ?? "").trim();
   if (!vendorId) {
     res.status(400).json({ error: "vendor_id is required" });

@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { detectDrift } from "../../../../../lib/meilisearch/drift-detection";
 import { syncProductsWorkflow } from "../../../../../workflows/sync-products";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/search/products/sync
@@ -12,6 +17,11 @@ import { syncProductsWorkflow } from "../../../../../workflows/sync-products";
  * safeSync workflow that upserts and cleans up orphans.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const productModule = req.scope.resolve("product");
     const { MeiliSearch } = await import("meilisearch");

@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { detectDrift } from "../../../../../lib/meilisearch/drift-detection";
 import { syncInventoryWorkflow } from "../../../../../workflows/sync-inventory";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/search/inventory/sync
@@ -15,6 +20,11 @@ import { syncInventoryWorkflow } from "../../../../../workflows/sync-inventory";
  * `variantId` is the most common way this index drifts silently.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const query = req.scope.resolve("query") as any;
     const { MeiliSearch } = await import("meilisearch");

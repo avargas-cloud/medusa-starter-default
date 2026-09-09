@@ -1,6 +1,11 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
 import { ulid } from "ulid";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 const bodySchema = z.object({
   payment_id: z.string().min(1),
@@ -33,6 +38,11 @@ interface DeferRow {
  * someone linked it (or voided it) in the meantime, not a server error.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({

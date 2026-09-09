@@ -19,13 +19,22 @@ import {
   invalidateBatchCutoffCache,
   parseCutoff,
 } from "../../../../lib/finance/batch-day";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 const DEFAULT_CUTOFF_STRING = `${String(DEFAULT_BATCH_CUTOFF.h).padStart(2, "0")}:${String(DEFAULT_BATCH_CUTOFF.m).padStart(2, "0")}`;
 
 export async function GET(
-  _req: AuthenticatedMedusaRequest,
+  req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const pool = getDbPool();
     const { rows } = await pool.query<{ cutoff: string | null }>(
@@ -45,6 +54,11 @@ export async function PUT(
   req: AuthenticatedMedusaRequest<{ cutoff?: string }>,
   res: MedusaResponse
 ) {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const { cutoff } = req.body;
   const parsed = parseCutoff(cutoff);
   if (!parsed) {

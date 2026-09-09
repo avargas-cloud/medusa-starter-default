@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { detectDrift } from "../../../../../lib/meilisearch/drift-detection";
 import { syncCustomersWorkflow } from "../../../../../workflows/sync-customers";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/search/customers/sync
@@ -10,6 +15,11 @@ import { syncCustomersWorkflow } from "../../../../../workflows/sync-customers";
  * Honors ?force=true (unlike the previous implementation which ignored it).
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const customerModule = req.scope.resolve("customer");
     const { MeiliSearch } = await import("meilisearch");

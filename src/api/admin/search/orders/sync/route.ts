@@ -1,6 +1,11 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { syncAllOrdersToMeili } from "../../../../../lib/meilisearch/sync-orders-runner";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/search/orders/sync
@@ -10,6 +15,11 @@ import { syncAllOrdersToMeili } from "../../../../../lib/meilisearch/sync-orders
  * the POS Settings page. Idempotent.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   try {
     const result = await syncAllOrdersToMeili(req.scope as any);
     return res.json({

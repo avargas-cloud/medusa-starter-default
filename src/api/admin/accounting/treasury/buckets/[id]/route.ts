@@ -1,5 +1,10 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 const bodySchema = z
   .object({
@@ -43,6 +48,11 @@ async function bankExists(
  * deleted or inactive qb_bank_account.
  */
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const { id } = req.params as BucketIdParams;
   if (!id) {
     return res

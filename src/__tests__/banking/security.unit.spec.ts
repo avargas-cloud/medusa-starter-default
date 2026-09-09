@@ -1,5 +1,6 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { bankAccess } from "../../lib/banking/auth";
+import { getDbPool } from "../../api/utils/db-pool";
 import {
   BankingError,
   bankingConfig,
@@ -11,6 +12,7 @@ import {
 } from "../../lib/banking/security";
 
 jest.mock("../../modules/pos-user", () => ({ POS_USER_MODULE: "pos_user" }));
+jest.mock("../../api/utils/db-pool", () => ({ getDbPool: jest.fn() }));
 
 const key = Buffer.alloc(32, 17);
 const token = "fixture-token-for-unit-tests-only";
@@ -149,34 +151,62 @@ describe("banking sandbox and dedicated credential gates", () => {
   });
 });
 
-function requestFixture(options: { authenticated?: boolean; email?: string | null; staff?: boolean; accounting?: boolean } = {}) {
-  const retrieveUser = jest.fn().mockResolvedValue({ email: options.email === undefined ? "Accountant@Example.invalid" : options.email });
-  const listPosUsers = jest.fn().mockResolvedValue(options.staff === false ? [] : [{ can_view_accounting: options.accounting ?? false }]);
+/**
+ * Fixture de identidad. REGLA NUEVA (2026-09-10): banking exige acceso a
+ * Accounting — owner (`POS_OWNER_EMAILS`) o grant vivo en
+ * `pos_accounting_grant`. La regla vieja que estos tests afirmaban —"ausente de
+ * `pos_user` ⇒ full admin ⇒ puede todo"— ya no existe: un admin sin grant es
+ * hoy un usuario cualquiera para banking.
+ */
+function requestFixture(
+  options: {
+    authenticated?: boolean;
+    email?: string | null;
+    staff?: boolean;
+    accounting?: boolean;
+  } = {}
+) {
+  const retrieveUser = jest.fn().mockResolvedValue({
+    email: options.email === undefined ? "Accountant@Example.invalid" : options.email,
+  });
+  const query = jest.fn().mockResolvedValue({
+    rows: [
+      {
+        in_pos_user: options.staff !== false,
+        pos_is_admin: false,
+        has_grant: options.accounting === true,
+      },
+    ],
+  });
+  jest.mocked(getDbPool).mockReturnValue({ query } as unknown as ReturnType<typeof getDbPool>);
   const resolve = jest.fn((name: string): unknown => {
     if (name === "user") return { retrieveUser };
-    if (name === "pos_user") return { listPosUsers };
     throw new Error(`Unexpected service: ${name}`);
   });
   const req = {
     auth_context: options.authenticated === false ? undefined : { actor_id: "usr_bank_unit" },
     scope: { resolve },
   } as unknown as AuthenticatedMedusaRequest;
-  return { req, retrieveUser, listPosUsers, resolve };
+  return { req, retrieveUser, query, resolve };
 }
 
-describe("bank access distinguishes accounting staff from administrators", () => {
+describe("bank access requires an accounting grant, not merely a Medusa admin", () => {
   it("rejects unauthenticated requests before accessing services", async () => {
     const { req, resolve } = requestFixture({ authenticated: false });
     await expect(bankAccess(req)).rejects.toMatchObject({ code: "BANKING_AUTH_REQUIRED", status: 401 });
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it("permits accounting staff to read and denies managing connections", async () => {
-    const { req, retrieveUser, listPosUsers } = requestFixture({ accounting: true });
-    await expect(bankAccess(req)).resolves.toEqual({ actorId: "usr_bank_unit", canManage: false });
-    expect(retrieveUser).toHaveBeenCalledWith("usr_bank_unit");
-    expect(listPosUsers).toHaveBeenCalledWith({ email: "accountant@example.invalid" }, { take: 1 });
+  it("un grant vivo SIN Admin habilita lectura pero no manejo", async () => {
+    const { req, retrieveUser, query } = requestFixture({ accounting: true });
+    await expect(bankAccess(req, false)).resolves.toEqual({ actorId: "usr_bank_unit", canManage: false });
     await expect(bankAccess(req, true)).rejects.toMatchObject({ code: "BANKING_ACCESS_DENIED", status: 403 });
+    expect(retrieveUser).toHaveBeenCalledWith("usr_bank_unit");
+    expect(query.mock.calls[0]?.[1]).toEqual(["usr_bank_unit", "accountant@example.invalid"]);
+  });
+  it.each([false, true])("Accounting + Admin (fuera de pos_user) habilita lectura Y manejo con manage=%s", async (manage) => {
+    const { req } = requestFixture({ accounting: true, staff: false });
+    await expect(bankAccess(req, manage)).resolves.toEqual({ actorId: "usr_bank_unit", canManage: true });
   });
 
   it.each([false, true])("denies ordinary staff with manage=%s", async (manage) => {
@@ -184,14 +214,26 @@ describe("bank access distinguishes accounting staff from administrators", () =>
     await expect(bankAccess(req, manage)).rejects.toMatchObject({ code: "BANKING_ACCESS_DENIED", status: 403 });
   });
 
-  it.each([false, true])("allows a full admin with manage=%s", async (manage) => {
+  it.each([false, true])("REGLA NUEVA: un admin sin grant tampoco entra, manage=%s", async (manage) => {
     const { req } = requestFixture({ staff: false });
-    await expect(bankAccess(req, manage)).resolves.toEqual({ actorId: "usr_bank_unit", canManage: true });
+    await expect(bankAccess(req, manage)).rejects.toMatchObject({ code: "BANKING_ACCESS_DENIED", status: 403 });
+  });
+
+  it("el owner entra sin ninguna fila de grant", async () => {
+    const saved = process.env.POS_OWNER_EMAILS;
+    process.env.POS_OWNER_EMAILS = "accountant@example.invalid";
+    try {
+      const { req } = requestFixture({ staff: false });
+      await expect(bankAccess(req, true)).resolves.toEqual({ actorId: "usr_bank_unit", canManage: true });
+    } finally {
+      if (saved === undefined) delete process.env.POS_OWNER_EMAILS;
+      else process.env.POS_OWNER_EMAILS = saved;
+    }
   });
 
   it.each([null, ""])("denies a user without a usable email %#", async (email) => {
-    const { req, listPosUsers } = requestFixture({ email, staff: false });
+    const { req, query } = requestFixture({ email, staff: false });
     await expect(bankAccess(req, true)).rejects.toMatchObject({ code: "BANKING_ACCESS_DENIED", status: 403 });
-    expect(listPosUsers).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });

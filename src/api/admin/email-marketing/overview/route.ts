@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 /**
  * GET /admin/email-marketing/overview
  *
@@ -17,13 +18,22 @@
  */
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import postgres from "postgres";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 const PROVIDER = "Mailchimp";
 
 export async function GET(
-  _req: MedusaRequest,
+  req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const audienceId = process.env.MAILCHIMP_AUDIENCE_ID;
   const apiKey = process.env.MAILCHIMP_API_KEY;
 

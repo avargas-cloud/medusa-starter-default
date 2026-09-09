@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import {
@@ -5,6 +6,10 @@ import {
   POLL_INTERVAL_MS,
   MAX_POLL_ATTEMPTS,
 } from "../../../../lib/quickbooks/client/core";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../lib/pos/access-level";
 
 type DateSearchDocType = "InventoryAdjustment" | "ItemReceipt";
 
@@ -53,6 +58,11 @@ export async function POST(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const { docType, date } = (req.body ?? {}) as {
     docType?: string;
     date?: string;

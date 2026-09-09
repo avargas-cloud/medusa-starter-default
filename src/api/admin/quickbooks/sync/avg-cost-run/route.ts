@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import type { MedusaContainer } from "@medusajs/framework/types";
 
@@ -6,6 +7,10 @@ import {
   syncAverageCostCore,
   type AvgCostSyncScope,
 } from "../../../../../lib/quickbooks/sync-average-cost-core";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 /**
  * POST /admin/quickbooks/sync/avg-cost-run
@@ -65,6 +70,11 @@ export async function GET(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const catalog = getCatalog(req.scope);
   const rows = await catalog.listQbAvgCostSyncRuns(
     {},
@@ -77,6 +87,11 @@ export async function POST(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const container = req.scope;
   const catalog = getCatalog(container);
 

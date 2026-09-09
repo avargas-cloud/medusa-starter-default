@@ -1,3 +1,4 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { generateEntityId } from "@medusajs/utils";
 import { Client } from "pg";
@@ -15,6 +16,10 @@ import {
   resolveActorId,
 } from "../../../../../lib/pos/supervisor-pin-guard";
 import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../lib/pos/access-level";
 
 interface AdoptBody {
   po_id?: string;
@@ -40,6 +45,11 @@ interface AdoptBody {
  * durable double-adopt guard; a race surfaces here as HTTP 409.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   // El PIN no se destructura: lo lee `extractSupervisorPin` (header primero, body
   // como fallback para no romper callers viejos).
   const { po_id, txn_id, mode, reason } = (req.body ?? {}) as AdoptBody;

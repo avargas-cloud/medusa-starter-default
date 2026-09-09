@@ -8,6 +8,9 @@ import { bankId } from "./store";
 export type ReviewCapability = "read" | "review" | "close" | "post" | "manage";
 export async function reviewAccess(req: AuthenticatedMedusaRequest, capability: ReviewCapability = "read") {
   const identity = await bankIdentity(req);
+  // Puerta cero (2026-09-10): sin acceso a Accounting no hay NINGUNA capacidad
+  // de review. Antes un grano de `bank_review_permission` alcanzaba solo.
+  if (!identity.canReadAccounting) throw new BankingError("BANKING_ACCESS_DENIED", 403);
   let canReview = identity.canManage;
   let canClose = identity.canManage;
   let canPost = identity.canManage;

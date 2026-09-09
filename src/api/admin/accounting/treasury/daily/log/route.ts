@@ -1,7 +1,12 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
 import { ulid } from "ulid";
 import { loadDailyReport } from "../../_lib/load-daily-report";
+import {
+  accessFailure,
+  assertAccounting,
+} from "../../../../../../lib/pos/access-level";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -38,6 +43,11 @@ const confirmSchema = z.object({
  *     ../../_lib/load-daily-report.ts.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    await assertAccounting(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const parsed = confirmSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({

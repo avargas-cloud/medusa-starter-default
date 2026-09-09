@@ -1,9 +1,14 @@
+import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { pollBridgeStatus } from "../../../../../lib/quickbooks/bridge-fetch";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../modules/quickbooks-catalog";
 import { requireBridgeUrl } from "../../../../../lib/quickbooks/bridge-url";
 import { requireQbApiKey } from "../../../../../lib/quickbooks/qb-api-key";
+import {
+  accessFailure,
+  assertOwner,
+} from "../../../../../lib/pos/access-level";
 
 
 const HEADERS = {
@@ -38,6 +43,11 @@ async function pollOperation(
  * upserts into the local qb_account table.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  try {
+    await assertOwner(req as AuthenticatedMedusaRequest);
+  } catch (error) {
+    return accessFailure(res, error);
+  }
   const catalog = req.scope.resolve(QUICKBOOKS_CATALOG_MODULE) as any;
   const query = req.scope.resolve("query");
   const logger = req.scope.resolve("logger");
