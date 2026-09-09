@@ -28,7 +28,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(400).json({
         error: "Invalid request",
         message: "Activation token is required",
-        details: validation.error.errors,
+        details: validation.error.issues,
       });
     }
 

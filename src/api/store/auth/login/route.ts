@@ -127,7 +127,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(400).json({
         error: "Invalid request",
         message: "Email and password are required",
-        details: error.errors,
+        details: error.issues,
       });
     }
 

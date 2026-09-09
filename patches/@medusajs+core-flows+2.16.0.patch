@@ -11,10 +11,10 @@ index 21eb9dd..dd65c33 100644
              "payment_collections.amount",
              "payment_collections.captured_amount",
 diff --git a/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js b/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js
-index b998a18..49b4f44 100644
+index c39a096..283dd28 100644
 --- a/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js
 +++ b/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js
-@@ -31,6 +31,11 @@ const completeOrderFields = [
+@@ -32,6 +32,11 @@ const completeOrderFields = [
      "items.title",
      "items.quantity",
      "items.unit_price",
@@ -26,7 +26,7 @@ index b998a18..49b4f44 100644
      "items.tax_lines.id",
      "items.tax_lines.description",
      "items.tax_lines.code",
-@@ -113,6 +118,11 @@ const lineItemFields = [
+@@ -114,6 +119,11 @@ const lineItemFields = [
      "title",
      "quantity",
      "unit_price",
@@ -39,10 +39,10 @@ index b998a18..49b4f44 100644
      "tax_lines.description",
      "tax_lines.code",
 diff --git a/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js b/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js
-index 0cd5477..35f37b6 100644
+index 13c8e5b..2563aab 100644
 --- a/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js
 +++ b/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js
-@@ -43,16 +43,33 @@ function normalizeTaxModuleContext(orderOrCart, forceTaxCalculation, isReturn, s
+@@ -44,16 +44,33 @@ function normalizeTaxModuleContext(orderOrCart, forceTaxCalculation, isReturn, s
      };
  }
  function normalizeLineItemsForTax(orderOrCart, items) {

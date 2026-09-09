@@ -40,7 +40,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (!validation.success) {
     res.status(400).json({
       message: "Invalid request body",
-      errors: validation.error.errors,
+      errors: validation.error.issues,
     });
     return;
   }

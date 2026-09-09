@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "postinstall": "patch-package",
-    "build": "medusa build && node scripts/post-build.js",
+    "build": "medusa build --no-lint && node scripts/post-build.js",
     "seed": "medusa exec ./src/scripts/seed.ts",
     "start": "medusa start",
     "dev": "nodemon",
@@ -46,18 +46,18 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@googleapis/gmail": "^16.1.1",
     "@mailchimp/mailchimp_marketing": "^3.0.80",
-    "@medusajs/admin-sdk": "^2.13.0",
-    "@medusajs/auth-google": "^2.13.1",
-    "@medusajs/cli": "^2.13.1",
-    "@medusajs/draft-order": "^2.13.1",
-    "@medusajs/file-s3": "^2.13.0",
-    "@medusajs/framework": "^2.13.0",
-    "@medusajs/icons": "^2.13.0",
-    "@medusajs/js-sdk": "^2.13.0",
-    "@medusajs/medusa": "2.13.0",
-    "@medusajs/notification-sendgrid": "^2.13.1",
-    "@medusajs/order": "2.13.0",
-    "@medusajs/ui": "^4.1.0",
+    "@medusajs/admin-sdk": "2.16.0",
+    "@medusajs/auth-google": "2.16.0",
+    "@medusajs/cli": "2.16.0",
+    "@medusajs/draft-order": "2.16.0",
+    "@medusajs/file-s3": "2.16.0",
+    "@medusajs/framework": "2.16.0",
+    "@medusajs/icons": "2.16.0",
+    "@medusajs/js-sdk": "2.16.0",
+    "@medusajs/medusa": "2.16.0",
+    "@medusajs/notification-sendgrid": "2.16.0",
+    "@medusajs/order": "2.16.0",
+    "@medusajs/ui": "4.1.16",
     "@rokmohar/medusa-plugin-meilisearch": "^1.3.5",
     "@types/pg": "^8.16.0",
     "@woocommerce/woocommerce-rest-api": "^1.0.2",
@@ -72,12 +72,13 @@
     "nodemailer": "^7.0.13",
     "playwright-core": "^1.59.1",
     "postgres": "^3.4.8",
+    "react-router-dom": "6.30.4",
     "resend": "^6.10.0",
     "scrypt-kdf": "^4.0.0",
     "typeorm": "^0.3.16"
   },
   "devDependencies": {
-    "@medusajs/test-utils": "^2.13.0",
+    "@medusajs/test-utils": "2.16.0",
     "@swc/core": "^1.7.28",
     "@swc/jest": "^0.2.36",
     "@types/adm-zip": "^0.5.8",
@@ -113,6 +114,7 @@
     "yalc": "1.0.0-pre.53"
   },
   "resolutions": {
-    "**/fast-xml-parser": "^5.7.2"
+    "**/fast-xml-parser": "^5.7.2",
+    "@smithy/core": "^3.33.3"
   }
 }

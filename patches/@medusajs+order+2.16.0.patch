@@ -1,5 +1,5 @@
 diff --git a/node_modules/@medusajs/order/dist/services/order-module-service.js b/node_modules/@medusajs/order/dist/services/order-module-service.js
-index 9cfeb59..4d008cf 100644
+index 0dcfaf9..249f444 100644
 --- a/node_modules/@medusajs/order/dist/services/order-module-service.js
 +++ b/node_modules/@medusajs/order/dist/services/order-module-service.js
 @@ -1,18 +1,18 @@
@@ -79,10 +79,10 @@ index 9cfeb59..4d008cf 100644
          });
      }
      // @ts-expect-error
-@@ -569,6 +599,14 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
-                     version: toCreate.version ?? 1,
+@@ -573,6 +603,14 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
                      item_id: item.id,
                      quantity: toCreate.quantity,
+                     metadata: toCreate.metadata,
 +                    // Fix ecopowertech #2: persist BigNumber backing fields so
 +                    // formatOrder/decorateCartTotals can compute correct totals.
 +                    // unit_price and raw_unit_price were missing in v2 resulting in Admin totals showing $0 for items.
@@ -94,16 +94,7 @@ index 9cfeb59..4d008cf 100644
                  });
              }
          }
-@@ -1059,7 +1097,7 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
-         const { itemsToUpsert, shippingMethodsToUpsert, calculatedOrders, lineItemAdjustmentsToCreate, } = await (0, utils_2.applyChangesToOrder)([order], { [order.id]: sortedActions }, { addActionReferenceToObject: true });
-         const calculated = calculatedOrders[order.id];
-         await this.includeTaxLinesAndAdjustmentsToPreview(calculated.order, itemsToUpsert, shippingMethodsToUpsert, lineItemAdjustmentsToCreate, // this will add "virtual" adjustments for the preview version but no actual adjustments will be created in the DB
--        sharedContext);
-+            sharedContext);
-         const calcOrder = calculated.order;
-         const orderWithTotals = (0, utils_1.decorateCartTotals)(calcOrder);
-         calcOrder.summary = calculated.getSummaryFromOrder(orderWithTotals);
-@@ -1508,12 +1546,12 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -1536,12 +1574,12 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
          const orderChangeMap = {};
          const orderChangeIds = dataArr
              .map((data, idx) => {
@@ -122,7 +113,7 @@ index 9cfeb59..4d008cf 100644
              .filter(Boolean);
          if (orderChangeIds.length) {
              const ordChanges = await this.getAndValidateOrderChange_(orderChangeIds, false, sharedContext);
-@@ -1588,9 +1626,9 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -1616,9 +1654,9 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
                  : null,
              lineItemAdjustmentsToCreate.length
                  ? this.orderLineItemAdjustmentService_.create(
@@ -133,13 +124,13 @@ index 9cfeb59..4d008cf 100644
 +                    // there is no removal or upsert
 +                    lineItemAdjustmentsToCreate, sharedContext)
                  : null,
-         ]);
-         return {
+             shippingMethodAdjustmentsToCreate.length
+                 ? this.orderShippingMethodAdjustmentService_.create(shippingMethodAdjustmentsToCreate, sharedContext)
 diff --git a/node_modules/@medusajs/order/dist/utils/transform-order.js b/node_modules/@medusajs/order/dist/utils/transform-order.js
-index aa2f3f5..cd20cae 100644
+index 810c872..b92c309 100644
 --- a/node_modules/@medusajs/order/dist/utils/transform-order.js
 +++ b/node_modules/@medusajs/order/dist/utils/transform-order.js
-@@ -147,11 +147,25 @@ function mapRepositoryToOrderModel(config, isRelatedEntity = false) {
+@@ -149,11 +149,25 @@ function mapRepositoryToOrderModel(config, isRelatedEntity = false) {
              return;
          }
          return (0, utils_1.deduplicate)(obj[type].sort().map((rel) => {
