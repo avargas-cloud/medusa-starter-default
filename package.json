@@ -67,12 +67,9 @@
     "fast-xml-parser": "^5.7.2",
     "glob": "^13.0.0",
     "google-auth-library": "^10.6.2",
-    "medusa-plugin-auth": "^1.11.1",
     "meilisearch": "^0.55.0",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.13",
-    "passport": "^0.6.0",
-    "passport-google-oauth20": "^2.0.0",
     "playwright-core": "^1.59.1",
     "postgres": "^3.4.8",
     "resend": "^6.10.0",
@@ -86,6 +83,7 @@
     "@types/adm-zip": "^0.5.8",
     "@types/glob": "^9.0.0",
     "@types/jest": "^29.5.13",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/mailchimp__mailchimp_marketing": "^3.0.22",
     "@types/multer": "^2.0.0",
     "@types/node": "^20.12.11",
@@ -113,5 +111,8 @@
     "vite": "^5.4.14",
     "xlsx": "^0.18.5",
     "yalc": "1.0.0-pre.53"
+  },
+  "resolutions": {
+    "**/fast-xml-parser": "^5.7.2"
   }
 }
