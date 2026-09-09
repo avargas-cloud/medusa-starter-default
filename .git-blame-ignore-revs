@@ -1,0 +1,6 @@
+# Commits que sólo reformatean. `git blame --ignore-revs-file .git-blame-ignore-revs`
+# los saltea para que el autor real de cada línea siga siendo visible.
+# Config permanente:  git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style(banking): eslint --fix, tipos de retorno y justificación de los `!` en 239 archivos
+4a2fb08ed594a1e2bcc038600be677afff96e49d
