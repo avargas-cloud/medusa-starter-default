@@ -3,6 +3,7 @@ import { Table, Text, Badge } from "@medusajs/ui";
 import { Link } from "react-router-dom";
 
 import type { MeiliProduct } from "../../../lib/meili-types";
+import { StatusCell } from "./status-cell";
 
 interface ProductTableProps {
   isLoading: boolean;
@@ -10,6 +11,10 @@ interface ProductTableProps {
   error: any;
   data: any;
   searchQuery: string;
+  publishingMode: boolean;
+  pendingIds: Set<string>;
+  displayStatus: (product: MeiliProduct) => MeiliProduct["status"];
+  onToggleStatus: (product: MeiliProduct) => void;
 }
 
 export const ProductTable = ({
@@ -18,6 +23,10 @@ export const ProductTable = ({
   error,
   data,
   searchQuery,
+  publishingMode,
+  pendingIds,
+  displayStatus,
+  onToggleStatus,
 }: ProductTableProps) => {
   return (
     <div className="flex-1 overflow-auto">
@@ -39,7 +48,7 @@ export const ProductTable = ({
               <Table.HeaderCell>Handle</Table.HeaderCell>
               <Table.HeaderCell>SKUs</Table.HeaderCell>
               <Table.HeaderCell>Categories</Table.HeaderCell>
-              <Table.HeaderCell className="w-32">Status</Table.HeaderCell>
+              <Table.HeaderCell className="w-36">Status</Table.HeaderCell>
             </Table.Row>
           </Table.Header>
 
@@ -150,20 +159,13 @@ export const ProductTable = ({
 
                   {/* Status */}
                   <Table.Cell>
-                    <Link
-                      to={`/products/${product.id}`}
-                      className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
-                    >
-                      <Badge
-                        size="small"
-                        color={
-                          product.status === "published" ? "green" : "grey"
-                        }
-                        className="capitalize"
-                      >
-                        {product.status}
-                      </Badge>
-                    </Link>
+                    <StatusCell
+                      product={product}
+                      status={displayStatus(product)}
+                      publishingMode={publishingMode}
+                      pending={pendingIds.has(product.id)}
+                      onToggle={onToggleStatus}
+                    />
                   </Table.Cell>
                 </Table.Row>
               ))
