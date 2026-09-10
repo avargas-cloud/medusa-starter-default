@@ -29,6 +29,11 @@ const FIXES = {
   "EPS-MDA-60-24":   ["100-120VAC", "120VAC"],
   "XLG-200-24-A":    ["90-305VAC",  "100-305VAC"],
   "XLG-320-V-A":     ["90-305VAC",  "100-305VAC"],
+  // EasyLED Slim drivers: no datasheet in the repo; value stated by the operator 2026-09-10.
+  "EPS-SPR-D2024":   ["100-277VAC", "120-240VAC"],
+  "EPS-SPR-D4024":   ["100-277VAC", "120-240VAC"],
+  "EPS-SPR-D6024":   ["100-277VAC", "120-240VAC"],
+  "EPS-SPR-D9024":   ["100-277VAC", "120-240VAC"],
 };
 
 if (APPLY && !TOKEN) { console.error("ADMIN_TOKEN required for --apply"); process.exit(2); }
