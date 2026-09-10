@@ -110,11 +110,17 @@ export const sendToQbStep = createStep(
         );
         pipelineRowId = row.id;
       } catch (e: any) {
-        // A failed pipeline insert must not block the bridge call — but log it
-        // loudly so we know the audit trail is missing.
-        logger.error(
-          `[sendToQbStep] failed to insert qb_item_pipeline row for ${resolvedSku || input.pipeline.variant_id}: ${e.message}`
-        );
+        // FAIL CLOSED. The row is the only audit trail of this operation: the
+        // poller confirms the bridge result through it and writes the fresh
+        // EditSequence back to the variant from it. Dispatching without it is
+        // a QB write nobody can see, confirm or retry — and the next mod hits
+        // a stale EditSequence (3200). Until 2026-09-10 this branch only
+        // logged and went on to the bridge, which is exactly how the MikroORM
+        // 6.6 `seq = NULL` regression would have stayed invisible on every
+        // item EDIT. Throwing lets the workflow compensate and the POS show it.
+        const msg = `[sendToQbStep] failed to insert qb_item_pipeline row for ${resolvedSku || input.pipeline.variant_id}: ${e.message}`;
+        logger.error(msg);
+        throw new Error(msg);
       }
     }
 

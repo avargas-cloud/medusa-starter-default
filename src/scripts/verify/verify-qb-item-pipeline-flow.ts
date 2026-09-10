@@ -181,6 +181,7 @@ const getRow = async (ctx: TestCtx, id: string): Promise<any> => {
       "next_retry_at",
       "failed_at",
       "op_payload",
+      "recovery_mode",
     ],
     filters: { id },
     pagination: { skip: 0, take: 1 },
@@ -264,7 +265,7 @@ async function scenarioPhaseAFailed(ctx: TestCtx): Promise<void> {
 }
 
 async function scenarioEditSequenceFallback(ctx: TestCtx): Promise<void> {
-  ctx.log("─── Scenario 3: Phase B — EditSequence fallback hydrates + retries ───");
+  ctx.log("─── Scenario 3: Phase B — EditSequence fallback hydrates + retries (2 ticks) ───");
   ctx.stub.reset();
   // ItemQuery returns a fresh sequence
   ctx.stub.script("GET", `/api/products/${FIXTURE_QB_LIST_ID}`, {
@@ -306,23 +307,52 @@ async function scenarioEditSequenceFallback(ctx: TestCtx): Promise<void> {
     retries: 0,
   });
 
+  // Since recovery_mode (Migration20260529221500) the fallback is ASYNC and
+  // takes two poller ticks — the cron must never block on QB COM:
+  //   tick 1 (Phase B): queue the ItemQuery, park the row in
+  //                     waiting/recovery_mode=editseq_query
+  //   tick 2 (Phase A): ItemQuery completed → hydrate EditSequence → resubmit
+  //                     the mod → waiting/recovery_mode=none
+  // Asserting only the end state would let a poller that skips the parking
+  // step (and blocks the cron) pass; asserting only tick 1 would let one that
+  // never resumes pass. Both are asserted.
+  await qbItemPipelinePoller(ctx.container);
+  const parked = await getRow(ctx, id);
+  expect(
+    parked.status === "waiting",
+    `tick 1: expected waiting while the ItemQuery is in flight, got ${parked.status}`
+  );
+  expect(
+    parked.recovery_mode === "editseq_query",
+    `tick 1: expected recovery_mode=editseq_query, got ${parked.recovery_mode}`
+  );
+  expect(
+    parked.qb_operation_id === "stub-itemquery-op",
+    `tick 1: expected the ItemQuery operationId, got ${parked.qb_operation_id}`
+  );
+  ctx.log("  ✓ tick 1: ItemQuery queued, row parked (editseq_query)");
+
   await qbItemPipelinePoller(ctx.container);
   const row = await getRow(ctx, id);
   expect(
     row.status === "waiting",
-    `expected waiting after resubmit, got ${row.status}`
+    `tick 2: expected waiting after resubmit, got ${row.status}`
+  );
+  expect(
+    row.recovery_mode === "none",
+    `tick 2: expected recovery_mode=none after resubmit, got ${row.recovery_mode}`
   );
   expect(
     row.qb_operation_id === "stub-mod-resubmit-op",
-    `expected new operationId, got ${row.qb_operation_id}`
+    `tick 2: expected new operationId, got ${row.qb_operation_id}`
   );
   expect(
     row.op_payload?.EditSequence === "FRESH-SEQ-2024",
-    `expected fresh EditSequence in op_payload, got ${row.op_payload?.EditSequence}`
+    `tick 2: expected fresh EditSequence in op_payload, got ${row.op_payload?.EditSequence}`
   );
   expect(row.retries === 0, "retries must NOT increment on free EditSeq retry");
   ctx.log(
-    "  ✓ EditSequence hydrated (FRESH-SEQ-2024), Mod resubmitted, retries=0"
+    "  ✓ tick 2: EditSequence hydrated (FRESH-SEQ-2024), Mod resubmitted, retries=0"
   );
 }
 
