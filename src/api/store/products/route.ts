@@ -155,6 +155,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         )
         .whereIn("product_variant_price_set.variant_id", variantIds)
         .where("price.currency_code", "usd")
+        // Regular price only. Price-list rows (wholesale, sales) live in the same
+        // table; without this filter the LAST row won — and with no ORDER BY that
+        // leaked the wholesale price to anonymous visitors on some requests.
+        // Customer-type pricing is applied client-side via /store/products/batch-prices.
+        .whereNull("price.price_list_id")
         .whereNull("price.deleted_at");
 
       if (prices.length === 0) {
