@@ -3,6 +3,7 @@ import { bankingConfig, bankingEnvSql, bankingTokenKey, decryptBankToken, encryp
   requireBankingEnabled, requireBankingSandbox, manualRefreshAllowed, BankingError } from "../../lib/banking/security";
 import { bankingLimits, limitCode } from "../../lib/banking/limits";
 import { assertBankingControl, readBankingControl } from "../../lib/banking/control";
+import { reviewCapacity } from "../../lib/banking/review-common";
 
 const VARS = ["BANKING_MANUAL_REFRESH", "ECOPOWERTECH_ENV", "DATABASE_URL", "BANKING_ENABLED", "BANKING_ENV", "BANKING_EXPECTED_DB_TARGET",
   "PLAID_CLIENT_ID", "PLAID_PRODUCTION_SECRET", "PLAID_SANDBOX_SECRET", "BANKING_WEBHOOK_URL", "BANKING_OAUTH_REDIRECT_URI",
@@ -143,5 +144,24 @@ describe("paid manual refresh is off in production unless explicitly enabled", (
     expect(manualRefreshAllowed()).toBe(false);
     production({ BANKING_MANUAL_REFRESH: "true" });
     expect(manualRefreshAllowed()).toBe(true);
+  });
+});
+
+describe("review capacity caps are sandbox test fixtures, not production quotas (H1)", () => {
+  const counting = (count: number) => ({
+    query: jest.fn(async () => ({ rows: [{ count: String(count) }] })),
+  }) as unknown as Parameters<typeof reviewCapacity>[0];
+
+  it("keeps the historical cap and code in sandbox", async () => {
+    production({ ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: "postgresql://postgres:sandbox@localhost:5499/medusa" });
+    await expect(reviewCapacity(counting(62), "bank_day_close", 62)).rejects.toMatchObject({ code: "BANKING_SANDBOX_CAP_REACHED" });
+    await expect(reviewCapacity(counting(61), "bank_day_close", 62)).resolves.toBeUndefined();
+  });
+  it("never counts rows nor blocks in production, but still rejects an unknown table", async () => {
+    production();
+    const client = counting(1_000_000);
+    await expect(reviewCapacity(client, "bank_day_close", 62)).resolves.toBeUndefined();
+    expect(client.query).not.toHaveBeenCalled();
+    await expect(reviewCapacity(client, "customer_payment", 62)).rejects.toMatchObject({ code: "BANKING_CAPACITY_INVALID" });
   });
 });

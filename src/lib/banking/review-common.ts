@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 
 import { getDbPool } from "../../api/utils/db-pool";
 
-import { BankingError, requireBankingEnabled } from "./security";
+import { BankingError, bankingConfig, requireBankingEnabled } from "./security";
 import { bankId, transaction } from "./store";
 
 export async function withReviewLock(client: PoolClient): Promise<void> {
@@ -60,6 +60,8 @@ export async function reviewCapacity(
   ];
   if (!allowed.includes(table))
     throw new BankingError("BANKING_CAPACITY_INVALID", 500);
+  // The caps are sandbox test fixtures (62 day closes ≈ two months); production must never hit a ceiling here.
+  if (bankingConfig().environment === "production") return;
   const result = await client.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM ${table}`
   );
