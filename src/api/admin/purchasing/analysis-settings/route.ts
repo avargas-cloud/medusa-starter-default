@@ -19,6 +19,11 @@ export interface PurchasingAnalysisSettings {
   inv_days_c: number;
   china_to_usa_days: number;
   china_to_usa_channels_days: number;
+  /** TEMPORARY holiday buffers (agent / factory closed). Display-only like the
+   *  rest of this blob; default 0 = off. The buyer sets them for the holiday
+   *  and clears them after — they are not a permanent part of the lead time. */
+  transfer_extra_days: number;
+  factory_extra_days: number;
 }
 
 const DEFAULTS: PurchasingAnalysisSettings = {
@@ -28,7 +33,18 @@ const DEFAULTS: PurchasingAnalysisSettings = {
   inv_days_c: 15,
   china_to_usa_days: 27,
   china_to_usa_channels_days: 15,
+  transfer_extra_days: 0,
+  factory_extra_days: 0,
 };
+
+const EXTRA_DAYS_MAX = 90;
+
+/** Integer 0..90, or the current value when absent/invalid — a NaN or a
+ *  negative must never widen (or shorten) a lead time silently. */
+function extraDaysOr(value: unknown, current: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return current;
+  return Math.min(EXTRA_DAYS_MAX, Math.max(0, Math.round(value)));
+}
 
 async function loadSettings(): Promise<PurchasingAnalysisSettings> {
   return withDb(async (db) => {
@@ -166,6 +182,14 @@ export async function PUT(
       typeof body.china_to_usa_channels_days === "number"
         ? body.china_to_usa_channels_days
         : current.china_to_usa_channels_days,
+    transfer_extra_days: extraDaysOr(
+      body.transfer_extra_days,
+      current.transfer_extra_days
+    ),
+    factory_extra_days: extraDaysOr(
+      body.factory_extra_days,
+      current.factory_extra_days
+    ),
   };
 
   return withDb(async (db) => {
