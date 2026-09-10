@@ -1,20 +1,35 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { getPublishedProductCountsBySubtree } from "../../../lib/catalog/category-published-counts";
 
 /**
  * GET /store/product-categories
  *
  * Custom list endpoint that adds breadcrumbs to each category.
  * Handles filtering by handle, name, etc.
+ *
+ * Storefront-safety defaults (unless overridden by the caller):
+ * - is_active: true, is_internal: false — pass ?include_inactive=true to skip.
+ * - category_children with zero published products in their subtree are
+ *   dropped — pass ?include_empty=true to keep them. The category itself is
+ *   never dropped from product_categories; every entry gets
+ *   published_product_count so the storefront can decide at the top level.
  */
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
 
   try {
+    const includeInactive = req.query.include_inactive === "true";
+    const includeEmpty = req.query.include_empty === "true";
+
     // Build filters from query params
     const filters: any = {};
     if (req.query.handle) filters.handle = req.query.handle;
     if (req.query.name) filters.name = req.query.name;
+    if (!includeInactive) {
+      filters.is_active = true;
+      filters.is_internal = false;
+    }
 
     // parent_category_id: Medusa core passes null as literal "null" string from URL
     const rawParentId = req.query.parent_category_id;
@@ -50,6 +65,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       });
     }
 
+    const publishedCounts = await getPublishedProductCountsBySubtree(
+      req.scope
+    );
+
     // Add breadcrumbs and category_children to each category
     const categoriesWithBreadcrumbs = await Promise.all(
       categories.map(async (category) => {
@@ -65,10 +84,20 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
           filters: childrenFilters,
         });
 
+        const childrenWithCounts = (children || []).map((child: any) => ({
+          ...child,
+          published_product_count: publishedCounts.get(child.id) || 0,
+        }));
+
         return {
           ...category,
+          published_product_count: publishedCounts.get(category.id) || 0,
           breadcrumbs,
-          category_children: children || [],
+          category_children: includeEmpty
+            ? childrenWithCounts
+            : childrenWithCounts.filter(
+                (child) => child.published_product_count > 0
+              ),
         };
       })
     );
