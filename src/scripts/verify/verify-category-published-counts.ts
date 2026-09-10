@@ -38,6 +38,14 @@ const ROUTES = [
   "src/api/store/product-categories/[id]/route.ts",
 ];
 
+// Children must carry the same visibility filter as the parent list: an inactive/internal
+// child (LED Neon, 2026-09-10) leaked into the storefront hub through category_children.
+for (const rel of ROUTES) {
+  const src = readFileSync(join(process.cwd(), rel), "utf8");
+  const ok = /parent_category_id:\s*[A-Za-z_.]+,\s*is_active:\s*true,\s*is_internal:\s*false/.test(src);
+  record(`${rel}: category_children filtered by is_active/is_internal`, ok, ok ? "ok" : "children query lacks is_active/is_internal");
+}
+
 function checkRouteFiltersActiveInternal(rel: string): void {
   const src = readFileSync(join(ROOT, rel), "utf8");
   const hasActiveFilter = /is_active\s*=\s*true/.test(src);

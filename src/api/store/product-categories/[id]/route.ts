@@ -88,7 +88,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const { data: children } = await query.graph({
       entity: "product_category",
       fields: ["id", "name", "handle", "rank", "metadata"],
-      filters: { parent_category_id: categoryId },
+      filters: { parent_category_id: categoryId, is_active: true, is_internal: false },
     });
 
     const publishedCounts = await getPublishedProductCountsBySubtree(
