@@ -15,6 +15,7 @@ export const BankJournalEntry = model.define("bank_journal_entry", {
     "movement",
     "merchant_settlement",
     "merchant_receipt",
+    "document",
   ]),
   completion_id: model.text().nullable(),
   completion_stage: model.text().nullable(),
@@ -28,4 +29,9 @@ export const BankJournalEntry = model.define("bank_journal_entry", {
   actor_id: model.text(),
   reverses_entry_id: model.text().nullable(),
   reason: model.text().nullable(),
+  // gl-core-v1: familia `document` (invoice/credit memo/pago/redondeo).
+  source_kind: model.text().nullable(),
+  source_id: model.text().nullable(),
+  document_number: model.text().nullable(),
+  posted_by: model.text().nullable(),
 });

@@ -17,6 +17,9 @@ import {
 } from "../../../../orders/[id]/_lib/web-edit-attestation";
 import { USA_LOC } from "../../../../../../lib/locations";
 import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks/damage/sync-damage-adjustment";
+import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { reverseCreditMemo } from "../../../../../../lib/ledger";
+import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
 
 export async function POST(
   req: MedusaRequest,
@@ -340,6 +343,13 @@ export async function POST(
         extractWebEditAudit(req)
       );
     }
+
+    // GL (best-effort, gl-core-v1 §6): CM just voided above.
+    await runLedgerHook(
+      (client) => reverseCreditMemo(client, id, resolveActorId(req)),
+      { source_kind: "pos_credit_memo", source_id: id }
+    );
+
     res.status(200).json({ success: true, message: "Credit Memo voided" });
   } catch (e: any) {
     logger.error(`[void CM] failed: ${e.message}`);

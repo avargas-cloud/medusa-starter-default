@@ -1,6 +1,8 @@
 import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
 
 import { FINANCE_MODULE } from "../modules/finance";
+import { runLedgerHook } from "../lib/ledger-hooks/run-ledger-hook";
+import { postCustomerPayment } from "../lib/ledger";
 
 /**
  * Subscriber: order.refund_created
@@ -101,6 +103,12 @@ export default async function financeRefundCreatedHandler({
 
     console.log(
       `[financeRefundCreatedHandler] Successfully mirrored refund ${refundId} to customer ${order.customer_id} ledger.`
+    );
+
+    // GL (best-effort, gl-core-v1 §6): refund payment just created above.
+    await runLedgerHook(
+      (client) => postCustomerPayment(client, customerPayment.id, "system"),
+      { source_kind: "customer_payment", source_id: customerPayment.id }
     );
   } catch (err: any) {
     console.error(

@@ -6,6 +6,9 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../modules/finance";
+import { runLedgerHook } from "../../../lib/ledger-hooks/run-ledger-hook";
+import { postCustomerPayment } from "../../../lib/ledger";
+import { resolveActorId } from "../../../lib/pos/supervisor-pin-guard";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -254,6 +257,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       status: "available", // standalone — not yet applied to any invoice
       medusa_payment_synced: false,
     });
+
+    // GL (best-effort, gl-core-v1 §6): payment just created above.
+    await runLedgerHook(
+      (client) => postCustomerPayment(client, payment.id, resolveActorId(req)),
+      { source_kind: "customer_payment", source_id: payment.id }
+    );
 
     return res.status(201).json({ payment });
   } catch (err: any) {

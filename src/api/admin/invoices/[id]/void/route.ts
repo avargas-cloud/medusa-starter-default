@@ -28,6 +28,8 @@ import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
+import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
+import { reverseInvoice } from "../../../../../lib/ledger";
 import {
   listAssignedDeliveries,
   reverseAssignedDelivery,
@@ -654,6 +656,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     voided_at: new Date(),
     void_reason: void_reason ?? null,
   });
+
+  // GL (best-effort, gl-core-v1 §6): reverse the invoice entry now that the
+  // void just committed.
+  await runLedgerHook(
+    (client) => reverseInvoice(client, id, resolveActorId(req), void_reason ?? undefined),
+    { source_kind: "pos_invoice", source_id: id }
+  );
 
   // Also zero out individual item amounts so reports don't pick up 'fake' historical line items
   try {

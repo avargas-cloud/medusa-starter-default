@@ -23,6 +23,9 @@ import {
   repSqlPredicate,
 } from "../../../lib/sales-rep/sql-filter";
 import { getDbPool } from "../../utils/db-pool";
+import { runLedgerHook } from "../../../lib/ledger-hooks/run-ledger-hook";
+import { postInvoice, postCustomerPayment } from "../../../lib/ledger";
+import { resolveActorId } from "../../../lib/pos/supervisor-pin-guard";
 import { sortDocItemsByInsertion } from "./_lib/item-order";
 import { maybeCompleteOrder } from "../../../lib/maybe-complete-order";
 import {
@@ -1051,6 +1054,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const invoice = core.invoice;
 
+  // GL (best-effort, gl-core-v1 §6): the invoice write just committed above —
+  // post it to the ledger now. A posting failure never blocks the POS; the
+  // reconciler catches up.
+  await runLedgerHook(
+    (client) => postInvoice(client, (invoice as any).id, resolveActorId(req)),
+    { source_kind: "pos_invoice", source_id: (invoice as any).id }
+  );
+
   // Step 2B (REMOVED 2026-07-10): invoicing no longer releases reservations.
   // Sold-but-undelivered goods stay reserved ("apartado") until the REAL
   // fulfillment consumes them: immediate pickup (create-fulfillment-force runs
@@ -1141,6 +1152,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return "other";
   }
 
+  // GL (best-effort): every customer_payment id touched by Step 3 below,
+  // posted once each after the block resolves.
+  const glPaymentIdsToPost = new Set<string>();
+
   // Step 3: If an initial payment amount is sent, record it in ALL ledgers
   if (body.amount_paid > 0) {
     if (!resolvedPaymentMethod) {
@@ -1183,6 +1198,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           const remaining = Number(p.amount) - totalApplied;
           if (remaining > 0) {
             const applyAmount = Math.min(remaining, amountToFind);
+            glPaymentIdsToPost.add(p.id);
 
             const application = await financeService.createPaymentApplications({
               payment_id: p.id,
@@ -1231,6 +1247,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }
     } else if (body.terminal_payment_id) {
+      glPaymentIdsToPost.add(body.terminal_payment_id);
       // B-terminal. The CustomerPayment was already created by the terminal route.
       // Just link it to this invoice via a PaymentApplication — no new payment row.
       // termPay was retrieved upfront (before createPosInvoices) to propagate
@@ -1456,6 +1473,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         },
       });
 
+      glPaymentIdsToPost.add(customerPayment.id);
+
       // Fire event so QuickBooks catches the POS payment immediately (deferred to end of route)
       const paymentId = Array.isArray(customerPayment)
         ? customerPayment[0]?.id
@@ -1521,6 +1540,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // is exactly the shape of the bug: six writers each adding, each having to
     // know what the others already did. Two of them still got it wrong (#1710,
     // #2400 landed at exactly 2.00x) and unlinking subtracted nothing at all.
+  }
+
+  // GL (best-effort): post every customer_payment touched by Step 3.
+  for (const paymentId of glPaymentIdsToPost) {
+    await runLedgerHook(
+      (client) => postCustomerPayment(client, paymentId, resolveActorId(req)),
+      { source_kind: "customer_payment", source_id: paymentId }
+    );
   }
 
   // ── Fase 3: QB items readiness gate ────────────────────────────────────────

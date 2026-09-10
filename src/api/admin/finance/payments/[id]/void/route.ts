@@ -8,6 +8,8 @@ import {
   getNum,
 } from "../../../../invoices/payment-balance";
 import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
+import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { reverseCustomerPayment } from "../../../../../../lib/ledger";
 
 /**
  * POST /admin/finance/payments/:id/void
@@ -156,6 +158,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }, 100);
     }
+
+    // GL (best-effort, gl-core-v1 §6): payment just voided above.
+    await runLedgerHook(
+      (client) =>
+        reverseCustomerPayment(client, paymentId, voided_by ?? "unknown-actor"),
+      { source_kind: "customer_payment", source_id: paymentId }
+    );
 
     // Voiding the payment removed its money from every order it was applied to,
     // so those search docs are stale: effective_payment and is_unpaid are

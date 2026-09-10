@@ -16,4 +16,9 @@ export const QbAccount = model.define("qb_account", {
   is_active: model.boolean().default(true),
   last_synced_at: model.dateTime().default(new Date()),
   metadata: model.json().nullable(),
+  // gl-core-v1: identidad numérica QB, jerarquía por ListID, y el lado normal
+  // (débito/crédito) derivado de account_type — NULL para NonPosting.
+  account_number: model.text().nullable(),
+  parent_list_id: model.text().nullable(),
+  normal_balance: model.text().nullable(),
 });

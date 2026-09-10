@@ -17,6 +17,25 @@ const HEADERS = {
   "Content-Type": "application/json",
 };
 
+/** gl-core-v1 §3: mismo mapeo account_type→lado normal que la migración. NonPosting → null. */
+const NORMAL_BALANCE_BY_TYPE: Record<string, "debit" | "credit"> = {
+  Bank: "debit",
+  AccountsReceivable: "debit",
+  OtherCurrentAsset: "debit",
+  FixedAsset: "debit",
+  OtherAsset: "debit",
+  Expense: "debit",
+  OtherExpense: "debit",
+  CostOfGoodsSold: "debit",
+  AccountsPayable: "credit",
+  CreditCard: "credit",
+  OtherCurrentLiability: "credit",
+  LongTermLiability: "credit",
+  Equity: "credit",
+  Income: "credit",
+  OtherIncome: "credit",
+};
+
 async function pollOperation(
   operationId: string,
   maxAttempts = 30,
@@ -106,15 +125,19 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         ? fullName.split(":").slice(0, -1).join(":")
         : null;
 
+      const accountType = String(acct.AccountType ?? "");
       const payload = {
         qb_list_id: listId,
         full_name: fullName,
         name,
-        account_type: String(acct.AccountType ?? ""),
+        account_type: accountType,
         parent_full_name: parent,
         currency: acct.CurrencyRef?.FullName ?? null,
         is_active: acct.IsActive !== false,
         last_synced_at: now,
+        account_number: acct.AccountNumber ?? null,
+        parent_list_id: acct.ParentRef?.ListID ?? null,
+        normal_balance: NORMAL_BALANCE_BY_TYPE[accountType] ?? null,
       };
 
       const prev = byListId.get(listId);

@@ -31,6 +31,9 @@ import {
   classifyCreditMemoLines,
   fraudWriteoffMetadata,
 } from "../../../../../../lib/reports/fraud-writeoff";
+import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { postCreditMemo } from "../../../../../../lib/ledger";
+import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
 
 export async function POST(
   req: MedusaRequest,
@@ -623,6 +626,13 @@ export async function POST(
         extractWebEditAudit(req)
       );
     }
+
+    // GL (best-effort, gl-core-v1 §6): CM just completed above.
+    await runLedgerHook(
+      (client) => postCreditMemo(client, id, resolveActorId(req)),
+      { source_kind: "pos_credit_memo", source_id: id }
+    );
+
     res.status(200).json({
       success: true,
       message: "Credit Memo completed and inventory restocked",

@@ -20,6 +20,9 @@ import {
 } from "../../../../../../lib/rounding/create-write-off";
 import { createOverageWriteOff } from "../../../../../../lib/rounding/overage";
 import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
+import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { postRoundingAdjustment } from "../../../../../../lib/ledger";
+import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
 
 /**
  * POST /admin/finance/payments/:id/apply
@@ -363,6 +366,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       actor: applied_by || null,
     });
 
+    // GL (best-effort, gl-core-v1 §6): the write-off row just committed above.
+    if (writeOff.created && writeOff.adjustmentId) {
+      const adjustmentId = writeOff.adjustmentId;
+      await runLedgerHook(
+        (client) =>
+          postRoundingAdjustment(client, adjustmentId, resolveActorId(req)),
+        { source_kind: "rounding_adjustment", source_id: adjustmentId }
+      );
+    }
+
     const balanceDue = writeOff.created ? 0 : rawBalanceDue;
     const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial";
 
@@ -409,6 +422,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       await financeService
         .updateCustomerPayments({ id: paymentId, status: "applied" })
         .catch(() => {}); // no-fatal: la fila del ajuste ya es la verdad
+
+      // GL (best-effort, gl-core-v1 §6): the overage write-off just committed.
+      if (overage.adjustmentId) {
+        const adjustmentId = overage.adjustmentId;
+        await runLedgerHook(
+          (client) =>
+            postRoundingAdjustment(client, adjustmentId, resolveActorId(req)),
+          { source_kind: "rounding_adjustment", source_id: adjustmentId }
+        );
+      }
     }
 
     // 7. Register in Medusa native Payment Module (best-effort, every payment)

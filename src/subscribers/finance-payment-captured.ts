@@ -3,6 +3,8 @@ import { Modules } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../modules/finance";
 import { buildOrderCostSnapshot } from "../lib/finance/build-order-cost-snapshot";
+import { runLedgerHook } from "../lib/ledger-hooks/run-ledger-hook";
+import { postCustomerPayment } from "../lib/ledger";
 
 /**
  * Subscriber: payment.captured
@@ -151,6 +153,20 @@ export default async function financePaymentCapturedHandler({
 
     console.log(
       `[financePaymentCapturedHandler] Mirrored payment ${paymentId} → customer ${order.customer_id}, order ${order.id}`
+    );
+
+    // GL (best-effort, gl-core-v1 §6): payment just created above.
+    await runLedgerHook(
+      (client) =>
+        postCustomerPayment(
+          client,
+          (customerPayment as { id: string }).id,
+          "system"
+        ),
+      {
+        source_kind: "customer_payment",
+        source_id: (customerPayment as { id: string }).id,
+      }
     );
   } catch (err: any) {
     console.error(

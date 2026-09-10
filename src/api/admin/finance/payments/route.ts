@@ -9,6 +9,9 @@ import {
 } from "../../../../lib/finance/batch-day";
 import { isTreasuryDayLocked } from "../../../../lib/finance/treasury-lock";
 import { FINANCE_MODULE } from "../../../../modules/finance";
+import { runLedgerHook } from "../../../../lib/ledger-hooks/run-ledger-hook";
+import { postCustomerPayment } from "../../../../lib/ledger";
+import { resolveActorId } from "../../../../lib/pos/supervisor-pin-guard";
 
 /**
  * GET /admin/finance/payments
@@ -334,6 +337,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }
     }
+
+    // GL (best-effort, gl-core-v1 §6): payment just created above.
+    await runLedgerHook(
+      (client) => postCustomerPayment(client, payment.id, resolveActorId(req)),
+      { source_kind: "customer_payment", source_id: payment.id }
+    );
 
     return res.json({ payment });
   } catch (err: any) {
