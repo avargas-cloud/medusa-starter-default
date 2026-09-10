@@ -1,5 +1,6 @@
-import { refreshCartItemsWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
+import { repriceCart } from "./reprice-cart";
 
 /**
  * POST /store/carts/:id/reprice
@@ -20,20 +21,14 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     const cartId = req.params.id as string;
-    const isAuthenticated = !!(req as any).auth_context?.actor_id;
-    const force_retail = !isAuthenticated;
+    const actorId = (req as any).auth_context?.actor_id;
+    const isAuthenticated = !!actorId;
 
     console.log(
-      `[REPRICE] 🔄 Cart ${cartId} | auth=${isAuthenticated} | force_retail=${force_retail}`
+      `[REPRICE] 🔄 Cart ${cartId} | auth=${isAuthenticated} | force_retail=${!isAuthenticated}`
     );
 
-    const { result: cart } = await refreshCartItemsWorkflow(req.scope).run({
-      input: {
-        cart_id: cartId,
-        force_refresh: true,
-        additional_data: { force_retail }, // hook reads this to decide retail vs wholesale
-      },
-    });
+    const cart = await repriceCart(req.scope, cartId, actorId);
 
     console.log(`[REPRICE] ✅ Done.`);
     return res.json({

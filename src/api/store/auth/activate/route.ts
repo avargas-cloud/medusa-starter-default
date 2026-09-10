@@ -34,28 +34,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const { token } = validation.data;
 
-    // Decode token: base64(customer_id:timestamp)
-    const decoded = Buffer.from(token, "base64").toString("utf-8");
-    const [customerId, _timestamp] = decoded.split(":");
-
-    console.log("📝 Decoded customer ID:", customerId);
-
-    if (!customerId) {
-      return res.status(400).json({
-        error: "Invalid activation token",
-      });
-    }
-
-    // Get customer
+    // The token is an opaque, high-entropy random value (see
+    // case3-legacy-customer.ts) — it carries no encoded customer id, so the
+    // customer is looked up by the stored token itself, not decoded from it.
     const [customer] = await sql`
             SELECT id, email, first_name, last_name, has_account, metadata
             FROM customer
-            WHERE id = ${customerId} AND deleted_at IS NULL
+            WHERE metadata->>'activation_token' = ${token} AND deleted_at IS NULL
         `;
 
     if (!customer) {
-      return res.status(404).json({
-        error: "Customer not found",
+      return res.status(400).json({
+        error: "Invalid activation token",
       });
     }
 

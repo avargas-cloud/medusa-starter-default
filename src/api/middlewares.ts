@@ -6,6 +6,7 @@ import type {
 } from "@medusajs/framework/http";
 import { defineMiddlewares } from "@medusajs/medusa";
 
+import { customerAuthThrottle } from "../lib/auth/customer-auth-throttle";
 import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
 import {
   protectClosedDocument,
@@ -102,6 +103,25 @@ function pubCorsMiddleware(
 
 export default defineMiddlewares({
   routes: [
+    // Redis-backed throttle on customer-facing auth endpoints — credential
+    // stuffing / brute force protection. Per-IP + per-email sliding windows;
+    // fails OPEN only if the cache itself is unreachable (never on a wrong
+    // credential). See src/lib/auth/customer-auth-throttle.ts.
+    {
+      matcher: "/auth/customer/emailpass",
+      method: "POST",
+      middlewares: [customerAuthThrottle({ bucket: "login" })],
+    },
+    {
+      matcher: "/store/auth/register",
+      method: "POST",
+      middlewares: [customerAuthThrottle({ bucket: "register" })],
+    },
+    {
+      matcher: "/store/auth/reset-password",
+      method: "POST",
+      middlewares: [customerAuthThrottle({ bucket: "reset" })],
+    },
     // El PIN de supervisor NO se cambia por la ruta nativa de Medusa. Vive en
     // `store.metadata`, y `POST /admin/stores/:id` acepta cualquier metadata sin
     // saber nada de PINes — así que cualquier cajero (todos son usuarios admin

@@ -8,6 +8,7 @@ import {
 } from "@medusajs/medusa/core-flows";
 
 import { getDbPool } from "../../utils/db-pool";
+import { repriceCart } from "../carts/[id]/reprice/reprice-cart";
 
 // ─── Florida province mapping (must match exact Tax Region province_code in DB)
 const FL_VARIATIONS = ["fl", "florida", "fla", "f.l.", "florid"];
@@ -161,7 +162,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     billingAddress,
     shippingMethodId,
     opaqueData,
-    amount: frontendAmountDollars,
+    // `amount` (frontend-computed dollars) is still accepted silently for old
+    // clients but is NEVER used to compute the charge — the server derives it
+    // from the cart. See STEP 4 below.
   } = body;
 
   // Normalize email to lowercase before any Medusa call — Medusa's internal customer
@@ -289,9 +292,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     //      full price engine recalculates post-shipping.
     //   2. The Store API goes through Medusa's full price engine and returns
     //      a correct integer total in cents AFTER the shipping just applied.
-    // NOTE: No reprice is done here intentionally — the customer saw these
-    // prices in their cart and that is what must be charged. Any repricing
-    // must happen before the customer reaches the payment step.
     let amountCents: number | null = null;
     let cartItemsForValidation: any[] = [];
     try {
@@ -339,6 +339,54 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
     }
 
+    // ── STEP 4a: Reprice for the CURRENT auth tier before charging ────────
+    // The cart total fetched above may be stale relative to the customer's
+    // present price tier (e.g. they logged in/out mid-checkout, or their
+    // customer-group pricing changed). We reprice using the same logic as
+    // `POST /store/carts/:id/reprice`, re-fetch the cart, and use ITS total —
+    // the customer is always charged the price that matches their current
+    // tier, never a cached one.
+    try {
+      const actorId = (req as any).auth_context?.actor_id;
+      await repriceCart(req.scope, cartId, actorId);
+
+      const MEDUSA_URL =
+        process.env.MEDUSA_BACKEND_URL || "http://localhost:9000";
+      const PUBLISHABLE_KEY = process.env.PUBLISHABLE_API_KEY || "";
+      const repricedRes = await fetch(
+        `${MEDUSA_URL}/store/carts/${cartId}?fields=*items,items.unit_price,items.raw_unit_price,items.quantity,items.raw_quantity,items.variant_id,total,subtotal,item_subtotal`,
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "x-publishable-api-key": PUBLISHABLE_KEY,
+          },
+        }
+      );
+      if (repricedRes.ok) {
+        const { cart: repricedCart } = await repricedRes.json();
+        cartItemsForValidation = repricedCart?.items ?? cartItemsForValidation;
+        if (repricedCart?.total && repricedCart.total > 0) {
+          const repricedAmountCents = Math.round(repricedCart.total * 100);
+          if (amountCents !== null && repricedAmountCents !== amountCents) {
+            console.log(
+              `[fast-checkout] ℹ️ Reprice changed cart total: cart=${cartId} before=${amountCents} after=${repricedAmountCents}`
+            );
+          }
+          amountCents = repricedAmountCents;
+        }
+      } else {
+        console.warn(
+          `[fast-checkout] Reprice re-fetch returned ${repricedRes.status}`
+        );
+      }
+    } catch (repriceErr: any) {
+      // Non-fatal: keep the pre-reprice total (already computed above) rather
+      // than blocking checkout on a transient reprice failure.
+      console.warn(
+        `[fast-checkout] ⚠️ Reprice-before-charge failed (continuing with pre-reprice total): ${repriceErr.message}`
+      );
+    }
+
     // ── GUARD: Validate item prices are non-zero ──────────────────────────
     // Block checkout if any item has unit_price=0 — this means a pricing
     // configuration error (not a reprice scenario). The customer would be
@@ -360,17 +408,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
-    // Fallback: frontend dollar amount → cents
-    if (!amountCents && frontendAmountDollars) {
-      amountCents = Math.round(Number(frontendAmountDollars) * 100);
-      console.warn(
-        `[fast-checkout] ⚠️ Using frontend fallback amount: ${amountCents} cents = $${(amountCents / 100).toFixed(2)}`
-      );
-    }
-
+    // No client-supplied amount is ever used to compute the charge — the
+    // server is the sole source of the total. If it could not derive one
+    // from the cart, checkout must stop, not fall back to a client value.
     if (!amountCents || amountCents <= 0) {
-      return res.status(400).json({
-        error: "Could not determine cart total. Please refresh and try again.",
+      console.error(
+        `[fast-checkout] ❌ Could not determine order total from cart ${cartId}`
+      );
+      return res.status(502).json({
+        error: "Could not determine order total",
       });
     }
 

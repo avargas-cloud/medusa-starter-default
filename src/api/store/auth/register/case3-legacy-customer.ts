@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules as _Modules } from "@medusajs/utils";
+import { randomBytes } from "node:crypto";
 
 import { buildActivationEmail } from "../../../../utils/email-templates";
 import { sendMail } from "../../../../utils/mailer";
@@ -19,10 +20,9 @@ export async function handleLegacyCustomerActivation(
 
   // Send activation email via mailer
   try {
-    // Generate activation token
-    const activationToken = Buffer.from(
-      `${existingCustomer.id}:${Date.now()}`
-    ).toString("base64");
+    // Generate activation token — high-entropy random, not a predictable
+    // customer_id+timestamp encoding (the old form was guessable/brute-forceable).
+    const activationToken = randomBytes(32).toString("hex");
     const activationLink = `${process.env.STOREFRONT_URL || "http://localhost:3000"}/activate-account?token=${activationToken}`;
 
     // Save temporary password and token in metadata using SQL (customerModule hangs on legacy customers)
