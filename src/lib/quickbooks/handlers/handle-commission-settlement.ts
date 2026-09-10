@@ -29,6 +29,7 @@ export interface CommissionPipelineRow {
 }
 
 const LOG = "[commission-pipeline]";
+export const COMMISSION_CREDIT_QB_PAYMENT_METHOD = "Credit Memo";
 
 async function markSubmitted(rowId: string, operationId: string): Promise<void> {
   const pool = getDbPool();
@@ -84,6 +85,9 @@ export async function dispatchCommissionCheck(
           RefNumber: p.refNumber,
           TxnDate: p.txnDate,
           Memo: p.memo ?? "",
+          // Check CONTABLE desde la clearing: no existe chequera. Sin este flag QB
+          // lo deja en la cola "Print Checks" (default true) — visto en 1D0096.
+          IsToBePrinted: false,
           ExpenseLineAdd: [
             {
               AccountRef: { ListID: p.expenseListId },
@@ -146,7 +150,10 @@ export async function dispatchCommissionPayment(
       customerId: String(p.customerListId),
       amount: String(p.amountDollars),
       date: p.txnDate,
-      paymentMethod: "Cash",
+      // NUNCA "Cash": el cierre del día del contador agrupa por método y leería
+      // $X de efectivo que no entró. "Credit Memo" es el bucket no-cash que el POS
+      // ya usa (customer_payment.method=credit_memo) y el contador ya excluye.
+      paymentMethod: COMMISSION_CREDIT_QB_PAYMENT_METHOD,
       memo: p.memo ?? "",
       autoApply: false,
       depositAccount: String(p.depositAccountFullName),

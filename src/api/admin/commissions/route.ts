@@ -71,6 +71,7 @@ interface ListRow {
   qb_payment_txn_id: string | null;
   failure_reason: string | null;
   vendor_bill_number: string | null;
+  vendor_bill_paid: boolean | null;
 }
 
 export async function GET(
@@ -161,7 +162,8 @@ export async function GET(
               s.status AS settlement_status, s.vendor_bill_id,
               s.customer_payment_id, s.qb_check_txn_id, s.qb_payment_txn_id,
               s.failure_reason,
-              svb.number AS vendor_bill_number
+              svb.number AS vendor_bill_number,
+              svb.qb_is_paid AS vendor_bill_paid
          FROM order_commission_recipient r
          JOIN order_commission c
            ON c.id = r.order_commission_id AND c.deleted_at IS NULL
@@ -316,6 +318,9 @@ export async function GET(
                 status: r.settlement_status,
                 vendor_bill_id: r.vendor_bill_id,
                 vendor_bill_number: r.vendor_bill_number,
+                // Revert settlement sólo si NADIE pagó el bill (unsettle.ts lo
+                // re-verifica en la ruta; acá es para que el botón no invite).
+                vendor_bill_paid: r.vendor_bill_paid,
                 customer_payment_id: r.customer_payment_id,
                 qb_check_txn_id: r.qb_check_txn_id,
                 qb_payment_txn_id: r.qb_payment_txn_id,

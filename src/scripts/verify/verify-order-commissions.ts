@@ -135,6 +135,69 @@ console.log("verify-order-commissions — registro del Commissions Pipeline\n");
     "payment leg pasa depositAccount (clearing) y autoApply:false",
     src.includes("depositAccount") && src.includes("autoApply: false")
   );
+  // 2026-09-10: el ReceivePayment salió con PaymentMethod "Cash" y el cierre del
+  // día del contador lo leyó como efectivo que entró (1D0099). Se mira el
+  // VALOR de la constante — sin el import, y se exige que ningún literal "Cash"
+  // sobreviva en el handler (la línea original era un literal, no la constante).
+  const methodDecl = src.match(/COMMISSION_CREDIT_QB_PAYMENT_METHOD\s*=\s*"([^"]+)"/);
+  const codeOnly = src
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//"))
+    .join("\n");
+  check(
+    "payment leg NO manda 'Cash': método no-cash 'Credit Memo' y cero literales \"Cash\" en código",
+    methodDecl?.[1] === "Credit Memo" &&
+      codeOnly.includes("paymentMethod: COMMISSION_CREDIT_QB_PAYMENT_METHOD") &&
+      !codeOnly.includes('"Cash"')
+  );
+  // El check contable no tiene chequera: sin el flag, QB lo deja en "Print
+  // Checks" (default true, visto en 1D0096). Se exige DENTRO del data del
+  // CheckAdd, no en cualquier parte del archivo.
+  const checkAddData = src.slice(src.indexOf('type: "check"'), src.indexOf("ExpenseLineAdd: ["));
+  check(
+    "check leg manda IsToBePrinted: false dentro del CheckAdd",
+    checkAddData.includes("IsToBePrinted: false")
+  );
+}
+
+// 6b · unsettle (2026-09-10): vuelta atrás de un settle por bill NO pagado
+{
+  const codeLines = (src: string) =>
+    src.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
+  const dispatch = codeLines(read("src/lib/quickbooks/consolidator/dispatch-pass.ts"));
+  const resubmit = codeLines(read("src/lib/quickbooks/consolidator/resubmit-by-step.ts"));
+  // El step existía desde el cancel route sin que nadie lo despachara: un bill
+  // "voided" local seguía vivo en QuickBooks. Las DOS mitades, por nombre.
+  check(
+    "vendor_bill_void está en la lista de claim del dispatcher Y tiene case en resubmit-by-step",
+    /step IN \([^)]*'vendor_bill_void'[^)]*\)/.test(dispatch) &&
+      resubmit.includes('case "vendor_bill_void"') &&
+      resubmit.includes('TxnVoidType: "Bill"')
+  );
+  const unsettle = codeLines(read("src/lib/commissions/unsettle.ts"));
+  const paidGuardAt = unsettle.indexOf("bill_already_paid");
+  const billWriteAt = unsettle.indexOf("UPDATE vendor_bill\n");
+  check(
+    "unsettle rechaza un bill PAGADO (qb_is_paid) ANTES de tocar el bill",
+    paidGuardAt > -1 && billWriteAt > -1 && paidGuardAt < billWriteAt &&
+      /if \(bill\.qb_is_paid\)/.test(unsettle)
+  );
+  check(
+    "unsettle sólo admite method='vendor_bill' (store credit ya emitió documentos)",
+    /settlement\.method !== "vendor_bill"/.test(unsettle) && unsettle.includes("method_not_reversible")
+  );
+  check(
+    "unsettle devuelve el beneficiario a 'approved' (no a draft) y marca el settlement 'reversed'",
+    /SET state = 'approved'/.test(unsettle) && /SET status = 'reversed'/.test(unsettle)
+  );
+  const recipientRoute = codeLines(
+    read("src/api/admin/commissions/orders/[orderId]/recipients/[recipientId]/route.ts")
+  );
+  check(
+    "la ruta exige reason para unsettle y llama unsettleRecipient dentro del lock (no sólo lo importa)",
+    /\(action === "void" \|\| action === "unsettle"\) && !reason/.test(recipientRoute) &&
+      /await unsettleRecipient\(client, recipientId, pin\.actorId, reason\)/.test(recipientRoute)
+  );
 }
 
 // 7 · allowlist de bills service (caso 1)

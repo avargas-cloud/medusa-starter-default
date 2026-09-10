@@ -33,6 +33,10 @@ import {
   withOrderCommissionLock,
 } from "../../../../../../../lib/commissions/writer";
 import { canStartSettlement } from "../../../../../../../lib/commissions/transitions";
+import {
+  unsettleRecipient,
+  type UnsettleResult,
+} from "../../../../../../../lib/commissions/unsettle";
 import { loadCommissionQbAccounts } from "../../../../../../../lib/commissions/config";
 import {
   buildStoreCreditPayloads,
@@ -79,8 +83,8 @@ export async function POST(
     vendor_bill_id?: unknown;
   };
   const action = body.action;
-  if (action !== "approve" && action !== "void" && action !== "settle") {
-    res.status(400).json({ error: "action must be 'approve', 'void' or 'settle'." });
+  if (action !== "approve" && action !== "void" && action !== "settle" && action !== "unsettle") {
+    res.status(400).json({ error: "action must be 'approve', 'void', 'settle' or 'unsettle'." });
     return;
   }
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
@@ -95,8 +99,8 @@ export async function POST(
     });
     return;
   }
-  if (action === "void" && !reason) {
-    res.status(400).json({ error: "void requires a reason." });
+  if ((action === "void" || action === "unsettle") && !reason) {
+    res.status(400).json({ error: `${action} requires a reason.` });
     return;
   }
 
@@ -105,7 +109,7 @@ export async function POST(
     const result = await withOrderCommissionLock(
       pool,
       orderId,
-      async (client): Promise<{ amountCents: number } | null> => {
+      async (client): Promise<{ amountCents: number; unsettled?: UnsettleResult } | null> => {
         const money = await readOrderMoneySnapshot(client, orderId);
         if (money) await refreshCommission(client, orderId, money);
         if (action === "approve") {
@@ -122,10 +126,21 @@ export async function POST(
             allowEarly: body.early === true,
           });
         }
+        if (action === "unsettle") {
+          // Vuelta atrás de un settle por bill NO pagado: el beneficiario
+          // regresa a `approved` y Settle vuelve a ofrecerse (store credit).
+          const out = await unsettleRecipient(client, recipientId, pin.actorId, reason);
+          return { amountCents: 0, unsettled: out };
+        }
         await voidRecipient(client, recipientId, pin.actorId, reason);
         return null;
       }
     );
+    if (action === "unsettle") {
+      const out = result as { unsettled: UnsettleResult } | null;
+      res.json({ ok: true, ...(out?.unsettled ?? {}) });
+      return;
+    }
     res.json({ ok: true, ...(result ? { amount_cents: result.amountCents } : {}) });
   } catch (err) {
     if (err instanceof CommissionError) {

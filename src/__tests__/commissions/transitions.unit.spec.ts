@@ -6,6 +6,7 @@ import {
   canApproveEarly,
   canReSaveAssignment,
   canStartSettlement,
+  canUnsettle,
   canVoid,
   isOpen,
   refreshedState,
@@ -76,6 +77,15 @@ describe("guardas de transición", () => {
     expect(canVoid("settling")).toBe(false);
     expect(canVoid("closed")).toBe(false);
     expect(canVoid("void")).toBe(false);
+  });
+
+  it("unsettle sólo desde una liquidación en curso o cerrada (vuelve a approved)", () => {
+    expect(canUnsettle("settling")).toBe(true);
+    expect(canUnsettle("closed")).toBe(true);
+    expect(canUnsettle("draft")).toBe(false);
+    expect(canUnsettle("eligible")).toBe(false);
+    expect(canUnsettle("approved")).toBe(false);
+    expect(canUnsettle("void")).toBe(false);
   });
 
   it("re-guardar la asignación exige todos en draft", () => {

@@ -103,6 +103,16 @@ async function main(): Promise<void> {
     `UPDATE store SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb`,
     [JSON.stringify({ pos_supervisor_pin: E2E_PIN })]
   );
+  // Desde dac20064 (4 niveles de acceso) un admin sin fila pos_user NO es
+  // accounting: las rutas de comisiones exigen grant vivo. El usuario de test
+  // lo recibe acá, idempotente (revive un grant revocado en vez de duplicar).
+  await pool.query(
+    `INSERT INTO pos_accounting_grant (id, user_id, email, granted_by)
+     SELECT 'pag_e2e_commissions', u.id, lower(u.email), 'e2e-order-commissions'
+       FROM "user" u WHERE lower(u.email) = lower($1) AND u.deleted_at IS NULL
+     ON CONFLICT (id) DO UPDATE SET revoked_at = NULL, revoked_by = NULL, revoke_reason = NULL, updated_at = NOW()`,
+    [ADMIN_EMAIL]
+  );
 
   // Cuenta de comisión ficticia en qb_account (para el camino vendor_bill).
   const EXPENSE_LIST_ID = "8000E2E1-1000000001";
@@ -825,6 +835,154 @@ async function main(): Promise<void> {
       "reconcile: bill con qb_txn_id cierra settlement y recipient",
       closedRow?.state === "closed",
       `state=${closedRow?.state}`
+    );
+  }
+
+  // 17 · Unsettle: la vuelta atrás de un settle por bill NO pagado (COM-1003).
+  // La sección 6 dejó `recipientVendorId` closed con un bill service cuyo
+  // qb_txn_id es el centinela 'E2E-QB-TXN'. Acá el bill pasa a 'synced' (lo que
+  // es en prod) y se revierte: bill voided + fila vendor_bill_void + settlement
+  // reversed + recipient approved → y el MISMO beneficiario se liquida como
+  // store credit (el link vendor↔customer lo dejó la sección 5).
+  console.log("── 17 · Unsettle de un bill no pagado → approved → store credit ──");
+  {
+    const { rows: liveS } = await pool.query<{ id: string; vendor_bill_id: string; status: string }>(
+      `SELECT id, vendor_bill_id, status FROM commission_settlement
+        WHERE recipient_id = $1 AND status IN ('pending','qb_waiting','confirmed')
+        ORDER BY created_at DESC LIMIT 1`,
+      [recipientVendorId]
+    );
+    const s17 = liveS[0];
+    check("17: hay un settlement vivo por vendor_bill para revertir", !!s17?.vendor_bill_id, JSON.stringify(s17));
+    const billId17 = String(s17?.vendor_bill_id ?? "");
+    await pool.query(`UPDATE vendor_bill SET status = 'synced', qb_is_paid = false WHERE id = $1`, [billId17]);
+
+    // Negativas primero (el orden importa: después del unsettle ya no hay settlement vivo).
+    const noReason = await api(
+      token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
+      { action: "unsettle" }, E2E_PIN
+    );
+    check("17: unsettle sin reason → 400", noReason.status === 400, `status=${noReason.status}`);
+
+    await pool.query(`UPDATE vendor_bill SET qb_is_paid = true WHERE id = $1`, [billId17]);
+    const paid = await api(
+      token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
+      { action: "unsettle", reason: "e2e 17 paid" }, E2E_PIN
+    );
+    check(
+      "17: bill PAGADO en QB → 409 bill_already_paid y nada cambia",
+      paid.status === 409 && (paid.body.details as { reason?: string } | undefined)?.reason === "bill_already_paid",
+      `status=${paid.status} ${JSON.stringify(paid.body).slice(0, 120)}`
+    );
+    const { rows: stillClosed } = await pool.query<{ state: string; bstatus: string }>(
+      `SELECT r.state, vb.status AS bstatus FROM order_commission_recipient r
+         JOIN vendor_bill vb ON vb.id = $2 WHERE r.id = $1`,
+      [recipientVendorId, billId17]
+    );
+    check(
+      "17: tras el 409 el beneficiario sigue closed y el bill synced (transacción intacta)",
+      stillClosed[0]?.state === "closed" && stillClosed[0]?.bstatus === "synced",
+      JSON.stringify(stillClosed[0])
+    );
+    await pool.query(`UPDATE vendor_bill SET qb_is_paid = false WHERE id = $1`, [billId17]);
+
+    // La vuelta atrás real.
+    const un = await api(
+      token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
+      { action: "unsettle", reason: "e2e 17: beneficiario pidió store credit" }, E2E_PIN
+    );
+    check("17: unsettle OK → billOutcome=voided", un.status === 200 && un.body.billOutcome === "voided", JSON.stringify(un.body).slice(0, 140));
+
+    const { rows: after } = await pool.query<{
+      state: string; approved_at: Date | null; settled_at: Date | null; sstatus: string; bstatus: string; voidrows: string;
+    }>(
+      `SELECT r.state, r.approved_at, r.settled_at,
+              (SELECT status FROM commission_settlement WHERE id = $2) AS sstatus,
+              (SELECT status FROM vendor_bill WHERE id = $3) AS bstatus,
+              (SELECT COUNT(*)::text FROM qb_order_pipeline
+                WHERE step = 'vendor_bill_void' AND reference_id = $3 AND status = 'pending'
+                  AND qb_txn_id = 'E2E-QB-TXN') AS voidrows
+         FROM order_commission_recipient r WHERE r.id = $1`,
+      [recipientVendorId, String(s17?.id), billId17]
+    );
+    const a = after[0];
+    check(
+      "17: recipient approved (approved_at intacto, settled_at NULL)",
+      a?.state === "approved" && a?.approved_at != null && a?.settled_at == null,
+      `state=${a?.state} approved_at=${a?.approved_at} settled_at=${a?.settled_at}`
+    );
+    check("17: settlement reversed", a?.sstatus === "reversed", String(a?.sstatus));
+    check(
+      "17: bill voided local + UNA fila vendor_bill_void pending con el TxnID del bill",
+      a?.bstatus === "voided" && a?.voidrows === "1",
+      `bill=${a?.bstatus} voidrows=${a?.voidrows}`
+    );
+
+    // El despacho REAL de esa fila contra bridge muerto: failed con retry
+    // (transporte), igual que el check de comisión — prueba que el consolidator
+    // ya la conoce (antes de hoy el step no tenía case y moría en default).
+    const { rows: voidRow } = await pool.query<{ id: string; qb_txn_id: string; retry_count: number }>(
+      `SELECT id, qb_txn_id, retry_count FROM qb_order_pipeline
+        WHERE step = 'vendor_bill_void' AND reference_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [billId17]
+    );
+    process.env.QB_BRIDGE_URL = process.env.QB_BRIDGE_URL || "http://127.0.0.1:1";
+    process.env.QB_API_KEY = process.env.QB_API_KEY || "sandbox-dummy";
+    const { resubmitByStep } = await import("../../lib/quickbooks/consolidator/resubmit-by-step");
+    await resubmitByStep(
+      {
+        id: voidRow[0]?.id, step: "vendor_bill_void", reference_id: billId17, order_id: null,
+        qb_txn_id: voidRow[0]?.qb_txn_id, payload: null, retry_count: 0,
+      } as unknown as Parameters<typeof resubmitByStep>[0],
+      { resolve: () => ({}) } as unknown as Parameters<typeof resubmitByStep>[1],
+      { info: () => undefined, warn: () => undefined, error: () => undefined }
+    );
+    const { rows: dispatched } = await pool.query<{ status: string; next_retry_at: Date | null; error: string | null }>(
+      `SELECT status, next_retry_at, error FROM qb_order_pipeline WHERE id = $1`,
+      [voidRow[0]?.id]
+    );
+    check(
+      "17: vendor_bill_void se DESPACHA (bridge muerto → failed con next_retry_at, no 'Unsupported step')",
+      dispatched[0]?.status === "failed" && dispatched[0]?.next_retry_at != null &&
+        !String(dispatched[0]?.error ?? "").includes("Unsupported"),
+      `status=${dispatched[0]?.status} err=${String(dispatched[0]?.error).slice(0, 80)}`
+    );
+
+    // Segundo unsettle: ya no hay settlement vivo (y el estado es approved).
+    const again = await api(
+      token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
+      { action: "unsettle", reason: "e2e 17 again" }, E2E_PIN
+    );
+    check("17: unsettle desde approved → 409", again.status === 409, `status=${again.status}`);
+
+    // Y el mismo beneficiario se liquida ahora como STORE CREDIT.
+    const sc = await api(
+      token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
+      { action: "settle", method: "store_credit" }, E2E_PIN
+    );
+    check("17: settle store_credit del mismo beneficiario → 200", sc.status === 200, JSON.stringify(sc.body).slice(0, 140));
+    const { rows: scRows } = await pool.query<{ state: string; method: string; sstatus: string }>(
+      `SELECT r.state, s.method, s.status AS sstatus
+         FROM order_commission_recipient r
+         JOIN commission_settlement s ON s.recipient_id = r.id
+        WHERE r.id = $1 ORDER BY s.created_at DESC LIMIT 1`,
+      [recipientVendorId]
+    );
+    check(
+      "17: recipient settling con settlement store_credit pending (el reversed quedó como historia)",
+      scRows[0]?.state === "settling" && scRows[0]?.method === "store_credit" && scRows[0]?.sstatus === "pending",
+      JSON.stringify(scRows[0])
+    );
+
+    // Store credit NO es reversible por este camino: sus documentos ya salieron.
+    const scUn = await api(
+      token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
+      { action: "unsettle", reason: "e2e 17 store credit" }, E2E_PIN
+    );
+    check(
+      "17: unsettle de un settlement store_credit → 409 method_not_reversible",
+      scUn.status === 409 && (scUn.body.details as { reason?: string } | undefined)?.reason === "method_not_reversible",
+      `status=${scUn.status} ${JSON.stringify(scUn.body).slice(0, 100)}`
     );
   }
 
@@ -1804,6 +1962,102 @@ async function main(): Promise<void> {
       }
     } finally {
       await cleanup();
+    }
+  }
+
+  // 16 · Lo que sale por el CABLE: bridge falso local que captura los bodies.
+  // 2026-09-10: 1D0099 salió con PaymentMethod "Cash" y el cierre del día del
+  // contador lo leyó como efectivo; 1D0096 quedó en "Print Checks". Un verify
+  // estático mira el texto del handler; esto mira el JSON que recibe el bridge.
+  console.log("── 16 · Payloads reales al bridge: método no-cash + IsToBePrinted ──");
+  {
+    const http = await import("node:http");
+    const captured: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const server = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        captured.push({ path: String(req.url), body: JSON.parse(raw || "{}") });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ operationId: `fake-${captured.length}` }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    const prevUrl = process.env.QB_BRIDGE_URL;
+    process.env.QB_BRIDGE_URL = `http://127.0.0.1:${port}`;
+    process.env.QB_API_KEY = process.env.QB_API_KEY || "sandbox-dummy";
+
+    const { rows: fakeRows } = await pool.query(
+      `INSERT INTO qb_order_pipeline (order_id, reference_id, step, status, payload)
+       VALUES ($1, $2, 'commission_check', 'pending', $3::jsonb),
+              ($1, $2, 'commission_payment', 'pending', $4::jsonb)
+       RETURNING id, step`,
+      [
+        fixture.order_id,
+        "cset_e2e_section16",
+        JSON.stringify({
+          settlementId: "cset_e2e_section16",
+          amountDollars: "1.00",
+          vendorListId: "8000E2E-1",
+          clearingListId: CLEARING_LIST_ID,
+          expenseListId: EXPENSE_LIST_ID,
+          refNumber: "RC-E2E-16",
+          txnDate: "2026-09-10",
+          memo: "e2e 16",
+        }),
+        JSON.stringify({
+          settlementId: "cset_e2e_section16",
+          amountDollars: "1.00",
+          customerListId: "8000E2E-2",
+          customerPaymentId: "cpay_e2e_16",
+          depositAccountFullName: "Referral Commission Clearing",
+          txnDate: "2026-09-10",
+          memo: "e2e 16",
+        }),
+      ]
+    );
+    const fakeCheck = fakeRows.find((r) => r.step === "commission_check");
+    const fakePay = fakeRows.find((r) => r.step === "commission_payment");
+    try {
+      const mod = await import("../../lib/quickbooks/handlers/handle-commission-settlement");
+      const silent = { info: () => undefined, warn: () => undefined };
+      const rowOf = async (id: string) =>
+        (await pool.query(`SELECT step, payload FROM qb_order_pipeline WHERE id = $1`, [id])).rows[0];
+      const cRow = await rowOf(String(fakeCheck?.id));
+      const pRow = await rowOf(String(fakePay?.id));
+      await mod.dispatchCommissionCheck(
+        { id: String(fakeCheck?.id), reference_id: "cset_e2e_section16", step: "commission_check", payload: cRow.payload, retry_count: 0 },
+        silent
+      );
+      await mod.dispatchCommissionPayment(
+        { id: String(fakePay?.id), reference_id: "cset_e2e_section16", step: "commission_payment", payload: pRow.payload, retry_count: 0 },
+        silent
+      );
+      const checkReq = captured.find((c) => c.path === "/api/sync/enqueue");
+      const payReq = captured.find((c) => c.path === "/api/payments");
+      const checkData = (checkReq?.body?.data ?? {}) as Record<string, unknown>;
+      check(
+        "sección 16: el CheckAdd viaja con IsToBePrinted === false (no queda en Print Checks)",
+        checkReq?.body?.type === "check" && checkData.IsToBePrinted === false,
+        JSON.stringify(checkReq?.body ?? {}).slice(0, 160)
+      );
+      check(
+        "sección 16: el ReceivePaymentAdd viaja con paymentMethod 'Credit Memo', NUNCA 'Cash'",
+        payReq?.body?.paymentMethod === "Credit Memo" &&
+          payReq?.body?.autoApply === false &&
+          payReq?.body?.depositAccount === "Referral Commission Clearing",
+        JSON.stringify(payReq?.body ?? {}).slice(0, 160)
+      );
+      check(
+        "sección 16: la constante exportada es la que viaja (una sola fuente)",
+        mod.COMMISSION_CREDIT_QB_PAYMENT_METHOD === payReq?.body?.paymentMethod
+      );
+    } finally {
+      process.env.QB_BRIDGE_URL = prevUrl;
+      await new Promise<void>((r) => server.close(() => r()));
+      await pool.query(`DELETE FROM qb_order_pipeline WHERE reference_id = 'cset_e2e_section16'`);
     }
   }
 

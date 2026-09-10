@@ -71,6 +71,19 @@ export function canVoid(current: RecipientState): boolean {
   return current === "draft" || current === "eligible" || current === "approved";
 }
 
+/**
+ * Vuelta atrás de una liquidación por VENDOR BILL cuyo bill nadie pagó todavía
+ * (2026-09-10: AAF eligió cheque, se liquidó, y después pidió store credit).
+ * `settling` = bill draft/confirmado sin confirmar en QB; `closed` = bill en
+ * QB. Los dos vuelven a `approved` (monto congelado intacto) — nunca a draft:
+ * la aprobación humana con PIN no se deshace por cambiar el medio de pago.
+ * El guard de "bill pagado" y de "método store_credit" vive en el writer,
+ * porque necesita el settlement y el bill, no el estado del beneficiario.
+ */
+export function canUnsettle(current: RecipientState): boolean {
+  return current === "settling" || current === "closed";
+}
+
 export function isOpen(current: RecipientState): boolean {
   return current !== "closed" && current !== "void";
 }

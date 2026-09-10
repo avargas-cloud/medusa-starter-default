@@ -978,6 +978,53 @@ export async function resubmitByStep(
         break;
       }
 
+      // vendor_bill_void: TxnVoid del Bill (QB acepta TxnVoidType=Bill). La
+      // fila la inserta el cancel de un bill synced y el unsettle de una
+      // comisión (`lib/commissions/unsettle.ts`). Existía desde el cancel route
+      // sin que NADIE la despachara (ni acá ni en la lista de claim): un bill
+      // "voided" local quedaba vivo en QuickBooks. 2026-09-10.
+      case "vendor_bill_void": {
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "vendor_bill_void: missing qb_txn_id — cannot void"
+          );
+          break;
+        }
+        try {
+          const voidEnq = (await bridgeFetch(
+            "POST",
+            "/api/sync/enqueue",
+            {
+              type: "void",
+              action: "void",
+              data: { TxnVoidType: "Bill", TxnID: row.qb_txn_id },
+            },
+            { idempotencyKey: `vendor-bill-void:${row.id}` }
+          )) as { operation_id?: string; operationId?: string } | undefined;
+          const voidOpId = voidEnq?.operation_id ?? voidEnq?.operationId;
+          if (!voidOpId) {
+            throw new Error("Bridge did not return operation_id for vendor bill void");
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, voidOpId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ vendor_bill_void ${row.id} submitted op=${voidOpId} bill=${row.qb_txn_id}`
+          );
+        } catch (voidErr) {
+          await failVoidFamilyRow(
+            row,
+            voidErr instanceof Error ? voidErr.message : String(voidErr)
+          );
+        }
+        break;
+      }
+
       // Revert-refund cleanup: TxnDel the $0 apply ReceivePayment (QB has no
       // TxnVoid for ReceivePayment). Its confirm handler (poll-submitted-rows)
       // runs the Medusa revert and wakes the dependent void_check row.
