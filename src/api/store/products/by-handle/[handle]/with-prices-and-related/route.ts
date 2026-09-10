@@ -237,6 +237,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         filters: {
           categories: { id: mainCategoryId } as any,
           id: { $ne: mainProduct.id }, // Exclude main product
+          status: "published", // drafts must never surface on the storefront
         },
       });
 
