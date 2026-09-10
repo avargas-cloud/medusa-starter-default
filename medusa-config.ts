@@ -29,6 +29,19 @@ console.log(
   process.env.WORKER_MODE || "NOT SET (will default to 'shared')"
 );
 
+// Secrets fail CLOSED in production: a missing JWT_SECRET/COOKIE_SECRET must
+// never silently fall back to the shared dev literal "supersecret" — that
+// would let anyone forge a valid session token. Non-production keeps the dev
+// fallback so local/sandbox boots without extra env setup.
+if (
+  process.env.NODE_ENV === "production" &&
+  (!process.env.JWT_SECRET || !process.env.COOKIE_SECRET)
+) {
+  throw new Error(
+    "JWT_SECRET and COOKIE_SECRET are required in production"
+  );
+}
+
 module.exports = defineConfig({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
