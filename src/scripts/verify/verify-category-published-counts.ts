@@ -6,7 +6,7 @@
  * categories by default:
  *
  *   (a) both routes filter is_active/is_internal by default (only skipped
- *       when ?include_inactive=true).
+ *       never).
  *   (b) both routes add published_product_count to every returned category
  *       and to every entry of category_children.
  *   (c) the helper (src/lib/catalog/category-published-counts.ts) uses a
@@ -42,9 +42,9 @@ function checkRouteFiltersActiveInternal(rel: string): void {
   const src = readFileSync(join(ROOT, rel), "utf8");
   const hasActiveFilter = /is_active\s*=\s*true/.test(src);
   const hasInternalFilter = /is_internal\s*=\s*false/.test(src);
-  const gatedByIncludeInactive = /include_inactive/.test(src);
+  const gatedByIncludeInactive = /const includeInactive = false/.test(src);
   record(
-    `${rel}: filters is_active/is_internal by default (gated by include_inactive)`,
+    `${rel}: filters is_active/is_internal by default (no opt-out switch)`,
     hasActiveFilter && hasInternalFilter && gatedByIncludeInactive,
     `is_active=${hasActiveFilter} is_internal=${hasInternalFilter} include_inactive=${gatedByIncludeInactive}`
   );

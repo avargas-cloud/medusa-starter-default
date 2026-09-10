@@ -8,18 +8,20 @@ import { getPublishedProductCountsBySubtree } from "../../../../lib/catalog/cate
  * Returns the category with breadcrumbs field included.
  *
  * Storefront-safety defaults (unless overridden by the caller):
- * - is_active: true, is_internal: false — pass ?include_inactive=true to skip
+ * - is_active: true, is_internal: false (always).
  *   the filter (the requested category itself is still 404'd if it is
- *   inactive/internal and include_inactive is not set).
+ *   inactive/internal).
  * - category_children with zero published products in their subtree are
- *   dropped — pass ?include_empty=true to keep them.
+ *   dropped (always).
  */
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const categoryId = req.params.id;
   const query = req.scope.resolve("query");
-  const includeInactive = req.query.include_inactive === "true";
-  const includeEmpty = req.query.include_empty === "true";
+  // Storefront-only route: inactive/internal categories are never exposed (Medusa's store
+  // query validator rejects unknown params, so there is deliberately no opt-in switch).
+  const includeInactive = false;
+  const includeEmpty = false;
 
   try {
     // Get full category data using query.graph with explicit fields

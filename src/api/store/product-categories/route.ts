@@ -8,9 +8,9 @@ import { getPublishedProductCountsBySubtree } from "../../../lib/catalog/categor
  * Handles filtering by handle, name, etc.
  *
  * Storefront-safety defaults (unless overridden by the caller):
- * - is_active: true, is_internal: false — pass ?include_inactive=true to skip.
+ * - is_active: true, is_internal: false (always).
  * - category_children with zero published products in their subtree are
- *   dropped — pass ?include_empty=true to keep them. The category itself is
+ *   dropped (always). The category itself is
  *   never dropped from product_categories; every entry gets
  *   published_product_count so the storefront can decide at the top level.
  */
@@ -19,8 +19,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
 
   try {
-    const includeInactive = req.query.include_inactive === "true";
-    const includeEmpty = req.query.include_empty === "true";
+    // Storefront-only route: inactive/internal categories are never exposed (Medusa's store
+  // query validator rejects unknown params, so there is deliberately no opt-in switch).
+  const includeInactive = false;
+    const includeEmpty = false;
 
     // Build filters from query params
     const filters: any = {};
