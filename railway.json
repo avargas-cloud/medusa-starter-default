@@ -1,8 +1,0 @@
-{
-    "build": {},
-    "deploy": {
-        "startCommand": "npm start",
-        "healthcheckPath": "/health",
-        "healthcheckTimeout": 900
-    }
-}
