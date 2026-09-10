@@ -1,6 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
 import type {
+  CustomerInvoiceAddress,
   CustomerInvoice,
   CustomerInvoiceItem,
   CustomerInvoiceTracking,
@@ -66,7 +67,24 @@ function projectInvoiceRow(row: any): Omit<CustomerInvoice, "items" | "tracking"
     tax: centsToDollarsNum(row.tax),
     total: centsToDollarsNum(row.total),
     refunded_amount: centsToDollarsNum(row.refunded_amount),
-    shipping_address: row.shipping_address ?? null,
+    shipping_address: projectAddress(row.shipping_address),
+  };
+}
+
+/** Address snapshot → only what a customer needs to see (drops id, customer_id, metadata, timestamps). */
+function projectAddress(a: any): CustomerInvoiceAddress | null {
+  if (!a || typeof a !== "object") return null;
+  return {
+    first_name: a.first_name ?? null,
+    last_name: a.last_name ?? null,
+    company: a.company ?? null,
+    address_1: a.address_1 ?? null,
+    address_2: a.address_2 ?? null,
+    city: a.city ?? null,
+    province: a.province ?? null,
+    postal_code: a.postal_code ?? null,
+    country_code: a.country_code ?? null,
+    phone: a.phone ?? null,
   };
 }
 

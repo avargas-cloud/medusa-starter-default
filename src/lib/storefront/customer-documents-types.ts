@@ -22,6 +22,12 @@ export type CustomerInvoiceTracking = {
   shipped_at: string | null;
 };
 
+export type CustomerInvoiceAddress = {
+  first_name: string | null; last_name: string | null; company: string | null;
+  address_1: string | null; address_2: string | null; city: string | null;
+  province: string | null; postal_code: string | null; country_code: string | null; phone: string | null;
+};
+
 export type CustomerInvoice = {
   id: string;
   invoice_number: string;
@@ -35,7 +41,7 @@ export type CustomerInvoice = {
   tax: number;
   total: number;
   refunded_amount: number;
-  shipping_address: unknown;
+  shipping_address: CustomerInvoiceAddress | null;
   items: CustomerInvoiceItem[];
   tracking: CustomerInvoiceTracking[];
 };
