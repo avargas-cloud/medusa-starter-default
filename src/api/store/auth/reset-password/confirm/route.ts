@@ -113,9 +113,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       ? new Date(resetExpiresRaw as string).getTime()
       : 0;
     if (!resetExpiresMs || Date.now() > resetExpiresMs) {
-      const cleanMetadata = { ...customer.metadata };
-      delete cleanMetadata.reset_token;
-      delete cleanMetadata.reset_expires;
+      // Medusa deep-merges JSONB on update: deleting a key never persists. Null does.
+      const cleanMetadata = { ...customer.metadata, reset_token: null, reset_expires: null };
       await customerModule.updateCustomers(customer.id, {
         metadata: cleanMetadata,
       });
@@ -179,9 +178,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
       await customerModule.updateCustomers(customer.id, {
         metadata: (() => {
-          const m = { ...customer.metadata };
-          delete m.reset_token;
-          delete m.reset_expires;
+          const m = { ...customer.metadata, reset_token: null, reset_expires: null }; // null persists; delete does not (JSONB deep-merge)
           m.password_reset_at = new Date().toISOString();
           return m;
         })(),
@@ -276,9 +273,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     }
 
     // ── Step 7: Invalidate reset token ────────────────────────────────────
-    const cleanMetadata = { ...customer.metadata };
-    delete cleanMetadata.reset_token;
-    delete cleanMetadata.reset_expires;
+    // Null persists; delete does not (Medusa deep-merges JSONB on update).
+    const cleanMetadata = { ...customer.metadata, reset_token: null, reset_expires: null };
     cleanMetadata.password_reset_at = new Date().toISOString();
 
     await customerModule.updateCustomers(customer.id, {
