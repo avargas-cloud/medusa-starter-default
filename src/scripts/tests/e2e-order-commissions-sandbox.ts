@@ -986,6 +986,61 @@ async function main(): Promise<void> {
     );
   }
 
+  // 18 · Fecha de liquidación: el settle store_credit acepta settlement_date y
+  // la MISMA fecha va al crédito POS y a los DOS payloads de QB. Usa el
+  // beneficiario customer (sección 5): su settlement se limpia acá y se
+  // re-liquida con fecha pasada.
+  console.log("── 18 · settlement_date en el settle store_credit ──");
+  {
+    // Limpiar el settlement de la sección 5 para poder liquidar de nuevo con fecha.
+    await pool.query(
+      `UPDATE commission_settlement SET status = 'reversed', updated_at = NOW()
+        WHERE recipient_id = $1 AND status IN ('pending','qb_waiting','confirmed')`,
+      [recipientCustomerId]
+    );
+    await pool.query(
+      `UPDATE order_commission_recipient SET state = 'approved', settled_at = NULL WHERE id = $1`,
+      [recipientCustomerId]
+    );
+    const bad1 = await api(
+      token, "POST", `${orderPath}/recipients/${recipientCustomerId}`,
+      { action: "settle", method: "store_credit", settlement_date: "2026-13-40" }, E2E_PIN
+    );
+    check("18: fecha inválida → 400 invalid_settlement_date", bad1.status === 400 && bad1.body.code === "invalid_settlement_date", `status=${bad1.status}`);
+    const bad2 = await api(
+      token, "POST", `${orderPath}/recipients/${recipientCustomerId}`,
+      { action: "settle", method: "store_credit", settlement_date: "2099-01-01" }, E2E_PIN
+    );
+    check("18: fecha futura → 400", bad2.status === 400 && bad2.body.code === "invalid_settlement_date", `status=${bad2.status}`);
+    const { rows: stillApproved } = await pool.query<{ state: string }>(
+      `SELECT state FROM order_commission_recipient WHERE id = $1`, [recipientCustomerId]
+    );
+    check("18: tras los 400 el beneficiario sigue approved (nada se escribió)", stillApproved[0]?.state === "approved", String(stillApproved[0]?.state));
+
+    const dated = await api(
+      token, "POST", `${orderPath}/recipients/${recipientCustomerId}`,
+      { action: "settle", method: "store_credit", settlement_date: "2026-08-14" }, E2E_PIN
+    );
+    check("18: settle con settlement_date=2026-08-14 → 200", dated.status === 200, JSON.stringify(dated.body).slice(0, 120));
+    const cpay18 = String(dated.body.customer_payment_id ?? "");
+    const { rows: d18 } = await pool.query<{ batch_day: string; received_day: string; dates: string[] }>(
+      `SELECT cp.batch_day,
+              (cp.received_at AT TIME ZONE 'America/New_York')::date::text AS received_day,
+              ARRAY(SELECT p.payload->>'txnDate' FROM qb_order_pipeline p
+                     WHERE p.reference_id = cp.metadata->>'commission_settlement_id'
+                       AND p.step IN ('commission_check','commission_payment')
+                     ORDER BY p.step) AS dates
+         FROM customer_payment cp WHERE cp.id = $1`,
+      [cpay18]
+    );
+    check(
+      "18: cpay.batch_day, received_at (ET) y txnDate de check+payment = 2026-08-14 (los tres iguales)",
+      d18[0]?.batch_day === "2026-08-14" && d18[0]?.received_day === "2026-08-14" &&
+        JSON.stringify(d18[0]?.dates) === JSON.stringify(["2026-08-14", "2026-08-14"]),
+      JSON.stringify(d18[0])
+    );
+  }
+
   console.log("── 7 · Guardas post-devengo ──");
   {
     const resave = await api(

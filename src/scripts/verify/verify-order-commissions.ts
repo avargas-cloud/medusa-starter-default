@@ -200,6 +200,30 @@ console.log("verify-order-commissions — registro del Commissions Pipeline\n");
   );
 }
 
+// 6c · fecha de liquidación (2026-09-10): UNA variable para cpay + check + payment
+{
+  const codeLines = (src: string) =>
+    src.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
+  const r = codeLines(read("src/api/admin/commissions/orders/[orderId]/recipients/[recipientId]/route.ts"));
+  // El settle fechaba "hoy" fijo: AAF (bill del 08-14) cayó en 09-10 y el gasto
+  // salió del período del contador. La fecha se valida (YYYY-MM-DD real, no
+  // futura) y es la MISMA para el crédito POS y los dos documentos de QB — si
+  // difirieran, la clearing dejaría de estar en $0 entre las dos fechas.
+  check(
+    "settle valida settlement_date (formato, calendario real, no futura) y devuelve 400 invalid_settlement_date",
+    /settlement_date must be YYYY-MM-DD/.test(r) &&
+      /cannot be in the future/.test(r) &&
+      /code: "invalid_settlement_date"/.test(r)
+  );
+  check(
+    "la fecha resuelta alimenta cpay.received_at, cpay.batch_day Y el txnDate de los payloads (una sola variable)",
+    /received_at: new Date\(`\$\{settlementDate\}T12:00:00/.test(r) &&
+      /batch_day: settlementDate/.test(r) &&
+      /const txnDate = settlementDate;/.test(r) &&
+      !/const txnDate = getBusinessDateString\(new Date\(\)\)/.test(r)
+  );
+}
+
 // 7 · allowlist de bills service (caso 1)
 {
   const src = read("src/lib/purchase-orders/vendor-bill-account-rules.ts");

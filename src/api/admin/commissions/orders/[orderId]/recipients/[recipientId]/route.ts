@@ -81,6 +81,7 @@ export async function POST(
     reason?: unknown;
     method?: unknown;
     vendor_bill_id?: unknown;
+    settlement_date?: unknown;
   };
   const action = body.action;
   if (action !== "approve" && action !== "void" && action !== "settle" && action !== "unsettle") {
@@ -96,6 +97,7 @@ export async function POST(
       actorId: pin.actorId,
       method: body.method,
       vendorBillId: typeof body.vendor_bill_id === "string" ? body.vendor_bill_id : null,
+      settlementDate: body.settlement_date,
     });
     return;
   }
@@ -164,6 +166,32 @@ interface SettleContext {
   actorId: string | null;
   method: unknown;
   vendorBillId: string | null;
+  /** YYYY-MM-DD (calendario ET). Ausente = hoy. */
+  settlementDate: unknown;
+}
+
+/**
+ * Fecha de la liquidación por store credit — la MISMA para el crédito POS, el
+ * Check y el ReceivePayment de QuickBooks. Se eligió una sola variable a
+ * propósito: si el check y el payment llevaran fechas distintas, la clearing
+ * dejaría de estar en $0 en cualquier corte de período entre las dos.
+ * 2026-09-10: el settle fechaba "hoy" fijo y AAF (bill original del 08-14)
+ * cayó en 09-10 — el contador vio el gasto salir de su período.
+ */
+function resolveSettlementDate(raw: unknown): { date: string } | { error: string } {
+  const today = getBusinessDateString(new Date());
+  if (raw === undefined || raw === null || raw === "") return { date: today };
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return { error: "settlement_date must be YYYY-MM-DD." };
+  }
+  const [y = 0, m = 0, d = 0] = raw.split("-").map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) {
+    return { error: "settlement_date is not a real calendar date." };
+  }
+  if (raw > today) return { error: "settlement_date cannot be in the future." };
+  if (y < 2020) return { error: "settlement_date is too far in the past." };
+  return { date: raw };
 }
 
 async function handleSettle(
@@ -180,6 +208,12 @@ async function handleSettle(
     res.status(400).json({ error: "vendor_bill_id is required for method 'vendor_bill'." });
     return;
   }
+  const resolvedDate = resolveSettlementDate(ctx.settlementDate);
+  if ("error" in resolvedDate) {
+    res.status(400).json({ error: resolvedDate.error, code: "invalid_settlement_date" });
+    return;
+  }
+  const settlementDate = resolvedDate.date;
 
   const accounts = await loadCommissionQbAccounts();
   if (!accounts) {
@@ -306,7 +340,10 @@ async function handleSettle(
         type: "payment",
         source: "pos",
         status: "available",
-        received_at: new Date(),
+        // Mediodía ET de la fecha elegida: cae en ese día en cualquier lector
+        // (batch_day explícito para Treasury; received_at para el resto).
+        received_at: new Date(`${settlementDate}T12:00:00-04:00`),
+        batch_day: settlementDate,
         reference: staged.refNumber,
         notes: staged.memo,
         metadata: {
@@ -316,7 +353,7 @@ async function handleSettle(
         },
       });
 
-      const txnDate = getBusinessDateString(new Date());
+      const txnDate = settlementDate;
       const payloads = buildStoreCreditPayloads({
         settlementId: staged.settlementId,
         amountCents: staged.amountCents,
