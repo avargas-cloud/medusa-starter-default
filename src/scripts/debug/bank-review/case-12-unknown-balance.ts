@@ -37,13 +37,25 @@ void run("case-12", async ({ api, pool }) => {
     { name, mime_type: "application/pdf", content_base64: tinyPdf(text).toString("base64") },
     key("ev"))).evidence)!;
 
+  // Idempotente (lección del caso 11): los borradores de este caso se REUSAN por referencia; cada corrida
+  // volvía a crear el par y la página de aperturas se llenaba de duplicados.
+  const existing = async (reference: string) => ((await api.get("/admin/banking/accounting/openings")).openings as Json[] ?? [])
+    .map(context => record(context.opening))
+    .find(o => o?.kind === "clearing" && o?.reference === reference && o?.status === "draft");
+  const saveOrReuse = async (reference: string, book: number | null, evidenceName: string, evidenceText: string, tag: string) => {
+    const found = await existing(reference);
+    if (found) return { status: 200, body: { opening: found } as Json };
+    const ev = await upload(evidenceName, evidenceText);
+    return api.call("/admin/banking/accounting/openings", {
+      method: "POST", headers: key(tag), allow: [400, 409, 422],
+      body: { expected_revision: 0, kind: "clearing", reference, book_balance_cents: book, statement_balance_cents: null,
+        books_evidence_id: ev.id, items: [] },
+    });
+  };
+
   // ── B · null explícito, CON evidencia ──────────────────────────────────────
-  const evB = await upload("case-12-uf-desconocido.pdf", "UF baseline al 2026-08-31 · saldo NO determinado");
-  const saved = await api.call("/admin/banking/accounting/openings", {
-    method: "POST", headers: key("null"), allow: [400, 409, 422],
-    body: { expected_revision: 0, kind: "clearing", reference: "case-12 · saldo desconocido",
-      book_balance_cents: null, statement_balance_cents: null, books_evidence_id: evB.id, items: [] },
-  });
+  const saved = await saveOrReuse("case-12 · saldo desconocido", null,
+    "case-12-uf-desconocido.pdf", "UF baseline al 2026-08-31 · saldo NO determinado", "null");
   let draft: Json = {}, blockersB: unknown = null, previewStatus = 0, previewCode = "UNKNOWN", diffB: unknown = null;
   if (saved.status === 200) {
     draft = record(saved.body.opening) ?? {};
@@ -58,12 +70,8 @@ void run("case-12", async ({ api, pool }) => {
 
   // ── C · control positivo: 0 explícito ──────────────────────────────────────
   // clearing exige statement_balance_cents === null; el saldo que cuenta es el book.
-  const evC = await upload("case-12-uf-cero.pdf", "UF baseline al 2026-08-31 · saldo CERO, conciliado");
-  const zero = await api.call("/admin/banking/accounting/openings", {
-    method: "POST", headers: key("zero"), allow: [400, 409, 422],
-    body: { expected_revision: 0, kind: "clearing", reference: "case-12 · saldo CERO conocido",
-      book_balance_cents: 0, statement_balance_cents: null, books_evidence_id: evC.id, items: [] },
-  });
+  const zero = await saveOrReuse("case-12 · saldo CERO conocido", 0,
+    "case-12-uf-cero.pdf", "UF baseline al 2026-08-31 · saldo CERO, conciliado", "zero");
   let blockersC: unknown = null, diffC: unknown = null, previewC = 0;
   if (zero.status === 200) {
     const z = record(zero.body.opening) ?? {};

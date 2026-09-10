@@ -33,6 +33,7 @@ for (const root of roots) {
     const source = readFileSync(file, "utf8");
     const rel = relative(backend, file);
     files++;
+    let insideHosts = false;
     source.split("\n").forEach((line, index) => {
       const where = `${rel}:${index + 1}`;
       // 1. Any environment literal, in any quoting, in a query-like context.
@@ -49,7 +50,11 @@ for (const root of roots) {
       if (/'sandbox'|'production'/.test(line)) problems.push(`${where}: single-quoted environment literal (SQL fragment?)`);
       // 3. Token prefixes and hosts must not name an environment either.
       if (/["'`](public|access|link)-sandbox-/.test(line) && !/prefix/.test(line)) problems.push(`${where}: sandbox token prefix literal`);
-      if (/sandbox\.plaid\.com|production\.plaid\.com/.test(line) && !/HOSTS\s*=/.test(line)) problems.push(`${where}: Plaid host literal outside the closed table`);
+      // Prettier lays the closed table out over several lines (2026-09-09), so "inside HOSTS = {…}" is what is allowed —
+      // not "on the HOSTS line". A host literal anywhere else is still a leak.
+      if (/HOSTS\s*=\s*\{/.test(line)) insideHosts = true;
+      if (/sandbox\.plaid\.com|production\.plaid\.com/.test(line) && !insideHosts) problems.push(`${where}: Plaid host literal outside the closed table`);
+      if (insideHosts && /\}/.test(line)) insideHosts = false;
     });
   }
 }

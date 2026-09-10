@@ -10,7 +10,7 @@ import {
   type OpeningContext,
 } from "./opening-types";
 import { openingPeriod } from "./opening-validation";
-import { receiptRead } from "./receipts-setup";
+import { receiptRead, receiptSetup } from "./receipts-setup";
 import { reviewCapacity, runReviewCommand } from "./review-common";
 import { loadReviewContext, persistReview } from "./review-core";
 import { reviewToday } from "./review-date";
@@ -34,7 +34,8 @@ const CANDIDATES_SQL = `SELECT t.id,t.name,t.transaction_date AS day,(-t.amount:
     AND t.amount::numeric*100=$4::numeric AND t.deleted_at IS NULL AND a.deleted_at IS NULL AND a.is_active AND a.is_selected
     AND conn.deleted_at IS NULL AND conn.environment=${bankingEnvSql()} AND a.currency='USD' AND a.type='depository'
     AND EXISTS(SELECT 1 FROM qb_account mapped WHERE mapped.qb_list_id=a.qb_list_id AND mapped.is_active
-      AND mapped.deleted_at IS NULL AND mapped.account_type='Bank' AND mapped.currency IN ('USD','US Dollar'))
+      AND mapped.deleted_at IS NULL AND mapped.account_type='Bank'
+      AND (mapped.currency IN ('USD','US Dollar') OR (mapped.currency IS NULL AND $6::boolean)))
     AND NOT EXISTS(SELECT 1 FROM bank_opening_clear c WHERE c.transaction_id=t.id AND c.kind='clear'
       AND NOT EXISTS(SELECT 1 FROM bank_opening_clear u WHERE u.reverses_clear_id=c.id))
     AND NOT EXISTS(SELECT 1 FROM bank_journal_entry e WHERE e.transaction_id=t.id AND e.kind<>'reversal'
@@ -62,6 +63,10 @@ async function clearCandidates(
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by `if (item.blockers.length)`, so index 0 exists
   if (item.blockers.length) throw new BankingError(item.blockers[0]!, 409);
   if (item.clear_id) return { transactions: [], count: 0 };
+  // QB Desktop without multicurrency reports NO currency on Bank accounts: the operator's local-USD attestation
+  // (same rule as receiptMapping) is what makes the mapped account eligible. Without it, no real account ever
+  // produced a candidate (guided-review case 13, 2026-09-10).
+  const attested = (await receiptSetup(client))?.attested === true;
   const transactions = (
     await client.query<{
       id: string;
@@ -77,6 +82,7 @@ async function clearCandidates(
         reviewToday(),
         item.amount_cents * (item.kind === "outstanding_check" ? 1 : -1),
         transactionId,
+        attested,
       ]
     )
   ).rows;

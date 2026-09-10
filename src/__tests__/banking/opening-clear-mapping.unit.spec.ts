@@ -13,6 +13,11 @@ function fixture(changes = {}, qb: Partial<typeof account> | null = {}, missing 
   });
   return { client: { query } as unknown as PoolClient, query };
 }
+const SANDBOX_ENV = { ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: "postgresql://postgres:sandbox@localhost:5499/medusa" };
+const savedEnv: Record<string, string | undefined> = {};
+// The mapping check now compares the feed row against the served environment, so the spec must declare one.
+beforeAll(() => { for (const [k, v] of Object.entries(SANDBOX_ENV)) { savedEnv[k] = process.env[k]; process.env[k] = v; } });
+afterAll(() => { for (const k of Object.keys(SANDBOX_ENV)) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; } });
 describe("historical clearing resolves the transaction's live bank mapping", () => {
   it("accepts a Bank account without a currency ref when the operator attested local USD, and not otherwise", async () => {
     await expect(assertOpeningClearMapping(fixture({}, { currency: null }, false, true).client, "tx", bank.qb_list_id)).resolves.toBeUndefined();
@@ -37,6 +42,23 @@ describe("historical clearing resolves the transaction's live bank mapping", () 
   it("rejects removed or inactive QB mappings absent from the active account lookup", async () => {
     await expect(assertOpeningClearMapping(fixture({}, null).client, "tx", bank.qb_list_id)).rejects.toThrow("BANKING_OPENING_MAPPING_STALE");
     await expect(assertOpeningClearMapping(fixture({}, {}, true).client, "tx", bank.qb_list_id)).rejects.toThrow("BANKING_OPENING_MAPPING_STALE");
+  });
+  it("compares the feed row against the environment this process serves, never a literal 'sandbox'", async () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, {
+      ECOPOWERTECH_ENV: "production", DATABASE_URL: "postgresql://u:p@db.railway.internal:5432/railway",
+      BANKING_ENABLED: "true", BANKING_ENV: "production", BANKING_EXPECTED_DB_TARGET: "db.railway.internal:5432/railway",
+      PLAID_CLIENT_ID: "client", PLAID_PRODUCTION_SECRET: "secret", BANKING_WEBHOOK_URL: "https://api.example.invalid/pub/banking/webhook",
+      BANKING_OAUTH_REDIRECT_URI: "https://pos.example.invalid/accounting/banks/oauth-return",
+      BANKING_TOKEN_ACTIVE_KEY_ID: "production-v1", BANKING_TOKEN_KEYS_JSON: JSON.stringify({ "production-v1": "a".repeat(64) }),
+    });
+    try {
+      await expect(assertOpeningClearMapping(fixture({ environment: "production" }).client, "tx", bank.qb_list_id)).resolves.toBeUndefined();
+      await expect(assertOpeningClearMapping(fixture({ environment: "sandbox" }).client, "tx", bank.qb_list_id)).rejects.toThrow("BANKING_OPENING_MAPPING_STALE");
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
+    }
   });
   it("accepts explicit ISO USD", async () => {
     await expect(assertOpeningClearMapping(fixture({}, { currency: "USD" }).client, "tx", bank.qb_list_id)).resolves.toBeUndefined();

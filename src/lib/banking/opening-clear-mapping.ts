@@ -5,7 +5,7 @@ import {
   receiptMapping,
   receiptSetup,
 } from "./receipts-setup";
-import { BankingError } from "./security";
+import { BankingError, requireBankingEnabled } from "./security";
 
 type ClearMapping = {
   account_id: string;
@@ -35,7 +35,9 @@ export async function assertOpeningClearMapping(
   if (
     !row ||
     row.deleted ||
-    row.environment !== "sandbox" ||
+    // The feed row must belong to the environment this process serves; a literal "sandbox" here made every
+    // production clear fail with MAPPING_STALE (found by guided-review case 13, 2026-09-10).
+    row.environment !== requireBankingEnabled() ||
     !row.is_active ||
     !row.is_selected ||
     row.currency !== "USD" ||
