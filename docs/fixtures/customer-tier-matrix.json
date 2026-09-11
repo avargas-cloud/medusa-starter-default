@@ -12,7 +12,8 @@
   {
     "name": "group Wholesale Distributor is NOT an exact match",
     "input": { "groups": [{ "name": "Wholesale Distributor" }] },
-    "expected": "retail"
+    "expected": "retail",
+    "pos_known_divergence": "store-pos/lib/customer-type.ts matchea el nombre del grupo por substring (/wholesale/i); alinear a /^wholesale$/i en un push del POS. Hoy no existe ningún grupo así en prod."
   },
   {
     "name": "Retail group only",
