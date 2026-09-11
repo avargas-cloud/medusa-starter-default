@@ -8,7 +8,7 @@
  *       (never a string-interpolated value).
  *   (c) customer-documents.ts's output object literals contain NONE of the
  *       forbidden field names as keys.
- *   (d) the invoice queries exclude drafts (`status <> 'draft'`).
+ *   (d) the invoice queries exclude drafts (`status NOT IN ('draft', 'voided')`).
  *
  * READ-ONLY except for the (c) mutation test, which edits a temp copy in
  * the OS tmp dir (never the real file) and diffs it back to nothing.
@@ -193,9 +193,9 @@ function mutationTestForbiddenFields(): void {
 // ── (d) draft invoices excluded ─────────────────────────────────────────────
 function checkDraftsExcluded(): void {
   const src = readFileSync(join(ROOT, MODULE_REL), "utf8");
-  const occurrences = src.split("status <> 'draft'").length - 1;
+  const occurrences = src.split("status NOT IN ('draft', 'voided')").length - 1;
   record(
-    "customer-documents.ts: status <> 'draft' present (list + detail)",
+    "customer-documents.ts: status NOT IN ('draft', 'voided') present (list + detail)",
     occurrences >= 2,
     `found ${occurrences} occurrence(s), expected >= 2 (list query + detail query)`
   );

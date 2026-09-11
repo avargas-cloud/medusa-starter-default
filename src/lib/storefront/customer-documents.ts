@@ -182,7 +182,7 @@ export async function listCustomerInvoices(
        JOIN "order" o ON o.id = i.order_id
       WHERE (i.customer_id = ? OR o.customer_id = ?)
         AND i.deleted_at IS NULL
-        AND i.status <> 'draft'
+        AND i.status NOT IN ('draft', 'voided')
         ${whereOrderId}`,
     baseBindings
   );
@@ -196,7 +196,7 @@ export async function listCustomerInvoices(
        JOIN "order" o ON o.id = i.order_id
       WHERE (i.customer_id = ? OR o.customer_id = ?)
         AND i.deleted_at IS NULL
-        AND i.status <> 'draft'
+        AND i.status NOT IN ('draft', 'voided')
         ${whereOrderId}
       ORDER BY i.issued_at DESC NULLS LAST, i.created_at DESC
       LIMIT ? OFFSET ?`,
@@ -228,7 +228,7 @@ export async function getCustomerInvoice(
       WHERE i.id = ?
         AND (i.customer_id = ? OR o.customer_id = ?)
         AND i.deleted_at IS NULL
-        AND i.status <> 'draft'
+        AND i.status NOT IN ('draft', 'voided')
       LIMIT 1`,
     [invoiceId, customerId, customerId]
   );
