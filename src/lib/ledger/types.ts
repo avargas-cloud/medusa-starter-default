@@ -11,7 +11,8 @@ export type LedgerSourceKind =
   | "po_receipt"
   | "vendor_bill"
   | "vendor_credit"
-  | "vendor_bill_payment";
+  | "vendor_bill_payment"
+  | "opening_balance";
 
 export interface LedgerAccount {
   id: string;
@@ -80,7 +81,7 @@ export class LedgerError extends Error {
   }
 }
 
-/** Claves de `gl_account_map` — §3. */
+/** Claves de `gl_account_map` — §3 (las 9 históricas). */
 export const ACCOUNT_MAP_KEYS = [
   "accounts_receivable",
   "undeposited_funds",
@@ -113,6 +114,16 @@ export const PURCHASE_ACCOUNT_MAP_KEYS = [
 export type PurchaseAccountMapKey = (typeof PURCHASE_ACCOUNT_MAP_KEYS)[number];
 export type PurchaseAccountMap = AccountMap &
   Record<PurchaseAccountMapKey, LedgerAccount>;
+
+/**
+ * Banking-on-GL §2/§6: sólo el documento `opening_balance` necesita
+ * `opening_balance_equity`; fuera de `ACCOUNT_MAP_KEYS` por la misma razón que
+ * las de compras — un ambiente sin sembrarla no rompe los demás documentos.
+ */
+export const OPENING_ACCOUNT_MAP_KEYS = ["opening_balance_equity"] as const;
+export type OpeningAccountMapKey = (typeof OPENING_ACCOUNT_MAP_KEYS)[number];
+export type OpeningAccountMap = AccountMap &
+  Record<OpeningAccountMapKey, LedgerAccount>;
 
 /** Una línea de invoice ya resuelta contra cuentas — el builder es puro, sin DB. */
 export interface InvoiceLineSnapshot {

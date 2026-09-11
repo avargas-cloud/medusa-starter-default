@@ -20,6 +20,7 @@ export function fakeAccountMap(): AccountMap {
     income_default: account("INCOME-1", "Income", "credit"),
     cogs_default: account("COGS-1", "CostOfGoodsSold", "debit"),
     bad_debt: account("BADDEBT-1", "Expense", "debit"),
+    opening_balance_equity: account("OBE-1", "Equity", "credit"),
   };
 }
 
