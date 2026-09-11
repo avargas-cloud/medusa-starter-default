@@ -78,7 +78,7 @@ export async function receiptSetup(
       await client.query<ReceiptSetup>(`SELECT id,revision,cut_date,currency,
     ar_account_snapshot AS ar_account,clearing_account_snapshot AS clearing_account,attested,
     (EXISTS(SELECT 1 FROM bank_receipt_accounting)
-      OR EXISTS(SELECT 1 FROM bank_journal_entry WHERE source_kind='opening_balance' AND deleted_at IS NULL
+      OR EXISTS(SELECT 1 FROM bank_journal_entry WHERE source_kind='opening_balance' AND kind='document' AND deleted_at IS NULL
         AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=bank_journal_entry.id))
       OR EXISTS(SELECT 1 FROM bank_journal_entry WHERE kind IN ('movement','merchant_receipt','merchant_settlement')))
       AS frozen FROM bank_accounting_setup WHERE id='local-usd' AND deleted_at IS NULL`)
