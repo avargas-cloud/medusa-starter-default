@@ -168,12 +168,31 @@ async function main() {
     // No doble conteo, hacia atrás: un qb_import posterior al corte cuyo TxnID el POS conoce
     // (p. ej. un recibo que el POS sincronizó después, o uno importado con una regla anterior)
     // se REVERSA — append-only, mismo mecanismo que cualquier documento del GL.
+    // Para los documentos de COMPRAS enlazados (bill, crédito, pago, recibo) se exige además que
+    // el documento del POS tenga su asiento ACTIVO: reversar el qb_import de un documento que el
+    // replay todavía no pudo postear deja un agujero en el libro (medido 2026-09-11: 46 vendor
+    // credits con total 0 quedaron sin asiento por ningún lado). Los de ventas los postea el replay
+    // siempre (verify-gl-core lo afirma), así que ahí alcanza con el enlace.
     const doubled = await client.query<{ source_id: string; day: string }>(
-      `SELECT e.source_id, e.day FROM bank_journal_entry e
+      `WITH purchase_links AS (
+         SELECT qb_txn_id AS txn, 'vendor_bill' AS kind, id AS doc FROM vendor_bill WHERE qb_txn_id IS NOT NULL AND deleted_at IS NULL
+         UNION ALL SELECT qb_txn_id, 'vendor_credit', id FROM vendor_credit WHERE qb_txn_id IS NOT NULL AND deleted_at IS NULL
+         UNION ALL SELECT qb_txn_id, 'vendor_bill_payment', id FROM vendor_bill_payment WHERE qb_txn_id IS NOT NULL AND deleted_at IS NULL
+         UNION ALL SELECT qb_item_receipt_list_id, 'po_receipt', id FROM purchase_order_receipt WHERE qb_item_receipt_list_id IS NOT NULL AND deleted_at IS NULL
+       ),
+       posted_purchase AS (
+         SELECT DISTINCT l.txn FROM purchase_links l
+           JOIN bank_journal_entry d ON d.source_kind = l.kind AND d.source_id = l.doc
+          WHERE d.kind = 'document' AND d.deleted_at IS NULL AND d.reverses_entry_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r2 WHERE r2.reverses_entry_id = d.id AND r2.deleted_at IS NULL)
+       )
+       SELECT e.source_id, e.day FROM bank_journal_entry e
         WHERE e.source_kind = 'qb_import' AND e.kind = 'document' AND e.deleted_at IS NULL
           AND e.reverses_entry_id IS NULL AND e.day > $1
           AND e.source_id = ANY($2::text[])
-          AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL)`,
+          AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL)
+          AND (NOT EXISTS (SELECT 1 FROM purchase_links pl WHERE pl.txn = e.source_id)
+               OR EXISTS (SELECT 1 FROM posted_purchase pp WHERE pp.txn = e.source_id))`,
       [CUTOFF, [...known]]
     );
     const reconcile = { candidates: doubled.rowCount ?? 0, reversed: 0, failed: 0 };
