@@ -122,6 +122,15 @@ export default defineMiddlewares({
       method: "POST",
       middlewares: [customerAuthThrottle({ bucket: "reset" })],
     },
+    // BOM de un proyecto (Backlighting / Linear Lighting) → carrito de la web.
+    // Sólo clientes autenticados: la ruta lee el customer_id del auth_context y
+    // el candado proyecto↔orden necesita saber de quién es el proyecto. Las
+    // rutas custom de /store/carts/* NO llevan auth por default en Medusa v2.
+    {
+      matcher: "/store/carts/:id/sync-bom",
+      method: "POST",
+      middlewares: [authenticate("customer", ["session", "bearer"])],
+    },
     // El PIN de supervisor NO se cambia por la ruta nativa de Medusa. Vive en
     // `store.metadata`, y `POST /admin/stores/:id` acepta cualquier metadata sin
     // saber nada de PINes — así que cualquier cajero (todos son usuarios admin
