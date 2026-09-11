@@ -51,7 +51,15 @@ export interface MissingLinks {
  * bills+recibos: POs enlazados que no están en `cache.purchase_orders`. De
  * bills: recibos enlazados que no están en `cache.item_receipts`.
  */
-export function collectMissingLinks(bucket: LinkableBucket, cache: KnownTxnIdCache): MissingLinks {
+/**
+ * `floorDate` (YYYY-MM-DD, típicamente el `--from` del import): un RECIBO anterior al piso NUNCA se
+ * sigue — pertenece a los libros del año cerrado y el inventario de apertura ya lo tiene (regla del
+ * operador 2026-09-11: "no pueden haber receipts en 2025"). Un BILL anterior al piso sólo entra si un
+ * pago posterior lo aplica (seguía abierto al cierre); desde un PO no se siguen bills anteriores.
+ * Los POs se siguen sin piso: si un documento del rango los enlaza, estaban vivos.
+ */
+export function collectMissingLinks(bucket: LinkableBucket, cache: KnownTxnIdCache, floorDate?: string): MissingLinks {
+  const afterFloor = (d: string | null): boolean => !floorDate || (d !== null && d >= floorDate);
   const missingBills = new Set<string>();
   const missingPos = new Set<string>();
   const missingReceipts = new Set<string>();
@@ -67,8 +75,19 @@ export function collectMissingLinks(bucket: LinkableBucket, cache: KnownTxnIdCac
     }
   }
   for (const bill of bucket.bills) {
-    for (const txnId of linkedTxnIdsOfType(bill.linked_txns, "ItemReceipt")) {
-      if (!cache.item_receipts.has(txnId)) missingReceipts.add(txnId);
+    for (const lt of bill.linked_txns) {
+      if (lt.txn_type === "ItemReceipt" && afterFloor(lt.txn_date) && !cache.item_receipts.has(lt.txn_id)) missingReceipts.add(lt.txn_id);
+    }
+  }
+  // Y en la dirección inversa: un PO traído por enlace (típicamente de 2025) lista en su
+  // `LinkedTxn` los recibos y bills que lo recibieron; si están fuera del rango descargado
+  // el PO queda "recibido" sin ningún recibo en el POS (medido 2026-09-11: 23 de 32 POs de
+  // 2025). Se piden por TxnID igual que el resto.
+  for (const po of bucket.purchase_orders) {
+    for (const lt of po.linked_txns) {
+      if (!afterFloor(lt.txn_date)) continue;
+      if (lt.txn_type === "ItemReceipt" && !cache.item_receipts.has(lt.txn_id)) missingReceipts.add(lt.txn_id);
+      if (lt.txn_type === "Bill" && !cache.bills.has(lt.txn_id)) missingBills.add(lt.txn_id);
     }
   }
   return { bills: [...missingBills], purchase_orders: [...missingPos], item_receipts: [...missingReceipts] };
@@ -192,7 +211,7 @@ function bumpYear(report: FollowLinksReport, type: keyof FollowLinksReport["fetc
  */
 export async function followLinks(
   bucket: FollowLinksMutableBucket,
-  opts: FetchLinkedOptions & { maxIterations?: number }
+  opts: FetchLinkedOptions & { maxIterations?: number; floorDate?: string }
 ): Promise<FollowLinksReport> {
   const maxIterations = opts.maxIterations ?? 5;
   const seenBills = new Set(bucket.bills.map((b) => b.txn_id));
@@ -206,7 +225,7 @@ export async function followLinks(
   };
 
   for (let i = 0; i < maxIterations; i++) {
-    const missing = collectMissingLinks(bucket, { bills: seenBills, purchase_orders: seenPos, item_receipts: seenReceipts });
+    const missing = collectMissingLinks(bucket, { bills: seenBills, purchase_orders: seenPos, item_receipts: seenReceipts }, opts.floorDate);
     if (missing.bills.length === 0 && missing.purchase_orders.length === 0 && missing.item_receipts.length === 0) break;
     report.iterations++;
     opts.log(
