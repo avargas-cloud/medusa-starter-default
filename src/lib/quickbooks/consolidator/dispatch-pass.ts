@@ -229,6 +229,12 @@ export async function runPurchaseDelegationRepairPass(
  * Covers all main pipeline steps (estimate, sales_order, invoice, payment, etc.)
  * as well as management steps (estimate_cancel, credit_memo_mod, transfer_customer,
  * so_close, so_reopen) and void/cancel steps (void_sales_order, void_invoice, etc.).
+ *
+ * THE LIST BELOW IS THE GATE: a step with a handler in resubmit-by-step.ts but
+ * missing here is never claimed and sits in 'pending' forever with no error.
+ * That is exactly how the first real vendor credit (VC-1002, 2026-09-11) got
+ * stuck — gl-purchases-v2 added the four GL steps to the handler and the
+ * poller, not to this claim. Adding a step: handler + poller + THIS list.
  */
 export async function runPendingDispatchPass(
   container: MedusaContainer,
@@ -240,7 +246,7 @@ export async function runPendingDispatchPass(
       WITH claim AS (
         SELECT id
           FROM qb_order_pipeline
-         WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'payment_method_change', 'refund_check_mod', 'refund_payment_txndate_change', 'refund_apply_del', 'estimate', 'estimate_mod', 'sales_order', 'sales_order_mod', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'void_payment', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment', 'cm_damage_adjustment', 'cm_damage_adjustment_mod', 'void_cm_damage_adjustment', 'purchase_order_mod', 'item_receipt_add', 'item_receipt_mod', 'vendor_bill_add', 'vendor_bill_mod', 'vendor_bill_rebuild_preflight', 'vendor_bill_rebuild_delete', 'vendor_bill_payment_check', 'vendor_bill_void', 'commission_check', 'commission_payment')
+         WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'payment_method_change', 'refund_check_mod', 'refund_payment_txndate_change', 'refund_apply_del', 'estimate', 'estimate_mod', 'sales_order', 'sales_order_mod', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'void_payment', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment', 'cm_damage_adjustment', 'cm_damage_adjustment_mod', 'void_cm_damage_adjustment', 'purchase_order_mod', 'item_receipt_add', 'item_receipt_mod', 'vendor_bill_add', 'vendor_bill_mod', 'vendor_bill_rebuild_preflight', 'vendor_bill_rebuild_delete', 'vendor_bill_payment_check', 'vendor_bill_void', 'commission_check', 'commission_payment', 'vendor_credit_add', 'vendor_credit_void', 'bill_payment_add', 'bill_payment_void')
            AND (
              -- A 'pending' row is normally due immediately. It carries a
              -- next_retry_at only when a handler DEFERRED it on purpose
