@@ -336,12 +336,12 @@ async function main() {
     const creditCacheFiles = existsSync(CACHE_DIR)
       ? require("node:fs").readdirSync(CACHE_DIR).filter((f: string) => /^credit_(\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}|bytxn_[0-9a-f]+)\.json$/.test(f))
       : [];
-    const qbCreditByTxn = new Map<string, { TotalAmount?: string; Amount?: string }>();
+    const qbCreditByTxn = new Map<string, { CreditAmount?: string; TotalAmount?: string; Amount?: string }>();
     for (const f of creditCacheFiles) {
       const raw = JSON.parse(readFileSync(join(CACHE_DIR, f), "utf8")) as { VendorCreditRet?: unknown } | null;
       if (!raw) continue;
       const rets = Array.isArray(raw.VendorCreditRet) ? raw.VendorCreditRet : raw.VendorCreditRet ? [raw.VendorCreditRet] : [];
-      for (const r of rets as { TxnID: string; TotalAmount?: string; Amount?: string }[]) qbCreditByTxn.set(r.TxnID, r);
+      for (const r of rets as { TxnID: string; CreditAmount?: string; TotalAmount?: string; Amount?: string }[]) qbCreditByTxn.set(r.TxnID, r);
     }
     const creditTxnIdsCreated = (inv.credit_scope?.created ?? []).map((c) => c.txn_id);
     if (creditTxnIdsCreated.length > 0) {
@@ -354,7 +354,7 @@ async function main() {
         const qb = qbCreditByTxn.get(r.qb_txn_id);
         if (!qb) continue;
         checked++;
-        const qbCents = Math.round(parseFloat(qb.TotalAmount ?? qb.Amount ?? "0") * 100);
+        const qbCents = Math.round(parseFloat(qb.CreditAmount ?? qb.TotalAmount ?? qb.Amount ?? "0") * 100);
         if (Math.abs(qbCents - Number(r.total_cents)) > 1) {
           console.error(`✗ (i) VendorCredit ${r.qb_txn_id}: total_cents ${r.total_cents} ≠ QB ${qbCents}`);
           failures++;
