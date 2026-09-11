@@ -159,6 +159,17 @@ export class BankingOnGlStatements1789100000000 implements MigrationInterface {
         ADD COLUMN IF NOT EXISTS manual_reference text,
         ADD COLUMN IF NOT EXISTS manual_description text
     `);
+    // -- statements anchor on the GL opening_balance entry, not the retired bank_opening_balance ----
+    // Found by guided-review case 18: every statement save failed the old FK. Entries are immutable and
+    // never deleted, so the new FK is safe; NOT VALID skips legacy rows that still point at bob_* ids.
+    await queryRunner.query(
+      `ALTER TABLE bank_statement DROP CONSTRAINT IF EXISTS bank_statement_opening_id_fkey`
+    );
+    await queryRunner.query(`
+      ALTER TABLE bank_statement
+        ADD CONSTRAINT bank_statement_opening_entry_fkey
+        FOREIGN KEY (opening_id) REFERENCES bank_journal_entry(id) NOT VALID
+    `);
   }
 
   public async down(): Promise<void> {
