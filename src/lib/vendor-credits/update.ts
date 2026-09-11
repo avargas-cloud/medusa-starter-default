@@ -1,5 +1,6 @@
 import { generateEntityId } from "@medusajs/utils";
 
+import { resolveMpnDefaults } from "./mpn-default";
 import { VendorCreditError, type PgClient, type VendorCreditLineInput } from "./types";
 
 interface CreditRow {
@@ -65,19 +66,22 @@ export async function updateDraftVendorCredit(
         `UPDATE vendor_credit_line SET deleted_at = now() WHERE credit_id = $1 AND deleted_at IS NULL`,
         [creditId]
       );
-      let sort = 0;
-      let total = 0;
       for (const line of patch.lines) {
         if (!(line.amount_cents > 0)) {
           throw new VendorCreditError("invalid_line_amount", "Every line must have amount_cents > 0.");
         }
+      }
+      const resolvedLines = await resolveMpnDefaults(client, patch.lines);
+      let sort = 0;
+      let total = 0;
+      for (const line of resolvedLines) {
         total += line.amount_cents;
         const lineId = generateEntityId("", "vcrl");
         await client.query(
           `INSERT INTO vendor_credit_line
-             (id, credit_id, sort, line_type, variant_id, sku, description, qty, unit_cost_cents,
+             (id, credit_id, sort, line_type, variant_id, sku, mpn, description, qty, unit_cost_cents,
               qb_account_list_id, amount_cents)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [
             lineId,
             creditId,
@@ -85,6 +89,7 @@ export async function updateDraftVendorCredit(
             line.line_type,
             line.variant_id ?? null,
             line.sku ?? null,
+            line.mpn ?? null,
             line.description ?? null,
             line.qty ?? null,
             line.unit_cost_cents ?? null,

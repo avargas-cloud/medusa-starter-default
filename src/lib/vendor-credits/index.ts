@@ -6,3 +6,9 @@ export { applyVendorCreditToBill } from "./apply";
 export { voidVendorCreditApplication } from "./void-application";
 export { voidVendorCredit } from "./void";
 export { nextVendorCreditNumber } from "./numbering";
+export { resolveMpnDefaults } from "./mpn-default";
+export {
+  buildListVendorCreditsQuery,
+  type ListVendorCreditsFilters,
+  type BuiltQuery,
+} from "./list-query";

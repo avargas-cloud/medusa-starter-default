@@ -8,6 +8,9 @@ export const VendorCreditLine = model.define("vendor_credit_line", {
   line_type: model.text(), // product | qb_account
   variant_id: model.text().nullable(),
   sku: model.text().nullable(),
+  // Mirrors vendor_bill_line.mpn — defaults from product_variant.metadata->>'mpn'
+  // at insert time when a product line doesn't send one (create.ts/update.ts).
+  mpn: model.text().nullable(),
   description: model.text().nullable(),
   qty: model.number().nullable(),
   unit_cost_cents: model.number().nullable(),

@@ -15,6 +15,9 @@ export interface VendorCreditLineInput {
   line_type: VendorCreditLineType;
   variant_id?: string | null;
   sku?: string | null;
+  // Product lines only. When omitted, insert time defaults it from
+  // `product_variant.metadata->>'mpn'` (same source vendor_bill_line uses).
+  mpn?: string | null;
   description?: string | null;
   qty?: number | null;
   unit_cost_cents?: number | null;

@@ -1,5 +1,6 @@
 import { generateEntityId } from "@medusajs/utils";
 
+import { resolveMpnDefaults } from "./mpn-default";
 import { VendorCreditError, type CreateVendorCreditInput, type PgClient } from "./types";
 
 interface VendorRow {
@@ -71,6 +72,7 @@ export async function createDraftVendorCredit(
 
   const totalCents = input.lines.reduce((sum, l) => sum + l.amount_cents, 0);
   const id = generateEntityId("", "vcr");
+  const lines = await resolveMpnDefaults(client, input.lines);
 
   await client.query("BEGIN");
   try {
@@ -92,14 +94,14 @@ export async function createDraftVendorCredit(
     );
 
     let sort = 0;
-    for (const line of input.lines) {
+    for (const line of lines) {
       const lineId = generateEntityId("", "vcrl");
       const account = line.qb_account_list_id ? accountByListId.get(line.qb_account_list_id) : null;
       await client.query(
         `INSERT INTO vendor_credit_line
-           (id, credit_id, sort, line_type, variant_id, sku, description, qty,
+           (id, credit_id, sort, line_type, variant_id, sku, mpn, description, qty,
             unit_cost_cents, qb_account_list_id, qb_account_full_name, qb_account_type, amount_cents)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           lineId,
           id,
@@ -107,6 +109,7 @@ export async function createDraftVendorCredit(
           line.line_type,
           line.variant_id ?? null,
           line.sku ?? null,
+          line.mpn ?? null,
           line.description ?? null,
           line.qty ?? null,
           line.unit_cost_cents ?? null,

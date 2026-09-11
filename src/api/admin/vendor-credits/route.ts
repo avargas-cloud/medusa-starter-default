@@ -10,6 +10,7 @@ import {
 } from "../../../lib/accounting/month-close-auth";
 import {
   createDraftVendorCredit,
+  buildListVendorCreditsQuery,
   VendorCreditError,
   type VendorCreditLineInput,
 } from "../../../lib/vendor-credits";
@@ -28,7 +29,12 @@ function creditError(res: MedusaResponse, error: unknown) {
   throw error;
 }
 
-/** GET: list vendor credits, filterable by vendor_id/status. */
+/**
+ * GET: list vendor credits, filterable by vendor_id/status, free-text `q`
+ * (ILIKE over number/vendor name/reason/memo). Each row carries `applied_to`
+ * — the credit's active applications joined to the bill's number, so the
+ * POS row can render VENDOR REF and APPLIED TO without a second round trip.
+ */
 export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
   try {
     await requireFullAdmin(req);
@@ -36,31 +42,23 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
     return authError(res, error);
   }
 
-  const { vendor_id, status, limit, offset } = req.query as Record<string, string | undefined>;
-  const clauses: string[] = ["deleted_at IS NULL"];
-  const params: unknown[] = [];
-  if (vendor_id) {
-    params.push(vendor_id);
-    clauses.push(`vendor_id = $${params.length}`);
-  }
-  if (status) {
-    params.push(status);
-    clauses.push(`status = $${params.length}`);
-  }
+  const { vendor_id, status, q, limit, offset } = req.query as Record<
+    string,
+    string | undefined
+  >;
   const lim = Math.min(Number(limit) || 50, 200);
   const off = Number(offset) || 0;
-  params.push(lim, off);
+
+  const { sql, params } = buildListVendorCreditsQuery({
+    vendorId: vendor_id,
+    status,
+    q,
+    limit: lim,
+    offset: off,
+  });
 
   const pool = getDbPool();
-  const { rows } = await pool.query(
-    `SELECT id, number, vendor_id, vendor_name_snapshot, credit_date, status, total_cents, applied_cents,
-            qb_txn_id, posted_at, voided_at, created_at
-       FROM vendor_credit
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY created_at DESC
-      LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
-  );
+  const { rows } = await pool.query(sql, params);
   return res.json({ vendor_credits: rows });
 }
 

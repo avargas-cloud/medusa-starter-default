@@ -3,10 +3,13 @@ import { VendorCreditError } from "../types";
 
 function fakeClient(handlers: Array<{ match: string; rows: unknown[] }>) {
   const calls: string[] = [];
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
   return {
     calls,
-    query: jest.fn(async (sql: string) => {
+    queries,
+    query: jest.fn(async (sql: string, params: unknown[] = []) => {
       calls.push(sql.trim().split("\n")[0]!.trim());
+      queries.push({ sql, params });
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] };
       const handler = handlers.find((h) => sql.includes(h.match));
       if (!handler) throw new Error(`No fake handler for SQL: ${sql}`);
@@ -39,6 +42,22 @@ describe("updateDraftVendorCredit", () => {
       lines: [{ line_type: "qb_account", qb_account_list_id: "80000001", amount_cents: 2_500 }],
     });
     expect(client.calls).toContain("COMMIT");
+  });
+
+  it("defaults mpn from product_variant.metadata->>'mpn' on a replaced product line", async () => {
+    const client = fakeClient([
+      { match: "SELECT id, status FROM vendor_credit", rows: [DRAFT] },
+      { match: "UPDATE vendor_credit_line SET deleted_at", rows: [] },
+      { match: "FROM product_variant WHERE", rows: [{ id: "variant_1", metadata: { mpn: "MPN-999" } }] },
+      { match: "INSERT INTO vendor_credit_line", rows: [] },
+      { match: "UPDATE vendor_credit SET total_cents", rows: [] },
+    ]);
+    await updateDraftVendorCredit(client as never, "vcr_1", {
+      lines: [{ line_type: "product", variant_id: "variant_1", amount_cents: 1_000 }],
+    });
+    const lineInsert = client.queries.find((q) => q.sql.includes("INSERT INTO vendor_credit_line"));
+    // params: id, credit_id, sort, line_type, variant_id, sku, mpn, ...
+    expect(lineInsert?.params[6]).toBe("MPN-999");
   });
 
   it("refuses when the credit is not draft", async () => {
