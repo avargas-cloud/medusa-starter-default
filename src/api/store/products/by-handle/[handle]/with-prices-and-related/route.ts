@@ -13,6 +13,7 @@ import {
 import type { StorePricingContext } from "../../../../../../lib/store-pricing/pricing-context";
 import { MEDUSA_REGION_ID } from "../../../../../../lib/config/region";
 import { isWholesaleTier } from "../../../../../../lib/customers/customer-tier";
+import { loadCustomerTierInput } from "../../../../../../lib/customers/load-customer-tier-input";
 
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
@@ -36,7 +37,6 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     // Resolve services
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
     const pricingModule = req.scope.resolve("pricing");
-    const customerModule = req.scope.resolve("customer");
 
     // Build pricing context for customer-specific pricing
     const pricingContext: Record<string, any> = {
@@ -50,16 +50,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     let isWholesaleCustomer = false;
     if (customerId) {
       try {
-        const customer = await customerModule.retrieveCustomer(customerId, {
-          relations: ["groups"],
-        });
+        // LIVE memberships only — see load-customer-tier-input.ts header.
+        const tierInput = await loadCustomerTierInput(req.scope, customerId);
 
-        if (customer.groups?.length) {
-          pricingContext.customer_group_id = customer.groups.map(
-            (g: any) => g.id
+        if (tierInput?.groups.length) {
+          pricingContext.customer_group_id = tierInput.groups.map(
+            (g) => g.id
           );
         }
-        isWholesaleCustomer = isWholesaleTier(customer);
+        isWholesaleCustomer = isWholesaleTier(tierInput);
       } catch (error) {
         console.warn(
           `[WITH-PRICES-RELATED] ⚠️  Could not fetch customer groups`

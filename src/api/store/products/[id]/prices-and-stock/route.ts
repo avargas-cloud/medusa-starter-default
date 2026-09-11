@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { USA_LOC } from "../../../../../lib/locations";
 import { MEDUSA_REGION_ID } from "../../../../../lib/config/region";
 import { isWholesaleTier } from "../../../../../lib/customers/customer-tier";
+import { loadCustomerTierInput } from "../../../../../lib/customers/load-customer-tier-input";
 
 // Cache manager removed - using fresh pricing calculations
 
@@ -38,17 +39,17 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     if (dynamicPricingEnabled && customerId) {
       try {
-        const customerModule = req.scope.resolve("customer");
-        const customer = await customerModule.retrieveCustomer(customerId, {
-          relations: ["groups"],
-        });
+        // LIVE memberships only — `query.graph`'s `groups.*` still returns
+        // soft-deleted `customer_group_customer` rows (see
+        // load-customer-tier-input.ts header).
+        const tierInput = await loadCustomerTierInput(req.scope, customerId);
 
-        if (customer.groups?.length) {
-          pricingContext.customer_group_id = customer.groups.map(
-            (g: any) => g.id
+        if (tierInput?.groups.length) {
+          pricingContext.customer_group_id = tierInput.groups.map(
+            (g) => g.id
           );
         }
-        isWholesaleCustomer = isWholesaleTier(customer);
+        isWholesaleCustomer = isWholesaleTier(tierInput);
       } catch (error) {
         // Fail open (retail pricing) — but log which customer hit this so a
         // pattern of failures for the same id is visible instead of silent.

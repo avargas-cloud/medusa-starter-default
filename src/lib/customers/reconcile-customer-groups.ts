@@ -7,13 +7,14 @@
  * reconciled, but a customer already correctly in Wholesale is left alone
  * even if they also happen to sit in some other unrelated group.
  */
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { Modules } from "@medusajs/utils";
 
 import {
   resolveCustomerTier,
   type CustomerTierInput,
 } from "./customer-tier";
 import { resolveGroupIdByName } from "./resolve-group-ids";
+import { loadCustomerTierInput } from "./load-customer-tier-input";
 
 export interface PlanCustomerGroupReconcileInput {
   tier: "wholesale" | "retail";
@@ -55,20 +56,6 @@ interface CustomerModuleLike {
   }): Promise<unknown>;
 }
 
-interface QueryGraphLike {
-  graph(input: {
-    entity: string;
-    fields: string[];
-    filters?: Record<string, unknown>;
-  }): Promise<{
-    data: Array<{
-      id: string;
-      metadata: Record<string, unknown> | null;
-      groups?: Array<{ id: string; name: string | null }> | null;
-    }>;
-  }>;
-}
-
 interface ContainerLike {
   resolve(key: string): unknown;
 }
@@ -82,30 +69,25 @@ export interface ReconcileCustomerGroupsResult {
 }
 
 /**
- * Loads the customer (id, metadata, groups), resolves the Retail/Wholesale
- * group ids BY NAME, plans the add-only diff, and applies it — idempotent
- * (skips ids already applied by `planCustomerGroupReconcile`, and
- * `addCustomerToGroup` itself is a no-op if already a member).
+ * Loads the customer's LIVE tier input (metadata, groups — via
+ * `loadCustomerTierInput`, NOT `query.graph`'s `groups.*`, which still
+ * returns soft-deleted `customer_group_customer` rows), resolves the
+ * Retail/Wholesale group ids BY NAME, plans the add-only diff against the
+ * LIVE membership, and applies it — idempotent (skips ids already applied by
+ * `planCustomerGroupReconcile`, and `addCustomerToGroup` itself is a no-op if
+ * already a member).
  */
 export async function reconcileCustomerGroups(
   container: ContainerLike,
   customerId: string
 ): Promise<ReconcileCustomerGroupsResult> {
-  const query = container.resolve(
-    ContainerRegistrationKeys.QUERY
-  ) as QueryGraphLike;
   const customerModule = container.resolve(
     Modules.CUSTOMER
   ) as CustomerModuleLike;
   const logger = container.resolve("logger") as ReconcileLoggerLike;
 
-  const { data } = await query.graph({
-    entity: "customer",
-    fields: ["id", "metadata", "groups.id", "groups.name"],
-    filters: { id: customerId },
-  });
-  const customer = data[0];
-  if (!customer) {
+  const tierInput = await loadCustomerTierInput(container, customerId);
+  if (!tierInput) {
     throw new Error(
       `[reconcileCustomerGroups] Customer ${customerId} not found`
     );
@@ -116,12 +98,12 @@ export async function reconcileCustomerGroups(
     resolveGroupIdByName(container, "Retail"),
   ]);
 
-  const memberGroupIds = (customer.groups ?? []).map((g) => g.id);
-  const tierInput: CustomerTierInput = {
-    groups: customer.groups ?? [],
-    metadata: customer.metadata ?? null,
+  const memberGroupIds = tierInput.groups.map((g) => g.id);
+  const tierInputForResolve: CustomerTierInput = {
+    groups: tierInput.groups,
+    metadata: tierInput.metadata,
   };
-  const tier = resolveCustomerTier(tierInput);
+  const tier = resolveCustomerTier(tierInputForResolve);
 
   const { add } = planCustomerGroupReconcile({
     tier,

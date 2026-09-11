@@ -1,6 +1,7 @@
 import { Modules } from "@medusajs/utils";
 
 import { resolveCustomerTier } from "../customers/customer-tier";
+import { loadCustomerTierInput } from "../customers/load-customer-tier-input";
 
 /**
  * Builds a customer's MeiliSearch document and upserts it into the
@@ -30,9 +31,13 @@ export async function syncCustomerToMeili(
   const log = logger ?? container.resolve("logger");
   try {
     const customerModule = container.resolve(Modules.CUSTOMER);
-    const customer = await customerModule.retrieveCustomer(customerId, {
-      relations: ["groups"],
-    });
+    // Base customer fields (email, name, etc.) — relations NOT requested
+    // here, since `retrieveCustomer(..., { relations: ["groups"] })` has the
+    // same soft-delete leak as `query.graph`'s `groups.*` (a
+    // `customer_group_customer` row with `deleted_at` set still comes back).
+    // Group membership + metadata for the TIER come from
+    // `loadCustomerTierInput` instead, which filters `deleted_at` in SQL.
+    const customer = await customerModule.retrieveCustomer(customerId);
     if (!customer) {
       log.warn(
         `[MEILI-CUSTOMER-SYNC] ⚠️  Customer ${customerId} not found, skipping`
@@ -40,14 +45,16 @@ export async function syncCustomerToMeili(
       return;
     }
 
+    const tierInput = await loadCustomerTierInput(container, customerId);
     const meta = (customer.metadata as any) || {};
 
     const existingCustomerType =
       meta.qb_customer_type || meta.customer_type || "Standard";
 
-    const groupNames = customer.groups?.map((g: any) => g.name) || [];
+    const liveGroups = tierInput?.groups ?? [];
+    const groupNames = liveGroups.map((g) => g.name);
     const tier = resolveCustomerTier({
-      groups: customer.groups ?? [],
+      groups: liveGroups,
       metadata: meta,
     });
     const priceLevel =

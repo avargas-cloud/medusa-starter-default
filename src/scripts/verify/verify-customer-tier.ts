@@ -13,7 +13,10 @@
  *       `customer-tier`; no `reg_`/`plist_` literals outside
  *       `src/lib/config` and `src/scripts`; fast-checkout contains
  *       `REPRICE_FAILED` and `CART_CUSTOMER_MISMATCH`; `case1-new-customer.ts`
- *       imports `reconcileCustomerGroups`.
+ *       imports `reconcileCustomerGroups`; the 4 price routes + the hook +
+ *       the reconciler import `load-customer-tier-input` and contain
+ *       neither the literal `"groups.*"` nor a `fields: [...]` array with a
+ *       `"groups.` entry (the soft-delete leak in `query.graph`).
  *
  * READ-ONLY. Prints PASS/FAIL per check. exit 1 on any FAIL.
  * Run: ./node_modules/.bin/tsx src/scripts/verify/verify-customer-tier.ts
@@ -224,6 +227,52 @@ function checkStatic(): void {
     importsReconciler,
     importsReconciler ? "present" : "missing"
   );
+
+  // Every file that resolves a tier from a customer id must go through
+  // load-customer-tier-input (LIVE memberships), never `query.graph`'s
+  // `groups.*` (soft-deleted `customer_group_customer` rows leak through
+  // that path — see load-customer-tier-input.ts header).
+  const RECONCILER_REL = "src/lib/customers/reconcile-customer-groups.ts";
+  const LIVE_MEMBERSHIP_FILES = [
+    ...PRICE_ROUTE_FILES,
+    hookRel,
+    RECONCILER_REL,
+  ];
+  // Exact patterns being grepped for, spelled out so the check is legible
+  // without re-deriving them from the regex source:
+  //   NEEDLE_GROUPS_STAR  matches the literal string  "groups.*"
+  //   NEEDLE_GROUPS_FIELD matches a `fields: [...]` array literal that
+  //                       contains a `"groups.` entry anywhere inside it
+  //                       (e.g. `fields: ["id", "groups.id", "groups.name"]`)
+  const NEEDLE_GROUPS_STAR = /"groups\.\*"/;
+  const NEEDLE_GROUPS_FIELD = /fields:\s*\[[^\]]*?"groups\./;
+
+  for (const rel of LIVE_MEMBERSHIP_FILES) {
+    const src = readFileSync(join(ROOT, rel), "utf8");
+
+    const importsLoader = /load-customer-tier-input/.test(src);
+    record(
+      `(c) ${rel} imports load-customer-tier-input`,
+      importsLoader,
+      importsLoader ? "present" : "missing import of load-customer-tier-input"
+    );
+
+    const hasGroupsStar = NEEDLE_GROUPS_STAR.test(src);
+    record(
+      `(c) ${rel} does not contain "groups.*"`,
+      !hasGroupsStar,
+      hasGroupsStar ? 'found literal "groups.*"' : "clean"
+    );
+
+    const hasGroupsField = NEEDLE_GROUPS_FIELD.test(src);
+    record(
+      `(c) ${rel} does not contain a fields:[...] array with "groups."`,
+      !hasGroupsField,
+      hasGroupsField
+        ? 'found fields:[...] array containing "groups."'
+        : "clean"
+    );
+  }
 }
 
 function main(): void {

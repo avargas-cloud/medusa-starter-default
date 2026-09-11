@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { MEDUSA_REGION_ID } from "../../../../lib/config/region";
 import { isWholesaleTier } from "../../../../lib/customers/customer-tier";
+import { loadCustomerTierInput } from "../../../../lib/customers/load-customer-tier-input";
 
 /**
  * POST /store/products/batch-prices
@@ -32,7 +33,6 @@ export async function POST(
   try {
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
     const pricingModule = req.scope.resolve(Modules.PRICING);
-    const customerModule = req.scope.resolve(Modules.CUSTOMER);
 
     // Fetch active store config to pass down global prefixes
     let activeStoreConfig = ["LEG"];
@@ -74,14 +74,15 @@ export async function POST(
 
     if (dynamicPricingEnabled && customerId) {
       try {
-        const customer = await customerModule.retrieveCustomer(customerId, {
-          relations: ["groups"],
-        });
+        // LIVE memberships only — see load-customer-tier-input.ts header.
+        const tierInput = await loadCustomerTierInput(req.scope, customerId);
 
-        if (customer.groups?.length) {
-          pricingContext.customer_group_id = customer.groups.map((g) => g.id);
+        if (tierInput?.groups.length) {
+          pricingContext.customer_group_id = tierInput.groups.map(
+            (g) => g.id
+          );
         }
-        isWholesale = isWholesaleTier(customer);
+        isWholesale = isWholesaleTier(tierInput);
 
         // console.log(`[Batch Prices] Customer ${customerId} is ${isWholesale ? 'WHOLESALE' : 'RETAIL'}`);
       } catch (error) {

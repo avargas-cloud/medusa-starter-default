@@ -8,6 +8,14 @@ import { StepResponse } from "@medusajs/workflows-sdk";
 
 import { isWholesaleTier } from "../../lib/customers/customer-tier";
 import { resolveGroupIdByName } from "../../lib/customers/resolve-group-ids";
+import {
+  loadCustomerTierInput,
+  type CustomerTierRow,
+} from "../../lib/customers/load-customer-tier-input";
+
+interface ContainerLike {
+  resolve: (key: string) => unknown;
+}
 
 /**
  * Appends the Wholesale group id (resolved by name) to the group-id list
@@ -19,11 +27,11 @@ import { resolveGroupIdByName } from "../../lib/customers/resolve-group-ids";
  * group would price as retail until the subscriber runs.
  */
 async function withWholesaleGroupIdIfNeeded(
-  container: { resolve: (key: string) => unknown },
-  customer: { groups?: Array<{ id: string; name?: string | null }> | null; metadata?: Record<string, unknown> | null },
+  container: ContainerLike,
+  tierInput: CustomerTierRow,
   groupIds: string[]
 ): Promise<string[]> {
-  if (!isWholesaleTier({ groups: customer.groups, metadata: customer.metadata })) {
+  if (!isWholesaleTier(tierInput)) {
     return groupIds;
   }
   try {
@@ -47,6 +55,12 @@ async function withWholesaleGroupIdIfNeeded(
  * group IDs in the context, the Pricing Module will use those
  * groups to select the correct price list (e.g., Wholesale pricing).
  *
+ * LIVE memberships only — `customerModule.retrieveCustomer(..., { relations:
+ * ["groups"] })` (like `query.graph`'s `groups.*`) still returns soft-deleted
+ * `customer_group_customer` rows, so a customer removed from Wholesale would
+ * keep pricing as wholesale forever. `loadCustomerTierInput` filters
+ * `deleted_at` at the SQL level — see its header for the full story.
+ *
  * @see https://docs.medusajs.com/resources/commerce-modules/pricing/price-calculation
  * @see GitHub issue #13990 for background on this approach
  */
@@ -68,16 +82,15 @@ addToCartWorkflow.hooks.setPricingContext(async ({ cart }, { container }) => {
   }
 
   try {
-    const customerModule = container.resolve(Modules.CUSTOMER);
+    const tierInput = await loadCustomerTierInput(container, cart.customer_id);
+    if (!tierInput) {
+      return new StepResponse({});
+    }
 
-    const customer = await customerModule.retrieveCustomer(cart.customer_id, {
-      relations: ["groups"],
-    });
-
-    const baseGroupIds = (customer.groups ?? []).map((g: any) => g.id);
+    const baseGroupIds = tierInput.groups.map((g) => g.id);
     const groupIds = await withWholesaleGroupIdIfNeeded(
       container,
-      customer,
+      tierInput,
       baseGroupIds
     );
 
@@ -125,15 +138,18 @@ updateLineItemInCartWorkflow.hooks.setPricingContext(
     }
 
     try {
-      const customerModule = container.resolve(Modules.CUSTOMER);
-      const customer = await customerModule.retrieveCustomer(cart.customer_id, {
-        relations: ["groups"],
-      });
+      const tierInput = await loadCustomerTierInput(
+        container,
+        cart.customer_id
+      );
+      if (!tierInput) {
+        return new StepResponse({});
+      }
 
-      const baseGroupIds = (customer.groups ?? []).map((g: any) => g.id);
+      const baseGroupIds = tierInput.groups.map((g) => g.id);
       const groupIds = await withWholesaleGroupIdIfNeeded(
         container,
-        customer,
+        tierInput,
         baseGroupIds
       );
 
@@ -193,15 +209,18 @@ refreshCartItemsWorkflow.hooks.setPricingContext(
     }
 
     try {
-      const customerModule = container.resolve(Modules.CUSTOMER);
-      const customer = await customerModule.retrieveCustomer(cart.customer_id, {
-        relations: ["groups"],
-      });
+      const tierInput = await loadCustomerTierInput(
+        container,
+        cart.customer_id
+      );
+      if (!tierInput) {
+        return new StepResponse({});
+      }
 
-      const baseGroupIds = (customer.groups ?? []).map((g: any) => g.id);
+      const baseGroupIds = tierInput.groups.map((g) => g.id);
       const groupIds = await withWholesaleGroupIdIfNeeded(
         container,
-        customer,
+        tierInput,
         baseGroupIds
       );
 
