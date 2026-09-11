@@ -121,6 +121,22 @@ export function customerAuthThrottle(options: {
           .status(429)
           .json({ error: "Too many attempts. Try again later." });
       }
+      // Same doctrine as the supervisor-PIN guard: a SUCCESS clears the per-email
+      // counter, so only failures accumulate. Without this, a legitimate customer
+      // logging in 6 times in 15 minutes was locked out (found by the E2E suite).
+      res.once("finish", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          // Reset via the same `set` used to count (the resolved cache object may not
+          // expose `invalidate`); a 1 s TTL lets Redis drop the keys on their own.
+          // Both buckets: brute force is FAILURES, a success must not eat the budget.
+          cache.set(emailKey, 0, 1).catch(() => {
+            /* best-effort */
+          });
+          cache.set(ipKey, 0, 1).catch(() => {
+            /* best-effort */
+          });
+        }
+      });
     }
 
     return next();
