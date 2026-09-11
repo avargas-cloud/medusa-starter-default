@@ -17,6 +17,12 @@
  *   (3) ningún bill cancelado/voideado conserva una entrada activa.
  *   (4) Inventory Offset (GL) = Σ receipts SIN bill atado.
  *   (5) hash de la entrada activa de cada bill = hash actual (sin drift).
+ *   (6) vendor credits ↔ PO (plan vc-po-return-20260911): por línea de PO,
+ *       Σ qty devuelta por créditos activos ≤ qty_received; toda línea de
+ *       producto de un crédito con PO apunta a una línea de ESE PO; ningún
+ *       crédito sin PO tiene líneas de producto; el bill relacionado es un
+ *       bill regular del mismo PO; y un crédito posted con PO y producto
+ *       tiene su stock aplicado (o reversado si está void).
  *
  * Mutation-testeado: ver el bloque de evidencia al final de este archivo.
  */
@@ -98,6 +104,7 @@ async function main(): Promise<void> {
     await section3(pool);
     await section4(pool);
     await section5(pool);
+    await section6(pool);
   } finally {
     await pool.end();
   }
@@ -249,6 +256,64 @@ async function section5(pool: Pool): Promise<void> {
   }
   console.log(`    bills con entrada activa evaluados: ${rows.length}, con drift: ${drifted}`);
   check("ningún bill activo tiene drift pendiente (hash guardado == hash actual)", drifted === 0, `${drifted}/${rows.length}`);
+}
+
+async function section6(pool: Pool): Promise<void> {
+  console.log("\n(6) Vendor credits ↔ PO: devuelto ≤ recibido, líneas del mismo PO, stock aplicado");
+  const over = await pool.query<{ po_line_id: string; returned: string; received: string }>(
+    `SELECT vcl.purchase_order_line_id AS po_line_id,
+            SUM(vcl.qty)::text AS returned, MAX(pol.qty_received)::text AS received
+       FROM vendor_credit_line vcl
+       JOIN vendor_credit vc ON vc.id = vcl.credit_id
+       JOIN purchase_order_line pol ON pol.id = vcl.purchase_order_line_id
+      WHERE vc.status IN ('draft','posted') AND vc.deleted_at IS NULL
+        AND vcl.deleted_at IS NULL AND vcl.line_type = 'product'
+      GROUP BY vcl.purchase_order_line_id
+     HAVING SUM(vcl.qty) > MAX(pol.qty_received)`
+  );
+  check("ninguna línea de PO tiene más devuelto (créditos activos) que recibido", over.rows.length === 0, `${over.rows.length} líneas`);
+
+  const foreign = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+       FROM vendor_credit_line vcl
+       JOIN vendor_credit vc ON vc.id = vcl.credit_id
+       LEFT JOIN purchase_order_line pol ON pol.id = vcl.purchase_order_line_id
+      WHERE vc.deleted_at IS NULL AND vcl.deleted_at IS NULL AND vcl.line_type = 'product'
+        AND vc.purchase_order_id IS NOT NULL
+        AND (vcl.purchase_order_line_id IS NULL OR pol.purchase_order_id IS DISTINCT FROM vc.purchase_order_id)`
+  );
+  check("toda línea de producto de un crédito con PO apunta a una línea de ESE PO", foreign.rows[0]?.n === "0", `${foreign.rows[0]?.n} líneas`);
+
+  const noPo = await pool.query<{ n: string }>(
+    `SELECT COUNT(DISTINCT vc.id)::text AS n
+       FROM vendor_credit vc JOIN vendor_credit_line vcl ON vcl.credit_id = vc.id
+      WHERE vc.deleted_at IS NULL AND vcl.deleted_at IS NULL
+        AND vc.purchase_order_id IS NULL AND vcl.line_type = 'product'
+        AND vc.created_at >= '2026-09-11'`
+  );
+  check("ningún crédito sin PO (creado desde 2026-09-11) tiene líneas de producto", noPo.rows[0]?.n === "0", `${noPo.rows[0]?.n} créditos`);
+
+  const badBill = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+       FROM vendor_credit vc
+       LEFT JOIN vendor_bill vb ON vb.id = vc.vendor_bill_id
+      WHERE vc.deleted_at IS NULL AND vc.vendor_bill_id IS NOT NULL
+        AND (vb.id IS NULL OR vb.bill_type <> 'regular' OR vb.purchase_order_id IS DISTINCT FROM vc.purchase_order_id)`
+  );
+  check("todo bill relacionado es un bill regular del mismo PO", badBill.rows[0]?.n === "0", `${badBill.rows[0]?.n} créditos`);
+
+  const stock = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+       FROM vendor_credit vc
+      WHERE vc.deleted_at IS NULL AND vc.purchase_order_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM vendor_credit_line l WHERE l.credit_id = vc.id AND l.deleted_at IS NULL AND l.line_type = 'product')
+        AND ((vc.status = 'posted' AND vc.stock_applied_at IS NULL)
+          OR (vc.status = 'voided' AND vc.stock_applied_at IS NOT NULL AND vc.stock_reversed_at IS NULL))`
+  );
+  // Informativo y no bloqueante: el movimiento de stock es best-effort post-commit
+  // (igual que el GL y QB) y se re-corre; un crédito posted sin la marca es un
+  // aviso para el operador, no una violación del libro.
+  infoOnly("todo crédito posted con PO+producto tiene stock aplicado (y reversado si está void)", stock.rows[0]?.n === "0", `${stock.rows[0]?.n} créditos`);
 }
 
 function report(): void {

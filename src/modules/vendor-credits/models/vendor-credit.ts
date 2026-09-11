@@ -16,6 +16,12 @@ export const VendorCredit = model.define("vendor_credit", {
   vendor_id: model.text(),
   vendor_name_snapshot: model.text().nullable(),
   vendor_qb_list_id_snapshot: model.text().nullable(),
+  // PO the returned goods came from + the regular bill that invoiced them
+  // (Migration 1783700000000). Snapshotted references, no FK — same as
+  // `vendor_bill.purchase_order_id`. PO is fixed at create; bill editable
+  // while draft.
+  purchase_order_id: model.text().nullable(),
+  vendor_bill_id: model.text().nullable(),
   credit_date: model.dateTime(),
   reason: model.text().nullable(),
   memo: model.text().nullable(),
@@ -28,6 +34,10 @@ export const VendorCredit = model.define("vendor_credit", {
   qb_txn_id: model.text().nullable(),
   qb_edit_sequence: model.text().nullable(),
   qb_synced_at: model.dateTime().nullable(),
+  // Stock movement idempotency marks — set once by the post/void routes
+  // after the Inventory module adjusted the PO location (never by SQL).
+  stock_applied_at: model.dateTime().nullable(),
+  stock_reversed_at: model.dateTime().nullable(),
   posted_at: model.dateTime().nullable(),
   posted_by: model.text().nullable(),
   voided_at: model.dateTime().nullable(),

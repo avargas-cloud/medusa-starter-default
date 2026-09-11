@@ -126,15 +126,19 @@ async function main(): Promise<void> {
     );
 
     // ── Vendor credit: ciclo de vida REAL (F2), $50.00, producto ──
+    // Plan vc-po-return-20260911: un crédito con líneas de producto nombra su
+    // PO y cada línea la línea del PO que devuelve (tope = recibido). El
+    // fixture recibió 10 en `polId`, así que 1 → 5 unidades caben.
     const draft = await createDraftVendorCredit(client, {
       vendor_id: fx.vendor_id,
       credit_date: today,
-      lines: [{ line_type: "product", qty: 1, unit_cost_cents: 100, amount_cents: 100 }],
+      purchase_order_id: fx.poId,
+      lines: [{ line_type: "product", purchase_order_line_id: fx.polId, qty: 1, unit_cost_cents: 100, amount_cents: 100 }],
       actor_id: "e2e",
     });
     creditId = draft.id;
     await updateDraftVendorCredit(client, creditId, {
-      lines: [{ line_type: "product", variant_id: fx.product_variant_id, sku: "E2E-SKU", qty: 5, unit_cost_cents: 1000, amount_cents: 5000 }],
+      lines: [{ line_type: "product", purchase_order_line_id: fx.polId, variant_id: fx.product_variant_id, sku: "E2E-SKU", qty: 5, unit_cost_cents: 1000, amount_cents: 5000 }],
     });
     const posted = await markVendorCreditPosted(client, creditId, "e2e");
     ok("vendor credit: draft→posted (ciclo real)", posted.id === creditId, JSON.stringify(posted));

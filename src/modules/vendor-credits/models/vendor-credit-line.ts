@@ -7,6 +7,10 @@ export const VendorCreditLine = model.define("vendor_credit_line", {
   sort: model.number().default(0),
   line_type: model.text(), // product | qb_account
   variant_id: model.text().nullable(),
+  // The PO line this product line returns (Migration 1783700000000). Required
+  // on every product line of a PO-linked credit; the "returned ≤ received"
+  // cap is enforced per PO line across all active credits (po-link.ts).
+  purchase_order_line_id: model.text().nullable(),
   sku: model.text().nullable(),
   // Mirrors vendor_bill_line.mpn — defaults from product_variant.metadata->>'mpn'
   // at insert time when a product line doesn't send one (create.ts/update.ts).

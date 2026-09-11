@@ -10,6 +10,7 @@ import {
 } from "../../../../../lib/accounting/month-close-auth";
 import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
 import { markVendorCreditPosted, VendorCreditError } from "../../../../../lib/vendor-credits";
+import { moveVendorCreditStock } from "../../../../../lib/vendor-credits/stock";
 import { bankingErrorResponse } from "../../../../../lib/accounting/banking-error-http";
 import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
 import { postVendorCredit } from "../../../../../lib/ledger";
@@ -23,10 +24,14 @@ function authError(res: MedusaResponse, error: unknown) {
 }
 
 /**
- * draft → posted. Best-effort GL posting + QB enqueue AFTER the local
- * commit — neither can un-post the credit (same discipline as vendor bill
- * confirm), and both failures surface in the response so the operator sees
- * them without needing the reconciler/digest.
+ * draft → posted. AFTER the local commit, three best-effort effects in this
+ * order — none can un-post the credit (same discipline as vendor bill
+ * confirm), and each surfaces in the response so the operator sees it
+ * without needing the reconciler/digest:
+ *   1. stock: returned units leave the PO's location (Inventory module,
+ *      idempotent by `stock_applied_at`) — `stock` field;
+ *   2. GL: AP debit / inventory_asset credit — via the ledger hook;
+ *   3. QB: `VendorCreditAdd` enqueued — `qb` field.
  */
 export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
   let actorId: string;
@@ -52,6 +57,8 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     pgClient.release();
   }
 
+  const stockResult = await moveVendorCreditStock(req.scope, getDbPool(), id, "apply");
+
   await runLedgerHook((client) => postVendorCredit(client, id, actorId), {
     source_kind: "vendor_credit",
     source_id: id,
@@ -63,5 +70,5 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     reason: err instanceof Error ? err.message : String(err),
   }));
 
-  return res.json({ vendor_credit: posted, qb: qbResult });
+  return res.json({ vendor_credit: posted, stock: stockResult, qb: qbResult });
 }

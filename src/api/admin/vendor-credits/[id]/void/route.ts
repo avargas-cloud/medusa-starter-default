@@ -10,12 +10,18 @@ import {
 } from "../../../../../lib/accounting/month-close-auth";
 import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
 import { voidVendorCredit, VendorCreditError } from "../../../../../lib/vendor-credits";
+import { moveVendorCreditStock } from "../../../../../lib/vendor-credits/stock";
 import { bankingErrorResponse } from "../../../../../lib/accounting/banking-error-http";
 import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
 import { reverseVendorCredit } from "../../../../../lib/ledger";
 import { enqueueVendorCreditVoid } from "../../../../../lib/purchase-orders/qb-vendor-credit-enqueue";
 
-/** POST { reason? }: voids the credit (must have zero active applications). */
+/**
+ * POST { reason? }: voids the credit (must have zero active applications).
+ * After the local commit: returned units come BACK to the PO's location
+ * (`stock`, idempotent by `stock_reversed_at`), the GL entry is reversed,
+ * and a QB `TxnVoid` is enqueued — same best-effort order as post.
+ */
 export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
   let actorId: string;
   try {
@@ -43,6 +49,8 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     client.release();
   }
 
+  const stockResult = await moveVendorCreditStock(req.scope, getDbPool(), id, "reverse");
+
   await runLedgerHook((c) => reverseVendorCredit(c, id, actorId, body.reason ?? undefined), {
     source_kind: "vendor_credit",
     source_id: id,
@@ -54,5 +62,5 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     reason: err instanceof Error ? err.message : String(err),
   }));
 
-  return res.json({ id, qb: qbResult });
+  return res.json({ id, stock: stockResult, qb: qbResult });
 }

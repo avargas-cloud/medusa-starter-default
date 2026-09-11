@@ -31,9 +31,10 @@ function creditError(res: MedusaResponse, error: unknown) {
 
 /**
  * GET: list vendor credits, filterable by vendor_id/status, free-text `q`
- * (ILIKE over number/vendor name/reason/memo). Each row carries `applied_to`
- * — the credit's active applications joined to the bill's number, so the
- * POS row can render VENDOR REF and APPLIED TO without a second round trip.
+ * (ILIKE over number/vendor name/reason/memo/PO number/bill number). Each
+ * row carries `applied_to` — the credit's active applications joined to the
+ * bill's number — plus `po_number` / `vendor_bill_number` of the linked
+ * documents, so the POS row renders without a second round trip.
  */
 export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
   try {
@@ -63,9 +64,13 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
 }
 
 /**
- * POST { vendor_id, credit_date, reason?, memo?, lines? }: creates a draft.
- * `lines` may be omitted or `[]` — the POS creates the header first and
- * edits lines afterward with PATCH; `post` is where ≥1 line is enforced.
+ * POST { vendor_id, credit_date, reason?, memo?, purchase_order_id?,
+ *        vendor_bill_id?, lines }: creates a draft.
+ * `lines` is REQUIRED and non-empty (owner rule 2026-09-11 — the POS
+ * collects PO + lines locally and creates once). With `purchase_order_id`
+ * every product line names a PO line and stays within what was received
+ * (`exceeds_returnable`); without it, product lines are refused
+ * (`product_line_requires_po`).
  */
 export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
   let actorId: string;
@@ -80,15 +85,13 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     credit_date?: string;
     reason?: string | null;
     memo?: string | null;
+    purchase_order_id?: string | null;
+    vendor_bill_id?: string | null;
     lines?: VendorCreditLineInput[];
   };
-  if (
-    !body.vendor_id ||
-    !body.credit_date ||
-    (body.lines !== undefined && !Array.isArray(body.lines))
-  ) {
+  if (!body.vendor_id || !body.credit_date || !Array.isArray(body.lines)) {
     return res.status(400).json({
-      error: "vendor_id and credit_date are required; lines, if present, must be an array.",
+      error: "vendor_id, credit_date and a lines array are required.",
       code: "invalid_body",
     });
   }
@@ -103,7 +106,9 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
       credit_date: body.credit_date,
       reason: body.reason ?? null,
       memo: body.memo ?? null,
-      lines: body.lines ?? [],
+      purchase_order_id: body.purchase_order_id ?? null,
+      vendor_bill_id: body.vendor_bill_id ?? null,
+      lines: body.lines,
       actor_id: actorId,
     });
     return res.status(201).json({ vendor_credit: created });
