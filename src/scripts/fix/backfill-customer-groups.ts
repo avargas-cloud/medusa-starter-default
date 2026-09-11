@@ -9,6 +9,10 @@
  *   - sin ningún grupo → se agrega a Retail.
  * Nunca quita a nadie de un grupo.
  *
+ * `customer.metadata` puede ser un JSON escalar (no objeto) en filas legacy:
+ * el snapshot lo compara tal cual y la auditoría lo reemplaza por objeto
+ * (jsonb_typeof guard) — un `-`/`||` sobre un escalar tira 22023.
+ *
  * Gates de /safe-backfill:
  *   - dry-run y apply comparten `buildPlan`; la rama sólo cambia en la
  *     persistencia (`APPLY=true`).
@@ -118,7 +122,7 @@ async function snapshot(knex: Knex): Promise<string[]> {
     q("price_list", `SELECT count(*) n, md5(string_agg(id||':'||status, ',' ORDER BY id)) h FROM price_list WHERE deleted_at IS NULL`),
     q("price_list_rule", `SELECT count(*) n, md5(string_agg(id||':'||coalesce(value::text,''), ',' ORDER BY id)) h FROM price_list_rule WHERE deleted_at IS NULL`),
     q("customer_group", `SELECT count(*) n, md5(string_agg(id||':'||name, ',' ORDER BY id)) h FROM customer_group WHERE deleted_at IS NULL`),
-    q("customer(sin auditoría)", `SELECT count(*) n, md5(string_agg(id||':'||coalesce(email,'')||':'||coalesce((metadata - '${AUDIT_KEY}')::text,''), ',' ORDER BY id)) h FROM customer WHERE deleted_at IS NULL`),
+    q("customer(sin auditoría)", `SELECT count(*) n, md5(string_agg(id||':'||coalesce(email,'')||':'||coalesce((CASE WHEN jsonb_typeof(metadata)='object' THEN metadata - '${AUDIT_KEY}' ELSE metadata END)::text,''), ',' ORDER BY id)) h FROM customer WHERE deleted_at IS NULL`),
     q("membresías vivas", `SELECT count(*) n FROM customer_group_customer WHERE deleted_at IS NULL`),
     q("membresías borradas", `SELECT count(*) n FROM customer_group_customer WHERE deleted_at IS NOT NULL`),
   ]);
@@ -155,11 +159,12 @@ async function applyPlan(knex: Knex, adds: readonly PlannedAdd[], runId: string)
       }));
       await trx.raw(
         `UPDATE customer c
-            SET metadata = coalesce(c.metadata, '{}'::jsonb) || jsonb_build_object('${AUDIT_KEY}', u.audit::jsonb),
+            SET metadata = (CASE WHEN jsonb_typeof(c.metadata) = 'object' THEN c.metadata ELSE '{}'::jsonb END)
+                           || jsonb_build_object('${AUDIT_KEY}', u.audit::jsonb),
                 updated_at = now()
            FROM unnest(?::text[], ?::text[]) AS u(id, audit)
           WHERE c.id = u.id AND c.deleted_at IS NULL
-            AND (c.metadata IS NULL OR c.metadata -> '${AUDIT_KEY}' IS NULL)`,
+            AND (c.metadata IS NULL OR jsonb_typeof(c.metadata) <> 'object' OR c.metadata -> '${AUDIT_KEY}' IS NULL)`,
         [slice, audit]
       );
     }
