@@ -70,7 +70,7 @@
     "google-auth-library": "^10.6.2",
     "meilisearch": "^0.55.0",
     "multer": "^2.0.2",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^9.1.1",
     "playwright-core": "^1.59.1",
     "postgres": "^3.4.8",
     "react-router-dom": "6.30.4",
