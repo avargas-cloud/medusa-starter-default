@@ -24,8 +24,13 @@ export const OPENING_BALANCE_ACCOUNT_TYPES = [
   "Equity",
 ] as const;
 
-/** `2026-04-13` cierre — la fecha de corte de Banking-on-GL §2, fuera de la ventana del replay. */
-const DEFAULT_OPENING_DAY = "2026-04-13";
+/**
+ * `2025-12-31` cierre — el corte del libro (Banking-on-GL §2, movido el
+ * 2026-09-11 desde `2026-04-13`): con el reporte General Ledger de QuickBooks
+ * importado desde el 1 de enero (qb-gl-import), la apertura va al cierre del
+ * ejercicio anterior. Sigue fuera de la ventana del replay (`GL_REPLAY_FROM`).
+ */
+export const DEFAULT_OPENING_DAY = "2025-12-31";
 
 type AccountRow = {
   qb_list_id: string;
@@ -94,7 +99,7 @@ async function loadEvidence(
 
 export interface PostOpeningBalanceInput {
   account_list_id: string;
-  /** YYYY-MM-DD en ET; default `2026-04-13` (§2). */
+  /** YYYY-MM-DD en ET; default `2025-12-31` (`DEFAULT_OPENING_DAY`, §2). */
   day?: string;
   balance_cents: bigint;
   evidence_ids: string[];

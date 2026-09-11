@@ -53,7 +53,7 @@ const LOGIN = { email: "sandbox@test.com", password: "sandbox123" };
 const ACCOUNT_LIST_ID = "80000006-1317847775"; // Chase Bank Checking 7223
 const EQUITY_LIST_ID = "80000005-1317847775"; // Opening Balance Equity
 const INCOME_LIST_ID = "8000000B-1317847948"; // Sales (Income) — non-balance-sheet negative control
-const OPENING_DAY = "2026-04-13";
+const OPENING_DAY = "2025-12-31"; // = DEFAULT_OPENING_DAY del sistema desde 2026-09-11 (antes 2026-04-13)
 const OPENING_BALANCE_CENTS = 1_000_000; // $10,000.00 statement balance at cutover
 const ITEM_KEY = "chk-1042";
 const ITEM_AMOUNT_CENTS = 100_000; // $1,000.00 outstanding check 1042
@@ -115,7 +115,7 @@ function pdfBase64(text: string): string { return tinyPdf(text).toString("base64
 void run18("case-18", async ({ api, pool }) => {
   // ── §2 GL opening balance ────────────────────────────────────────────────
   const evidence = await api.post("/admin/accounting/ledger/opening-balances/evidence", {
-    name: "case18OpeningEvidence", mime_type: "application/pdf", content_base64: pdfBase64("Case 18 opening evidence Chase 2026-04-13"),
+    name: "case18OpeningEvidence", mime_type: "application/pdf", content_base64: pdfBase64("Case 18 opening evidence Chase 2025-12-31"),
   });
   const evidenceId = String(record(evidence.evidence)?.id);
   assert(evidenceId.length > 0, "opening evidence uploaded");
@@ -123,7 +123,7 @@ void run18("case-18", async ({ api, pool }) => {
   const openingBody = {
     account_list_id: ACCOUNT_LIST_ID, day: OPENING_DAY, balance_cents: OPENING_BALANCE_CENTS,
     evidence_ids: [evidenceId],
-    items: [{ key: ITEM_KEY, kind: "outstanding_check", original_day: "2026-04-10", amount_cents: ITEM_AMOUNT_CENTS, reference: "Check 1042", description: "outstanding at cutover" }],
+    items: [{ key: ITEM_KEY, kind: "outstanding_check", original_day: "2025-12-28", amount_cents: ITEM_AMOUNT_CENTS, reference: "Check 1042", description: "outstanding at cutover" }],
   };
   const posted = await api.call("/admin/accounting/ledger/opening-balances", { method: "POST", body: openingBody, allow: [409] });
   let openingEntryId: string;

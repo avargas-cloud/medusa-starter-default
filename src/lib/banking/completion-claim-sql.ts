@@ -72,7 +72,11 @@ CREATE FUNCTION bank_completion_claim_insert() RETURNS trigger LANGUAGE plpgsql 
 DECLARE e bank_journal_entry%ROWTYPE;
 BEGIN
  SELECT * INTO e FROM bank_journal_entry WHERE id=NEW.entry_id;
- IF e.completion_id IS NULL OR e.kind='reversal' THEN RAISE EXCEPTION 'BANKING_SOURCE_CLAIM_INVALID'; END IF;
+ -- gl-core-v1 (GeneralLedgerCore 1783300000000): los documentos del libro (source_kind IS NOT NULL,
+ -- p. ej. customer_payment con claim payment_recognition) no tienen completion_id y SÍ reclaman.
+ -- Recrear esta función sin la exención (BankingOnGlStatements 1789100000000, 2026-09-11) dejaba
+ -- todo cobro del GL en BANKING_SOURCE_CLAIM_INVALID. Sigue rechazando reversals.
+ IF (e.completion_id IS NULL AND e.source_kind IS NULL) OR e.kind='reversal' THEN RAISE EXCEPTION 'BANKING_SOURCE_CLAIM_INVALID'; END IF;
  PERFORM bank_completion_validate_claim(NEW.source_kind,NEW.source_id,NEW.amount_cents,NEW.capacity_cents,NEW.source_hash,NEW.entry_id);
  RETURN NEW;
 END $$;
