@@ -53,10 +53,6 @@ export async function reviewCapacity(
     "bank_accounting_setup",
     "bank_receipt_accounting",
     "bank_receipt_consumption",
-    "bank_opening_balance",
-    "bank_opening_item",
-    "bank_opening_clear",
-    "bank_opening_evidence",
   ];
   if (!allowed.includes(table))
     throw new BankingError("BANKING_CAPACITY_INVALID", 500);

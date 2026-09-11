@@ -1,19 +1,60 @@
-/** Real HTTP helpers for the owned v10 E2E; never imported by application routes. */
+/**
+ * Real HTTP helpers for the owned v10 E2E; never imported by application routes.
+ *
+ * banking-on-gl: the retired `/admin/banking/accounting/openings*` routes (draft →
+ * preview → adopt, one opening per bank/clearing account with its own revision) are
+ * gone. The replacement is the GL `opening_balance` document:
+ *   POST /admin/accounting/ledger/opening-balances
+ *     { account_list_id, day?, balance_cents, evidence_ids[], items?[] }
+ * posted ATOMICALLY (no separate preview/adopt step) and idempotent by
+ * `(account_list_id)` — a second post with the SAME body returns 409
+ * `GL_ALREADY_POSTED` and the existing `entry_id`. There is one active document
+ * per account; to post a DIFFERENT balance/items, reverse the active one first
+ * (`POST .../opening-balances/:accountListId/reverse`).
+ *
+ * `openingApiBase` now points at the GL route (kept exported under the same name
+ * so callers that only ever used it as a URL prefix — e.g. for `/evidence` —
+ * don't need to know the route moved).
+ */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import type { DepositCandidate } from "./deposit-read";
-import type { BankDeposit } from "./deposit-types";
-import type {
-  OpeningContext,
-  OpeningItemInput,
-  OpeningPreview,
-  OpeningSaveInput,
-} from "./opening-types";
-import type { ReceiptContext } from "./receipts-types";
+import type { PoolClient } from "pg";
+
+import type { OpeningBalanceItemKind } from "../ledger";
 
 export type TestValue = Record<string, unknown>;
-export const openingApiBase = "/admin/banking/accounting/openings";
+export const openingApiBase = "/admin/accounting/ledger/opening-balances";
+const SANDBOX_API_BASE =
+  process.env.BANKING_SANDBOX_API_BASE ?? "http://localhost:9099";
+
+export type OpeningBalanceItemInput = {
+  key: string;
+  kind: OpeningBalanceItemKind;
+  original_day: string;
+  amount_cents: number;
+  reference: string;
+  description?: string;
+};
+
+export type OpeningBalancePostInput = {
+  account_list_id: string;
+  day?: string;
+  balance_cents: number;
+  evidence_ids: string[];
+  items?: OpeningBalanceItemInput[];
+};
+
+/** One posted GL `opening_balance` document, its lines keyed by `role`
+ * (`opening` / `equity` / `uncleared_<key>`), and the underlying journal
+ * lines for every `uncleared_<key>` role (id needed to match statement lines
+ * against `book_kind: "journal_line"`). */
+export type OpeningBalanceAdopted = {
+  entry_id: string;
+  lines: Record<string, TestValue>;
+  uncleared: Record<string, { id: string; role: string }>;
+};
+
 export class OpeningSandboxApi {
   checks = 0;
   jwt = "";
@@ -31,7 +72,7 @@ export class OpeningSandboxApi {
     key: string = randomUUID(),
     anonymous = false
   ): Promise<TestValue> {
-    const response = await fetch(`http://localhost:9099${path}`, {
+    const response = await fetch(`${SANDBOX_API_BASE}${path}`, {
       method: body ? "POST" : "GET",
       signal: AbortSignal.timeout(60000),
       headers: {
@@ -111,99 +152,109 @@ export class OpeningSandboxApi {
     });
     return String((result.evidence as TestValue).id);
   }
-  async opening(id: string): Promise<OpeningContext> {
-    return (await this.api(`${openingApiBase}/${id}`)) as OpeningContext;
-  }
-  async save(body: OpeningSaveInput): Promise<OpeningContext> {
-    return (await this.api(openingApiBase, body)) as OpeningContext;
-  }
-  async preview(id: string): Promise<OpeningPreview> {
-    const context = await this.opening(id);
-    return (await this.api(`${openingApiBase}/${id}/preview`, {
-      expected_revision: context.opening.revision,
-    })) as OpeningPreview;
-  }
-  async adopt(id: string): Promise<OpeningContext> {
-    const preview = await this.preview(id);
-    return (await this.api(`${openingApiBase}/${id}/adopt`, {
-      expected_revision: preview.revision,
-      preview_hash: preview.preview_hash,
-      evidence_attested: true,
-    })) as OpeningContext;
-  }
-  async receipt(id: string, deposit = false): Promise<ReceiptContext> {
-    return (await this.api(
-      `/admin/banking/accounting/${deposit ? "deposits" : "receipts"}/${id}`
-    )) as ReceiptContext;
-  }
-  async postReceipt(id: string, deposit = false): Promise<ReceiptContext> {
-    const context = await this.receipt(id, deposit),
-      base = `/admin/banking/accounting/${deposit ? "deposits" : "receipts"}/${id}`;
-    const body = {
-      expected_source_hash: context.source_hash,
-      ...(context.source.fee_cents ? { fee_attested: true } : {}),
+  private async activeOpening(accountListId: string): Promise<TestValue> {
+    const listed = (await this.api(openingApiBase)) as {
+      accounts: TestValue[];
     };
-    const preview = await this.api(base + "/preview", body);
-    return (await this.api(base + "/post", {
-      ...body,
-      preview_hash: preview.preview_hash,
-    })) as ReceiptContext;
+    const row = listed.accounts.find(
+      (a) =>
+        (a.account as TestValue | undefined)?.qb_list_id === accountListId
+    );
+    assert(row, `${accountListId} present in opening-balances listing`);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- `row` just asserted present above
+    return row!.entry as TestValue;
   }
-  async makeDeposit(
-    accountId: string,
-    reference: string,
-    lines: Array<{ id: string; amount: string; opening?: boolean }>,
-    feeAccount?: string
-  ): Promise<BankDeposit> {
-    const candidates = (
-      await this.api(
-        `/admin/banking/deposit-candidates?account_id=${accountId}&q=${encodeURIComponent("bank_e2e_")}`
-      )
-    ).candidates as DepositCandidate[];
-    const saved = (
-      await this.api("/admin/banking/deposits", {
-        expected_revision: 0,
-        account_id: accountId,
-        date: "2026-09-02",
-        reference,
-        memo: "Owned v10 verification",
-        fee_amount: feeAccount ? "2.00" : "0.00",
-        fee_account_list_id: feeAccount ?? null,
-        fee_reference: feeAccount ? reference + " new fee" : null,
-        lines: lines.map((line) => {
-          const source = candidates.find((row) => row.id === line.id);
-          assert(source, `Candidate available ${line.id}`);
-          return {
-            ...(line.opening
-              ? { opening_item_id: line.id }
-              : { payment_id: line.id }),
-            amount: line.amount,
-            expected_source_hash: source.source_hash,
-          };
-        }),
-      })
-    ).deposit as BankDeposit;
-    return (
-      await this.api(`/admin/banking/deposits/${saved.id}/ready`, {
-        expected_revision: saved.revision,
-        expected_source_hash: saved.source_hash,
-      })
-    ).deposit as BankDeposit;
+  private static projectOpening(entry: TestValue): OpeningBalanceAdopted {
+    const lines = (entry.lines as TestValue[]).reduce<
+      Record<string, TestValue>
+    >((acc, line) => ({ ...acc, [String(line.role)]: line }), {});
+    const uncleared: Record<string, { id: string; role: string }> = {};
+    for (const [role, line] of Object.entries(lines)) {
+      if (role.startsWith("uncleared_"))
+        uncleared[role] = { id: String(line.id), role };
+    }
+    return { entry_id: String(entry.id), lines, uncleared };
+  }
+  /** Posts the GL `opening_balance` document for `input.account_list_id`. If
+   * one is already active (409 `GL_ALREADY_POSTED`) with the SAME balance and
+   * item count, reuse it; if it differs, reverse it first and re-post — an
+   * account carries exactly one active opening, there is no "adopt a new
+   * revision over the old one" concept anymore. */
+  async adopt(input: OpeningBalancePostInput): Promise<OpeningBalanceAdopted> {
+    const posted = await this.api(openingApiBase, input, [201, 409]);
+    assert(
+      String(posted.entry_id ?? "").length > 0,
+      "opening balance entry id present (either freshly posted or GL_ALREADY_POSTED)"
+    );
+    let entry = await this.activeOpening(input.account_list_id);
+    if (posted.code === "GL_ALREADY_POSTED") {
+      const openingLine = (entry.lines as TestValue[]).find(
+        (line) => line.role === "opening"
+      );
+      const currentBalance = openingLine
+        ? Number(openingLine.debit_cents) + Number(openingLine.credit_cents)
+        : 0;
+      const unclearedCount = (entry.lines as TestValue[]).filter((line) =>
+        String(line.role).startsWith("uncleared_")
+      ).length;
+      const matches =
+        currentBalance === input.balance_cents &&
+        unclearedCount === (input.items?.length ?? 0);
+      if (!matches) {
+        await this.revoke(
+          input.account_list_id,
+          "Sandbox harness: re-adopting with a different balance/items"
+        );
+        await this.api(openingApiBase, input, 201);
+        entry = await this.activeOpening(input.account_list_id);
+      }
+    }
+    return OpeningSandboxApi.projectOpening(entry);
+  }
+  /** Reverses the active opening balance of `accountListId`; `nothing_to_reverse`
+   * (404) and `already_reversed` (409) are both acceptable — the caller only
+   * needs the account left WITHOUT the balance it had. */
+  async revoke(accountListId: string, reason: string): Promise<TestValue> {
+    return this.api(
+      `${openingApiBase}/${accountListId}/reverse`,
+      { reason },
+      [201, 404, 409]
+    );
   }
 }
+
+/** GL equivalent of the retired `openingItem()`: an `outstanding_check` or
+ * `deposit_in_transit` line item for the `items[]` array of an opening-balance
+ * POST. `key` replaces the retired `external_key`/`evidence_id`/`payment_id`
+ * fields — the GL document has ONE evidence set (`evidence_ids`) for the whole
+ * entry, not one per item. */
 export const openingItem = (
-  kind: OpeningItemInput["kind"],
+  kind: OpeningBalanceItemKind,
   cents: number,
-  reference: string,
-  evidenceId: string,
-  paymentId?: string
-): OpeningItemInput => ({
+  key: string,
+  reference: string = key
+): OpeningBalanceItemInput => ({
+  key,
   kind,
   original_day: "1999-12-31",
   amount_cents: cents,
-  external_key: reference,
   reference,
   description: "Synthetic documented opening item",
-  evidence_id: evidenceId,
-  payment_id: paymentId ?? null,
 });
+
+/** The old opening-item flow addressed a `bank_account_id` (an internal
+ * `bank_account.id`); the GL route addresses `account_list_id` (the QB List
+ * ID). Both call sites that still adopt an opening already hold `client`. */
+export async function accountListIdFor(
+  client: PoolClient,
+  bankAccountId: string
+): Promise<string> {
+  const row = (
+    await client.query<{ qb_list_id: string }>(
+      "SELECT qb_list_id FROM bank_account WHERE id=$1",
+      [bankAccountId]
+    )
+  ).rows[0];
+  assert(row, `bank_account ${bankAccountId} has a qb_list_id`);
+  return row.qb_list_id;
+}

@@ -4,7 +4,7 @@ import {
   assertDepositSourceHash,
   validateMatchedDeposit,
 } from "./deposit-matching";
-import { assertNoOpeningClear } from "./opening-guards";
+import { assertNoJournalClaim } from "./journal-claim";
 import {
   appendReviewEvent,
   requireOpenReviewDay,
@@ -70,7 +70,7 @@ export async function persistReview(
   action: string,
   details: Record<string, unknown> = {}
 ): Promise<Review> {
-  await assertNoOpeningClear(client, context.tx.id);
+  await assertNoJournalClaim(client, context.tx.id);
   const before = context.review;
   // A posted direct transfer owns its receipt even if somebody clears its feed evidence.
   // Grouped deposits are independent documents: matching/unmatching those stays evidence-only.

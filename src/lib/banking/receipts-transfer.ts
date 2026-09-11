@@ -6,7 +6,6 @@ import {
 } from "./accounting-types";
 import { loadBankDeposit } from "./deposit-read";
 import { depositCents, depositSourceKey } from "./deposit-types";
-import { validateOpeningFunding } from "./opening-funding";
 import { paymentReservedCentsSql } from "./payment-evidence";
 import {
   receiptAccounts,
@@ -153,99 +152,32 @@ async function feeAccount(
     blockers.push("BANKING_RECEIPT_FEE_ALREADY_RECOGNIZED");
   return { ...account, qb_currency_ref: account.currency, currency: "USD" };
 }
-async function allocateOpening(
-  client: PoolClient,
+/**
+ * banking-on-gl: a manual Undeposited-Funds line has no payment to look up —
+ * it's a pre-cutover receipt the GL never individually recognized (it only
+ * replays `customer_payment` on/after the cutover). The deposit's own
+ * bank/clearing lines (Dr Bank / Cr Undeposited Funds) already cover it; this
+ * just records the allocation for the audit trail, with no source claim.
+ */
+function allocateManual(
   evidence: ReceiptEvidence,
-  openingItemId: string,
+  reference: string,
+  description: string,
+  amount: string,
   cents: number,
   expectedHash: string
-): Promise<
-  | {
-      opening_item_id: string;
-      hash: string;
-      cents: number;
-      opening_snapshot: {
-        opening_id: string;
-        original_day: string;
-        amount_cents: number;
-        external_key: string;
-        reference: string;
-        evidence_id: string | null;
-        source_snapshot: Record<string, unknown>;
-        parent:
-          | {
-              setup_id: string;
-              account_list_id: string;
-              cut_date: string;
-              currency: string;
-            }
-          | undefined;
-      };
-    }
-  | { opening_item_id: string; hash: string; cents: number; unavailable: true }
-> {
-  try {
-    const item = await validateOpeningFunding(
-      client,
-      openingItemId,
-      evidence.source.id,
-      BigInt(cents),
-      evidence.source.day
-    );
-    if (item.source_hash !== expectedHash)
-      evidence.blockers.push("BANKING_OPENING_SOURCE_DRIFT");
-    const parent = (
-      await client.query<{
-        setup_id: string;
-        account_list_id: string;
-        cut_date: string;
-        currency: string;
-      }>(
-        "SELECT setup_id,account_list_id,cut_date,currency FROM bank_opening_balance WHERE id=$1",
-        [item.opening_id]
-      )
-    ).rows[0];
-    if (
-      !evidence.setup ||
-      !parent ||
-      parent.setup_id !== evidence.setup.id ||
-      parent.cut_date !== evidence.setup.cut_date ||
-      parent.account_list_id !== evidence.setup.clearing_account.id ||
-      parent.currency !== "USD"
-    ) {
-      evidence.blockers.push("BANKING_RECEIPT_MAPPING_STALE");
-    }
-    evidence.allocations.push({
-      payment_id: null,
-      receipt_id: null,
-      opening_item_id: item.id,
-      amount_cents: cents,
-    });
-    return {
-      opening_item_id: item.id,
-      hash: item.source_hash,
-      cents,
-      opening_snapshot: {
-        opening_id: item.opening_id,
-        original_day: item.original_day,
-        amount_cents: item.amount_cents,
-        external_key: item.external_key,
-        reference: item.reference,
-        evidence_id: item.evidence_id,
-        source_snapshot: item.source_snapshot,
-        parent,
-      },
-    };
-  } catch (error) {
-    if (!(error instanceof BankingError)) throw error;
-    evidence.blockers.push(error.code);
-    return {
-      opening_item_id: openingItemId,
-      hash: expectedHash,
-      cents,
-      unavailable: true,
-    };
-  }
+): { manual_reference: string; hash: string; cents: number } {
+  const hash = reviewHash({ manual: true, reference, description, amount });
+  if (hash !== expectedHash)
+    evidence.blockers.push("BANKING_RECEIPT_SOURCE_DRIFT");
+  evidence.allocations.push({
+    payment_id: null,
+    receipt_id: null,
+    manual_reference: reference,
+    manual_description: description || null,
+    amount_cents: cents,
+  });
+  return { manual_reference: reference, hash, cents };
 }
 export async function depositReceiptSource(
   client: PoolClient,
@@ -319,15 +251,17 @@ export async function depositReceiptSource(
     const cents = Number(depositCents(line.amount));
     if (cents <= 0) blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
     payments.push(
-      line.opening_item_id
-        ? await allocateOpening(
-            client,
+      line.manual
+        ? allocateManual(
             evidence,
-            line.opening_item_id,
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey (called on every line during the sort above) throws unless line.reference is set when line.manual is true
+            line.reference!,
+            line.description ?? "",
+            line.amount,
             cents,
             line.source_hash
           )
-        : // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey (called on every line during the sort above) throws unless exactly one of payment_id/opening_item_id is set; opening_item_id is falsy here
+        : // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey (called on every line during the sort above) throws unless exactly one of payment_id/manual is set; payment_id is set here
           await allocate(client, evidence, line.payment_id!, cents)
     );
   }

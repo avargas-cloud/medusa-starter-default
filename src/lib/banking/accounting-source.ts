@@ -5,7 +5,7 @@ import {
   type AccountingAccount,
   type AccountingSource,
 } from "./accounting-types";
-import { OPENING_TRANSACTION_CLAIM_SQL } from "./opening-guards";
+import { JOURNAL_CLAIM_SQL } from "./journal-claim";
 import { receiptMapping, receiptSetup } from "./receipts-setup";
 import { reviewHash } from "./review-common";
 import { reviewDate, reviewToday } from "./review-date";
@@ -97,7 +97,7 @@ export async function accountingSource(
   const category = accounts.find((a) => a.id === row.category_list_id) ?? null;
   const bank = accounts.find((a) => a.id === row.qb_list_id) ?? null;
   const blockers: string[] = [];
-  if ((await client.query(OPENING_TRANSACTION_CLAIM_SQL, [id])).rowCount)
+  if ((await client.query(JOURNAL_CLAIM_SQL, [id])).rowCount)
     blockers.push("BANKING_OPENING_TRANSACTION_CLAIMED");
   let amount: number | null = null;
   try {

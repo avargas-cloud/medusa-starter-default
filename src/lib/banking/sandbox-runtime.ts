@@ -8,6 +8,7 @@ import {
   writeFileSync,
   statSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { parse } from "dotenv";
@@ -22,7 +23,9 @@ import { drainBankWebhooks } from "./webhooks";
 export const BANK_SANDBOX_DIR = "/tmp/ept-bank-feed-sandbox";
 const backend = resolve(__dirname, "../../..");
 const workspace = resolve(backend, "..");
-const keyFile = `${BANK_SANDBOX_DIR}/token-key`;
+// The key must outlive /tmp: a reboot wiped it on 2026-09-10 and every stored sandbox token became unrecoverable.
+const BANK_SANDBOX_KEY_DIR = resolve(homedir(), ".ept-secrets/bank-feed-sandbox");
+const keyFile = `${BANK_SANDBOX_KEY_DIR}/token-key`;
 const self = resolve(__filename);
 const loader = resolve(backend, "node_modules/tsx/dist/loader.mjs");
 
@@ -119,6 +122,7 @@ async function setup(): Promise<void> {
     verifier.stdin.end(readFileSync(snapshot));
   });
   mkdirSync(BANK_SANDBOX_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(BANK_SANDBOX_KEY_DIR, { recursive: true, mode: 0o700 });
   if (!existsSync(keyFile))
     writeFileSync(keyFile, randomBytes(32).toString("hex"), {
       mode: 0o600,
@@ -301,9 +305,6 @@ if (process.argv[1] && resolve(process.argv[1]) === self) {
             `${kind}/[id]/reverse`,
           ]),
         ].map((path) => `api/admin/banking/accounting/${path}/route`),
-        "lib/banking/opening-core",
-        "lib/banking/opening-read",
-        "lib/banking/opening-funding",
         "lib/banking/movement-core",
         "lib/banking/movement-read",
         "lib/banking/completion-journal",
@@ -341,18 +342,6 @@ if (process.argv[1] && resolve(process.argv[1]) === self) {
         ...["preview", "post", "[id]", "[id]/reverse"].map(
           (p) => `api/admin/banking/merchant-receipts/${p}/route`
         ),
-        ...[
-          "",
-          "/[id]",
-          "/[id]/preview",
-          "/[id]/adopt",
-          "/[id]/revoke",
-          "/evidence",
-          "/evidence/[id]",
-          "/items/[id]/clear",
-          "/items/[id]/unclear",
-          "/items/[id]/candidates",
-        ].map((path) => `api/admin/banking/accounting/openings${path}/route`),
       ]) {
         require(resolve(backend, ".medusa/server/src", path));
       }
@@ -369,7 +358,8 @@ if (process.argv[1] && resolve(process.argv[1]) === self) {
       configureBankSandbox();
       const child = spawn(
         resolve(backend, "node_modules/.bin/medusa"),
-        ["develop"],
+        // Backend lint is not a gate (≈9k pre-existing problems) and costs minutes per restart; ./back-sb skips it too.
+        ["develop", "--no-lint"],
         {
           cwd: backend,
           env: process.env,

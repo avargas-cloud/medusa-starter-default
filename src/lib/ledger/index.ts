@@ -1,6 +1,6 @@
 /** gl-core-v1 §5 — punto de entrada público del motor. */
 export * from "./types";
-export { loadAccountMap, loadPurchaseAccountMap, resolveProductAccounts } from "./accounts";
+export { loadAccountMap, loadOpeningAccountMap, loadPurchaseAccountMap, resolveProductAccounts } from "./accounts";
 export {
   postDocumentJournal,
   reverseDocumentJournal,
@@ -16,6 +16,12 @@ export type { VendorBillClassifiedLine } from "./lines/vendor-bill";
 export { buildVendorCreditLines } from "./lines/vendor-credit";
 export type { VendorCreditAccountLine } from "./lines/vendor-credit";
 export { buildBillPaymentLines } from "./lines/bill-payment";
+export { buildOpeningBalanceLines } from "./lines/opening-balance";
+export type {
+  OpeningBalanceInput,
+  OpeningBalanceItem,
+  OpeningBalanceItemKind,
+} from "./lines/opening-balance";
 export { postInvoice, reverseInvoice } from "./documents/invoice";
 export { postCreditMemo, reverseCreditMemo } from "./documents/credit-memo";
 export {
@@ -36,6 +42,16 @@ export {
 } from "./documents/vendor-bill";
 export { postVendorCredit, reverseVendorCredit } from "./documents/vendor-credit";
 export { postBillPayment, reverseBillPayment } from "./documents/bill-payment";
+export {
+  postOpeningBalance,
+  reverseOpeningBalance,
+  listOpeningBalances,
+  OPENING_BALANCE_ACCOUNT_TYPES,
+} from "./documents/opening-balance";
+export type {
+  PostOpeningBalanceInput,
+  OpeningBalanceListItem,
+} from "./documents/opening-balance";
 export { replayLedger } from "./replay";
 export type { ReplayOptions, ReplayReport, ReplayCounts, ReplayBlock } from "./replay";
 export {

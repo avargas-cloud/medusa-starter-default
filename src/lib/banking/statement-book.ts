@@ -3,7 +3,6 @@ import type { PoolClient } from "pg";
 import { accountingContext } from "./accounting-read";
 import { merchantReceiptDrift } from "./merchant-receipts";
 import { movementContext } from "./movement-read";
-import { openingReadItem } from "./opening-funding";
 import { receiptContext } from "./receipts-read";
 import { reviewHash } from "./review-common";
 import { BankingError } from "./security";
@@ -11,8 +10,10 @@ import { settlementContext } from "./settlement-read";
 import type { StatementBookItem, StatementDocument } from "./statement-types";
 
 type BankLine = {
+  source_kind: string | null;
   id: string;
   entry_id: string;
+  role: string;
   day: string;
   reference: string;
   description: string;
@@ -31,6 +32,11 @@ async function bookSourceBlockers(
   row: BankLine
 ): Promise<string[]> {
   if (row.canceled_by_end) return [];
+  // The GL opening_balance document is always a valid, self-contained source —
+  // its `opening` line is already cleared against the cut-date statement, and
+  // its `uncleared_<key>` lines clear via the ordinary statement match.
+  // `kind` is the entry FAMILY (document/reversal/…); the document type lives in source_kind (case 18, 2026-09-10).
+  if (row.source_kind === "opening_balance") return [];
   try {
     if (row.effective_kind === "expense" && row.transaction_id) {
       const context = await accountingContext(client, row.transaction_id);
@@ -64,46 +70,34 @@ async function bookSourceBlockers(
   }
 }
 
+/**
+ * banking-on-gl: the book balance is `Σ(debit-credit)` of every active Bank line
+ * of the account through `to` — no separate opening term, no lower bound, since
+ * the GL opening_balance document IS the first line (dated at cut). Its `opening`
+ * role line is always fully cleared (never pending); its `uncleared_<key>` lines
+ * (former outstanding checks / deposits in transit) are ordinary pending lines
+ * until matched, exactly like any other journal line.
+ */
 export async function statementBook(
   client: PoolClient,
   statement: StatementDocument
 ): Promise<{
   items: StatementBookItem[];
   book_balance_cents: number;
-  opening: {
-    cut_date: string;
-    book_balance_cents: number;
-    statement_balance_cents: number;
-    status: string;
-  };
 }> {
-  const opening = (
-    await client.query<{
-      cut_date: string;
-      book_balance_cents: number;
-      statement_balance_cents: number;
-      status: string;
-    }>(
-      `SELECT cut_date,
-    book_balance_cents::float8 AS book_balance_cents,statement_balance_cents::float8 AS statement_balance_cents,status FROM bank_opening_balance WHERE id=$1`,
-      [statement.opening_id]
-    )
-  ).rows[0];
-  if (!opening)
-    throw new BankingError("BANKING_STATEMENT_VERIFIED_OPENING_REQUIRED", 409);
   const lines = (
     await client.query<BankLine>(
-      `SELECT l.id,e.id AS entry_id,e.day,e.reference,e.description,
-    (l.debit_cents-l.credit_cents)::float8 AS amount_cents,e.source_hash,e.kind,e.transaction_id,e.deposit_id,e.completion_id,
+      `SELECT l.id,e.id AS entry_id,l.role,e.day,e.reference,e.description,
+    (l.debit_cents-l.credit_cents)::float8 AS amount_cents,e.source_hash,e.kind,COALESCE(original.source_kind,e.source_kind) AS source_kind,e.transaction_id,e.deposit_id,e.completion_id,
     a.payment_id AS receipt_payment_id,COALESCE(original.kind,e.kind) AS effective_kind,
-    (EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id AND r.day<=$3)
-      OR (e.kind='reversal' AND e.day<=$3)) AS canceled_by_end
+    (EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id AND r.day<=$2)
+      OR (e.kind='reversal' AND e.day<=$2)) AS canceled_by_end
     FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
     LEFT JOIN bank_journal_entry original ON original.id=e.reverses_entry_id
     LEFT JOIN bank_receipt_accounting a ON a.id=e.receipt_id
-    WHERE l.account_list_id=$1 AND l.account_snapshot->>'account_type'='Bank' AND e.day BETWEEN $2 AND $3
+    WHERE l.account_list_id=$1 AND l.account_snapshot->>'account_type'='Bank' AND e.day<=$2
     ORDER BY e.day,e.created_at,l.id LIMIT 10001`,
-      [statement.account_list_id, opening.cut_date, statement.to]
+      [statement.account_list_id, statement.to]
     )
   ).rows;
   if (lines.length > 10000)
@@ -127,7 +121,12 @@ export async function statementBook(
       cache.set(origin, await bookSourceBlockers(client, line));
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- the `if (!cache.has(origin))` above just populated this key, so it is always present
     const blockers = cache.get(origin)!;
-    const matched = amountByBook.get(`journal_line:${line.id}`) ?? 0;
+    // The `opening` line is always fully cleared: it is the cut-date balance
+    // already reconciled in the statement it anchors, never a pending item.
+    const alwaysCleared = line.role === "opening";
+    const matched = alwaysCleared
+      ? Math.abs(line.amount_cents)
+      : (amountByBook.get(`journal_line:${line.id}`) ?? 0);
     items.push({
       kind: "journal_line",
       id: line.id,
@@ -147,38 +146,8 @@ export async function statementBook(
       blockers,
     });
   }
-  const ids = (
-    await client.query<{ id: string }>(
-      `SELECT id FROM bank_opening_item WHERE opening_id=$1
-    AND kind IN ('deposit_in_transit','outstanding_check') ORDER BY original_day,id`,
-      [statement.opening_id]
-    )
-  ).rows;
-  for (const row of ids) {
-    const item = await openingReadItem(client, row.id),
-      matched = amountByBook.get(`opening_item:${row.id}`) ?? 0;
-    items.push({
-      kind: "opening_item",
-      id: item.id,
-      day: item.original_day,
-      reference: item.reference,
-      description: item.description,
-      amount_cents:
-        item.amount_cents * (item.kind === "deposit_in_transit" ? 1 : -1),
-      matched_cents: matched,
-      remaining_cents: item.amount_cents - matched,
-      source_hash: reviewHash({
-        hash: item.source_hash,
-        blockers: item.blockers,
-      }),
-      transaction_id: item.transaction_id,
-      blockers: item.blockers,
-    });
-  }
-  const bookBalance =
-    opening.book_balance_cents +
-    lines.reduce((sum, line) => sum + line.amount_cents, 0);
+  const bookBalance = lines.reduce((sum, line) => sum + line.amount_cents, 0);
   if (!Number.isSafeInteger(bookBalance))
     throw new BankingError("BANKING_STATEMENT_AMOUNT_INVALID", 409);
-  return { items, book_balance_cents: bookBalance, opening };
+  return { items, book_balance_cents: bookBalance };
 }

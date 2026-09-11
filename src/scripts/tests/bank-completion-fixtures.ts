@@ -80,7 +80,12 @@ export function configureCompletionSandbox(): void {
   }
   Object.assign(process.env, {
     ECOPOWERTECH_ENV: "sandbox",
-    DATABASE_URL: "postgresql://postgres:sandbox@localhost:5499/medusa",
+    // banking-on-gl: overridable so this harness can target the ept-banking-gl
+    // worktree (:9096 / medusa_bgl) instead of the shared sandbox — defaults
+    // unchanged for every other caller of configureCompletionSandbox().
+    DATABASE_URL:
+      process.env.BANKING_SANDBOX_DATABASE_URL ??
+      "postgresql://postgres:sandbox@localhost:5499/medusa",
     REDIS_URL: "redis://localhost:6399",
     MEILISEARCH_HOST: "http://localhost:7799",
     MEILISEARCH_API_KEY: "sandbox_master_key",
@@ -91,7 +96,8 @@ export function configureCompletionSandbox(): void {
     SMTP_DISABLED: "true",
     BAMS_WEBHOOK_DISABLED: "true",
     PLAID_ENV: "sandbox",
-    MEDUSA_BACKEND_URL: "http://localhost:9099",
+    MEDUSA_BACKEND_URL:
+      process.env.BANKING_SANDBOX_API_BASE ?? "http://localhost:9099",
     MEDUSA_TELEMETRY_DISABLED: "true",
   });
   requireBankingSandbox();

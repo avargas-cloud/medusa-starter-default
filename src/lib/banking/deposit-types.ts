@@ -30,9 +30,11 @@ export const depositSaveSchema = z
             .strict(),
           z
             .object({
-              opening_item_id: id,
+              payment_id: z.null(),
+              manual: z.literal(true),
+              reference: z.string().trim().min(1).max(500),
+              description: z.string().trim().max(2000).default(""),
               amount: depositMoney,
-              expected_source_hash: z.string().regex(/^[a-f0-9]{64}$/),
             })
             .strict(),
         ])
@@ -58,8 +60,10 @@ export type DepositLine = {
   id: string;
   payment_id: string | null;
   opening_item_id?: string;
-  source_type?: "opening_item";
+  manual?: boolean;
+  source_type?: "opening_item" | "manual";
   reference?: string;
+  description?: string;
   payment_display_id: number | null;
   customer_id: string;
   customer_name: string;
@@ -104,18 +108,18 @@ export const depositMajor = (cents: bigint): string =>
   `${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
 export function depositSourceKey(line: {
   payment_id?: string | null;
-  opening_item_id?: string | null;
+  manual?: boolean;
+  reference?: string | null;
 }): string {
-  if (Boolean(line.payment_id) === Boolean(line.opening_item_id))
+  if (Boolean(line.payment_id) === Boolean(line.manual))
     throw new BankingError("BANKING_DEPOSIT_LINES_INVALID");
-  return line.opening_item_id
-    ? `opening_item:${line.opening_item_id}`
-    : `payment:${line.payment_id}`;
+  return line.manual ? `manual:${line.reference}` : `payment:${line.payment_id}`;
 }
 export function depositTotals(
   lines: Array<{
     payment_id?: string | null;
-    opening_item_id?: string | null;
+    manual?: boolean;
+    reference?: string | null;
     amount: string;
   }>,
   fee: string

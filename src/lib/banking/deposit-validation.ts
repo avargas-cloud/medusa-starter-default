@@ -7,13 +7,12 @@ import {
   depositSourceKey,
   type BankDeposit,
 } from "./deposit-types";
-import { validateOpeningFunding } from "./opening-funding";
 import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
   NO_DIRECT_RESERVATION_SQL,
   matchesPaymentFingerprint,
 } from "./payment-evidence";
-import { appendReviewEvent } from "./review-common";
+import { appendReviewEvent, reviewHash } from "./review-common";
 import { validateCategory, type Category } from "./review-lookups";
 import { BankingError } from "./security";
 
@@ -74,7 +73,9 @@ export async function validateDepositFunding(
   client: PoolClient,
   line: {
     payment_id?: string | null;
-    opening_item_id?: string | null;
+    manual?: boolean;
+    reference?: string | null;
+    description?: string | null;
     amount: string;
   },
   depositId: string | null,
@@ -84,10 +85,10 @@ export async function validateDepositFunding(
   expectedHash: string
 ): Promise<DepositCandidate> {
   depositSourceKey(line);
-  if (!line.opening_item_id)
+  if (!line.manual)
     return validateDepositReceipt(
       client,
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey() above throws unless exactly one of payment_id/opening_item_id is set; opening_item_id is falsy here
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey() above throws unless exactly one of payment_id/manual is set; manual is falsy here
       line.payment_id!,
       depositId,
       currency,
@@ -96,32 +97,34 @@ export async function validateDepositFunding(
       line.amount,
       expectedHash
     );
+  // Manual Undeposited-Funds line: a pre-cutover receipt with no individual
+  // customer_payment (the GL only recognizes payments received on/after the
+  // cutover). Nothing to compare against a stored fingerprint — the hash is
+  // derived from the line's own content, deterministic and tamper-evident.
   if (currency !== "USD")
     throw new BankingError("BANKING_DEPOSIT_SOURCE_STALE", 409);
-  const item = await validateOpeningFunding(
-    client,
-    line.opening_item_id,
-    depositId,
-    depositCents(line.amount),
-    date
-  );
-  if (item.source_hash !== expectedHash)
-    throw new BankingError("BANKING_DEPOSIT_SOURCE_STALE", 409);
+  const cents = depositCents(line.amount);
+  if (cents <= 0n) throw new BankingError("BANKING_DEPOSIT_AMOUNT_INVALID");
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey() above throws unless line.reference is set when manual is true
+  const reference = line.reference!;
+  const description = line.description ?? "";
+  const amount = depositMajor(cents);
   return {
-    id: item.id,
-    source_type: "opening_item",
-    opening_item_id: item.id,
+    id: `manual:${reference}`,
+    source_type: "manual",
+    manual_reference: reference,
+    manual_description: description || null,
     payment_id: null,
     display_id: null,
     customer_id: "",
-    customer_name: item.description || item.reference,
-    method: "opening_uf",
-    date: item.original_day,
-    reference: item.reference,
-    amount: depositMajor(BigInt(item.amount_cents)),
-    available_amount: depositMajor(BigInt(item.available_cents)),
+    customer_name: description || reference,
+    method: "manual_uf",
+    date,
+    reference,
+    amount,
+    available_amount: amount,
     currency: "USD",
-    source_hash: item.source_hash,
+    source_hash: reviewHash({ manual: true, reference, description, amount }),
   };
 }
 export async function guardDepositEdit(

@@ -66,18 +66,6 @@ BEGIN
      AND OLD.deleted_at IS NOT DISTINCT FROM NEW.deleted_at THEN RETURN NEW; END IF;
    IF EXISTS(SELECT 1 FROM bank_statement s WHERE s.account_list_id=OLD.qb_list_id AND s.status='closed')
    THEN RAISE EXCEPTION 'BANKING_STATEMENT_PERIOD_CLOSED'; END IF;
- ELSIF TG_TABLE_NAME='bank_opening_balance' THEN
-   IF EXISTS(SELECT 1 FROM bank_statement s WHERE s.opening_id=OLD.id)
-   THEN RAISE EXCEPTION 'BANKING_STATEMENT_OPENING_DEPENDENCY'; END IF;
- ELSIF TG_TABLE_NAME='bank_opening_clear' THEN
-   txid:=NEW.transaction_id;
-   IF NEW.kind='clear' AND EXISTS(SELECT 1 FROM bank_statement_match m JOIN bank_statement_line l ON l.id=m.statement_line_id
-     WHERE m.book_kind='opening_item' AND m.book_id=NEW.item_id AND m.deleted_at IS NULL
-       AND l.transaction_id IS DISTINCT FROM NEW.transaction_id)
-     THEN RAISE EXCEPTION 'BANKING_STATEMENT_OPENING_CLEAR_CONFLICT'; END IF;
-   IF NEW.kind<>'clear' AND EXISTS(SELECT 1 FROM bank_statement_match m JOIN bank_statement s ON s.id=m.statement_id
-     WHERE m.book_kind='opening_item' AND m.book_id=NEW.item_id AND m.deleted_at IS NULL AND s.status='closed')
-     THEN RAISE EXCEPTION 'BANKING_STATEMENT_PERIOD_CLOSED'; END IF;
  ELSIF TG_TABLE_NAME='bank_transaction_review' THEN
    txid:=CASE WHEN TG_OP='DELETE' THEN OLD.transaction_id ELSE NEW.transaction_id END;
    IF TG_OP='UPDATE' AND OLD.transaction_id IS DISTINCT FROM NEW.transaction_id THEN
@@ -85,11 +73,6 @@ BEGIN
        WHERE t.id=OLD.transaction_id;
      PERFORM bank_statement_assert_open(mapped,d);
    END IF;
-   IF TG_OP<>'DELETE' AND NEW.deleted_at IS NULL AND NEW.status<>'excluded'
-     AND (NEW.matched_payment_id IS NOT NULL OR NEW.matched_deposit_id IS NOT NULL)
-     AND EXISTS(SELECT 1 FROM bank_statement_line l JOIN bank_statement_match m ON m.statement_line_id=l.id
-       WHERE l.transaction_id=NEW.transaction_id AND l.deleted_at IS NULL AND m.deleted_at IS NULL AND m.book_kind='opening_item')
-   THEN RAISE EXCEPTION 'BANKING_STATEMENT_OPENING_TRANSACTION_CLAIMED'; END IF;
  ELSIF TG_TABLE_NAME='bank_deposit_line' THEN
    SELECT a.qb_list_id,p.deposit_date INTO mapped,d FROM bank_deposit p JOIN bank_account a ON a.id=p.account_id
      WHERE p.id=CASE WHEN TG_OP='DELETE' THEN OLD.deposit_id ELSE NEW.deposit_id END;
@@ -110,16 +93,15 @@ BEGIN
  IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW;
 END $$;
 CREATE TRIGGER bank_statement_account_guard BEFORE UPDATE OR DELETE ON bank_account FOR EACH ROW EXECUTE FUNCTION bank_statement_evidence_guard();
-CREATE TRIGGER bank_statement_opening_guard BEFORE UPDATE OR DELETE ON bank_opening_balance FOR EACH ROW EXECUTE FUNCTION bank_statement_evidence_guard();
-CREATE TRIGGER bank_statement_opening_clear_guard BEFORE INSERT ON bank_opening_clear FOR EACH ROW EXECUTE FUNCTION bank_statement_evidence_guard();
 CREATE TRIGGER bank_statement_review_guard BEFORE INSERT OR UPDATE OR DELETE ON bank_transaction_review FOR EACH ROW EXECUTE FUNCTION bank_statement_evidence_guard();
 CREATE TRIGGER bank_statement_deposit_guard BEFORE UPDATE OR DELETE ON bank_deposit FOR EACH ROW EXECUTE FUNCTION bank_statement_evidence_guard();
 CREATE TRIGGER bank_statement_deposit_line_guard BEFORE INSERT OR UPDATE OR DELETE ON bank_deposit_line FOR EACH ROW EXECUTE FUNCTION bank_statement_evidence_guard();
 CREATE FUNCTION bank_statement_historical_claim_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
  IF NEW.kind<>'reversal' AND NEW.transaction_id IS NOT NULL AND EXISTS(SELECT 1 FROM bank_statement_line l
-   JOIN bank_statement_match m ON m.statement_line_id=l.id WHERE l.transaction_id=NEW.transaction_id
-   AND l.deleted_at IS NULL AND m.deleted_at IS NULL AND m.book_kind='opening_item')
+   JOIN bank_statement_match m ON m.statement_line_id=l.id JOIN bank_journal_line jl ON jl.id=m.book_id
+   WHERE l.transaction_id=NEW.transaction_id AND l.deleted_at IS NULL AND m.deleted_at IS NULL
+     AND m.book_kind='journal_line' AND jl.role LIKE 'uncleared_%')
  THEN RAISE EXCEPTION 'BANKING_STATEMENT_OPENING_TRANSACTION_CLAIMED'; END IF;
  RETURN NEW;
 END $$;

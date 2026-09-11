@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { getDbPool } from "../../api/utils/db-pool";
 import { configureCompletionSandbox, completionBankCaps, completionDirectory } from "./bank-completion-fixtures";
-import { OpeningSandboxApi, openingItem } from "../../lib/banking/opening-sandbox-api";
+import { OpeningSandboxApi, openingItem, accountListIdFor } from "../../lib/banking/opening-sandbox-api";
 import { nextStatementDay } from "../../lib/banking/statement-source";
 import type { MovementContext } from "../../lib/banking/movement-types";
 import type { StatementContext, StatementInput } from "../../lib/banking/statement-types";
@@ -59,12 +59,20 @@ export async function runBankStatementsSandbox(snapshot: { file: string; sha256:
     assert(secondEnd <= new Date().toISOString().slice(0, 10));
     const openingEvidence = await test.evidence(prefix + "verified-opening.pdf");
     const originalDay = new Date(`${first}T12:00:00Z`); originalDay.setUTCDate(originalDay.getUTCDate() - 1);
-    const historical = (kind: "deposit_in_transit" | "outstanding_check") => ({ ...openingItem(kind, 10000, prefix + kind, openingEvidence), original_day: originalDay.toISOString().slice(0, 10) });
-    const draft = await test.save({ expected_revision: 0, kind: "bank", bank_account_id: account,
-      book_balance_cents: 100000, statement_balance_cents: 100000, statement_evidence_id: openingEvidence,
-      books_evidence_id: openingEvidence, reference: prefix + "bank", items: [historical("deposit_in_transit"), historical("outstanding_check")] });
-    const opening = await test.adopt(draft.opening.id);
-    const deposit = opening.items.find(item => item.kind === "deposit_in_transit")!, cheque = opening.items.find(item => item.kind === "outstanding_check")!;
+    const originalDayStr = originalDay.toISOString().slice(0, 10);
+    const historical = (kind: "deposit_in_transit" | "outstanding_check") => ({ ...openingItem(kind, 10000, prefix + kind), original_day: originalDayStr });
+    // banking-on-gl: the retired draft→preview→adopt opening flow is now a single
+    // atomic POST to the GL `opening_balance` document, keyed by `account_list_id`
+    // (the QB List ID, resolved here from the internal `bank_account.id`) — and
+    // the GL entry's OWN `day` must be the day BEFORE this statement's `first`
+    // (Banking-on-GL: "the first statement must start the day after the entry's day").
+    const accountListId = await accountListIdFor(client, account);
+    const opening = await test.adopt({ account_list_id: accountListId, day: originalDayStr, balance_cents: 100000,
+      evidence_ids: [openingEvidence], items: [historical("deposit_in_transit"), historical("outstanding_check")] });
+    const unclearedFor = (kind: "deposit_in_transit" | "outstanding_check") =>
+      Object.values(opening.uncleared).find(row => row.role.includes(kind));
+    const deposit = unclearedFor("deposit_in_transit")!, cheque = unclearedFor("outstanding_check")!;
+    assert(deposit && cheque, "GL opening_balance posted an uncleared_<key> line for both historical items");
     const evidence = String(((await test.api("/admin/banking/evidence", { name: prefix + "complete-statement.pdf",
       mime_type: "application/pdf", content_base64: test.pdfBase64 })).evidence as Value).id);
     const loanTx = await seedStatementTransaction(client, "loan", -1500, first);
@@ -93,8 +101,11 @@ export async function runBankStatementsSandbox(snapshot: { file: string; sha256:
     one = await save(completeBody);
     await test.api(base, { ...body, reference: prefix + "duplicate-period" }, 409);
     await test.api(base, { ...completeBody, expected_revision: 1 }, 409);
+    // banking-on-gl: the retired "opening_item" book_kind is gone — the former
+    // outstanding-check/deposit-in-transit items ARE `bank_journal_line` rows now
+    // (role `uncleared_<key>`), matched exactly like any other journal line.
     const allocate = (context: StatementContext, lineKey: string, bookId: string, cents: number) => ({
-      statement_line_id: context.lines.find(line => line.external_key === lineKey)!.id, book_kind: "opening_item",
+      statement_line_id: context.lines.find(line => line.external_key === lineKey)!.id, book_kind: "journal_line",
       book_id: bookId, amount_cents: cents, expected_book_hash: context.book_items.find(item => item.id === bookId)!.source_hash });
     await test.api(`${base}/${one.statement.id}/matches`, { expected_revision: one.statement.revision,
       allocations: [allocate(one, "credit", deposit.id, 6001)] }, 409);
@@ -110,7 +121,9 @@ export async function runBankStatementsSandbox(snapshot: { file: string; sha256:
       amount_cents: 1500, expected_book_hash: loanLine.source_hash }] }) as StatementContext;
     test.check(one.deposits_in_transit_cents === 4000 && one.outstanding_disbursements_cents === 6000
       && one.book_balance_cents === 98500 && one.difference_cents === 0, "Grouped partial matches carry deposit40/check60 with book985/statement1005");
-    const matchedId = one.matches.find(match => match.book_kind === "opening_item")!.id;
+    // "opening_item" no longer distinguishes this match from the loan's `journal_line`
+    // match below — select the same one the old test picked (deposit's partial match) by `book_id`.
+    const matchedId = one.matches.find(match => match.book_kind === "journal_line" && match.book_id === deposit.id)!.id;
     one = await test.api(`${base}/${one.statement.id}/unmatch`, { expected_revision: one.statement.revision,
       match_ids: [matchedId], reason: "Verify audited unmatch and restore" }) as StatementContext;
     const openLine = one.lines.find(line => line.remaining_cents > 0)!;
