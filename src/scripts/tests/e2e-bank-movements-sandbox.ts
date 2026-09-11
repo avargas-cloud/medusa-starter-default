@@ -107,7 +107,7 @@ export async function runBankMovementsSandbox(snapshot: { file: string; sha256: 
     const changed = await report(); test.check(changed.expense - baseline.expense === 1000 && changed.income - baseline.income === -1000, "Loan100 = principal90 + new Expense10 exactly once");
     const documents = (await test.api("/admin/reports/expenses/documents?from=2026-09-01&to=2026-09-30")).documents as Value[];
     test.check(documents.filter(r => r.document_id === posted.postings[0]!.id).length === 1, "Movement expense has one navigable report row");
-    const privatePdf = await fetch(`http://localhost:9099/admin/banking/evidence/${loan.body.evidence_id}`, { headers: { Authorization: `Bearer ${test.jwt}` } });
+    const privatePdf = await fetch(`${process.env.BANKING_SANDBOX_API_BASE ?? "http://localhost:9099"}/admin/banking/evidence/${loan.body.evidence_id}`, { headers: { Authorization: `Bearer ${test.jwt}` } });
     test.check(privatePdf.status === 200 && privatePdf.headers.get("cache-control")?.includes("no-store") &&
       Buffer.from(await privatePdf.arrayBuffer()).subarray(0, 5).toString() === "%PDF-", "Evidence downloads privately as real PDF");
     const transferTx = await seedMovementTransaction(client, "transfer_out", 5000);
