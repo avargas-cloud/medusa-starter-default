@@ -10,8 +10,10 @@
  * Nunca quita a nadie de un grupo.
  *
  * `customer.metadata` puede ser un JSON escalar (no objeto) en filas legacy:
- * el snapshot lo compara tal cual y la auditoría lo reemplaza por objeto
- * (jsonb_typeof guard) — un `-`/`||` sobre un escalar tira 22023.
+ * el snapshot lo compara tal cual y la auditoría en `customer.metadata` se
+ * OMITE en esas filas (nunca se pisa el valor legacy); la membresía insertada
+ * lleva igual `metadata.backfill_run_id`, que es la auditoría inmutable de la
+ * fila. Un `-`/`||` sobre un escalar tira 22023.
  *
  * Gates de /safe-backfill:
  *   - dry-run y apply comparten `buildPlan`; la rama sólo cambia en la
@@ -159,12 +161,12 @@ async function applyPlan(knex: Knex, adds: readonly PlannedAdd[], runId: string)
       }));
       await trx.raw(
         `UPDATE customer c
-            SET metadata = (CASE WHEN jsonb_typeof(c.metadata) = 'object' THEN c.metadata ELSE '{}'::jsonb END)
-                           || jsonb_build_object('${AUDIT_KEY}', u.audit::jsonb),
+            SET metadata = coalesce(c.metadata, '{}'::jsonb) || jsonb_build_object('${AUDIT_KEY}', u.audit::jsonb),
                 updated_at = now()
            FROM unnest(?::text[], ?::text[]) AS u(id, audit)
           WHERE c.id = u.id AND c.deleted_at IS NULL
-            AND (c.metadata IS NULL OR jsonb_typeof(c.metadata) <> 'object' OR c.metadata -> '${AUDIT_KEY}' IS NULL)`,
+            AND (c.metadata IS NULL OR jsonb_typeof(c.metadata) = 'object')
+            AND (c.metadata IS NULL OR c.metadata -> '${AUDIT_KEY}' IS NULL)`,
         [slice, audit]
       );
     }
