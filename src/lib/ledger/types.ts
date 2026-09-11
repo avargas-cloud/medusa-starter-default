@@ -38,8 +38,18 @@ export interface LedgerClaim {
   source_hash: string;
 }
 
+/**
+ * qb-gl-import (docs/QB_GL_IMPORT.md): documentos importados del reporte
+ * General Ledger de QuickBooks. Deliberadamente FUERA de `LedgerSourceKind`:
+ * ese union es lo que el replay enumera (`Record<LedgerSourceKind, …>` en
+ * replay.ts), y un documento importado nunca se replaya — se postea una vez
+ * por TxnID desde el script y se reversa por el mismo mecanismo que los demás.
+ */
+export type LedgerImportSourceKind = "qb_import";
+export type LedgerDocumentSourceKind = LedgerSourceKind | LedgerImportSourceKind;
+
 export interface PostDocumentInput {
-  source_kind: LedgerSourceKind;
+  source_kind: LedgerDocumentSourceKind;
   source_id: string;
   document_number: string;
   /** YYYY-MM-DD en ET (etMidnightUtc / getBusinessDateString). */
