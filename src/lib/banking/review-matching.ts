@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { getDbPool } from "../../api/utils/db-pool";
 
+import { journalClaimExistsSql } from "./journal-claim";
 import {
   PAYMENT_ELIGIBLE_SQL,
   PAYMENT_FINGERPRINT_SQL,
@@ -50,8 +51,7 @@ export const MATCH_FROM_SQL = `FROM bank_transaction t JOIN bank_account a ON a.
 export const MATCH_VALID_SQL = `t.deleted_at IS NULL AND a.deleted_at IS NULL
   AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}
   AND a.type='depository' AND t.status='posted' AND t.amount::numeric<0
-  AND NOT EXISTS(SELECT 1 FROM bank_opening_clear claim WHERE claim.transaction_id=t.id AND claim.kind='clear'
-    AND NOT EXISTS(SELECT 1 FROM bank_opening_clear undo WHERE undo.reverses_clear_id=claim.id))
+  AND NOT ${journalClaimExistsSql("t.id")}
   AND ${PAYMENT_ELIGIBLE_SQL} AND ${paymentReservedCentsSql({ transaction: "t.id" })}=0`;
 
 /** Normalize punctuation identically and require whole words, never numeric substrings. */

@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 
 import { getDbPool } from "../../api/utils/db-pool";
 
-import { openingClearProjection } from "./opening-guards";
+import { journalClaimProjection } from "./journal-claim";
 import { stableReviewHash, withReviewLock } from "./review-common";
 import { reviewDate, reviewToday } from "./review-date";
 import { REVIEW_JOINS, REVIEW_SELECT_SQL } from "./review-projection";
@@ -364,7 +364,7 @@ export async function readDailyReview(
         : live.snapshot.accounts) {
         accounts.push({
           ...block,
-          transactions: await openingClearProjection(
+          transactions: await journalClaimProjection(
             client,
             block.transactions
           ),

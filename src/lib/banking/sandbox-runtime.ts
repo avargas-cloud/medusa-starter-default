@@ -301,9 +301,6 @@ if (process.argv[1] && resolve(process.argv[1]) === self) {
             `${kind}/[id]/reverse`,
           ]),
         ].map((path) => `api/admin/banking/accounting/${path}/route`),
-        "lib/banking/opening-core",
-        "lib/banking/opening-read",
-        "lib/banking/opening-funding",
         "lib/banking/movement-core",
         "lib/banking/movement-read",
         "lib/banking/completion-journal",
@@ -341,18 +338,6 @@ if (process.argv[1] && resolve(process.argv[1]) === self) {
         ...["preview", "post", "[id]", "[id]/reverse"].map(
           (p) => `api/admin/banking/merchant-receipts/${p}/route`
         ),
-        ...[
-          "",
-          "/[id]",
-          "/[id]/preview",
-          "/[id]/adopt",
-          "/[id]/revoke",
-          "/evidence",
-          "/evidence/[id]",
-          "/items/[id]/clear",
-          "/items/[id]/unclear",
-          "/items/[id]/candidates",
-        ].map((path) => `api/admin/banking/accounting/openings${path}/route`),
       ]) {
         require(resolve(backend, ".medusa/server/src", path));
       }

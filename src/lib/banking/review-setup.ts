@@ -29,8 +29,10 @@ export async function requireUnpostedBankAccount(
     [accountId]
   );
   const opening = await client.query(
-    `SELECT b.id FROM bank_opening_balance b JOIN bank_account a ON a.qb_list_id=b.account_list_id
-    WHERE a.id=$1 AND b.kind='bank' AND b.status='adopted' LIMIT 1`,
+    `SELECT l.id FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
+    JOIN bank_account a ON a.qb_list_id=l.account_list_id
+    WHERE a.id=$1 AND l.account_snapshot->>'account_type'='Bank' AND e.deleted_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) LIMIT 1`,
     [accountId]
   );
   if (posted.rowCount || opening.rowCount)

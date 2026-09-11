@@ -8,20 +8,16 @@ BEGIN
  IF sk='transaction' THEN
    IF EXISTS(SELECT 1 FROM bank_journal_entry e WHERE e.transaction_id=sid AND e.completion_id IS NULL AND e.kind<>'reversal'
      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))
-     OR EXISTS(SELECT 1 FROM bank_opening_clear c WHERE c.transaction_id=sid AND c.kind='clear'
-       AND NOT EXISTS(SELECT 1 FROM bank_opening_clear u WHERE u.reverses_clear_id=c.id))
      OR EXISTS(SELECT 1 FROM bank_transaction_review r WHERE r.transaction_id=sid AND r.deleted_at IS NULL AND r.status<>'excluded'
        AND (r.matched_payment_id IS NOT NULL OR r.matched_deposit_id IS NOT NULL))
    THEN RETURN 1000000000000; END IF;
  ELSIF sk='payment_recognition' THEN
    IF EXISTS(SELECT 1 FROM bank_receipt_accounting a JOIN bank_journal_entry e ON e.receipt_id=a.id WHERE a.payment_id=sid
      AND e.kind='receipt' AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))
-     OR EXISTS(SELECT 1 FROM bank_opening_item oi JOIN bank_opening_balance b ON b.id=oi.opening_id WHERE oi.payment_id=sid AND b.status='adopted')
    THEN RETURN 1000000000000; END IF;
  ELSIF sk='payment_funding' THEN
    SELECT ${paymentReservedCentsSql()} INTO reserved FROM customer_payment mp WHERE mp.id=sid;
    RETURN COALESCE(reserved,0);
- ELSIF sk='opening_funding' THEN RETURN bank_opening_reserved(sid,NULL);
  END IF;
  RETURN 0;
 END $$;
@@ -54,10 +50,6 @@ BEGIN
        AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id); END IF;
      IF recognized<>capacity THEN RAISE EXCEPTION 'BANKING_RECEIPT_POSTING_REQUIRED'; END IF;
    END IF;
- ELSIF sk='opening_funding' THEN
-   SELECT i.amount_cents INTO live_amount FROM bank_opening_item i JOIN bank_opening_balance b ON b.id=i.opening_id
-     WHERE i.id=sid AND b.status='adopted' AND i.kind='uf_receipt';
-   IF live_amount IS DISTINCT FROM capacity::numeric THEN RAISE EXCEPTION 'BANKING_OPENING_CONSUMPTION_INVALID'; END IF;
  ELSIF sk='journal_funding' THEN
    SELECT e.amount_cents INTO live_amount FROM bank_journal_entry e WHERE e.id=sid AND e.kind<>'reversal'
      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id);
@@ -104,32 +96,15 @@ BEGIN
      SELECT a.payment_id INTO payment_id FROM bank_receipt_accounting a WHERE a.id=NEW.receipt_id;
      IF bank_completion_active_claims('payment_recognition',payment_id)>0 THEN RAISE EXCEPTION 'BANKING_ALREADY_POSTED'; END IF;
    END IF;
- ELSIF TG_TABLE_NAME='bank_opening_clear' THEN
-   IF NEW.kind='clear' AND bank_completion_active_claims('transaction',NEW.transaction_id)>0
-     THEN RAISE EXCEPTION 'BANKING_OPENING_TRANSACTION_CLAIMED'; END IF;
- ELSIF TG_TABLE_NAME='bank_opening_balance' THEN
-   IF NEW.status='adopted' AND EXISTS(SELECT 1 FROM bank_opening_item i WHERE i.opening_id=NEW.id AND i.payment_id IS NOT NULL
-     AND (bank_completion_active_claims('payment_recognition',i.payment_id)>0 OR bank_completion_active_claims('payment_funding',i.payment_id)>0))
-     THEN RAISE EXCEPTION 'BANKING_OPENING_SOURCE_ALREADY_CLAIMED'; END IF;
  ELSIF TG_TABLE_NAME='bank_deposit_line' THEN
    IF NEW.deleted_at IS NOT NULL THEN RETURN NEW; END IF;
    payment_id:=NEW.payment_id;
-   IF NEW.opening_item_id IS NOT NULL THEN
-     SELECT amount_cents INTO monetary FROM bank_opening_item WHERE id=NEW.opening_item_id;
-     IF bank_completion_active_claims('opening_funding',NEW.opening_item_id)+bank_opening_reserved(NEW.opening_item_id,NULL)>monetary
-       THEN RAISE EXCEPTION 'BANKING_SOURCE_OVERCONSUMED'; END IF;
-   END IF;
  ELSIF TG_TABLE_NAME='bank_transaction_review' THEN
    IF NEW.deleted_at IS NOT NULL OR NEW.status='excluded' THEN RETURN NEW; END IF;
    IF (NEW.matched_payment_id IS NOT NULL OR NEW.matched_deposit_id IS NOT NULL)
      AND bank_completion_active_claims('transaction',NEW.transaction_id)>0 THEN RAISE EXCEPTION 'BANKING_SOURCE_OVERCONSUMED'; END IF;
    payment_id:=NEW.matched_payment_id;
  ELSIF TG_TABLE_NAME='bank_receipt_consumption' THEN payment_id:=NEW.payment_id;
-   IF NEW.opening_item_id IS NOT NULL THEN
-     SELECT amount_cents INTO monetary FROM bank_opening_item WHERE id=NEW.opening_item_id;
-     IF bank_completion_active_claims('opening_funding',NEW.opening_item_id)+bank_opening_reserved(NEW.opening_item_id,NULL)>monetary
-       THEN RAISE EXCEPTION 'BANKING_SOURCE_OVERCONSUMED'; END IF;
-   END IF;
  END IF;
  IF payment_id IS NOT NULL THEN
    active:=bank_completion_active_claims('payment_funding',payment_id);
@@ -140,8 +115,6 @@ BEGIN
  RETURN NEW;
 END $$;
 CREATE TRIGGER bank_completion_legacy_journal BEFORE INSERT ON bank_journal_entry FOR EACH ROW EXECUTE FUNCTION bank_completion_legacy_guard();
-CREATE TRIGGER bank_completion_legacy_opening BEFORE INSERT ON bank_opening_clear FOR EACH ROW EXECUTE FUNCTION bank_completion_legacy_guard();
-CREATE TRIGGER bank_completion_legacy_adopt BEFORE INSERT OR UPDATE ON bank_opening_balance FOR EACH ROW EXECUTE FUNCTION bank_completion_legacy_guard();
 CREATE TRIGGER bank_completion_legacy_deposit AFTER INSERT OR UPDATE ON bank_deposit_line FOR EACH ROW EXECUTE FUNCTION bank_completion_legacy_guard();
 CREATE TRIGGER bank_completion_legacy_review AFTER INSERT OR UPDATE ON bank_transaction_review FOR EACH ROW EXECUTE FUNCTION bank_completion_legacy_guard();
 CREATE TRIGGER bank_completion_legacy_consumption AFTER INSERT ON bank_receipt_consumption FOR EACH ROW EXECUTE FUNCTION bank_completion_legacy_guard();

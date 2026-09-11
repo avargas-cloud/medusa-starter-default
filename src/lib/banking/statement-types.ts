@@ -48,7 +48,7 @@ export const statementMatchSchema = statementRevisionSchema.extend({
       z
         .object({
           statement_line_id: movementId,
-          book_kind: z.enum(["journal_line", "opening_item"]),
+          book_kind: z.enum(["journal_line"]),
           book_id: movementId,
           amount_cents: statementCents.positive(),
           expected_book_hash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -95,7 +95,7 @@ export type StatementDocument = Omit<
   history: unknown[];
 };
 export type StatementBookItem = {
-  kind: "journal_line" | "opening_item";
+  kind: "journal_line";
   id: string;
   day: string;
   reference: string;
