@@ -1,5 +1,5 @@
 import { collectMissingLinks, type KnownTxnIdCache, type LinkableBucket } from "../follow-links";
-import type { QbBill, QbBillPayment, QbItemReceipt, QbLinkedTxn, QbPurchaseOrder } from "../types";
+import type { QbBill, QbBillPayment, QbItemReceipt, QbLinkedTxn, QbPurchaseOrder, QbVendorCredit } from "../types";
 
 function linked(overrides: Partial<QbLinkedTxn> = {}): QbLinkedTxn {
   return { txn_id: "T1", txn_type: "PurchaseOrder", txn_date: "2026-08-01", amount_cents: 100, ref_number: null, ...overrides };
@@ -80,7 +80,7 @@ const emptyBucket: LinkableBucket = { bills: [], item_receipts: [], purchase_ord
 
 describe("qb-backfill/follow-links :: collectMissingLinks", () => {
   it("bucket vacío → sin faltantes de ningún tipo", () => {
-    expect(collectMissingLinks(emptyBucket, emptyCache)).toEqual({ bills: [], purchase_orders: [], item_receipts: [] });
+    expect(collectMissingLinks(emptyBucket, emptyCache)).toEqual({ bills: [], purchase_orders: [], item_receipts: [], vendor_credits: [] });
   });
 
   it("bill_payments: AppliedToTxnRet tipo Bill ausente del cache → falta", () => {
@@ -142,6 +142,26 @@ describe("qb-backfill/follow-links :: collectMissingLinks", () => {
     expect(collectMissingLinks(bucket, cache).purchase_orders).toEqual([]);
   });
 
+  it("vendor_credits: LinkedTxn tipo Bill ausente del cache → falta aunque sea anterior al piso (un crédito del rango lo cerró)", () => {
+    const credit: QbVendorCredit = {
+      txn_id: "VC1", edit_sequence: "1", ref_number: null, vendor_ref: null, txn_date: "2026-02-01", amount_cents: 100, memo: null,
+      item_lines: [], expense_lines: [], linked_txns: [linked({ txn_id: "B2025", txn_type: "Bill", txn_date: "2025-11-20" })],
+    };
+    const bucket: LinkableBucket = { bills: [], item_receipts: [], purchase_orders: [], bill_payments: [], vendor_credits: [credit] };
+    const cache: KnownTxnIdCache = { bills: new Set(), purchase_orders: new Set(), item_receipts: new Set() };
+    expect(collectMissingLinks(bucket, cache, "2026-01-01").bills).toEqual(["B2025"]);
+    expect(collectMissingLinks(bucket, { ...cache, bills: new Set(["B2025"]) }, "2026-01-01").bills).toEqual([]);
+  });
+
+  it("bills: LinkedTxn tipo VendorCredit ausente del cache de créditos → falta sin piso; sin cache de créditos no se sigue", () => {
+    const b = bill({ linked_txns: [linked({ txn_id: "VC2025", txn_type: "VendorCredit", txn_date: "2025-10-01" })] });
+    const bucket: LinkableBucket = { bills: [b], item_receipts: [], purchase_orders: [], bill_payments: [] };
+    const base: KnownTxnIdCache = { bills: new Set(), purchase_orders: new Set(), item_receipts: new Set() };
+    expect(collectMissingLinks(bucket, { ...base, vendor_credits: new Set() }, "2026-01-01").vendor_credits).toEqual(["VC2025"]);
+    expect(collectMissingLinks(bucket, { ...base, vendor_credits: new Set(["VC2025"]) }, "2026-01-01").vendor_credits).toEqual([]);
+    expect(collectMissingLinks(bucket, base, "2026-01-01").vendor_credits).toEqual([]);
+  });
+
   it("combina los tres tipos de faltante en una sola llamada", () => {
     const bucket: LinkableBucket = {
       bill_payments: [payment({ applications: [{ txn_id: "B1", txn_type: "Bill", txn_date: null, amount_cents: 10, balance_remaining_cents: null }] })],
@@ -153,6 +173,7 @@ describe("qb-backfill/follow-links :: collectMissingLinks", () => {
       bills: ["B1"],
       purchase_orders: ["PO1"],
       item_receipts: ["R1"],
+      vendor_credits: [],
     });
   });
 });

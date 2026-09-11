@@ -133,6 +133,21 @@ export function buildItemReceiptByTxnIdsQbxml(txnIds: readonly string[]): string
   );
 }
 
+/**
+ * `VendorCreditQueryRq` por lista de `TxnID` (follow-links: un crédito de 2025
+ * aplicado a un bill de 2026 seguía abierto al cierre — mismo criterio que un
+ * bill aplicado por un pago del rango). Mismo patrón y mismo fallback 1x1.
+ */
+export function buildVendorCreditByTxnIdsQbxml(txnIds: readonly string[]): string {
+  if (txnIds.length === 0) throw new Error("buildVendorCreditByTxnIdsQbxml: lista de TxnID vacía");
+  const ids = txnIds.map((id) => `<TxnID>${id}</TxnID>`).join("");
+  return envelope(
+    `<VendorCreditQueryRq requestID="1">${ids}` +
+      `<IncludeLineItems>true</IncludeLineItems><IncludeLinkedTxns>true</IncludeLinkedTxns>` +
+      `</VendorCreditQueryRq>`
+  );
+}
+
 export function buildBillPaymentCheckQbxml(from: string, to: string): string {
   assertDate(from);
   assertDate(to);

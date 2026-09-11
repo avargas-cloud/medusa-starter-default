@@ -91,9 +91,9 @@ interface DeAdoptScope {
 
 interface FollowLinksScope {
   iterations: number;
-  fetched_by_type: { bills: number; purchase_orders: number; item_receipts: number };
+  fetched_by_type: { bills: number; purchase_orders: number; item_receipts: number; vendor_credits?: number };
   fetched_by_year: Record<string, { bills: number; purchase_orders: number; item_receipts: number }>;
-  fetched_txn_ids: { bills: string[]; purchase_orders: string[]; item_receipts: string[] };
+  fetched_txn_ids: { bills: string[]; purchase_orders: string[]; item_receipts: string[]; vendor_credits?: string[] };
 }
 
 interface Inventory {
@@ -134,8 +134,10 @@ async function main() {
   }
 
   // Cargar líneas/headers de la caché QB de PO para este rango, buscando por TxnID.
+  // Incluye los lotes por TxnID (`po_bytxn_*`): un PO traído por enlace (2025) sólo
+  // vive ahí — sin ellos un run que sólo cree POs enlazados dispara el control de vacuidad.
   const poCacheFiles = existsSync(CACHE_DIR)
-    ? require("node:fs").readdirSync(CACHE_DIR).filter((f: string) => /^po_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.json$/.test(f))
+    ? require("node:fs").readdirSync(CACHE_DIR).filter((f: string) => /^po_(\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}|bytxn_[0-9a-f]+)\.json$/.test(f))
     : [];
   const qbByTxn = new Map<string, { TotalAmount?: string; PurchaseOrderLineRet?: unknown }>();
   for (const f of poCacheFiles) {
@@ -457,7 +459,7 @@ async function main() {
     if (inv.follow_links) {
       const fl = inv.follow_links;
       console.log(
-        `(l) follow-links: ${fl.iterations} iteración(es) · traídos: bill ${fl.fetched_by_type.bills} · po ${fl.fetched_by_type.purchase_orders} · receipt ${fl.fetched_by_type.item_receipts} · por año ${JSON.stringify(fl.fetched_by_year)}`
+        `(l) follow-links: ${fl.iterations} iteración(es) · traídos: bill ${fl.fetched_by_type.bills} · po ${fl.fetched_by_type.purchase_orders} · receipt ${fl.fetched_by_type.item_receipts} · credit ${fl.fetched_by_type.vendor_credits ?? 0} · por año ${JSON.stringify(fl.fetched_by_year)}`
       );
       const stillBlockedByMissingBill = (inv.payment_scope?.blocked ?? []).filter((b) => b.blocked_reason === "bill_not_found");
       if (stillBlockedByMissingBill.length > 0) {
