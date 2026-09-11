@@ -57,8 +57,8 @@ const lines = [
 ];
 
 describe("creditMemoForQb", () => {
-  it("sends the Vendor Ref/Reason first, then Notes; blanks dropped; null when both empty", () => {
-    expect(creditMemoForQb("RMA#", "restock")).toBe("RMA# · restock");
+  it("sends the Vendor Ref/Reason first, then Notes joined by an ASCII dash; blanks dropped; null when both empty", () => {
+    expect(creditMemoForQb("RMA#", "restock")).toBe("RMA# - restock");
     expect(creditMemoForQb("RMA#", null)).toBe("RMA#");
     expect(creditMemoForQb("  ", "notes")).toBe("notes");
     expect(creditMemoForQb(null, "")).toBeNull();

@@ -61,13 +61,16 @@ interface CreditRow {
 
 /**
  * What QuickBooks shows as the credit's Memo: the operator's Vendor Ref /
+ * Reason, then Notes, joined by a plain ASCII " - " (a middle dot was the
+ * first thing QuickBooks rejected in a real VendorCreditMod — see
+ * `qbxml-escape.ts`, `sanitizeForQb`). Original line:
  * Reason first (the POS labels it "sent to QuickBooks as the memo"), then the
  * free-text Notes. VC-1002 (2026-09-11) reached QB with an EMPTY memo because
  * only `memo` (Notes) was sent while the reason lived in `reason`.
  */
 export function creditMemoForQb(reason: string | null, memo: string | null): string | null {
   const parts = [reason, memo].map((v) => (v ?? "").trim()).filter((v) => v.length > 0);
-  return parts.length ? parts.join(" · ") : null;
+  return parts.length ? parts.join(" - ") : null;
 }
 
 interface CreditLineRow {

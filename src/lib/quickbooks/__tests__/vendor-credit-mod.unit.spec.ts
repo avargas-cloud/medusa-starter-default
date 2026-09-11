@@ -7,7 +7,7 @@ const base = {
   apAccountListId: "8000003B-1318880913",
   txnDate: "2026-09-11",
   refNumber: "VC-1002",
-  memo: "RMA# · restock",
+  memo: "RMA# - 6 \u00D7 J-Box restock", // the \u00D7 must fold to x on the wire
   expenseLines: [],
   itemLines: [
     { txnLineId: "1D0AFF-1789143761", itemListId: "80000ABC-1", quantity: 4, unitCostCents: 8800, amountCents: 35200 },
@@ -26,7 +26,7 @@ describe("buildVendorCreditModQbxml", () => {
       "<APAccountRef><ListID>8000003B-1318880913</ListID></APAccountRef>",
       "<TxnDate>2026-09-11</TxnDate>",
       "<RefNumber>VC-1002</RefNumber>",
-      "<Memo>RMA# · restock</Memo>",
+      "<Memo>RMA# - 6 x J-Box restock</Memo>",
       "<ItemLineMod>",
     ];
     let cursor = -1;
