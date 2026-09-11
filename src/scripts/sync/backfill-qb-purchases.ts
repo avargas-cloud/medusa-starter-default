@@ -214,6 +214,7 @@ async function main() {
     // mutable que downloadAll llenó por ventana mensual). ──
     console.log(`\n── follow-links (2025 por enlace) ──`);
     const followLinksReport: FollowLinksReport = await followLinks(bucket, {
+      floorDate: FROM as string, // regla: ningún recibo anterior al rango; bills anteriores sólo si un pago del rango los aplica
       cacheDir: CACHE_DIR,
       pauseMs: PAUSE_MS,
       log: (l) => console.log(l),
