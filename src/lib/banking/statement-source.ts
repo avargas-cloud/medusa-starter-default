@@ -1,49 +1,59 @@
 import type { PoolClient } from "pg";
 
-import { openingMapping } from "./opening-read";
+import type { AccountingAccount } from "./accounting-types";
+import { receiptAccounts, receiptMapping, receiptSetup } from "./receipts-setup";
 import { reviewHash } from "./review-common";
 import { reviewToday } from "./review-date";
 import { BankingError, bankingEnvSql } from "./security";
 import type { StatementDocument, StatementInput } from "./statement-types";
 
+/**
+ * banking-on-gl: a statement's anchor is the GL `opening_balance` document for the
+ * account (`bank_journal_entry.source_kind='opening_balance'`), not a declared
+ * `bank_opening_balance` row. `cut_date` is the entry's own day; the statement
+ * balance at cut is the `opening` role line's signed amount on this account.
+ */
 export async function statementBank(
   client: PoolClient,
   accountId: string
 ): Promise<{
-  account: Awaited<ReturnType<typeof openingMapping>>["account"];
-  opening: {
-    id: string;
-    cut_date: string;
-    book_balance_cents: number;
-    statement_balance_cents: number;
-  };
+  account: AccountingAccount;
+  opening: { id: string; cut_date: string; statement_balance_cents: number };
 }> {
-  const mapping = await openingMapping(client, "bank", accountId);
+  const setup = await receiptSetup(client);
+  if (!setup) throw new BankingError("BANKING_RECEIPT_SETUP_REQUIRED", 409);
+  const bank = (
+    await client.query<{ qb_list_id: string }>(
+      `SELECT a.qb_list_id FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
+    WHERE a.id=$1 AND a.is_active AND a.is_selected AND a.currency='USD' AND a.type='depository'
+      AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`,
+      [accountId]
+    )
+  ).rows[0];
+  const live = bank?.qb_list_id
+    ? (await receiptAccounts(client, [bank.qb_list_id]))[0]
+    : null;
+  const account = live ? receiptMapping(live, setup.attested) : null;
+  if (!account || account.account_type !== "Bank" || account.currency !== "USD")
+    throw new BankingError("BANKING_OPENING_ACCOUNT_INVALID", 409);
   const opening = (
     await client.query<{
       id: string;
       cut_date: string;
-      book_balance_cents: number;
       statement_balance_cents: number;
     }>(
-      `SELECT id,cut_date,
-    book_balance_cents::float8 AS book_balance_cents,statement_balance_cents::float8 AS statement_balance_cents
-    FROM bank_opening_balance WHERE kind='bank' AND account_list_id=$1 AND status='adopted' AND deleted_at IS NULL
-    ORDER BY cut_date,id`,
-      [mapping.account.id]
+      `SELECT e.id,e.day AS cut_date,(l.debit_cents-l.credit_cents)::float8 AS statement_balance_cents
+    FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening'
+    WHERE e.source_kind='opening_balance' AND e.source_id=$1 AND l.account_list_id=$1
+      AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)`,
+      [account.id]
     )
   ).rows;
-  if (
-    opening.length !== 1 ||
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- opening.length===1 recién chequeado en esta misma condición garantiza opening[0]
-    opening[0]!.book_balance_cents === null ||
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- opening.length===1 recién chequeado en esta misma condición garantiza opening[0]
-    opening[0]!.statement_balance_cents === null
-  )
+  if (opening.length !== 1)
     throw new BankingError("BANKING_STATEMENT_VERIFIED_OPENING_REQUIRED", 409);
   return {
-    account: mapping.account,
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- el throw de arriba ya descartó opening.length!==1
+    account,
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- opening.length===1 recién chequeado arriba garantiza opening[0]
     opening: opening[0]!,
   };
 }

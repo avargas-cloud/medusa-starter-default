@@ -5,10 +5,6 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { DEPOSIT_SELECT_SQL } from "./deposit-projection";
 import type { BankDeposit } from "./deposit-types";
 import {
-  OPENING_ITEM_STALE_SQL,
-  openingFundingReservedSql,
-} from "./opening-sql";
-import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
   NO_DIRECT_RESERVATION_SQL,
   PAYMENT_FINGERPRINT_SQL,
@@ -37,8 +33,10 @@ export type DepositCandidate = {
   source_hash: string;
   fingerprint_version?: 2;
   legacy_source_hash?: string;
-  source_type?: "opening_item";
+  source_type?: "opening_item" | "manual";
   opening_item_id?: string;
+  manual_reference?: string | null;
+  manual_description?: string | null;
   payment_id?: null;
 };
 export const DEPOSIT_RECEIPT_SQL = `mp.id,mp.display_id,mp.customer_id,
@@ -122,18 +120,7 @@ export async function depositCandidates(input: {
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date <= (now() AT TIME ZONE 'America/New_York')::date
   ), normal AS (SELECT id,display_id,customer_id,customer_name,method,date,reference,amount,available_amount,currency,source_hash,fingerprint_version
     FROM eligible WHERE available_amount::numeric>0 AND ($4::text='' OR concat_ws(' ',customer_name,reference,display_id::text) ILIKE '%'||$4||'%')),
-  opening AS (SELECT oi.id,oi.original_day AS date,jsonb_build_object('id',oi.id,'opening_item_id',oi.id,
-    'source_type','opening_item','payment_id',NULL,'display_id',NULL,'customer_id','',
-    'customer_name',COALESCE(NULLIF(oi.description,''),oi.reference),'method','opening_uf',
-    'date',oi.original_day,'reference',oi.reference,'amount',(oi.amount_cents::numeric/100)::numeric(30,2)::text,
-    'available_amount',((oi.amount_cents::numeric-${openingFundingReservedSql("$2::text")})/100)::numeric(30,2)::text,
-    'currency','USD','source_hash',oi.source_hash) AS candidate
-    FROM bank_opening_item oi JOIN bank_opening_balance opening_balance ON opening_balance.id=oi.opening_id
-    WHERE $1::text='USD' AND opening_balance.status='adopted' AND oi.kind='uf_receipt'
-      AND opening_balance.cut_date<=(now() AT TIME ZONE 'America/New_York')::date::text
-      AND NOT ${OPENING_ITEM_STALE_SQL} AND oi.amount_cents::numeric>${openingFundingReservedSql("$2::text")}
-      AND ($4::text='' OR concat_ws(' ',oi.description,oi.reference,oi.external_key) ILIKE '%'||$4||'%')),
-  matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal UNION ALL SELECT id,date,candidate FROM opening)
+  matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal)
   SELECT (SELECT COUNT(*)::text FROM matching) AS count,COALESCE((SELECT jsonb_agg(p.candidate ORDER BY p.date,p.id) FROM
     (SELECT id,date,candidate FROM matching ORDER BY date,id LIMIT 50) p),'[]'::jsonb) AS candidates`,
     [

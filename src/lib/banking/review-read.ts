@@ -1,6 +1,6 @@
 import { getDbPool } from "../../api/utils/db-pool";
 
-import { openingClearProjection } from "./opening-guards";
+import { journalClaimProjection } from "./journal-claim";
 import {
   ATTACHMENT_COLUMNS,
   type ReviewAttachment,
@@ -57,7 +57,7 @@ export async function readTransactionReview(id: string): Promise<{
       [id]
     );
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- openingClearProjection maps its input array 1:1, so passing a single-element array returns a single-element array
-    const projected = (await openingClearProjection(client, [tx]))[0]!;
+    const projected = (await journalClaimProjection(client, [tx]))[0]!;
     await client.query("COMMIT");
     return {
       transaction: projected,

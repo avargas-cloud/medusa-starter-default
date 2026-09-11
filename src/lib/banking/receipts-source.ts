@@ -46,7 +46,9 @@ export type ReceiptEvidence = {
   allocations: Array<{
     payment_id: string | null;
     receipt_id: string | null;
-    opening_item_id?: string;
+    opening_item_id?: string | null;
+    manual_reference?: string | null;
+    manual_description?: string | null;
     amount_cents: number;
   }>;
 };
@@ -231,13 +233,13 @@ export async function paymentReceiptSource(
   if (
     (
       await client.query(
-        `SELECT item.id FROM bank_opening_item item JOIN bank_opening_balance parent ON parent.id=item.opening_id
-    WHERE item.payment_id=$1 AND parent.status='adopted' LIMIT 1`,
+        `SELECT e.id FROM bank_journal_entry e WHERE e.source_kind='customer_payment' AND e.source_id=$1
+    AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) LIMIT 1`,
         [id]
       )
     ).rowCount
   )
-    blockers.push("BANKING_OPENING_PAYMENT_CLAIMED");
+    blockers.push("BANKING_ALREADY_POSTED");
   // Keep the source's customer identity stable until the journal transaction commits.
   const customer = await client.query(
     "SELECT id FROM customer WHERE id=$1 AND deleted_at IS NULL FOR SHARE",

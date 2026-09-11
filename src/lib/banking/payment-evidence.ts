@@ -35,10 +35,7 @@ export function matchesPaymentFingerprint(
 }
 export const PAYMENT_ELIGIBLE_SQL = `mp.deleted_at IS NULL AND mp.type='payment'
   AND mp.method IN ('ach','zelle','check') AND mp.status IN ('available','partially_applied','applied')
-  AND mp.amount::numeric>0 AND COALESCE(mp.metadata->>'qb_import','false')='false'
-  AND NOT EXISTS(SELECT 1 FROM bank_opening_item opening_item JOIN bank_opening_balance opening_balance
-    ON opening_balance.id=opening_item.opening_id WHERE opening_item.payment_id=mp.id
-      AND opening_item.kind='uf_receipt' AND opening_balance.status='adopted')`;
+  AND mp.amount::numeric>0 AND COALESCE(mp.metadata->>'qb_import','false')='false'`;
 export const DEPOSIT_PAYMENT_ELIGIBLE_SQL =
   PAYMENT_ELIGIBLE_SQL.replace(
     "('ach','zelle','check')",

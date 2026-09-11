@@ -1,7 +1,7 @@
 import { getDbPool } from "../../api/utils/db-pool";
 
 import { readBankingControl } from "./control";
-import { openingClearProjection } from "./opening-guards";
+import { journalClaimProjection } from "./journal-claim";
 import { REVIEW_JOINS, REVIEW_SELECT_SQL } from "./review-projection";
 import type { Review } from "./review-types";
 import {
@@ -214,7 +214,7 @@ export async function bankingTransactions(
   if (!Number.isSafeInteger(count))
     throw new BankingError("BANKING_COUNT_INVALID", 500);
   return {
-    transactions: await openingClearProjection(getDbPool(), row.transactions),
+    transactions: await journalClaimProjection(getDbPool(), row.transactions),
     count,
   };
 }

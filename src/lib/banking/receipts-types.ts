@@ -43,7 +43,6 @@ export type ReceiptSetupContext = {
   setup: ReceiptSetup | null;
   ar_accounts: AccountingAccount[];
   clearing_accounts: AccountingAccount[];
-  opening_pending: true;
   coverage: "partial";
 };
 export type ReceiptSource = {
@@ -69,7 +68,6 @@ export type ReceiptContext = {
   history: ReceiptJournal[];
   consumed_cents: number;
   available_cents: number;
-  opening_pending: true;
   coverage: "partial";
 };
 export type ReceiptPreview = {
@@ -79,7 +77,6 @@ export type ReceiptPreview = {
   amount_cents: number;
   lines: ReceiptLine[];
   blockers: string[];
-  opening_pending: true;
   coverage: "partial";
 };
 export const receiptSetupSchema = z
