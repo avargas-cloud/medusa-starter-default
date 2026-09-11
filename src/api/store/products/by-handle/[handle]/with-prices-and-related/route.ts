@@ -6,6 +6,11 @@ import {
   withPublicProductMetadata,
   withPublicVariantMetadata,
 } from "../../../../../../lib/product-metadata/public-keys";
+import {
+  type RelatedSourceProduct,
+  resolveRelatedProducts,
+} from "../../../../../../lib/related-products/resolve-related";
+import type { StorePricingContext } from "../../../../../../lib/store-pricing/pricing-context";
 
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
@@ -218,78 +223,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       };
     });
 
-    // 3. Fetch related products from same category
-    const mainCategoryId = mainProduct.categories?.[0]?.id;
-    let relatedProducts: any[] = [];
-
-    if (mainCategoryId) {
-      const { data: relatedProductsData } = await query.graph({
-        entity: "product",
-        fields: [
-          "id",
-          "title",
-          "handle",
-          "status",
-          "thumbnail",
-          "variants.*",
-          "variants.price_set.id",
-        ],
-        filters: {
-          categories: { id: mainCategoryId } as any,
-          id: { $ne: mainProduct.id }, // Exclude main product
-          status: "published", // drafts must never surface on the storefront
-        },
-      });
-
-      // Get up to 4 related products
-      const limitedRelated = (relatedProductsData || []).slice(0, 4);
-
-      // Calculate prices for related products
-      if (limitedRelated.length > 0) {
-        const relatedPriceSetIds = limitedRelated
-          .flatMap((p) => p.variants || [])
-          .map((v: any) => v.price_set?.id)
-          .filter(Boolean);
-
-        let relatedCalculatedPrices: any[] = [];
-        if (relatedPriceSetIds.length > 0) {
-          relatedCalculatedPrices = await pricingModule.calculatePrices(
-            { id: relatedPriceSetIds },
-            { context: pricingContext }
-          );
-        }
-
-        // Map prices to related products
-        relatedProducts = limitedRelated.map((product: any) => {
-          const variantsWithPrices = (product.variants || []).map(
-            (variant: any) => {
-              const priceData = relatedCalculatedPrices.find(
-                (p: any) => p.id === variant.price_set?.id
-              );
-
-              return {
-                ...variant,
-                calculated_price: priceData
-                  ? {
-                      calculated_amount: priceData.calculated_amount,
-                      original_amount: priceData.original_amount,
-                      currency_code: priceData.currency_code,
-                    }
-                  : null,
-              };
-            }
-          );
-
-          return {
-            ...product,
-            // Filtrado ACÁ además del `.map(withPublicProductMetadata)` del
-            // return: que la corrección dependa de una llamada río abajo es
-            // como se pierde en la próxima edición.
-            variants: variantsWithPrices.map(withPublicVariantMetadata),
-          };
-        });
-      }
-    }
+    // 3. Related products — curated list + storefront rules (published,
+    // out-of-stock last, same-category fill). Same lib as
+    // GET /store/products/:id/related, so build, SSR and the client refresh
+    // can never disagree on the order.
+    const relatedProducts = await resolveRelatedProducts({
+      container: req.scope,
+      product: mainProduct as RelatedSourceProduct,
+      pricingContext: pricingContext as StorePricingContext,
+    });
 
     // 4. Return consolidated response
     return res.json({
@@ -301,8 +243,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         attributes: attributes || [],
         breadcrumbs,
       },
-      // Los relacionados son productos igual que el principal: el mismo filtro
-      // o el catálogo se sigue publicando por esta puerta.
+      // Ya filtrados dentro de resolveRelatedProducts; se repite acá porque
+      // verify-public-metadata-exposure afirma el filtro en ESTA línea.
       related_products: relatedProducts.map(withPublicProductMetadata),
       customer_context: {
         customer_id: customerId || "anonymous",
