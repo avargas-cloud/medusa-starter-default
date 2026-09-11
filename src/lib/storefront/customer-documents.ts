@@ -166,15 +166,21 @@ async function hydrateInvoices(
 export async function listCustomerInvoices(
   container: MedusaContainer,
   customerId: string,
-  options: { orderId?: string; limit?: number; offset?: number } = {}
+  options: { orderId?: string; q?: string; limit?: number; offset?: number } = {}
 ): Promise<{ invoices: CustomerInvoice[]; count: number }> {
   const pg = resolvePg(container);
   const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
   const offset = Math.max(options.offset ?? 0, 0);
 
   const whereOrderId = options.orderId ? "AND i.order_id = ?" : "";
+  // Server-side search (a client-side filter over the loaded page lies): invoice number
+  // prefix or exact order display_id. Digits only → the term can't inject a pattern.
+  const q = (options.q ?? "").trim();
+  const qDigits = q.replace(/\D/g, "");
+  const whereQ = qDigits ? "AND (i.invoice_number LIKE ? OR o.display_id::text = ?)" : "";
   const baseBindings: unknown[] = [customerId, customerId];
   if (options.orderId) baseBindings.push(options.orderId);
+  if (qDigits) baseBindings.push(`${qDigits}%`, qDigits);
 
   const countResult = await pg.raw(
     `SELECT COUNT(*)::int AS count
@@ -183,7 +189,8 @@ export async function listCustomerInvoices(
       WHERE (i.customer_id = ? OR o.customer_id = ?)
         AND i.deleted_at IS NULL
         AND i.status NOT IN ('draft', 'voided')
-        ${whereOrderId}`,
+        ${whereOrderId}
+        ${whereQ}`,
     baseBindings
   );
   const count = Number(countResult.rows[0]?.count ?? 0);
@@ -198,6 +205,7 @@ export async function listCustomerInvoices(
         AND i.deleted_at IS NULL
         AND i.status NOT IN ('draft', 'voided')
         ${whereOrderId}
+        ${whereQ}
       ORDER BY i.issued_at DESC NULLS LAST, i.created_at DESC
       LIMIT ? OFFSET ?`,
     [...baseBindings, limit, offset]

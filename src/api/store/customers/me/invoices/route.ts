@@ -18,13 +18,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   }
 
   try {
-    const { order_id, limit, offset } = req.query as Record<string, string>;
+    const { order_id, q, limit, offset } = req.query as Record<string, string>;
 
     const { invoices, count } = await listCustomerInvoices(
       req.scope,
       customerId,
       {
         orderId: order_id || undefined,
+        q: typeof q === "string" ? q.slice(0, 40) : undefined,
         limit: limit ? parseInt(limit, 10) : undefined,
         offset: offset ? parseInt(offset, 10) : undefined,
       }
