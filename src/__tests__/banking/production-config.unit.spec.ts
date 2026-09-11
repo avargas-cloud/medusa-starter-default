@@ -145,3 +145,14 @@ describe("paid manual refresh is off in production unless explicitly enabled", (
     expect(manualRefreshAllowed()).toBe(true);
   });
 });
+
+describe("sandbox target accepts one-DB-per-session clones", () => {
+  it.each(["medusa", "medusa_gl", "medusa_bgl"])("accepts %s on localhost:5499 as a sandbox database", (db) => {
+    production({ ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: `postgresql://postgres:sandbox@localhost:5499/${db}` });
+    expect(requireBankingSandbox).not.toThrow();
+  });
+  it.each(["railway", "medusa-prod", "medusaX", "medusa_"])("rejects %s (BANKING_SANDBOX_DATABASE_REQUIRED)", (db) => {
+    production({ ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: `postgresql://postgres:sandbox@localhost:5499/${db}` });
+    failure(requireBankingSandbox, "BANKING_SANDBOX_DATABASE_REQUIRED");
+  });
+});
