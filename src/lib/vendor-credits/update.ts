@@ -1,6 +1,7 @@
 import { generateEntityId } from "@medusajs/utils";
 
 import { resolveMpnDefaults } from "./mpn-default";
+import { resolveQbAccountsByListId } from "./qb-account-lookup";
 import { VendorCreditError, type PgClient, type VendorCreditLineInput } from "./types";
 
 interface CreditRow {
@@ -70,18 +71,33 @@ export async function updateDraftVendorCredit(
         if (!(line.amount_cents > 0)) {
           throw new VendorCreditError("invalid_line_amount", "Every line must have amount_cents > 0.");
         }
+        if (line.line_type === "qb_account" && !line.qb_account_list_id) {
+          throw new VendorCreditError(
+            "missing_qb_account",
+            "A qb_account line needs qb_account_list_id."
+          );
+        }
       }
+      // Exactly like create.ts: resolve every qb_account line's snapshot by
+      // list id (active accounts only), fail closed on anything that
+      // doesn't resolve — a PATCH must not persist a `qb_account` line with
+      // a stale/unknown account and a null full_name/type.
+      const accountByListId = await resolveQbAccountsByListId(
+        client,
+        patch.lines.map((l) => l.qb_account_list_id).filter((v): v is string => !!v)
+      );
       const resolvedLines = await resolveMpnDefaults(client, patch.lines);
       let sort = 0;
       let total = 0;
       for (const line of resolvedLines) {
         total += line.amount_cents;
         const lineId = generateEntityId("", "vcrl");
+        const account = line.qb_account_list_id ? accountByListId.get(line.qb_account_list_id) : null;
         await client.query(
           `INSERT INTO vendor_credit_line
              (id, credit_id, sort, line_type, variant_id, sku, mpn, description, qty, unit_cost_cents,
-              qb_account_list_id, amount_cents)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+              qb_account_list_id, qb_account_full_name, qb_account_type, amount_cents)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [
             lineId,
             creditId,
@@ -94,6 +110,8 @@ export async function updateDraftVendorCredit(
             line.qty ?? null,
             line.unit_cost_cents ?? null,
             line.qb_account_list_id ?? null,
+            account?.full_name ?? null,
+            account?.account_type ?? null,
             line.amount_cents,
           ]
         );

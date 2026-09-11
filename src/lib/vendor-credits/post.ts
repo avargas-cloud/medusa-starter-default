@@ -3,12 +3,12 @@ import type { PoolClient } from "pg";
 import { assertBankAccountingPeriodOpen } from "../accounting/banking-period-lock";
 import { pgDateToIso } from "../date/et";
 
-import { nextVendorCreditNumber } from "./numbering";
 import { VendorCreditError, type PgClient } from "./types";
 
 interface CreditRow {
   id: string;
   status: string;
+  number: string | null;
   // pg returns a `date` column as a JS Date (local-midnight parsed) — never
   // a bare string. Read it through `pgDateToIso`, never pass it raw to
   // `assertBankAccountingPeriodOpen` (BANKING_INVALID_ACCOUNTING_DATE).
@@ -17,9 +17,10 @@ interface CreditRow {
 }
 
 /**
- * draft → posted. Assigns `VC-####`, freezes nothing else (lines are
- * already immutable to edits once posted, enforced by the PATCH route
- * refusing non-draft). Period lock on `credit_date` (plan §3).
+ * draft → posted. The `VC-####` number is assigned at CREATE, not here (see
+ * create.ts — same as `vendor_bill` shows `VB-####` while still draft) — this
+ * only flips status and locks the period. Lines are already immutable to
+ * edits once posted, enforced by the PATCH route refusing non-draft.
  */
 export async function markVendorCreditPosted(
   client: PgClient,
@@ -29,7 +30,7 @@ export async function markVendorCreditPosted(
   await client.query("BEGIN");
   try {
     const { rows } = await client.query(
-      `SELECT id, status, credit_date, total_cents FROM vendor_credit
+      `SELECT id, status, number, credit_date, total_cents FROM vendor_credit
         WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
       [creditId]
     );
@@ -59,14 +60,23 @@ export async function markVendorCreditPosted(
       pgDateToIso(credit.credit_date)
     );
 
-    const number = await nextVendorCreditNumber(client);
+    if (!credit.number) {
+      // Should be unreachable — create.ts assigns it unconditionally — but a
+      // credit somehow missing one is not something `post` should paper over
+      // by minting a fresh one silently (that would desync the sequence from
+      // what create.ts already handed the caller).
+      throw new VendorCreditError(
+        "missing_number",
+        "Vendor credit has no VC-#### number (expected to be assigned at create)."
+      );
+    }
     await client.query(
-      `UPDATE vendor_credit SET status='posted', number=$2, posted_at=now(), posted_by=$3, updated_at=now()
+      `UPDATE vendor_credit SET status='posted', posted_at=now(), posted_by=$2, updated_at=now()
         WHERE id=$1`,
-      [creditId, number, actorId]
+      [creditId, actorId]
     );
     await client.query("COMMIT");
-    return { id: creditId, number };
+    return { id: creditId, number: credit.number };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

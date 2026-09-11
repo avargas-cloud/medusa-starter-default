@@ -24,6 +24,7 @@ describe("createDraftVendorCredit", () => {
   it("creates a draft with ZERO lines (POS creates the header first, edits lines via PATCH)", async () => {
     const client = fakeClient([
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
+      { match: "'VC-' || nextval", rows: [{ number: "VC-1001" }] },
       { match: "INSERT INTO vendor_credit", rows: [] },
     ]);
     const result = await createDraftVendorCredit(client as never, {
@@ -35,6 +36,9 @@ describe("createDraftVendorCredit", () => {
       actor_id: "u1",
     });
     expect(result.id).toMatch(/^vcr/);
+    // The `VC-####` number is assigned at CREATE (drafts included) — same
+    // as `vendor_bill` shows `VB-####` while still draft.
+    expect(result.number).toBe("VC-1001");
     expect(client.calls).toContain("BEGIN");
     expect(client.calls).toContain("COMMIT");
   });
@@ -71,6 +75,7 @@ describe("createDraftVendorCredit", () => {
     const client = fakeClient([
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
       { match: "FROM product_variant WHERE", rows: [{ id: "variant_1", metadata: { mpn: "MPN-777" } }] },
+      { match: "'VC-' || nextval", rows: [{ number: "VC-1002" }] },
       { match: "INSERT INTO vendor_credit", rows: [] },
       { match: "INSERT INTO vendor_credit_line", rows: [] },
     ]);
@@ -90,6 +95,7 @@ describe("createDraftVendorCredit", () => {
   it("keeps an explicit mpn instead of overwriting it from metadata", async () => {
     const client = fakeClient([
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
+      { match: "'VC-' || nextval", rows: [{ number: "VC-1003" }] },
       { match: "INSERT INTO vendor_credit", rows: [] },
       { match: "INSERT INTO vendor_credit_line", rows: [] },
     ]);

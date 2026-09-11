@@ -1,6 +1,8 @@
 import { generateEntityId } from "@medusajs/utils";
 
 import { resolveMpnDefaults } from "./mpn-default";
+import { nextVendorCreditNumber } from "./numbering";
+import { resolveQbAccountsByListId } from "./qb-account-lookup";
 import { VendorCreditError, type CreateVendorCreditInput, type PgClient } from "./types";
 
 interface VendorRow {
@@ -10,10 +12,12 @@ interface VendorRow {
 }
 
 /**
- * Draft creation — no GL, no QB, no period lock (those apply at `post`,
- * plan §3: the number/freeze happens at post, same as `vendor_bill`'s VB
- * number is assigned at confirm). `total_cents` is the live sum of lines;
- * it is NOT frozen until posted.
+ * Draft creation — no GL, no QB, no period lock (those apply at `post`).
+ * `total_cents` is the live sum of lines; it is NOT frozen until posted.
+ *
+ * The `VC-####` NUMBER, unlike the total, IS assigned here — same as
+ * `vendor_bill` shows its `VB-####` while still draft. `post` no longer
+ * touches `number` (see post.ts).
  *
  * ZERO lines is allowed here on purpose: the POS creates the credit header
  * first (vendor + date), then edits its lines with PATCH — `post` is where
@@ -22,7 +26,7 @@ interface VendorRow {
 export async function createDraftVendorCredit(
   client: PgClient,
   input: CreateVendorCreditInput
-): Promise<{ id: string }> {
+): Promise<{ id: string; number: string }> {
   for (const line of input.lines) {
     if (!(line.amount_cents > 0)) {
       throw new VendorCreditError("invalid_line_amount", "Every line must have amount_cents > 0.");
@@ -44,45 +48,27 @@ export async function createDraftVendorCredit(
     throw new VendorCreditError("vendor_not_found", "Vendor not found.", 404);
   }
 
-  let accountByListId = new Map<string, { full_name: string; account_type: string }>();
-  const accountListIds = input.lines
-    .map((l) => l.qb_account_list_id)
-    .filter((v): v is string => !!v);
-  if (accountListIds.length > 0) {
-    const { rows } = await client.query(
-      `SELECT qb_list_id, full_name, account_type FROM qb_account
-        WHERE qb_list_id = ANY($1::text[]) AND deleted_at IS NULL AND is_active = true`,
-      [accountListIds]
-    );
-    accountByListId = new Map(
-      (rows as { qb_list_id: string; full_name: string; account_type: string }[]).map((r) => [
-        r.qb_list_id,
-        { full_name: r.full_name, account_type: r.account_type },
-      ])
-    );
-    for (const listId of accountListIds) {
-      if (!accountByListId.has(listId)) {
-        throw new VendorCreditError(
-          "account_not_found",
-          `QB account ${listId} not found or inactive.`
-        );
-      }
-    }
-  }
+  const accountByListId = await resolveQbAccountsByListId(
+    client,
+    input.lines.map((l) => l.qb_account_list_id).filter((v): v is string => !!v)
+  );
 
   const totalCents = input.lines.reduce((sum, l) => sum + l.amount_cents, 0);
   const id = generateEntityId("", "vcr");
   const lines = await resolveMpnDefaults(client, input.lines);
 
   await client.query("BEGIN");
+  let number: string;
   try {
+    number = await nextVendorCreditNumber(client);
     await client.query(
       `INSERT INTO vendor_credit
-         (id, vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
+         (id, number, vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
           credit_date, reason, memo, status, total_cents, applied_cents)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,0)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,0)`,
       [
         id,
+        number,
         vendor.id,
         vendor.full_name,
         vendor.qb_list_id,
@@ -126,5 +112,5 @@ export async function createDraftVendorCredit(
     throw err;
   }
 
-  return { id };
+  return { id, number };
 }
