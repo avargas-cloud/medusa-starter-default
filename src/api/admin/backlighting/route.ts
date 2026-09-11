@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
-import { VALID_BACKLIGHTING_CATEGORIES as VALID_CATEGORIES } from "./_categories";
+import { VALID_BACKLIGHTING_CATEGORIES as VALID_CATEGORIES } from "../../../lib/backlighting-categories";
 
 // Authenticated like every /admin route (JWT or secret-key Basic auth — the
 // Backlighting sync sends the latter). This route exposes wholesale prices:

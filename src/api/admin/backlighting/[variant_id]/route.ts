@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
-import { VALID_BACKLIGHTING_CATEGORIES as VALID_CATEGORIES } from "../_categories";
+import { VALID_BACKLIGHTING_CATEGORIES as VALID_CATEGORIES } from "../../../../lib/backlighting-categories";
 
 const DB = () => new Client({ connectionString: process.env.DATABASE_URL });
 

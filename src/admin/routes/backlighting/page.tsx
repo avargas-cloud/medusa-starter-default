@@ -10,6 +10,7 @@ import {
     Badge,
 } from "@medusajs/ui";
 import { useState, useEffect, useCallback } from "react";
+import { BACKLIGHTING_CATEGORIES as CATEGORIES } from "../../../lib/backlighting-categories";
 
 interface Variant {
     id: string;
@@ -20,15 +21,6 @@ interface Variant {
     product_title: string;
     thumbnail?: string | null;
 }
-
-const CATEGORIES = [
-    { key: "led-modules", label: "LED Modules" },
-    { key: "led-drivers", label: "LED Drivers" },
-    { key: "controllers", label: "Controllers" },
-    { key: "amplifiers", label: "Amplifiers" },
-    { key: "remotes", label: "Remotes" },
-    { key: "accessories", label: "Accessories" },
-] as const;
 
 type CategoryKey = (typeof CATEGORIES)[number]["key"];
 
@@ -124,7 +116,7 @@ const BacklightingAdminPage = () => {
             </Text>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-6 border-b border-ui-border-base">
+            <div className="flex flex-wrap gap-2 mb-6 border-b border-ui-border-base">
                 {CATEGORIES.map((c) => (
                     <button
                         key={c.key}
