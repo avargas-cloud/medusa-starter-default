@@ -131,6 +131,22 @@ export default defineMiddlewares({
       method: "POST",
       middlewares: [authenticate("customer", ["session", "bearer"])],
     },
+    // "Avisame cuando vuelva el stock" desde el BOM de las apps embebidas: sólo
+    // cliente autenticado (el email sale de su registro, nunca del body).
+    {
+      matcher: "/store/stock-alerts",
+      method: "POST",
+      middlewares: [authenticate("customer", ["session", "bearer"])],
+    },
+    // La disponibilidad del BOM es pública, pero CON sesión además dice si el
+    // cliente ya tiene una alerta pendiente por SKU (`alert_pending`).
+    {
+      matcher: "/store/bom/availability",
+      method: "GET",
+      middlewares: [
+        authenticate("customer", ["session", "bearer"], { allowUnauthenticated: true }),
+      ],
+    },
     // El PIN de supervisor NO se cambia por la ruta nativa de Medusa. Vive en
     // `store.metadata`, y `POST /admin/stores/:id` acepta cualquier metadata sin
     // saber nada de PINes — así que cualquier cajero (todos son usuarios admin

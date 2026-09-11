@@ -1,9 +1,10 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys, getVariantAvailability } from "@medusajs/framework/utils";
 
-import { getDbPool } from "../../../utils/db-pool";
 import { resolveBomSkus } from "../../../../lib/bom";
 import { classifyAvailability, type BomAvailabilityItem } from "../../../../lib/bom/availability";
+import { StockAlertService } from "../../../../lib/stock-alerts";
+import { getDbPool } from "../../../utils/db-pool";
 
 /**
  * GET /store/bom/availability?skus=A,B,C → { sales_channel_id, items[] }
@@ -51,7 +52,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     })) as Record<string, { availability: number | null }>;
   }
 
-  const items: BomAvailabilityItem[] = skus.map((sku) => {
+  // Con sesión de cliente, además: ¿ya pidió aviso para esta variante?
+  const customerId = (req as { auth_context?: { actor_id?: string } }).auth_context?.actor_id ?? null;
+  const pending = customerId
+    ? await StockAlertService.pendingVariantIdsForCustomer(db, customerId, variantIds)
+    : new Set<string>();
+
+  const items: Array<BomAvailabilityItem & { alert_pending?: boolean }> = skus.map((sku) => {
     const variant = resolved.get(sku);
     if (!variant) return { sku, status: "not_sold", available: null };
     const f = flags.get(variant.variantId) ?? { manageInventory: true, allowBackorder: false };
@@ -62,7 +69,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       // Sin canal no hay stock que mirar: no se afirma "sin stock" por un dato que falta.
       available: salesChannelId ? (typeof level === "number" ? level : 0) : null,
     });
-    return { sku, status: salesChannelId ? verdict.status : "ok", available: verdict.available };
+    return {
+      sku,
+      status: salesChannelId ? verdict.status : "ok",
+      available: verdict.available,
+      ...(customerId ? { alert_pending: pending.has(variant.variantId) } : {}),
+    };
   });
 
   res.set("Cache-Control", "no-store");
