@@ -19,6 +19,9 @@ import { ensureVendor, ensureItem, type EnsureLog, type QbItemLookup } from "./e
 import { resolveItemRef, type ItemIndex, type QueryableDb, type VendorIndexEntry } from "./resolve";
 import type { QbPurchaseOrder, QbPurchaseOrderLine } from "./types";
 
+/** Go-live del POS: antes de esta fecha nada existía en el POS (misma constante que STORE_EPOCH / GL_REPLAY_FROM). */
+export const POS_GO_LIVE_DATE = "2026-04-14";
+
 function makeId(prefix: string): string {
   return `${prefix}_${ulid().toLowerCase()}`;
 }
@@ -66,7 +69,13 @@ export function decidePoCreation(po: QbPurchaseOrder, knownTxnIds: ReadonlySet<s
 }
 
 /** Status del header derivado de las banderas/cantidades que trae QB. */
+/** QB voidea un PO dejándolo en cero: total 0 y todas las líneas con cantidad 0 (medido: 8 de 167). */
+export function isVoidedInQb(po: QbPurchaseOrder): boolean {
+  return po.total_amount_cents === 0 && po.lines.every((l) => !(l.quantity > 0) && !(l.amount_cents > 0));
+}
+
 export function derivePoStatus(po: QbPurchaseOrder): string {
+  if (isVoidedInQb(po)) return "voided";
   if (po.is_fully_received) return "received";
   if (po.lines.some((l) => l.received_quantity > 0)) return "partially_received";
   if (po.is_manually_closed) return "closed";
@@ -120,12 +129,16 @@ export async function createPurchaseOrderFromQb(
   // rango 1..999 como `PO-0001`… en orden de creación (el script recorre ventanas cronológicas),
   // así quedan ANTES de los del POS (seq ≥ 1000) en el orden "By PO #" y no consumen la
   // secuencia `custom_purchase_order_seq` de los POs reales.
-  const seqRes = await client.query(
-    `SELECT coalesce(max(seq), 0) + 1 AS seq FROM purchase_order WHERE deleted_at IS NULL AND seq BETWEEN 1 AND 999`
-  );
+  // Sólo los POs anteriores al go-live del POS (2026-04-14) son "históricos"; un PO de QB posterior
+  // (hecho directo en QB, o de un día que el clon del sandbox no tiene) es un PO corriente y toma la
+  // secuencia normal — si no, un PO de septiembre aparecía como PO-0166 (medido 2026-09-11).
+  const historical = po.txn_date < POS_GO_LIVE_DATE;
+  const seqRes = historical
+    ? await client.query(`SELECT coalesce(max(seq), 0) + 1 AS seq FROM purchase_order WHERE deleted_at IS NULL AND seq BETWEEN 1 AND 999`)
+    : await client.query(`SELECT nextval('custom_purchase_order_seq') AS seq`);
   const seq = Number((seqRes.rows[0] as { seq: string | number }).seq);
-  if (seq > 999) throw new Error(`PO ${po.txn_id}: se agotó el rango histórico PO-0001..PO-0999`);
-  const number = `PO-${String(seq).padStart(4, "0")}`;
+  if (historical && seq > 999) throw new Error(`PO ${po.txn_id}: se agotó el rango histórico PO-0001..PO-0999`);
+  const number = historical ? `PO-${String(seq).padStart(4, "0")}` : `PO-${seq}`;
 
   const status = derivePoStatus(po);
   const businessAt = businessInstant(po.txn_date);
@@ -157,14 +170,14 @@ export async function createPurchaseOrderFromQb(
        other_fees_cents, total_cents, currency_code, reference_number, created_by_user_id,
        submitted_at, submitted_by_user_id, total_lines, total_units_ordered, total_units_received,
        qb_purchase_order_list_id, qb_purchase_order_txn_number, qb_synced_at, qb_edit_sequence,
-       metadata, created_at, updated_at
+       metadata, created_at, updated_at, voided_at, void_reason
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7,
        $8, $9, $10, $11, 0, 0,
        $12, $13, 'usd', $14, $15,
        $9, $15, $16, $17, $18,
        $19, $20, $9, $21,
-       $22::jsonb, $9, $9
+       $22::jsonb, $9, $9, $23, $24
      )`,
     [
       poId, // 1
@@ -189,6 +202,8 @@ export async function createPurchaseOrderFromQb(
       po.txn_number, // 20
       po.edit_sequence, // 21
       metadata, // 22
+      status === "voided" ? businessAt : null, // 23
+      status === "voided" ? "VOID en QuickBooks (total 0, líneas en 0)" : null, // 24
     ]
   );
   void dueAt; // DueDate de QB no tiene columna propia en purchase_order; queda documentado, no se pierde (memo/metadata podría sumarse si un caller lo pide).

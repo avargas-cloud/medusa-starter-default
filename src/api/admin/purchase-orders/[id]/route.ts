@@ -601,6 +601,7 @@ export async function GET(
         total_units_received?: number | null;
         vendor_id: string;
         metadata?: Record<string, unknown> | null;
+        ordered_at?: string | Date | null;
       };
       const required = await vendorIsChinaAgent(knex, poLike.vendor_id);
       return deriveChinaTransferState({
@@ -608,7 +609,11 @@ export async function GET(
         hasLinkedTransfer: Boolean(linked_inventory_transfer),
         status: poLike.status,
         unitsReceived: Number(poLike.total_units_received ?? 0),
-        historical: Boolean(poLike.metadata?.qb_backfill),
+        // histórico = traído de QB por el backfill Y anterior al go-live (2026-04-14); un PO de QB
+        // posterior es un PO corriente y sí necesita su Inventory Transfer.
+        historical:
+          Boolean(poLike.metadata?.qb_backfill) &&
+          new Date(poLike.ordered_at ?? 0).toISOString() < "2026-04-14",
       });
     } catch {
       return null;

@@ -104,7 +104,7 @@ export async function enrichChinaTransferMap(
                  AND it.status <> 'voided'
                  AND it.deleted_at IS NULL
             ) AS has_linked_transfer,
-            (po.metadata -> 'qb_backfill') IS NOT NULL AS historical
+            ((po.metadata -> 'qb_backfill') IS NOT NULL AND po.ordered_at < '2026-04-14') AS historical
        FROM purchase_order po
        LEFT JOIN qb_vendor v ON v.id = po.vendor_id AND v.deleted_at IS NULL
       WHERE po.id = ANY (?::text[])`,
