@@ -10,6 +10,7 @@ import { settlementContext } from "./settlement-read";
 import type { StatementBookItem, StatementDocument } from "./statement-types";
 
 type BankLine = {
+  source_kind: string | null;
   id: string;
   entry_id: string;
   role: string;
@@ -34,7 +35,8 @@ async function bookSourceBlockers(
   // The GL opening_balance document is always a valid, self-contained source —
   // its `opening` line is already cleared against the cut-date statement, and
   // its `uncleared_<key>` lines clear via the ordinary statement match.
-  if (row.kind === "opening_balance") return [];
+  // `kind` is the entry FAMILY (document/reversal/…); the document type lives in source_kind (case 18, 2026-09-10).
+  if (row.source_kind === "opening_balance") return [];
   try {
     if (row.effective_kind === "expense" && row.transaction_id) {
       const context = await accountingContext(client, row.transaction_id);
@@ -86,7 +88,7 @@ export async function statementBook(
   const lines = (
     await client.query<BankLine>(
       `SELECT l.id,e.id AS entry_id,l.role,e.day,e.reference,e.description,
-    (l.debit_cents-l.credit_cents)::float8 AS amount_cents,e.source_hash,e.kind,e.transaction_id,e.deposit_id,e.completion_id,
+    (l.debit_cents-l.credit_cents)::float8 AS amount_cents,e.source_hash,e.kind,COALESCE(original.source_kind,e.source_kind) AS source_kind,e.transaction_id,e.deposit_id,e.completion_id,
     a.payment_id AS receipt_payment_id,COALESCE(original.kind,e.kind) AS effective_kind,
     (EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id AND r.day<=$2)
       OR (e.kind='reversal' AND e.day<=$2)) AS canceled_by_end
