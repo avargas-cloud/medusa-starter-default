@@ -600,6 +600,7 @@ export async function GET(
         status: string;
         total_units_received?: number | null;
         vendor_id: string;
+        metadata?: Record<string, unknown> | null;
       };
       const required = await vendorIsChinaAgent(knex, poLike.vendor_id);
       return deriveChinaTransferState({
@@ -607,6 +608,7 @@ export async function GET(
         hasLinkedTransfer: Boolean(linked_inventory_transfer),
         status: poLike.status,
         unitsReceived: Number(poLike.total_units_received ?? 0),
+        historical: Boolean(poLike.metadata?.qb_backfill),
       });
     } catch {
       return null;

@@ -11,6 +11,7 @@ type Case = {
   hasLinkedTransfer: boolean;
   status: string;
   unitsReceived: number;
+  historical?: boolean;
   expect: string;
 };
 
@@ -23,6 +24,8 @@ const cases: Case[] = [
   { name: "draft/0/noIT (agent)", required: true, hasLinkedTransfer: false, status: "draft", unitsReceived: 0, expect: "not_convertible_status" },
   { name: "cancelled/0/noIT (agent)", required: true, hasLinkedTransfer: false, status: "cancelled", unitsReceived: 0, expect: "not_convertible_status" },
   { name: "non-agent submitted", required: false, hasLinkedTransfer: false, status: "submitted", unitsReceived: 0, expect: "not_required" },
+  { name: "backfill QB received/100/noIT (agente)", required: true, hasLinkedTransfer: false, status: "received", unitsReceived: 100, historical: true, expect: "not_required" },
+  { name: "backfill QB submitted/0/noIT (agente)", required: true, hasLinkedTransfer: false, status: "submitted", unitsReceived: 0, historical: true, expect: "not_required" },
 ];
 
 let failed = 0;
