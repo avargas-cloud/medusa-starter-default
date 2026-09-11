@@ -210,21 +210,56 @@ async function main(): Promise<void> {
     const glEntry = await activeDocumentEntry(client, "vendor_credit", creditId);
     ok("6d. GL: entrada activa del crédito por $36.00", glEntry?.amount_cents === "3600", `amount=${glEntry?.amount_cents}`);
 
-    // 7. race gate en post: draft C (3 u, cabe: 10−4−3=3) mutado por SQL a 6
+    // 6e. REVISE del crédito posteado (vc-edit-mod): 3 → 2 (stock +1), luego 2 → 4 (stock −2),
+    //     header-only (sin stock), total < aplicado → 409, y draft → 409.
+    const rev1 = await http("POST", `/admin/vendor-credits/${creditId}/revise`, {
+      lines: [productLine(fx.polId, 2)],
+    });
+    const stockAfterRev1 = await stockAt(client, refs.inventory_item_id, refs.location_id);
+    const rev1Stock = rev1.json.stock as Json;
+    ok("6e. revise 3→2 → 200, stock.moved delta y +1 unidad en la location", rev1.status === 200 && rev1Stock?.moved === true && rev1Stock?.direction === "delta" && stockAfterRev1 === stockAfterPost + 1, JSON.stringify(rev1.json));
+    const { rows: revRows } = await client.query<{ total: string; qty: number; revised: string | null }>(
+      `SELECT vc.total_cents::text AS total, l.qty, vc.revised_at::text AS revised
+         FROM vendor_credit vc JOIN vendor_credit_line l ON l.credit_id = vc.id AND l.deleted_at IS NULL
+        WHERE vc.id = $1`,
+      [creditId]
+    );
+    ok("6f. la línea quedó en 2, total 2400, revised_at seteado", revRows[0]?.qty === 2 && revRows[0]?.total === "2400" && !!revRows[0]?.revised, JSON.stringify(revRows[0]));
+    const glRev = await activeDocumentEntry(client, "vendor_credit", creditId);
+    ok("6g. GL reposteado por $24.00", glRev?.amount_cents === "2400", `amount=${glRev?.amount_cents}`);
+    const rev2 = await http("POST", `/admin/vendor-credits/${creditId}/revise`, {
+      lines: [productLine(fx.polId, 4)],
+    });
+    const stockAfterRev2 = await stockAt(client, refs.inventory_item_id, refs.location_id);
+    ok("6h. revise 2→4 → 200 y −2 unidades (neto −4 desde el inicio)", rev2.status === 200 && stockAfterRev2 === stockBefore - 4, `before=${stockBefore} after=${stockAfterRev2}`);
+    const rev3 = await http("POST", `/admin/vendor-credits/${creditId}/revise`, { reason: "RMA# revised" });
+    const rev3Stock = rev3.json.stock as Json;
+    ok("6i. revise sólo header → 200 sin mover stock", rev3.status === 200 && rev3Stock?.moved === false, JSON.stringify(rev3.json));
+    const applied = await http("POST", `/admin/vendor-credits/${creditId}/apply`, { vendor_bill_id: fx.billId, amount_cents: 4800 });
+    const rev4 = await http("POST", `/admin/vendor-credits/${creditId}/revise`, { lines: [productLine(fx.polId, 3)] });
+    ok("6j. con $48.00 aplicados, revise a 3 u ($36.00) → 409 exceeds_applications", [200, 201].includes(applied.status) && rev4.status === 409 && rev4.json.code === "exceeds_applications", `apply=${applied.status} ` + JSON.stringify(rev4.json));
+    const appId = (applied.json.application as { id?: string } | undefined)?.id ?? "";
+    const unapplied = await http("POST", `/admin/vendor-credits/${creditId}/applications/${appId}/void`);
+    ok("6k. aplicación voideada para poder seguir", unapplied.status === 200, JSON.stringify(unapplied.json));
+    const revDraft = await http("POST", `/admin/vendor-credits/${other.id}/revise`, { reason: "x" });
+    ok("6l. revise de un DRAFT → 409 invalid_status (los drafts usan PATCH)", revDraft.status === 409 && revDraft.json.code === "invalid_status", JSON.stringify(revDraft.json));
+
+    // 7. race gate en post: draft C (3 u, cabe: 10−4−4=2 → con 3 NO cabe; usar 2) mutado por SQL a 6
     const draftC = await http("POST", "/admin/vendor-credits", {
       vendor_id: fx.vendor_id,
       credit_date: today,
       purchase_order_id: fx.poId,
-      lines: [productLine(fx.polId, 3)],
+      lines: [productLine(fx.polId, 2)],
     });
     const draftCId = (draftC.json.vendor_credit as { id?: string } | undefined)?.id ?? "";
     if (draftCId) createdCreditIds.push(draftCId);
-    ok("7a. draft C con 3 (justo cabe) → 201", draftC.status === 201, JSON.stringify(draftC.json));
+    ok("7a. draft C con 2 (justo cabe: 10 − 4 draft − 4 posted) → 201", draftC.status === 201, JSON.stringify(draftC.json));
     await client.query(`UPDATE vendor_credit_line SET qty = 6, amount_cents = 7200 WHERE credit_id = $1 AND deleted_at IS NULL`, [draftCId]);
     await client.query(`UPDATE vendor_credit SET total_cents = 7200 WHERE id = $1`, [draftCId]);
+    const stockBeforeC = await stockAt(client, refs.inventory_item_id, refs.location_id);
     const postC = await http("POST", `/admin/vendor-credits/${draftCId}/post`);
     const stockAfterC = await stockAt(client, refs.inventory_item_id, refs.location_id);
-    ok("7b. post de un draft que ya no cabe → 400 exceeds_returnable y el stock no se mueve", postC.status === 400 && postC.json.code === "exceeds_returnable" && stockAfterC === stockAfterPost, JSON.stringify(postC.json));
+    ok("7b. post de un draft que ya no cabe → 400 exceeds_returnable y el stock no se mueve", postC.status === 400 && postC.json.code === "exceeds_returnable" && stockAfterC === stockBeforeC, JSON.stringify(postC.json));
 
     // 8. DELETE drafts · DELETE de un posted → 409 · returnable = 7
     const delC = await http("DELETE", `/admin/vendor-credits/${draftCId}`);
@@ -235,7 +270,7 @@ async function main(): Promise<void> {
     ok("8b. DELETE de un posted → 409 invalid_status", delPosted.status === 409 && delPosted.json.code === "invalid_status", JSON.stringify(delPosted.json));
     const ret2 = await http("GET", `/admin/vendor-credits/po-returnable/${fx.poId}`);
     const retLine2 = (ret2.json.lines as Json[]).find((l) => l.purchase_order_line_id === fx.polId);
-    ok("8c. returnable ahora 7 (10 − 3 posted; los drafts borrados soltaron sus unidades)", retLine2?.qty_returnable === 7 && retLine2?.qty_credited === 3, JSON.stringify(retLine2));
+    ok("8c. returnable ahora 6 (10 − 4 posted tras el revise; los drafts borrados soltaron sus unidades)", retLine2?.qty_returnable === 6 && retLine2?.qty_credited === 4, JSON.stringify(retLine2));
 
     // 9. void → stock restaurado, marca, GL reversado
     const voided = await http("POST", `/admin/vendor-credits/${creditId}/void`, { reason: "e2e teardown" });

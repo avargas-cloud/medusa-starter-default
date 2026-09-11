@@ -558,11 +558,12 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           COALESCE(vc.vendor_name_snapshot, po.vendor_name_snapshot, vc.vendor_id)
                                                            AS vendor_name,
           CASE WHEN qop.step = 'vendor_credit_add' THEN 'add_vendor_credit'
+               WHEN qop.step = 'vendor_credit_mod' THEN 'mod_vendor_credit'
                ELSE 'void_vendor_credit' END              AS step
         FROM qb_order_pipeline qop
         JOIN vendor_credit vc ON vc.id = qop.reference_id AND vc.deleted_at IS NULL
         LEFT JOIN purchase_order po ON po.id = vc.purchase_order_id AND po.deleted_at IS NULL
-        WHERE qop.step IN ('vendor_credit_add', 'vendor_credit_void')
+        WHERE qop.step IN ('vendor_credit_add', 'vendor_credit_mod', 'vendor_credit_void')
 
         UNION ALL
 

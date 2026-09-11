@@ -38,6 +38,8 @@ export const VendorCredit = model.define("vendor_credit", {
   // after the Inventory module adjusted the PO location (never by SQL).
   stock_applied_at: model.dateTime().nullable(),
   stock_reversed_at: model.dateTime().nullable(),
+  // Last revise of a POSTED credit (Migration 1783800000000) — informative.
+  revised_at: model.dateTime().nullable(),
   posted_at: model.dateTime().nullable(),
   posted_by: model.text().nullable(),
   voided_at: model.dateTime().nullable(),

@@ -22,4 +22,8 @@ export const VendorCreditLine = model.define("vendor_credit_line", {
   qb_account_full_name: model.text().nullable(),
   qb_account_type: model.text().nullable(),
   amount_cents: model.number(),
+  // QuickBooks TxnLineID of this line, written back from the VendorCreditRet
+  // on Add/Mod confirmation (Migration 1783800000000). A VendorCreditMod
+  // addresses existing lines by it; NULL = re-sent as a new line (-1).
+  qb_txn_line_id: model.text().nullable(),
 });

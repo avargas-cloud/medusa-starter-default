@@ -37,6 +37,7 @@ type PoStep =
   | "delete_vendor_bill_rebuild"
   | "delete_vendor_bill"
   | "add_vendor_credit"
+  | "mod_vendor_credit"
   | "void_vendor_credit"
   | "add_bill_payment"
   | "void_bill_payment";
@@ -95,6 +96,7 @@ const STEP_ICON: Record<PoStep, string> = {
   delete_vendor_bill_rebuild: "🧹",
   delete_vendor_bill: "🗑️",
   add_vendor_credit: "↩️",
+  mod_vendor_credit: "✏️",
   void_vendor_credit: "🚫",
   add_bill_payment: "💵",
   void_bill_payment: "🚫",
@@ -113,6 +115,7 @@ const STEP_LABEL: Record<PoStep, string> = {
   delete_vendor_bill_rebuild: "Prepare Bill Rebuild",
   delete_vendor_bill: "Delete Bill",
   add_vendor_credit: "Vendor Credit",
+  mod_vendor_credit: "Modify Credit",
   void_vendor_credit: "Void Credit",
   add_bill_payment: "Bill Payment",
   void_bill_payment: "Void Payment",

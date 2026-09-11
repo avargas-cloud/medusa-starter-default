@@ -61,7 +61,10 @@ import {
   PermanentPurchaseOperationError,
 } from "./vendor-bill-rebuild-operations";
 import { classifyQbError } from "../error-classifier";
-import { handleVendorCreditAddConfirmed } from "../handlers/handle-vendor-credit-add";
+import {
+  handleVendorCreditAddConfirmed,
+  handleVendorCreditModConfirmed,
+} from "../handlers/handle-vendor-credit-add";
 import { handleVendorCreditVoidConfirmed } from "../handlers/handle-vendor-credit-void";
 import { handleBillPaymentAddConfirmed } from "../handlers/handle-bill-payment-add";
 import { handleBillPaymentVoidConfirmed } from "../handlers/handle-bill-payment-void";
@@ -216,6 +219,7 @@ export async function pollSubmittedRows(
         // applies to them, so this branch confirms/fails and `continue`s.
         if (
           row.step === "vendor_credit_add" ||
+          row.step === "vendor_credit_mod" ||
           row.step === "vendor_credit_void" ||
           row.step === "bill_payment_add" ||
           row.step === "bill_payment_void"
@@ -223,6 +227,8 @@ export async function pollSubmittedRows(
           const rsNode: Record<string, unknown> | undefined =
             row.step === "vendor_credit_add"
               ? msgs?.VendorCreditAddRs
+              : row.step === "vendor_credit_mod"
+                ? msgs?.VendorCreditModRs
               : row.step === "bill_payment_add"
                 ? (msgs?.BillPaymentCheckAddRs ?? msgs?.BillPaymentCreditCardAddRs)
                 : msgs?.TxnVoidRs; // covers both vendor_credit_void and bill_payment_void
@@ -252,7 +258,7 @@ export async function pollSubmittedRows(
           }
 
           const ret =
-            row.step === "vendor_credit_add"
+            row.step === "vendor_credit_add" || row.step === "vendor_credit_mod"
               ? (rsNode as { VendorCreditRet?: { TxnID?: string; EditSequence?: string } })
                   .VendorCreditRet
               : row.step === "bill_payment_add"
@@ -279,6 +285,12 @@ export async function pollSubmittedRows(
             try {
               if (row.step === "vendor_credit_add" && ret) {
                 await handleVendorCreditAddConfirmed(
+                  poolAsRawKnexHandlerShim(pool),
+                  row.reference_id,
+                  ret
+                );
+              } else if (row.step === "vendor_credit_mod" && ret) {
+                await handleVendorCreditModConfirmed(
                   poolAsRawKnexHandlerShim(pool),
                   row.reference_id,
                   ret

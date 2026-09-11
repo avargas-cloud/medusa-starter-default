@@ -31,6 +31,11 @@ import {
   type VendorCreditExpenseLineInput,
   type VendorCreditItemLineInput,
 } from "../quickbooks/vendor-credit-add";
+import {
+  buildVendorCreditModQbxml,
+  type VendorCreditModExpenseLine,
+  type VendorCreditModItemLine,
+} from "../quickbooks/vendor-credit-mod";
 import { buildTxnVoidQbxml } from "../quickbooks/txn-void-add";
 import { toQbRefNumber } from "../quickbooks/qb-ref-number";
 
@@ -48,8 +53,21 @@ interface CreditRow {
   vendor_qb_list_id_snapshot: string | null;
   vendor_name_snapshot: string | null;
   credit_date: string;
+  reason: string | null;
   memo: string | null;
   qb_txn_id: string | null;
+  qb_edit_sequence: string | null;
+}
+
+/**
+ * What QuickBooks shows as the credit's Memo: the operator's Vendor Ref /
+ * Reason first (the POS labels it "sent to QuickBooks as the memo"), then the
+ * free-text Notes. VC-1002 (2026-09-11) reached QB with an EMPTY memo because
+ * only `memo` (Notes) was sent while the reason lived in `reason`.
+ */
+export function creditMemoForQb(reason: string | null, memo: string | null): string | null {
+  const parts = [reason, memo].map((v) => (v ?? "").trim()).filter((v) => v.length > 0);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 interface CreditLineRow {
@@ -60,6 +78,8 @@ interface CreditLineRow {
   unit_cost_cents: string | number | null;
   qb_account_list_id: string | null;
   amount_cents: string | number;
+  description: string | null;
+  qb_txn_line_id: string | null;
   variant_qb_item_list_id: string | null;
 }
 
@@ -140,7 +160,7 @@ export async function loadVendorCreditAddFacts(
 ): Promise<VendorCreditAddFacts> {
   const creditResult = await knex.raw(
     `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
-            vendor_name_snapshot, credit_date, memo, qb_txn_id
+            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence
        FROM vendor_credit
       WHERE id = ? AND deleted_at IS NULL`,
     [vendorCreditId]
@@ -164,7 +184,7 @@ export async function loadVendorCreditAddFacts(
 
   const linesResult = await knex.raw(
     `SELECT vcl.id, vcl.line_type, vcl.variant_id, vcl.qty, vcl.unit_cost_cents,
-            vcl.qb_account_list_id, vcl.amount_cents,
+            vcl.qb_account_list_id, vcl.amount_cents, vcl.description, vcl.qb_txn_line_id,
             pv.metadata ->> 'quickbooks_id' AS variant_qb_item_list_id
        FROM vendor_credit_line vcl
        LEFT JOIN product_variant pv
@@ -217,7 +237,7 @@ export async function loadVendorCreditAddFacts(
       apAccountListId,
       txnDate: toDateOnly(credit.credit_date),
       refNumber: toQbRefNumber(credit.number),
-      memo: credit.memo,
+      memo: creditMemoForQb(credit.reason, credit.memo),
       expenseLines,
       itemLines,
     });
@@ -271,7 +291,7 @@ export async function enqueueVendorCreditVoid(
 
   const creditResult = await knex.raw(
     `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
-            vendor_name_snapshot, credit_date, memo, qb_txn_id
+            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence
        FROM vendor_credit
       WHERE id = ? AND deleted_at IS NULL`,
     [vendorCreditId]
@@ -308,5 +328,148 @@ export async function enqueueVendorCreditVoid(
     operationKey: purchaseOperationKey("vendor_credit_void", credit.id, payload),
   });
 
+  return { queued: true, pipelineRowId: operation.id };
+}
+
+// ── VendorCreditMod (plan vc-edit-mod-20260911) ──────────────────────────────
+
+export type VendorCreditModFacts =
+  | { ready: true; qbxml: string; txnId: string }
+  | { ready: false; reason: string };
+
+/**
+ * Builds the `VendorCreditMod` for a POSTED credit that already lives in
+ * QuickBooks. `editSequence` is the FRESH one the dispatcher just read from
+ * QB (`VendorCreditQueryRq` right before submitting — a stale sequence is a
+ * 3200); at enqueue time the stored `qb_edit_sequence` is used only to
+ * snapshot a payload. Every current line is re-sent: existing ones by their
+ * `qb_txn_line_id`, new ones as `-1`; lines QB has and we no longer do are
+ * deleted by omission.
+ */
+export async function loadVendorCreditModFacts(
+  knex: EnqueueKnex,
+  vendorCreditId: string,
+  editSequence: string | null
+): Promise<VendorCreditModFacts> {
+  const creditResult = await knex.raw(
+    `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
+            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence
+       FROM vendor_credit
+      WHERE id = ? AND deleted_at IS NULL`,
+    [vendorCreditId]
+  );
+  const credit = (creditResult.rows[0] ?? null) as CreditRow | null;
+  if (!credit) return { ready: false, reason: "vendor credit not found" };
+  if (credit.status !== "posted") {
+    return { ready: false, reason: `vendor credit status is '${credit.status}', expected 'posted'` };
+  }
+  if (!credit.qb_txn_id) {
+    return { ready: false, reason: "vendor credit has no qb_txn_id — its add has not confirmed" };
+  }
+  const seq = editSequence ?? credit.qb_edit_sequence;
+  if (!seq) return { ready: false, reason: "no EditSequence for the vendor credit" };
+
+  const identity = await resolveCreditVendorIdentity(knex, credit);
+  if (!identity.resolved) return { ready: false, reason: identity.reason };
+  const apAccountListId = await loadApAccountListId(knex);
+  if (!apAccountListId) {
+    return { ready: false, reason: "gl_account_map has no 'accounts_payable' entry" };
+  }
+
+  const linesResult = await knex.raw(
+    `SELECT vcl.id, vcl.line_type, vcl.variant_id, vcl.qty, vcl.unit_cost_cents,
+            vcl.qb_account_list_id, vcl.amount_cents, vcl.description, vcl.qb_txn_line_id,
+            pv.metadata ->> 'quickbooks_id' AS variant_qb_item_list_id
+       FROM vendor_credit_line vcl
+       LEFT JOIN product_variant pv
+         ON pv.id = vcl.variant_id AND pv.deleted_at IS NULL
+      WHERE vcl.credit_id = ? AND vcl.deleted_at IS NULL
+      ORDER BY vcl.sort ASC, vcl.created_at ASC`,
+    [vendorCreditId]
+  );
+  const lines = linesResult.rows as CreditLineRow[];
+  if (lines.length === 0) return { ready: false, reason: "vendor credit has no lines" };
+
+  const itemLines: VendorCreditModItemLine[] = [];
+  const expenseLines: VendorCreditModExpenseLine[] = [];
+  for (const line of lines) {
+    if (line.line_type === "product") {
+      if (!line.variant_qb_item_list_id) {
+        return { ready: false, reason: `vendor credit line ${line.id} has no QB item ListID for its variant` };
+      }
+      itemLines.push({
+        txnLineId: line.qb_txn_line_id,
+        itemListId: line.variant_qb_item_list_id,
+        quantity: Number(line.qty ?? 0),
+        unitCostCents: BigInt(Math.round(Number(line.unit_cost_cents ?? 0))),
+        amountCents: BigInt(Math.round(Number(line.amount_cents))),
+      });
+    } else {
+      if (!line.qb_account_list_id) {
+        return { ready: false, reason: `vendor credit line ${line.id} has no QB account` };
+      }
+      expenseLines.push({
+        txnLineId: line.qb_txn_line_id,
+        accountListId: line.qb_account_list_id,
+        amountCents: BigInt(Math.round(Number(line.amount_cents))),
+        memo: line.description,
+      });
+    }
+  }
+
+  const toDateOnly = (v: string): string => new Date(v).toISOString().slice(0, 10);
+  try {
+    const qbxml = buildVendorCreditModQbxml({
+      txnId: credit.qb_txn_id,
+      editSequence: seq,
+      vendorListId: identity.list_id,
+      apAccountListId,
+      txnDate: toDateOnly(credit.credit_date),
+      refNumber: toQbRefNumber(credit.number),
+      memo: creditMemoForQb(credit.reason, credit.memo),
+      expenseLines,
+      itemLines,
+    });
+    return { ready: true, qbxml, txnId: credit.qb_txn_id };
+  } catch (error) {
+    return {
+      ready: false,
+      reason: error instanceof Error ? error.message : "could not build VendorCreditMod QBXML",
+    };
+  }
+}
+
+/**
+ * Queues a `vendor_credit_mod` behind the credit's own-document chain (so it
+ * always runs AFTER the add confirmed). A credit whose add has not reached
+ * QuickBooks yet needs no mod at all: the add is rebuilt from the live rows
+ * at dispatch time (`loadVendorCreditAddFacts`), so the revision travels
+ * inside it.
+ */
+export async function enqueueVendorCreditMod(
+  knex: EnqueueKnex,
+  vendorCreditId: string
+): Promise<EnqueueResult> {
+  if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
+    return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
+  }
+  const facts = await loadVendorCreditModFacts(knex, vendorCreditId, null);
+  if (!facts.ready) return { queued: false, reason: facts.reason };
+
+  const payload = {
+    vendor_credit_id: vendorCreditId,
+    txn_id: facts.txnId,
+    qbxml: facts.qbxml,
+    revised_at: new Date().toISOString(),
+  };
+  const operation = await enqueuePurchaseQbOperation(knex, {
+    purchaseOrderId: vendorCreditId,
+    referenceId: vendorCreditId,
+    referenceType: "vendor_credit",
+    step: "vendor_credit_mod",
+    payload,
+    qbTxnId: facts.txnId,
+    operationKey: purchaseOperationKey("vendor_credit_mod", vendorCreditId, payload),
+  });
   return { queued: true, pipelineRowId: operation.id };
 }

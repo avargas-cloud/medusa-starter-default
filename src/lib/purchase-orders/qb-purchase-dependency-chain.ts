@@ -12,6 +12,8 @@ export type PurchaseQbStep =
   // bill with no PO, above) — a credit/payment has no purchase order, and its
   // chain only ever holds its own add followed, later, by its own void.
   | "vendor_credit_add"
+  // vc-edit-mod: a revise of a posted credit, queued behind its own add.
+  | "vendor_credit_mod"
   | "vendor_credit_void"
   | "bill_payment_add"
   | "bill_payment_void";

@@ -31,11 +31,20 @@ import { Modules } from "@medusajs/utils";
 
 import { buildStockWarning } from "../../lib/purchase-orders/receipt-stock-warnings";
 import type { StockDirection, VendorCreditStockLine } from "../../lib/vendor-credits/stock-lines";
+
 import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
+
+/**
+ * `apply`/`reverse` move every line's qty in one direction and stamp the
+ * idempotency mark; `delta` (vc-edit-mod: a revise of a posted credit) moves
+ * each line by its SIGNED `qty` and stamps nothing — the credit stays
+ * "applied", only its quantities changed.
+ */
+export type StockMoveDirection = StockDirection | "delta";
 
 export interface AdjustVendorCreditStockInput {
   credit_id: string;
-  direction: StockDirection;
+  direction: StockMoveDirection;
   location_id: string;
   lines: VendorCreditStockLine[];
 }
@@ -61,7 +70,7 @@ export interface VendorCreditStockDelta {
 
 export interface AdjustVendorCreditStockOutput {
   credit_id: string;
-  direction: StockDirection;
+  direction: StockMoveDirection;
   adjusted: VendorCreditStockDelta[];
   warnings: VendorCreditStockWarning[];
 }
@@ -85,19 +94,23 @@ const adjustVendorCreditStockStep = createStep(
     { container }
   ): Promise<StepResponse<{ adjusted: VendorCreditStockDelta[]; warnings: VendorCreditStockWarning[] }, { location_id: string; adjusted: VendorCreditStockDelta[] }>> => {
     const inventoryService = container.resolve(Modules.INVENTORY) as unknown as InventoryServiceLike;
-    const sign = input.direction === "apply" ? -1 : 1;
+    // apply: units leave (−qty); reverse: they come back (+qty); delta: the
+    // line's qty IS the signed movement (a revise that lowered 6→4 sends −2
+    // meaning "2 units come back", so the stock delta is +2).
     const adjusted: VendorCreditStockDelta[] = [];
     const warnings: VendorCreditStockWarning[] = [];
 
     for (const line of input.lines) {
-      if (line.qty <= 0) continue;
+      if (line.qty === 0) continue;
+      if (input.direction !== "delta" && line.qty < 0) continue;
       const levels = await inventoryService.listInventoryLevels(
         { inventory_item_id: line.inventory_item_id, location_id: input.location_id },
         { take: 1 }
       );
       const before = Number(levels[0]?.stocked_quantity ?? 0);
       const reserved = Number(levels[0]?.reserved_quantity ?? 0);
-      const delta = sign * line.qty;
+      const delta =
+        input.direction === "apply" ? -line.qty : input.direction === "reverse" ? line.qty : -line.qty;
       const after = before + delta;
 
       const warning = buildStockWarning({
@@ -146,9 +159,19 @@ const adjustVendorCreditStockStep = createStep(
   }
 );
 
+type MarkOut = { column: string | null };
+type MarkComp = { credit_id: string; column: string } | null;
+
 const markVendorCreditStockStep = createStep(
   "mark-vendor-credit-stock",
-  async (input: { credit_id: string; direction: StockDirection }, { container }) => {
+  async (
+    input: { credit_id: string; direction: StockMoveDirection },
+    { container }
+  ): Promise<StepResponse<MarkOut, MarkComp>> => {
+    if (input.direction === "delta") {
+      // A revise keeps the credit "applied": nothing to stamp, nothing to undo.
+      return new StepResponse<MarkOut, MarkComp>({ column: null }, null);
+    }
     const knex = container.resolve("__pg_connection__") as KnexLike;
     const column = input.direction === "apply" ? "stock_applied_at" : "stock_reversed_at";
     // The `IS NULL` guard is the idempotency mark: a second run of the same
@@ -162,7 +185,7 @@ const markVendorCreditStockStep = createStep(
     if ((result.rowCount ?? 0) !== 1) {
       throw new Error(`vendor credit ${input.credit_id}: ${column} already set — stock movement refused`);
     }
-    return new StepResponse({ column }, { credit_id: input.credit_id, column });
+    return new StepResponse<MarkOut, MarkComp>({ column }, { credit_id: input.credit_id, column });
   },
   async (ctx, { container }) => {
     if (!ctx) return;

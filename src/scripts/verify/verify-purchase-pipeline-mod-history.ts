@@ -58,6 +58,7 @@ async function main(): Promise<void> {
       // the feed uses — a row whose document was hard-deleted (test fixtures)
       // is invisible in both.
       ["vendor_credit_add", "add_vendor_credit"],
+      ["vendor_credit_mod", "mod_vendor_credit"],
       ["vendor_credit_void", "void_vendor_credit"],
       ["bill_payment_add", "add_bill_payment"],
       ["bill_payment_void", "void_bill_payment"],
@@ -126,7 +127,7 @@ async function main(): Promise<void> {
           WHERE step IN ('purchase_order_mod', 'item_receipt_mod'))
       + (SELECT COUNT(*) FROM qb_order_pipeline qop
           JOIN vendor_credit vc ON vc.id = qop.reference_id AND vc.deleted_at IS NULL
-         WHERE qop.step IN ('vendor_credit_add', 'vendor_credit_void'))
+         WHERE qop.step IN ('vendor_credit_add', 'vendor_credit_mod', 'vendor_credit_void'))
       + (SELECT COUNT(*) FROM qb_order_pipeline qop
           JOIN vendor_bill_payment vbp ON vbp.id = qop.reference_id AND vbp.deleted_at IS NULL
          WHERE qop.step IN ('bill_payment_add', 'bill_payment_void'))

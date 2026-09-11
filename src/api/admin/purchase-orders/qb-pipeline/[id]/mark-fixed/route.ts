@@ -66,6 +66,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const glChainStep = (
     [
       "vendor_credit_add",
+      "vendor_credit_mod",
       "vendor_credit_void",
       "bill_payment_add",
       "bill_payment_void",

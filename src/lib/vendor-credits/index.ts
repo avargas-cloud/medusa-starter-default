@@ -3,6 +3,7 @@ export { createDraftVendorCredit, assertLineShapes } from "./create";
 export { updateDraftVendorCredit } from "./update";
 export { deleteDraftVendorCredit } from "./delete";
 export { markVendorCreditPosted } from "./post";
+export { reviseVendorCredit, type ReviseVendorCreditPatch, type ReviseResult, type ReviseStockDelta } from "./revise";
 export { applyVendorCreditToBill } from "./apply";
 export { voidVendorCreditApplication } from "./void-application";
 export { voidVendorCredit } from "./void";

@@ -67,9 +67,12 @@ import {
   processCustomerPipelineRow,
   processCustomerDataExtPipelineRow,
 } from "./customer-pass";
-import { bridgeFetch } from "../client/core";
+import { bridgeFetch, pollRawOperationResult } from "../client/core";
 import { classifyQbError } from "../error-classifier";
-import { loadVendorCreditAddFacts } from "../../purchase-orders/qb-vendor-credit-enqueue";
+import {
+  loadVendorCreditAddFacts,
+  loadVendorCreditModFacts,
+} from "../../purchase-orders/qb-vendor-credit-enqueue";
 import { loadBillPaymentAddFacts } from "../../purchase-orders/qb-bill-payment-enqueue";
 import { buildTxnVoidQbxml } from "../txn-void-add";
 // Confirmation write-back for these 4 steps (VendorCreditRet/BillPaymentRet/
@@ -273,11 +276,6 @@ export async function resubmitByStep(
             excludeRowId: row.id,
           }
         );
-        if (outcome === "deferred") {
-          // gateModDispatch put the row back to pending + next_retry_at behind
-          // an older in-flight operation; a later tick re-dispatches it.
-          break;
-        }
         if (outcome === "skipped") {
           await failPipelineRow(
             row.id,
@@ -335,11 +333,6 @@ export async function resubmitByStep(
           pipelineRowId: row.id,
           excludeRowId: row.id,
         });
-        if (outcome === "deferred") {
-          // gateModDispatch put the row back to pending + next_retry_at behind
-          // an older in-flight operation; a later tick re-dispatches it.
-          break;
-        }
         if (outcome === "skipped") {
           await failPipelineRow(
             row.id,
@@ -1116,6 +1109,80 @@ export async function resubmitByStep(
           const message = addErr instanceof Error ? addErr.message : String(addErr);
           classifyQbError({ message }); // logged for future triage; ADD stays terminal regardless of class.
           await failPipelineRow(row.id, message);
+        }
+        break;
+      }
+
+      // vc-edit-mod: a revision of a POSTED credit. Idempotent by design (a
+      // stale EditSequence is a 3200, never a duplicate), so failures use the
+      // ordinary retry budget. The EditSequence is read from QuickBooks RIGHT
+      // before submitting, same as `refreshVendorBillModSnapshot` does for
+      // BillMod — the stored one may predate a change made inside QB.
+      case "vendor_credit_mod": {
+        if (!row.reference_id) {
+          await failPipelineRow(row.id, "vendor_credit_mod: missing reference_id");
+          break;
+        }
+        try {
+          const txnIdFromRow =
+            row.qb_txn_id ?? (typeof row.payload?.txn_id === "string" ? row.payload.txn_id : null);
+          if (!txnIdFromRow) {
+            throw new Error("vendor_credit_mod: the credit has no QuickBooks TxnID yet");
+          }
+          const query = (await bridgeFetch("POST", "/api/sync/direct-query", {
+            qbxml:
+              '<?xml version="1.0" encoding="utf-8"?><?qbxml version="10.0"?><QBXML><QBXMLMsgsRq onError="stopOnError"><VendorCreditQueryRq><TxnID>' +
+              txnIdFromRow +
+              "</TxnID></VendorCreditQueryRq></QBXMLMsgsRq></QBXML>",
+          })) as { operationId?: string; operation_id?: string } | undefined;
+          const queryOp = query?.operationId ?? query?.operation_id;
+          if (!queryOp) throw new Error("vendor_credit_mod: VendorCreditQuery returned no operationId");
+          const raw = (await pollRawOperationResult(queryOp, (m) =>
+            logger.info(`${LOG_PREFIX} ${m}`)
+          )) as Record<string, unknown> | null;
+          const result = (raw?.result ?? raw) as Record<string, unknown> | undefined;
+          const qbxmlNode = (result?.QBXML ?? result) as Record<string, unknown> | undefined;
+          const msgsRs = (qbxmlNode?.QBXMLMsgsRs ?? qbxmlNode) as Record<string, unknown> | undefined;
+          const queryRs = msgsRs?.VendorCreditQueryRs as Record<string, unknown> | undefined;
+          const retRaw = queryRs?.VendorCreditRet;
+          const rets = (Array.isArray(retRaw) ? retRaw : retRaw ? [retRaw] : []) as Array<
+            Record<string, unknown>
+          >;
+          const match = rets.find((r) => String(r.TxnID ?? "") === txnIdFromRow) ?? null;
+          const freshEditSequence =
+            match && typeof match.EditSequence === "string" ? match.EditSequence : null;
+          if (!freshEditSequence) {
+            throw new Error(
+              "vendor_credit_mod: QuickBooks query returned no exact VendorCredit/EditSequence match"
+            );
+          }
+          const facts = await loadVendorCreditModFacts(poolAsRawKnex(), row.reference_id, freshEditSequence);
+          if (!facts.ready) {
+            await deferPipelineRow(row.id, facts.reason, QUIESCENCE_RECHECK_SECONDS);
+            logger.info(`${LOG_PREFIX} ⏳ vendor_credit_mod ${row.id} not ready yet: ${facts.reason}`);
+            break;
+          }
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml: facts.qbxml },
+            { idempotencyKey: `vendor-credit-mod:${row.id}:${freshEditSequence}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) throw new Error("Bridge did not return an operationId for VendorCreditMod");
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object('edit_sequence', $3::text),
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId, freshEditSequence]
+          );
+          logger.info(`${LOG_PREFIX} ✅ vendor_credit_mod ${row.id} submitted op=${opId}`);
+        } catch (modErr) {
+          const message = modErr instanceof Error ? modErr.message : String(modErr);
+          classifyQbError({ message });
+          await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
         }
         break;
       }
@@ -2420,25 +2487,22 @@ export async function resubmitByStep(
         );
     }
   } catch (err: any) {
-    const message = describeDispatchError(err) || `${row.step} dispatch failed`;
     logger.warn(
-      `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${message}`
+      `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${err.message}`
     );
     if (
       row.step === "vendor_bill_mod" ||
-      // A BillQuery is read-only, so a lost connection is only worth a
-      // backoff — not a dead row. 2026-09-11: two checks died terminal on
-      // `fetch failed` (undici connect timeout, 10 s) while 16 siblings in the
-      // same tick went through; terminal here means 12 h until the monitor
-      // re-elects the bill and a red badge nobody can act on.
-      row.step === "vendor_bill_payment_check" ||
       PURCHASE_OPERATION_STEPS.includes(
         row.step as (typeof PURCHASE_OPERATION_STEPS)[number]
       )
     ) {
-      await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
+      await failOrRetryPipelineRow(
+        row.id,
+        err.message || `${row.step} dispatch failed`,
+        row.retry_count ?? 0
+      );
     } else {
-      await failPipelineRow(row.id, message);
+      await failPipelineRow(row.id, err.message || "resubmitByStep failed");
     }
     if (row.step === "vendor_bill_mod" && row.reference_id) {
       const pool = getDbPool();
@@ -2447,7 +2511,7 @@ export async function resubmitByStep(
             SET status = 'error', qb_operation_id = NULL,
                 last_error = $2, updated_at = NOW()
           WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
-        [row.reference_id, message]
+        [row.reference_id, err.message || "BillMod dispatch failed"]
       );
     }
     if (
@@ -2455,26 +2519,10 @@ export async function resubmitByStep(
         row.step as (typeof PURCHASE_OPERATION_STEPS)[number]
       )
     ) {
-      await mirrorPurchaseOperationFailure(row, message).catch(() => undefined);
+      await mirrorPurchaseOperationFailure(
+        row,
+        err.message || `${row.step} dispatch failed`
+      ).catch(() => undefined);
     }
   }
-}
-
-/**
- * Error text for a failed dispatch. Node's fetch wraps every connection-level
- * failure as `TypeError: fetch failed` and hides the useful part in
- * `err.cause.code` (UND_ERR_CONNECT_TIMEOUT, ECONNREFUSED, ENOTFOUND…). The
- * pipeline row stores only the message, so without this the diagnosis of a
- * network failure is guesswork. The message still starts with the original
- * text, so `classifyQbError`'s network patterns keep matching.
- */
-export function describeDispatchError(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err ?? "");
-  const cause = (err as { cause?: unknown } | null)?.cause;
-  const code =
-    cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
-      ? ((cause as { code: string }).code)
-      : null;
-  if (!code || message.includes(code)) return message;
-  return `${message} (${code})`;
 }
