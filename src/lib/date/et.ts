@@ -62,3 +62,23 @@ export function etMidnightUtc(year: number, monthIndex: number, day = 1): Date {
     Date.UTC(normalized.getUTCFullYear(), normalized.getUTCMonth(), normalized.getUTCDate(), 5, 0, 0, 0)
   );
 }
+
+/**
+ * A Postgres `date` column has no timezone — node-postgres parses it with
+ * `new Date(year, monthIndex, day)`, i.e. LOCAL midnight, so the calendar
+ * date is recoverable only through the LOCAL getters (`getFullYear` /
+ * `getMonth` / `getDate`). `toISOString()` converts to UTC first and would
+ * shift the date backward by one day on any host whose local timezone is
+ * behind UTC (this box runs UTC-negative) — that mismatch is exactly what
+ * fed a JS `Date` into `assertBankAccountingPeriodOpen` (which validates a
+ * strict `YYYY-MM-DD` string) and raised `BANKING_INVALID_ACCOUNTING_DATE`.
+ * A string input (already `YYYY-MM-DD`, e.g. a value never round-tripped
+ * through pg) passes through unchanged.
+ */
+export function pgDateToIso(value: Date | string): string {
+  if (typeof value === "string") return value.slice(0, 10);
+  const y = value.getFullYear();
+  const m = String(value.getMonth() + 1).padStart(2, "0");
+  const d = String(value.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}

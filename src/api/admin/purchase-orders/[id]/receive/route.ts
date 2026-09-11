@@ -21,6 +21,9 @@ import type {
 import { receivePurchaseOrderWorkflow } from "../../../../../workflows/purchase-orders/receive-purchase-order";
 import { onPoReceiveApplied } from "../../../../../lib/inventory-transfer-link";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
+import { postReceipt } from "../../../../../lib/ledger";
+import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
+import { resolveActorId } from "../../../../../lib/pos/supervisor-pin-guard";
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import {
   hasActiveLinkedTransfer,
@@ -370,6 +373,12 @@ export async function POST(
           input: { inventoryItemId: l.inventory_item_id },
         })
       )
+    );
+
+    // GL (best-effort, gl-purchases-v2 §5): la recepción ya commiteó — postearla ahora.
+    await runLedgerHook(
+      (client) => postReceipt(client, result.receipt_id, resolveActorId(req)),
+      { source_kind: "po_receipt", source_id: result.receipt_id }
     );
 
     return res.json({ receipt: result });

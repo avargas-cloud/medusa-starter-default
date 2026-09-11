@@ -31,6 +31,9 @@ import {
   getActorUserId,
   UnauthenticatedError,
 } from "../../../purchase-orders/_lib/auth";
+import { reverseVendorBill } from "../../../../../lib/ledger";
+import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
+import { resolveActorId } from "../../../../../lib/pos/supervisor-pin-guard";
 import { getPurchaseOrdersService } from "../../../purchase-orders/_lib/service-resolver";
 
 // ── Knex type ─────────────────────────────────────────────────────────────────
@@ -219,6 +222,12 @@ export async function POST(
       code: "vendor_bill_cancel_failed",
     });
   }
+
+  // GL (best-effort, gl-purchases-v2 §2): cancel/void ya commiteó — reversar.
+  await runLedgerHook(
+    (client) => reverseVendorBill(client, bill.id, resolveActorId(req)),
+    { source_kind: "vendor_bill", source_id: bill.id }
+  );
 
   const updatedBills = (await service.listVendorBills(
     { id: bill.id },

@@ -2,7 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { getDbPool } from "../api/utils/db-pool";
 import { getBusinessDateString } from "../lib/date/et";
-import { replayLedger } from "../lib/ledger";
+import { reconcilePurchaseDrift, replayLedger } from "../lib/ledger";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 
@@ -54,6 +54,27 @@ export default async function ledgerReconciler(
       logger.warn(
         `[ledger-reconciler] ${blocked.length} blocked (showing up to 20): ` +
           JSON.stringify(blocked.slice(0, 20))
+      );
+    }
+
+    // gl-purchases-v2 §5: drift de vendor_bill (reconfirm reescribe costos/
+    // revisión sin cambiar `status`). Transacción PROPIA — `replayLedger` ya
+    // cerró la suya arriba (el COMMIT anterior deja `client` en autocommit,
+    // y `reconcilePurchaseDrift` abre SAVEPOINTs por bill, igual de inválido
+    // fuera de una transacción que el de `replayLedger`).
+    await client.query("BEGIN");
+    const driftReport = await reconcilePurchaseDrift(client, {
+      limit: GL_RECONCILER_LIMIT,
+    });
+    await client.query("COMMIT");
+    logger.info(
+      `[ledger-reconciler] purchase drift: ${JSON.stringify({ ...driftReport, blocked: undefined })} ` +
+        `blocked=${driftReport.blocked.length}`
+    );
+    if (driftReport.blocked.length > 0) {
+      logger.warn(
+        `[ledger-reconciler] drift ${driftReport.blocked.length} blocked (showing up to 20): ` +
+          JSON.stringify(driftReport.blocked.slice(0, 20))
       );
     }
   } catch (err: unknown) {

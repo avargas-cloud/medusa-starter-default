@@ -56,6 +56,16 @@ export const LEDGER_ACCOUNT_MAP_KEYS: LedgerAccountMapKeyDef[] = [
     label: "Bad Debt / Fraud Write-off",
     allowedTypes: ["Expense", "OtherExpense"],
   },
+  {
+    key: "accounts_payable",
+    label: "Accounts Payable",
+    allowedTypes: ["AccountsPayable"],
+  },
+  {
+    key: "inventory_offset",
+    label: "Inventory Offset Account",
+    allowedTypes: ["OtherCurrentLiability"],
+  },
 ];
 
 export const LEDGER_ACCOUNT_MAP_KEY_SET = new Set(

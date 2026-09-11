@@ -122,6 +122,57 @@ const EXEMPT: Map<string, string> = new Map([
     "src/api/admin/quickbooks/lookup/route.ts::cfg.queryElement",
     "nombre de elemento, sale de DOC_TYPE_CONFIG (constante)",
   ],
+  // gl-purchases-v2 §4: mismo patrón que qb-vendor-mod.ts — un `tag()` local
+  // aplica escapeXml al valor ANTES de interpolarlo, y `body`/`parts.join("")`
+  // componen hijos que ya pasaron por ese `tag()`.
+  [
+    'src/lib/quickbooks/bill-payment-add.ts::tag("ListID", input.payeeListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/bill-payment-add.ts::tag("ListID", input.apAccountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/bill-payment-add.ts::tag("ListID", input.bankAccountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/bill-payment-add.ts::tag("ListID", input.creditCardAccountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    "src/lib/quickbooks/bill-payment-add.ts::body",
+    "composición de hijos ya escapados por tag()/buildAppliedToTxnXml",
+  ],
+  [
+    "src/lib/quickbooks/txn-void-add.ts::body",
+    "composición de hijos ya escapados por escapeXml directamente",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-add.ts::tag("ListID", input.vendorListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-add.ts::tag("ListID", input.apAccountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-add.ts::tag("ListID", line.accountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-add.ts::tag("ListID", line.itemListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-add.ts::parts.join("")',
+    "hijos ya escapados por tag(), que aplica escapeXml a cada valor",
+  ],
+  [
+    "src/lib/quickbooks/vendor-credit-add.ts::body",
+    "composición de hijos ya escapados por tag()",
+  ],
 ]);
 
 let failures = 0;

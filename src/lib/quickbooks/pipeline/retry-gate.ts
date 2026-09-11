@@ -59,6 +59,12 @@ export const ADD_CAPABLE_STEPS = [
   "write_check",
   "item_receipt_add",
   "vendor_bill_add",
+  // gl-purchases-v2 §4: VendorCreditAdd/BillPaymentCheckAdd/
+  // BillPaymentCreditCardAdd each mint one QuickBooks document — same
+  // non-idempotent ADD family as vendor_bill_add. The *_void steps are
+  // deliberately NOT here (TxnVoid can't mint a duplicate).
+  "vendor_credit_add",
+  "bill_payment_add",
   // Commissions. These two are the reason this gate exists, and the first draft
   // of the list LEFT THEM OUT — because the list was derived from the `switch`
   // in `post-pipeline.ts`, and commission steps have no `case` there (the

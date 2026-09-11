@@ -68,6 +68,14 @@ import {
   processCustomerDataExtPipelineRow,
 } from "./customer-pass";
 import { bridgeFetch } from "../client/core";
+import { classifyQbError } from "../error-classifier";
+import { loadVendorCreditAddFacts } from "../../purchase-orders/qb-vendor-credit-enqueue";
+import { loadBillPaymentAddFacts } from "../../purchase-orders/qb-bill-payment-enqueue";
+import { buildTxnVoidQbxml } from "../txn-void-add";
+// Confirmation write-back for these 4 steps (VendorCreditRet/BillPaymentRet/
+// TxnVoidRs parsing → handle-*-add/void.ts) lives in poll-submitted-rows.ts,
+// alongside the vendor_bill_add confirmation it mirrors — not here, which
+// only ever SUBMITS.
 import {
   dispatchPurchaseOperation,
   mirrorPurchaseOperationFailure,
@@ -147,6 +155,25 @@ async function voidBlockedByLiveMutation(
     );
   }
   return true;
+}
+
+/**
+ * `loadVendorCreditAddFacts`/`loadBillPaymentAddFacts` want a `{ raw(sql,
+ * bindings) }` shape (knex-style `?` placeholders) so the SAME function runs
+ * unchanged at enqueue time (real knex) and here at dispatch time (the
+ * consolidator's shared `pg.Pool`, `$1`-style). This shim is the only place
+ * that bridges the two — never re-implement the query logic itself twice.
+ */
+function poolAsRawKnex(): { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }> } {
+  const pool = getDbPool();
+  return {
+    raw: async (sql: string, bindings: unknown[] = []) => {
+      let i = 0;
+      const pgSql = sql.replace(/\?/g, () => `$${++i}`);
+      const result = await pool.query(pgSql, bindings);
+      return { rows: result.rows };
+    },
+  };
 }
 
 /**
@@ -1015,6 +1042,203 @@ export async function resubmitByStep(
           );
           logger.info(
             `${LOG_PREFIX} ✅ vendor_bill_void ${row.id} submitted op=${voidOpId} bill=${row.qb_txn_id}`
+          );
+        } catch (voidErr) {
+          await failVoidFamilyRow(
+            row,
+            voidErr instanceof Error ? voidErr.message : String(voidErr)
+          );
+        }
+        break;
+      }
+
+      // gl-purchases-v2 §4 (docs/GL_PURCHASES_PLAN.md): VendorCreditAdd /
+      // BillPaymentCheckAdd / BillPaymentCreditCardAdd, dispatched through the
+      // raw QBXML passthrough (`/api/sync/direct-query`) — same precedent as
+      // `qb-terms-add.ts`, because the bridge has no typed builder for these
+      // three document types. Readiness is RE-CHECKED here, not trusted from
+      // enqueue time: `loadVendorCreditAddFacts`/`loadBillPaymentAddFacts` are
+      // the ONE place that decides "ready", called at enqueue AND at dispatch,
+      // so a vendor/bill/credit that resolved in between never needs a human
+      // to re-enqueue. An ADD's failure is ALWAYS terminal
+      // (`failPipelineRow`, never `failOrRetryPipelineRow`) — a lost bridge
+      // response means QuickBooks' outcome is unknown, and blindly retrying
+      // an ADD risks minting a second real document (same discipline as
+      // `vendor_bill_add`).
+      case "vendor_credit_add": {
+        if (!row.reference_id) {
+          await failPipelineRow(row.id, "vendor_credit_add: missing reference_id");
+          break;
+        }
+        const facts = await loadVendorCreditAddFacts(poolAsRawKnex(), row.reference_id);
+        if (!facts.ready) {
+          // Not a failure — the vendor/lines may resolve shortly (VB-1148
+          // shape). Defer instead of failing so the retry budget and the
+          // Failed badge stay clean, same as the apply_payment quiescence gate.
+          await deferPipelineRow(row.id, facts.reason, QUIESCENCE_RECHECK_SECONDS);
+          logger.info(
+            `${LOG_PREFIX} ⏳ vendor_credit_add ${row.id} not ready yet: ${facts.reason}`
+          );
+          break;
+        }
+        try {
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml: facts.qbxml },
+            { idempotencyKey: `vendor-credit-add:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error("Bridge did not return an operationId for VendorCreditAdd");
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ vendor_credit_add ${row.id} submitted op=${opId}`
+          );
+        } catch (addErr) {
+          const message = addErr instanceof Error ? addErr.message : String(addErr);
+          classifyQbError({ message }); // logged for future triage; ADD stays terminal regardless of class.
+          await failPipelineRow(row.id, message);
+        }
+        break;
+      }
+
+      case "vendor_credit_void": {
+        if (!row.qb_txn_id) {
+          // The add is still in flight/unconfirmed — never void a TxnID we
+          // don't have. Not a failure: it will have one once the add confirms.
+          await deferPipelineRow(
+            row.id,
+            "vendor_credit_void: waiting on the add's qb_txn_id",
+            QUIESCENCE_RECHECK_SECONDS
+          );
+          break;
+        }
+        try {
+          const qbxml = buildTxnVoidQbxml("VendorCredit", row.qb_txn_id);
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml },
+            { idempotencyKey: `vendor-credit-void:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error("Bridge did not return an operationId for VendorCredit TxnVoid");
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ vendor_credit_void ${row.id} submitted op=${opId} txn=${row.qb_txn_id}`
+          );
+        } catch (voidErr) {
+          await failVoidFamilyRow(
+            row,
+            voidErr instanceof Error ? voidErr.message : String(voidErr)
+          );
+        }
+        break;
+      }
+
+      case "bill_payment_add": {
+        if (!row.reference_id) {
+          await failPipelineRow(row.id, "bill_payment_add: missing reference_id");
+          break;
+        }
+        const facts = await loadBillPaymentAddFacts(poolAsRawKnex(), row.reference_id);
+        if (!facts.ready) {
+          // Includes the multi-bill/credit readiness gate
+          // (payload.blocking_reference_ids at enqueue time) — re-verified
+          // live here, never trusted stale. Still not a failure.
+          await deferPipelineRow(row.id, facts.reason, QUIESCENCE_RECHECK_SECONDS);
+          logger.info(
+            `${LOG_PREFIX} ⏳ bill_payment_add ${row.id} not ready yet: ${facts.reason}`
+          );
+          break;
+        }
+        try {
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml: facts.qbxml },
+            { idempotencyKey: `bill-payment-add:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error(
+              `Bridge did not return an operationId for BillPayment${facts.isCreditCard ? "CreditCard" : "Check"}Add`
+            );
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ bill_payment_add ${row.id} submitted op=${opId}`
+          );
+        } catch (addErr) {
+          const message = addErr instanceof Error ? addErr.message : String(addErr);
+          classifyQbError({ message });
+          await failPipelineRow(row.id, message);
+        }
+        break;
+      }
+
+      case "bill_payment_void": {
+        if (!row.qb_txn_id) {
+          await deferPipelineRow(
+            row.id,
+            "bill_payment_void: waiting on the add's qb_txn_id",
+            QUIESCENCE_RECHECK_SECONDS
+          );
+          break;
+        }
+        try {
+          const accountTypeResult = await getDbPool().query(
+            `SELECT qb_account.account_type
+               FROM vendor_bill_payment vbp
+               JOIN qb_account ON qb_account.qb_list_id = vbp.bank_account_list_id
+              WHERE vbp.id = $1`,
+            [row.reference_id]
+          );
+          const accountType = accountTypeResult.rows[0]?.account_type as string | undefined;
+          const txnVoidType =
+            accountType === "CreditCard" ? "BillPaymentCreditCard" : "BillPaymentCheck";
+          const qbxml = buildTxnVoidQbxml(txnVoidType, row.qb_txn_id);
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml },
+            { idempotencyKey: `bill-payment-void:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error("Bridge did not return an operationId for BillPayment TxnVoid");
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ bill_payment_void ${row.id} submitted op=${opId} txn=${row.qb_txn_id}`
           );
         } catch (voidErr) {
           await failVoidFamilyRow(

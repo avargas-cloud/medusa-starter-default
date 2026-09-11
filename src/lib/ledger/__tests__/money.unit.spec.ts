@@ -1,4 +1,5 @@
-import { absBigInt, centsFromNumeric, costCentsHalfUp } from "../money";
+import { absBigInt, centsFromNumeric, costCentsHalfUp, sanitizeRole, signedLine } from "../money";
+import { account } from "./fixtures";
 
 describe("centsFromNumeric", () => {
   it("parses an integer-looking numeric string as-is (the column is already cents)", () => {
@@ -46,5 +47,27 @@ describe("absBigInt", () => {
     expect(absBigInt(-5n)).toBe(5n);
     expect(absBigInt(5n)).toBe(5n);
     expect(absBigInt(0n)).toBe(0n);
+  });
+});
+
+describe("signedLine", () => {
+  const acct = account("A-1", "Expense", "debit");
+  it("debits on positive, credits on negative, omits on zero", () => {
+    expect(signedLine("role", acct, 5n)).toEqual({ role: "role", account: acct, debit_cents: 5n, credit_cents: 0n });
+    expect(signedLine("role", acct, -5n)).toEqual({ role: "role", account: acct, debit_cents: 0n, credit_cents: 5n });
+    expect(signedLine("role", acct, 0n)).toBeNull();
+  });
+});
+
+describe("sanitizeRole", () => {
+  it("lowercases and replaces illegal chars — matches bank_journal_line's CHECK ^[a-z][a-z0-9_]{0,79}$", () => {
+    const role = sanitizeRole("qb_account", "8000018A-1786738459");
+    expect(role).toMatch(/^[a-z][a-z0-9_]{0,79}$/);
+    expect(role).toBe("qb_account_8000018a_1786738459");
+  });
+  it("two different real QB ListIDs never collide", () => {
+    const a = sanitizeRole("qb_account", "8000018A-1786738459");
+    const b = sanitizeRole("qb_account", "8000018B-1786738459");
+    expect(a).not.toBe(b);
   });
 });

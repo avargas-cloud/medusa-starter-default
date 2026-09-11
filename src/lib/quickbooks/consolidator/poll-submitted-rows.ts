@@ -61,8 +61,31 @@ import {
   PermanentPurchaseOperationError,
 } from "./vendor-bill-rebuild-operations";
 import { classifyQbError } from "../error-classifier";
+import { handleVendorCreditAddConfirmed } from "../handlers/handle-vendor-credit-add";
+import { handleVendorCreditVoidConfirmed } from "../handlers/handle-vendor-credit-void";
+import { handleBillPaymentAddConfirmed } from "../handlers/handle-bill-payment-add";
+import { handleBillPaymentVoidConfirmed } from "../handlers/handle-bill-payment-void";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
+
+/**
+ * The 4 gl-purchases-v2 handlers use knex-style `?` placeholders (same
+ * convention as the enqueue functions they mirror); the consolidator's pool
+ * is plain `pg` (`$1`-style). Same shim as `resubmit-by-step.ts`'s
+ * `poolAsRawKnex` — kept local since this file doesn't share that module.
+ */
+function poolAsRawKnexHandlerShim(pool: {
+  query: (sql: string, bindings?: unknown[]) => Promise<{ rowCount?: number | null }>;
+}): { raw: (sql: string, bindings?: unknown[]) => Promise<{ rowCount?: number }> } {
+  return {
+    raw: async (sql: string, bindings: unknown[] = []) => {
+      let i = 0;
+      const pgSql = sql.replace(/\?/g, () => `$${++i}`);
+      const result = await pool.query(pgSql, bindings);
+      return { rowCount: result.rowCount ?? undefined };
+    },
+  };
+}
 
 export type SubmittedRow = {
   id: string;
@@ -180,6 +203,117 @@ export async function pollSubmittedRows(
           }
         }
         const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs;
+
+        // gl-purchases-v2 §4: VendorCreditAdd/BillPaymentCheckAdd/
+        // BillPaymentCreditCardAdd/TxnVoid confirmations. Dispatched through
+        // the raw `/api/sync/direct-query` passthrough (`resubmit-by-step.ts`
+        // cases vendor_credit_add|vendor_credit_void|bill_payment_add|
+        // bill_payment_void`), so the response shape is the SAME
+        // `QBXMLMsgsRs.<Type>Rs` envelope `qb-terms-add.ts`'s
+        // `parseDirectQueryStatus` already documents — keyed by whichever
+        // `*Rs` came back, one per request. Self-contained: these documents
+        // have no order_id and none of the generic metadata-patch logic below
+        // applies to them, so this branch confirms/fails and `continue`s.
+        if (
+          row.step === "vendor_credit_add" ||
+          row.step === "vendor_credit_void" ||
+          row.step === "bill_payment_add" ||
+          row.step === "bill_payment_void"
+        ) {
+          const rsNode: Record<string, unknown> | undefined =
+            row.step === "vendor_credit_add"
+              ? msgs?.VendorCreditAddRs
+              : row.step === "bill_payment_add"
+                ? (msgs?.BillPaymentCheckAddRs ?? msgs?.BillPaymentCreditCardAddRs)
+                : msgs?.TxnVoidRs; // covers both vendor_credit_void and bill_payment_void
+          const statusCode =
+            rsNode?.statusCode != null ? String(rsNode.statusCode) : null;
+          const statusMessage =
+            typeof rsNode?.statusMessage === "string" ? rsNode.statusMessage : "";
+
+          if (!rsNode || (statusCode !== null && statusCode !== "0")) {
+            const message =
+              statusCode !== null
+                ? `QuickBooks rejected ${row.step} (${statusCode}): ${statusMessage}`
+                : `${row.step} completed without a recognizable response`;
+            // ADD steps NEVER auto-retry on a rejection whose outcome could be
+            // ambiguous (same discipline as vendor_bill_add) — terminal fail,
+            // manual Retry only (gated by retry-gate.ts's ADD_CAPABLE_STEPS).
+            // Voids are safe to classify normally: a TxnVoid rejection never
+            // creates or destroys a document.
+            if (row.step === "vendor_credit_add" || row.step === "bill_payment_add") {
+              classifyQbError({ message, code: statusCode });
+              await failPipelineRow(row.id, message);
+            } else {
+              await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
+            }
+            logger.warn(`${LOG_PREFIX} ⚠️ ${row.step} ${row.id}: ${message}`);
+            continue;
+          }
+
+          const ret =
+            row.step === "vendor_credit_add"
+              ? (rsNode as { VendorCreditRet?: { TxnID?: string; EditSequence?: string } })
+                  .VendorCreditRet
+              : row.step === "bill_payment_add"
+                ? (
+                    rsNode as {
+                      BillPaymentCheckRet?: { TxnID?: string; EditSequence?: string };
+                      BillPaymentCreditCardRet?: { TxnID?: string; EditSequence?: string };
+                    }
+                  ).BillPaymentCheckRet ??
+                  (
+                    rsNode as {
+                      BillPaymentCreditCardRet?: { TxnID?: string; EditSequence?: string };
+                    }
+                  ).BillPaymentCreditCardRet
+                : null;
+
+          const wonConfirmGl = await confirmPipelineRow(
+            row.id,
+            ret?.TxnID ?? row.qb_txn_id ?? null,
+            null,
+            (rsNode as object) ?? null
+          );
+          if (wonConfirmGl && row.reference_id) {
+            try {
+              if (row.step === "vendor_credit_add" && ret) {
+                await handleVendorCreditAddConfirmed(
+                  poolAsRawKnexHandlerShim(pool),
+                  row.reference_id,
+                  ret
+                );
+              } else if (row.step === "vendor_credit_void") {
+                await handleVendorCreditVoidConfirmed(
+                  poolAsRawKnexHandlerShim(pool),
+                  row.reference_id,
+                  null
+                );
+              } else if (row.step === "bill_payment_add" && ret) {
+                await handleBillPaymentAddConfirmed(
+                  poolAsRawKnexHandlerShim(pool),
+                  row.reference_id,
+                  ret
+                );
+              } else if (row.step === "bill_payment_void") {
+                await handleBillPaymentVoidConfirmed(
+                  poolAsRawKnexHandlerShim(pool),
+                  row.reference_id,
+                  null
+                );
+              }
+              logger.info(
+                `${LOG_PREFIX} ✅ ${row.step} ${row.id} confirmed — TxnID=${ret?.TxnID ?? row.qb_txn_id ?? "(void)"}`
+              );
+            } catch (handlerErr) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ ${row.step} ${row.id} confirmed on the pipeline but its write-back failed: ${handlerErr instanceof Error ? handlerErr.message : String(handlerErr)}`
+              );
+            }
+          }
+          continue;
+        }
+
         const paymentBill =
           row.step === "vendor_bill_payment_check"
             ? extractVendorBillQueryRet(msgs, row.qb_txn_id)

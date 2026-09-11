@@ -22,6 +22,8 @@ import { randomUUID } from "crypto";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../purchase-orders/_lib/format";
 import { recomputeBillFinanceLinks } from "../../../../lib/finance/recompute-bill-finance";
+import { loadVendorBillPayablesDetail } from "../../../../lib/bill-payments";
+import { getDbPool } from "../../../utils/db-pool";
 import {
   qtyExceedsRemainingMessage,
   resolveRemainingPoQuantities,
@@ -950,6 +952,12 @@ export async function GET(
   );
   const revisions = revisionsResult.rows;
 
+  // gl-purchases-v2 §3: AP balance + the payments/credits that make it up.
+  // A separate pg pool, not `knex` — `computeBillBalance` speaks pg `$1`
+  // bindings, never knex `?` (see recompute-bill-finance.ts's split).
+  const { balance, payments, credit_applications } =
+    await loadVendorBillPayablesDetail(getDbPool(), id);
+
   return res.json({
     vendor_bill: {
       ...header,
@@ -967,6 +975,13 @@ export async function GET(
       confirm_gate,
       clearing_drift,
       revisions,
+      payable_cents: balance?.payable_cents ?? null,
+      paid_cents: balance?.paid_cents ?? null,
+      credited_cents: balance?.credited_cents ?? null,
+      balance_cents: balance?.balance_cents ?? null,
+      paid_status: balance?.paid_status ?? null,
+      payments,
+      credit_applications,
     },
   });
 }

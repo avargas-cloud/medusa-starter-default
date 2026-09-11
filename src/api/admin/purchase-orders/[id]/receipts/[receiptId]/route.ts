@@ -27,6 +27,9 @@ import { deletePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/
 import { updatePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/update-purchase-order-receipt";
 import { onPoReceiveApplied, onPoReceiveReversed } from "../../../../../../lib/inventory-transfer-link";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
+import { reverseReceipt } from "../../../../../../lib/ledger";
+import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
 import { getActorUserId, UnauthenticatedError } from "../../../_lib/auth";
 import { zodErrorToBody } from "../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../_lib/service-resolver";
@@ -279,6 +282,14 @@ export async function DELETE(
       raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
     };
   }).resolve("__pg_connection__");
+
+  // GL (best-effort, gl-purchases-v2 §5): reversar ANTES del hard delete —
+  // esta ruta destruye la fila, no la marca (ver docstring del archivo), y
+  // `reverseReceipt` necesita leerla para resolver el día de la reversa.
+  await runLedgerHook(
+    (client) => reverseReceipt(client, receiptId, resolveActorId(req)),
+    { source_kind: "po_receipt", source_id: receiptId }
+  );
 
   try {
     const { result } = await deletePurchaseOrderReceiptWorkflow(req.scope).run(

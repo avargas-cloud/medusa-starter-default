@@ -20,6 +20,14 @@ export const PURCHASE_PIPELINE_STEPS = [
   "vendor_bill_mod",
   "vendor_bill_rebuild_preflight",
   "vendor_bill_rebuild_delete",
+  // gl-purchases-v2 §4: vendor credits + pay bills are Purchase-side
+  // documents, same tab as vendor_bill_add/void — no dedicated tab this
+  // phase (dispatch is R3; adding UI for a lane the bridge never contacts
+  // yet is out of scope).
+  "vendor_credit_add",
+  "vendor_credit_void",
+  "bill_payment_add",
+  "bill_payment_void",
 ] as const;
 
 /** Steps surfaced by the Inventory Adjustments tab. */

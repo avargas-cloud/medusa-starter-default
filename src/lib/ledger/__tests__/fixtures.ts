@@ -1,4 +1,4 @@
-import { AccountMap, LedgerAccount } from "../types";
+import { AccountMap, LedgerAccount, PurchaseAccountMap } from "../types";
 
 export function account(
   id: string,
@@ -20,6 +20,15 @@ export function fakeAccountMap(): AccountMap {
     income_default: account("INCOME-1", "Income", "credit"),
     cogs_default: account("COGS-1", "CostOfGoodsSold", "debit"),
     bad_debt: account("BADDEBT-1", "Expense", "debit"),
+  };
+}
+
+/** gl-purchases-v2: mapa base + los dos keys nuevos, para los builders de compras. */
+export function fakePurchaseAccountMap(): PurchaseAccountMap {
+  return {
+    ...fakeAccountMap(),
+    accounts_payable: account("AP-1", "AccountsPayable", "credit"),
+    inventory_offset: account("OFFSET-1", "OtherCurrentLiability", "credit"),
   };
 }
 

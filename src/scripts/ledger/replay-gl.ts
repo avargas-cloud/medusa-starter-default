@@ -3,7 +3,13 @@
  *
  * Uso:
  *   ./node_modules/.bin/tsx src/scripts/ledger/replay-gl.ts \
- *     --from 2026-04-14 --to 2026-08-31 [--kinds pos_invoice,customer_payment] [--apply]
+ *     --from 2026-04-14 [--to 2026-08-31] [--kinds pos_invoice,customer_payment] [--apply]
+ *
+ * `--to` por defecto es HOY en ET (`getBusinessDateString`) — Phase 7
+ * (2026-09-11): antes era obligatorio y sin él el script cortaba con un
+ * error explícito, que igual costaba una corrida perdida cada vez que se
+ * omitía por apuro. `--from` sigue siendo obligatorio a propósito: no hay un
+ * default de negocio razonable (el go-live varía por ambiente).
  *
  * `--apply` se RECHAZA salvo que `DATABASE_URL` apunte al sandbox
  * (`:5499/`) o `GL_REPLAY_ALLOW_PROD=1` esté seteada — y esa env var NUNCA se
@@ -12,6 +18,7 @@
  */
 import { Pool } from "pg";
 
+import { getBusinessDateString } from "../../lib/date/et";
 import type { LedgerSourceKind } from "../../lib/ledger";
 import { replayLedger } from "../../lib/ledger";
 
@@ -34,12 +41,12 @@ async function main(): Promise<void> {
   }
 
   const from = arg("from");
-  const to = arg("to");
-  if (!from || !to) {
-    console.error("replay-gl: --from y --to son obligatorios (YYYY-MM-DD, ET).");
+  if (!from) {
+    console.error("replay-gl: --from es obligatorio (YYYY-MM-DD, ET).");
     process.exit(1);
     return;
   }
+  const to = arg("to") ?? getBusinessDateString();
 
   const kindsArg = arg("kinds");
   const kinds = kindsArg

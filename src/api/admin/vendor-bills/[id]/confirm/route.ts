@@ -11,6 +11,9 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
+import { postVendorBill } from "../../../../../lib/ledger";
+import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
+import { resolveActorId } from "../../../../../lib/pos/supervisor-pin-guard";
 import {
   normalizeRequiredVendorBillReference,
   VENDOR_BILL_REFERENCE_REQUIRED_BODY,
@@ -205,6 +208,12 @@ export async function POST(
       code: "confirm_failed",
     });
   }
+
+  // GL (best-effort, gl-purchases-v2 §5): la confirmación ya commiteó — postear el bill.
+  await runLedgerHook(
+    (client) => postVendorBill(client, id, resolveActorId(req)),
+    { source_kind: "vendor_bill", source_id: id }
+  );
 
   const headerResult = await knex.raw(
     `SELECT *

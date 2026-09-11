@@ -42,7 +42,7 @@ describe("evaluateRetryGate", () => {
     expect(verdict.allow).toBe(true);
   });
 
-  it("ADD_CAPABLE_STEPS contains exactly the 12 specified steps", () => {
+  it("ADD_CAPABLE_STEPS contains exactly the 14 specified steps", () => {
     expect([...ADD_CAPABLE_STEPS].sort()).toEqual(
       [
         "estimate",
@@ -57,6 +57,8 @@ describe("evaluateRetryGate", () => {
         "commission_check",
         "commission_payment",
         "vendor_bill_add",
+        "vendor_credit_add",
+        "bill_payment_add",
       ].sort()
     );
   });
@@ -268,7 +270,7 @@ describe("evaluateRetryGate", () => {
     }
   );
 
-  it("ADD_CAPABLE_STEPS covers exactly the 12 steps whose Add mints a document", () => {
+  it("ADD_CAPABLE_STEPS covers exactly the 14 steps whose Add mints a document", () => {
     expect([...ADD_CAPABLE_STEPS].sort()).toEqual(
       [
         "apply_payment",
@@ -282,6 +284,8 @@ describe("evaluateRetryGate", () => {
         "sales_order",
         "sales_receipt",
         "vendor_bill_add",
+        "vendor_credit_add",
+        "bill_payment_add",
         "write_check",
       ].sort()
     );

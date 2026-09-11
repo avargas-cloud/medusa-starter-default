@@ -55,7 +55,15 @@ export type PipelineStep =
   // ReceivePaymentAdd sin aplicar depositado a la misma clearing (el crédito).
   // Ver lib/quickbooks/handlers/handle-commission-settlement.ts.
   | "commission_check"
-  | "commission_payment";
+  | "commission_payment"
+  // gl-purchases-v2 §4 (docs/GL_PURCHASES_PLAN.md): vendor credits + pay
+  // bills. Own-document chains via qb-purchase-dependency-chain.ts, same
+  // shape as vendor_bill_add/vendor_bill_void. See
+  // qb-vendor-credit-enqueue.ts / qb-bill-payment-enqueue.ts.
+  | "vendor_credit_add"
+  | "vendor_credit_void"
+  | "bill_payment_add"
+  | "bill_payment_void";
 
 export type PipelineStatus =
   | "pending"

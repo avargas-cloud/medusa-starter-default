@@ -7,7 +7,14 @@ export type PurchaseQbStep =
   | "vendor_bill_add"
   | "vendor_bill_mod"
   | "vendor_bill_rebuild_preflight"
-  | "vendor_bill_rebuild_delete";
+  | "vendor_bill_rebuild_delete"
+  // gl-purchases-v2 §4: each keyed by its OWN document id (like an expense
+  // bill with no PO, above) — a credit/payment has no purchase order, and its
+  // chain only ever holds its own add followed, later, by its own void.
+  | "vendor_credit_add"
+  | "vendor_credit_void"
+  | "bill_payment_add"
+  | "bill_payment_void";
 
 export interface PurchaseDependencyKnex {
   raw: (
@@ -22,7 +29,12 @@ export interface PurchaseDependencyKnex {
 export interface EnqueuePurchaseQbOperationInput {
   purchaseOrderId: string;
   referenceId: string;
-  referenceType: "purchase_order" | "item_receipt" | "vendor_bill";
+  referenceType:
+    | "purchase_order"
+    | "item_receipt"
+    | "vendor_bill"
+    | "vendor_credit"
+    | "bill_payment";
   step: PurchaseQbStep;
   payload: Record<string, unknown>;
   qbTxnId?: string | null;

@@ -30,6 +30,148 @@
 
 import { materializePaidShortTranches } from "../china-finance/bill-split-payment";
 
+// ─── gl-purchases-v2 §3 — bill balance (pg client, $1 bindings) ───
+//
+// Appended here (not a new file) per the plan: "extend
+// lib/finance/recompute-bill-finance.ts ... with computeBillBalance". Uses a
+// DIFFERENT client shape than the China-finance code above (`RecomputeKnex`,
+// `?` bindings) — this half of the file talks to a raw `pg` client/pool with
+// `$1` bindings, per gl-purchases-v2's convention (never mix the two styles
+// in one query).
+
+export type PgQueryClient = {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
+
+export type BillPaidStatus = "open" | "partial" | "paid";
+
+export interface BillBalance {
+  vendor_bill_id: string;
+  payable_cents: number;
+  paid_cents: number;
+  credited_cents: number;
+  balance_cents: number;
+  paid_status: BillPaidStatus;
+}
+
+function deriveStatus(payableCents: number, balanceCents: number): BillPaidStatus {
+  if (payableCents <= 0) return balanceCents <= 0 ? "paid" : "open";
+  if (balanceCents <= 0) return "paid";
+  if (balanceCents < payableCents) return "partial";
+  return "open";
+}
+
+interface PayableRow {
+  id: string;
+  status: string;
+  qb_source: string | null;
+  qb_amount_due_cents: number | string | null;
+  line_total: number | string | null;
+}
+
+/**
+ * `payable_cents` — plan §1: Σ `COALESCE(amount_cents, qty × unit_cost_cents)`
+ * over every non-deleted line, EXCEPT the 66 `adopted` bills with no lines,
+ * whose payable is `qb_amount_due_cents` (informative QB snapshot, since
+ * there is nothing else to sum).
+ */
+async function loadPayableRows(
+  client: PgQueryClient,
+  billIds: string[]
+): Promise<Map<string, PayableRow>> {
+  const { rows } = (await client.query(
+    `SELECT vb.id, vb.status, vb.qb_source, vb.qb_amount_due_cents,
+            COUNT(vbl.id) AS line_count,
+            COALESCE(SUM(COALESCE(vbl.amount_cents, vbl.qty * vbl.unit_cost_cents)), 0)::bigint AS line_total
+       FROM vendor_bill vb
+       LEFT JOIN vendor_bill_line vbl
+         ON vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
+      WHERE vb.id = ANY($1::text[]) AND vb.deleted_at IS NULL
+      GROUP BY vb.id, vb.status, vb.qb_source, vb.qb_amount_due_cents`,
+    [billIds]
+  )) as { rows: (PayableRow & { line_count: number | string })[] };
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+function toIntCents(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(v ?? 0);
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+/**
+ * Balance of a single bill: `balance_cents = payable − Σ active payment
+ * allocations − Σ active credit applications` (plan §3). `qb_is_paid` never
+ * participates — it is QB's own mirror, not a derivation input.
+ */
+export async function computeBillBalance(
+  client: PgQueryClient,
+  vendorBillId: string
+): Promise<BillBalance | null> {
+  const batch = await computeBillBalancesBatch(client, [vendorBillId]);
+  return batch.get(vendorBillId) ?? null;
+}
+
+/** Batch variant — one round trip per table, used by the payables report. */
+export async function computeBillBalancesBatch(
+  client: PgQueryClient,
+  billIds: string[]
+): Promise<Map<string, BillBalance>> {
+  const result = new Map<string, BillBalance>();
+  if (billIds.length === 0) return result;
+
+  const payableRows = await loadPayableRows(client, billIds);
+
+  const { rows: paidRows } = (await client.query(
+    `SELECT a.vendor_bill_id, COALESCE(SUM(a.amount_cents), 0)::bigint AS paid
+       FROM vendor_bill_payment_allocation a
+       JOIN vendor_bill_payment p ON p.id = a.payment_id
+      WHERE a.vendor_bill_id = ANY($1::text[]) AND p.status = 'posted'
+      GROUP BY a.vendor_bill_id`,
+    [billIds]
+  )) as { rows: Array<{ vendor_bill_id: string; paid: number | string }> };
+  const paidByBill = new Map(paidRows.map((r) => [r.vendor_bill_id, toIntCents(r.paid)]));
+
+  const { rows: creditRows } = (await client.query(
+    `SELECT ca.vendor_bill_id, COALESCE(SUM(ca.amount_cents), 0)::bigint AS credited
+       FROM vendor_credit_application ca
+       JOIN vendor_credit vc ON vc.id = ca.credit_id
+      WHERE ca.vendor_bill_id = ANY($1::text[]) AND ca.voided_at IS NULL AND vc.status = 'posted'
+      GROUP BY ca.vendor_bill_id`,
+    [billIds]
+  )) as { rows: Array<{ vendor_bill_id: string; credited: number | string }> };
+  const creditedByBill = new Map(
+    creditRows.map((r) => [r.vendor_bill_id, toIntCents(r.credited)])
+  );
+
+  for (const id of billIds) {
+    const row = payableRows.get(id) as
+      | (PayableRow & { line_count: number | string })
+      | undefined;
+    if (!row) continue;
+    // Plan §1: the 66 `adopted` (from QB) bills with zero lines carry
+    // `qb_amount_due_cents` as their payable — there is nothing else to sum.
+    // A bill with real lines (adopted or not) always sums those instead.
+    const noLines = toIntCents(row.line_count) === 0;
+    const payableCents =
+      row.qb_source === "adopted" && noLines
+        ? toIntCents(row.qb_amount_due_cents)
+        : toIntCents(row.line_total);
+    const paidCents = paidByBill.get(id) ?? 0;
+    const creditedCents = creditedByBill.get(id) ?? 0;
+    const balanceCents = payableCents - paidCents - creditedCents;
+    result.set(id, {
+      vendor_bill_id: id,
+      payable_cents: payableCents,
+      paid_cents: paidCents,
+      credited_cents: creditedCents,
+      balance_cents: balanceCents,
+      paid_status: deriveStatus(payableCents, balanceCents),
+    });
+  }
+
+  return result;
+}
+
 export type RecomputeKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
 };

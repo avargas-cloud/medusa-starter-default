@@ -94,3 +94,50 @@ export function allocateEqually(n: number, total: bigint): bigint[] {
   const remainder = total - base * BigInt(n);
   return Array.from({ length: n }, (_, i) => base + (BigInt(i) < remainder ? 1n : 0n));
 }
+
+/**
+ * bigint/number cents → dollar string with exactly 2 decimals, for QBXML
+ * `<Amount>`/`<PaymentAmount>`/`<AppliedAmount>` fields (gl-purchases-v2 §4).
+ * Never float math on the cents themselves — only the final /100 division,
+ * which is exact for an integer numerator at 2 decimal places.
+ */
+export function centsToDollarsString(cents: bigint | number): string {
+  const n = typeof cents === "bigint" ? cents : BigInt(Math.round(cents));
+  const negative = n < 0n;
+  const abs = negative ? -n : n;
+  const dollars = abs / 100n;
+  const remainder = abs % 100n;
+  const str = `${negative ? "-" : ""}${dollars.toString()}.${remainder.toString().padStart(2, "0")}`;
+  return str;
+}
+
+/**
+ * gl-purchases-v2: una línea de journal cuyo LADO lo decide el signo del
+ * monto — positivo debita `account`, negativo la credita por su valor
+ * absoluto, cero omite la línea entera (evita el CHECK "un solo lado > 0"
+ * de `validateLines`, igual que el caso `total = 0` de `buildInvoiceLines`).
+ * Import type inline para no crear un ciclo con `types.ts`.
+ */
+export function signedLine(
+  role: string,
+  account: import("./types").LedgerAccount,
+  cents: bigint
+): import("./types").LedgerLine | null {
+  if (cents === 0n) return null;
+  return cents > 0n
+    ? { role, account, debit_cents: cents, credit_cents: 0n }
+    : { role, account, debit_cents: 0n, credit_cents: -cents };
+}
+
+/**
+ * `bank_journal_line.role` tiene el CHECK `^[a-z][a-z0-9_]{0,79}$` (gl-core-v1
+ * §4) — un role dinámico por cuenta (líneas `qb_account` de vendor bills/
+ * credits, gl-purchases-v2) arma su sufijo desde un `qb_list_id` REAL como
+ * `"8000018A-1786738459"`: mayúscula y guión, ambos ilegales. Minúsculas +
+ * todo lo que no sea `[a-z0-9]` a `_`; el prefijo ya garantiza que arranca
+ * con letra.
+ */
+export function sanitizeRole(prefix: string, id: string): string {
+  const suffix = id.toLowerCase().replace(/[^a-z0-9]/g, "_");
+  return `${prefix}_${suffix}`.slice(0, 80);
+}

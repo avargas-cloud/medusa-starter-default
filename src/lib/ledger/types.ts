@@ -7,7 +7,11 @@ export type LedgerSourceKind =
   | "pos_invoice"
   | "pos_credit_memo"
   | "customer_payment"
-  | "rounding_adjustment";
+  | "rounding_adjustment"
+  | "po_receipt"
+  | "vendor_bill"
+  | "vendor_credit"
+  | "vendor_bill_payment";
 
 export interface LedgerAccount {
   id: string;
@@ -90,6 +94,25 @@ export const ACCOUNT_MAP_KEYS = [
 ] as const;
 export type AccountMapKey = (typeof ACCOUNT_MAP_KEYS)[number];
 export type AccountMap = Record<AccountMapKey, LedgerAccount>;
+
+/**
+ * gl-purchases-v2 §2/§3 — keys nuevos, deliberadamente NO agregados a
+ * `ACCOUNT_MAP_KEYS`: ese array es lo que `loadAccountMap` exige siempre, y
+ * los kinds de plan-1 (invoice/credit-memo/payment/rounding) no deben
+ * empezar a fallar `GL_ACCOUNT_MAP_MISSING` sólo porque un ambiente todavía
+ * no tiene sembrado `accounts_payable`/`inventory_offset` — `inventory_offset`
+ * en particular no tiene ListID de QB real hoy (no existe una "Inventory
+ * Offset Account" en el catálogo; alguien la tiene que crear en QB Desktop
+ * antes de sembrar la fila). `loadPurchaseAccountMap` (accounts.ts) pide el
+ * mapa base MÁS estas dos, sólo para los documentos de compras.
+ */
+export const PURCHASE_ACCOUNT_MAP_KEYS = [
+  "accounts_payable",
+  "inventory_offset",
+] as const;
+export type PurchaseAccountMapKey = (typeof PURCHASE_ACCOUNT_MAP_KEYS)[number];
+export type PurchaseAccountMap = AccountMap &
+  Record<PurchaseAccountMapKey, LedgerAccount>;
 
 /** Una línea de invoice ya resuelta contra cuentas — el builder es puro, sin DB. */
 export interface InvoiceLineSnapshot {

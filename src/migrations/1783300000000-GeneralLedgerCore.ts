@@ -18,6 +18,20 @@ export class GeneralLedgerCore1783300000000 implements MigrationInterface {
   name = "GeneralLedgerCore1783300000000";
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // Guard (2026-09-10): el journal del GL ES el de Banking. En producción el módulo
+    // Banking sólo se registra con BANKING_ENABLED=true, y sin registro sus migraciones
+    // nunca crean bank_journal_entry. Fallar ACÁ, ruidoso y antes de tocar nada, deja el
+    // predeploy de Railway en rojo con el build viejo ACTIVE — mejor que un GL a medias.
+    const guardRows = (await queryRunner.query(
+      `SELECT to_regclass('public.bank_journal_entry') IS NOT NULL AS present`
+    )) as Array<{ present: boolean }>;
+    if (!guardRows[0]?.present) {
+      throw new Error(
+        "GeneralLedger migration: falta bank_journal_entry. Registrá el módulo Banking " +
+          "(BANKING_ENABLED=true) para que sus migraciones corran ANTES (medusa db:migrate " +
+          "precede a run-custom-migrations.js), y re-desplegá."
+      );
+    }
     // ── §3: qb_account gana account_number/parent_list_id/normal_balance ──
     await queryRunner.query(`
       ALTER TABLE qb_account

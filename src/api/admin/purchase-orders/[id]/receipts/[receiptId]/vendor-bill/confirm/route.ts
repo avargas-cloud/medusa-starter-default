@@ -59,6 +59,9 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../../../../../lib/purchase-orders/vendor-bill-receipts";
+import { postOrRepostVendorBill } from "../../../../../../../../lib/ledger";
+import { runLedgerHook } from "../../../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { resolveActorId } from "../../../../../../../../lib/pos/supervisor-pin-guard";
 import { getActorUserId, UnauthenticatedError } from "../../../../../_lib/auth";
 import { getPurchaseOrdersService } from "../../../../../_lib/service-resolver";
 
@@ -1297,6 +1300,12 @@ export async function POST(
     }
     await trx.commit();
     knex = rootKnex;
+
+    // GL (best-effort, gl-purchases-v2 §5): la confirmación ya commiteó — postear/repostear el bill.
+    await runLedgerHook(
+      (client) => postOrRepostVendorBill(client, bill.id, resolveActorId(req)),
+      { source_kind: "vendor_bill", source_id: bill.id }
+    );
   } catch (error) {
     await trx.rollback().catch(() => undefined);
     knex = rootKnex;

@@ -1,6 +1,13 @@
 import type { PoolClient } from "pg";
 
-import { ACCOUNT_MAP_KEYS, AccountMap, LedgerAccount, LedgerError } from "./types";
+import {
+  ACCOUNT_MAP_KEYS,
+  AccountMap,
+  LedgerAccount,
+  LedgerError,
+  PURCHASE_ACCOUNT_MAP_KEYS,
+  PurchaseAccountMap,
+} from "./types";
 
 type MapRow = {
   key: string;
@@ -33,24 +40,45 @@ function toAccount(row: MapRow): LedgerAccount {
  * mantiene la pantalla y el motor sincronizados con lo que un owner aprobó) más
  * el `normal_balance` VIVO de `qb_account` (informativo, no valida contra él).
  */
-export async function loadAccountMap(client: PoolClient): Promise<AccountMap> {
+async function loadAccountMapByKeys(
+  client: PoolClient,
+  keys: readonly string[]
+): Promise<Record<string, LedgerAccount>> {
   const { rows } = await client.query<MapRow>(
     `SELECT m.key, m.account_snapshot, a.normal_balance
      FROM gl_account_map m
      LEFT JOIN qb_account a ON a.qb_list_id = m.qb_list_id
      WHERE m.key = ANY($1::text[])`,
-    [ACCOUNT_MAP_KEYS]
+    [keys]
   );
   const found = new Map(rows.map((r) => [r.key, r]));
-  const missing = ACCOUNT_MAP_KEYS.filter((k) => !found.has(k));
+  const missing = keys.filter((k) => !found.has(k));
   if (missing.length) throw new LedgerError("GL_ACCOUNT_MAP_MISSING", { missing });
 
-  const map = {} as AccountMap;
-  for (const key of ACCOUNT_MAP_KEYS) {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- key viene de ACCOUNT_MAP_KEYS y ya se validó que no falta arriba
+  const map: Record<string, LedgerAccount> = {};
+  for (const key of keys) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- key viene de `keys` y ya se validó que no falta arriba
     map[key] = toAccount(found.get(key)!);
   }
   return map;
+}
+
+export async function loadAccountMap(client: PoolClient): Promise<AccountMap> {
+  return (await loadAccountMapByKeys(client, ACCOUNT_MAP_KEYS)) as AccountMap;
+}
+
+/**
+ * gl-purchases-v2 §2/§3: los documentos de compras necesitan además
+ * `accounts_payable`/`inventory_offset` (`PURCHASE_ACCOUNT_MAP_KEYS`, ver el
+ * comentario en `types.ts` sobre por qué esas dos NO entran a `ACCOUNT_MAP_KEYS`
+ * — un ambiente sin sembrarlas no debe romper plan-1). Una sola query trae
+ * las 9+2 keys.
+ */
+export async function loadPurchaseAccountMap(
+  client: PoolClient
+): Promise<PurchaseAccountMap> {
+  const keys = [...ACCOUNT_MAP_KEYS, ...PURCHASE_ACCOUNT_MAP_KEYS];
+  return (await loadAccountMapByKeys(client, keys)) as PurchaseAccountMap;
 }
 
 /**
