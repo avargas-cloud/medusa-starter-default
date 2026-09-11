@@ -116,9 +116,16 @@ export async function createPurchaseOrderFromQb(
     : await ensureVendor(client, po.vendor_ref, opts.runId, opts.ensureLog);
   const vendorNameSnapshot = knownVendor?.full_name ?? po.vendor_ref.full_name;
 
-  const seqRes = await client.query(`SELECT nextval('custom_purchase_order_seq') AS seq`);
+  // Numeración HISTÓRICA (decisión del operador 2026-09-11): los POs traídos de QB van en el
+  // rango 1..999 como `PO-0001`… en orden de creación (el script recorre ventanas cronológicas),
+  // así quedan ANTES de los del POS (seq ≥ 1000) en el orden "By PO #" y no consumen la
+  // secuencia `custom_purchase_order_seq` de los POs reales.
+  const seqRes = await client.query(
+    `SELECT coalesce(max(seq), 0) + 1 AS seq FROM purchase_order WHERE deleted_at IS NULL AND seq BETWEEN 1 AND 999`
+  );
   const seq = Number((seqRes.rows[0] as { seq: string | number }).seq);
-  const number = `PO-${seq}`;
+  if (seq > 999) throw new Error(`PO ${po.txn_id}: se agotó el rango histórico PO-0001..PO-0999`);
+  const number = `PO-${String(seq).padStart(4, "0")}`;
 
   const status = derivePoStatus(po);
   const businessAt = businessInstant(po.txn_date);
