@@ -41,7 +41,7 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
  SELECT e.id,e.day,l.debit_cents-l.credit_cents INTO opening_entry_id,opening_day,opening_amount
    FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening'
-   WHERE e.source_kind='opening_balance' AND e.source_id=s.account_list_id AND l.account_list_id=s.account_list_id
+   WHERE e.source_kind='opening_balance' AND e.kind='document' AND e.source_id=s.account_list_id AND l.account_list_id=s.account_list_id
      AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id);
  SELECT COUNT(*),COALESCE(SUM(amount_cents) FILTER(WHERE amount_cents>0),0),
    COALESCE(-SUM(amount_cents) FILTER(WHERE amount_cents<0),0) INTO n,credits,debits

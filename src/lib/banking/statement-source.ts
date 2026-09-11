@@ -44,7 +44,8 @@ export async function statementBank(
     }>(
       `SELECT e.id,e.day AS cut_date,(l.debit_cents-l.credit_cents)::float8 AS statement_balance_cents
     FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening'
-    WHERE e.source_kind='opening_balance' AND e.source_id=$1 AND l.account_list_id=$1
+    -- A reversal copies every line (role included), so only kind='document' is the opening itself.
+    WHERE e.source_kind='opening_balance' AND e.kind='document' AND e.source_id=$1 AND l.account_list_id=$1
       AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)`,
       [account.id]
     )

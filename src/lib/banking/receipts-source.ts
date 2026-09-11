@@ -234,7 +234,7 @@ export async function paymentReceiptSource(
     (
       await client.query(
         `SELECT e.id FROM bank_journal_entry e WHERE e.source_kind='customer_payment' AND e.source_id=$1
-    AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) LIMIT 1`,
+    AND e.kind='document' AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) LIMIT 1`,
         [id]
       )
     ).rowCount
