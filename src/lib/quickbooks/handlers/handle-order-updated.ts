@@ -23,6 +23,10 @@ import {
   pollUntilQbConfirmed,
   submitPipelineRowById,
 } from "../qb-pipeline";
+import {
+  gateModDispatch,
+  MOD_DISPATCH_SERIALIZER_WAIT_MS,
+} from "../pipeline/mod-dispatch-gate";
 import { withQbSerialized } from "../qb-serializer";
 
 /**
@@ -41,8 +45,19 @@ import { withQbSerialized } from "../qb-serializer";
  *   - withQbSerialized still guarantees sequential bridge calls per order
  *     across sales_order + sales_order_mod.
  *
+ * Consolidator path (isCron + pipelineRowId) — 2026-09-11: the dispatcher
+ *   NEVER waits for a confirmation. Before touching the bridge the row passes
+ *   `gateModDispatch`: with an older operation in flight on the same document
+ *   the row is deferred (pending + next_retry_at) instead of blocking the tick,
+ *   and after the submit the callback returns — the submitted-poller confirms
+ *   within a minute. Waiting here used to hold the worker's only job slot for
+ *   5 minutes per edit (see pipeline/mod-dispatch-gate.ts).
+ *
  * Returns:
  *   - "coalesced" — absorbed by a queued row or parked behind the in-flight ADD.
+ *   - "deferred"  — consolidator path only: an older operation on the same
+ *                   document is in flight; the row went back to pending with
+ *                   next_retry_at and a later tick re-dispatches it.
  *   - "scheduled" — serialized dispatch scheduled (or ran, when awaited).
  *   - "skipped"   — order has no qb_sales_order.txn_id and no in-flight ADD.
  */
@@ -62,7 +77,7 @@ export async function handleOrderUpdated(
      */
     excludeRowId?: string;
   }
-): Promise<"coalesced" | "scheduled" | "skipped"> {
+): Promise<"coalesced" | "deferred" | "scheduled" | "skipped"> {
   const LOG_PREFIX = "[QB-ORDER-UPDATED]";
 
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
@@ -159,6 +174,21 @@ export async function handleOrderUpdated(
     }
   }
   const dispatchRowId = rowId;
+
+  // Consolidator path: the dispatch pass already claimed this row. If an older
+  // operation on this Sales Order is still in flight, step aside NOW — never
+  // wait inside the tick for a confirmation another cron has to write.
+  if (opts?.isCron && opts?.pipelineRowId) {
+    const gate = await gateModDispatch({
+      rowId: dispatchRowId,
+      orderId,
+      steps: ["sales_order", "sales_order_mod"],
+      step: "sales_order_mod",
+      logger,
+      logPrefix: LOG_PREFIX,
+    });
+    if (gate === "deferred") return "deferred";
+  }
 
   const runCallback = async (): Promise<void> => {
     if (!opts?.pipelineRowId) {
@@ -263,9 +293,17 @@ export async function handleOrderUpdated(
           dispatchRowId,
           result.data?.operationId || null
         );
-        const outcome = await pollUntilQbConfirmed(dispatchRowId);
-        if (outcome === "timeout") {
-          logger.warn(`${LOG_PREFIX} Poll timed out for rowId=${dispatchRowId}`);
+        if (opts?.isCron) {
+          // Never wait inside a scheduled job: the submitted-poller confirms
+          // this row on its next tick, and it can only run once we return.
+          logger.info(
+            `${LOG_PREFIX} sales_order_mod ${dispatchRowId} submitted op=${result.data?.operationId ?? "?"} — confirmation left to the submitted-poller`
+          );
+        } else {
+          const outcome = await pollUntilQbConfirmed(dispatchRowId);
+          if (outcome === "timeout") {
+            logger.warn(`${LOG_PREFIX} Poll timed out for rowId=${dispatchRowId}`);
+          }
         }
       } else {
         await failPipelineRow(dispatchRowId, result.error ?? "QB SO MOD failed");
@@ -288,7 +326,13 @@ export async function handleOrderUpdated(
       excludeRowId: opts?.excludeRowId ?? dispatchRowId,
     },
     runCallback,
-    { logger }
+    {
+      logger,
+      // Cron path: the gate already ruled out an OLDER in-flight operation, so
+      // anything the serializer still sees is a younger sibling about to defer
+      // itself. Never sit in a scheduled job for the default 5 minutes.
+      ...(opts?.isCron ? { maxWaitMs: MOD_DISPATCH_SERIALIZER_WAIT_MS } : {}),
+    }
   );
 
   if (opts?.awaitSerialized) {
