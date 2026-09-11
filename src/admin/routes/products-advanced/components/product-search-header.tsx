@@ -1,8 +1,10 @@
 import { MagnifyingGlass } from "@medusajs/icons";
-import { Heading, Text, Input, Select } from "@medusajs/ui";
+import { Button, Heading, Text, Input, Select } from "@medusajs/ui";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { SyncStatusButton } from "../../../components/shared/sync-status-button";
+
+export type StatusFilter = "all" | "published" | "draft";
 
 interface ProductSearchHeaderProps {
   searchQuery: string;
@@ -13,7 +15,9 @@ interface ProductSearchHeaderProps {
   categories: any[];
   isLoadingCategories: boolean;
   statusFilter: string;
-  setStatusFilter: (status: "all" | "published") => void;
+  setStatusFilter: (status: StatusFilter) => void;
+  publishingMode: boolean;
+  setPublishingMode: (on: boolean) => void;
   sortBy: string;
   setSortBy: (sort: string) => void;
   totalHits: number;
@@ -30,6 +34,8 @@ export const ProductSearchHeader = ({
   isLoadingCategories,
   statusFilter,
   setStatusFilter,
+  publishingMode,
+  setPublishingMode,
   sortBy,
   setSortBy,
   totalHits,
@@ -58,28 +64,41 @@ export const ProductSearchHeader = ({
           </Text>
         </div>
 
-        {/* Category Quick Search */}
-        <div className="w-[220px]">
-          <Select
-            value={categoryFilter}
-            onValueChange={(value) => {
-              setCategoryFilter(value);
-              setCurrentPage(0);
-            }}
-            disabled={isLoadingCategories}
+        <div className="flex items-center gap-3">
+          {/* Publishing mode: Status column becomes a draft/published switch */}
+          <Button
+            size="small"
+            variant={publishingMode ? "primary" : "secondary"}
+            onClick={() => setPublishingMode(!publishingMode)}
+            data-testid="publishing-mode-toggle"
+            aria-pressed={publishingMode}
           >
-            <Select.Trigger>
-              <Select.Value placeholder="Select Category..." />
-            </Select.Trigger>
-            <Select.Content>
-              <Select.Item value="all">All Categories</Select.Item>
-              {categories?.map((c: any) => (
-                <Select.Item key={c.id} value={c.handle}>
-                  {c.name}
-                </Select.Item>
-              ))}
-            </Select.Content>
-          </Select>
+            {publishingMode ? "Exit publishing mode" : "Publishing mode"}
+          </Button>
+
+          {/* Category Quick Search */}
+          <div className="w-[220px]">
+            <Select
+              value={categoryFilter}
+              onValueChange={(value) => {
+                setCategoryFilter(value);
+                setCurrentPage(0);
+              }}
+              disabled={isLoadingCategories}
+            >
+              <Select.Trigger>
+                <Select.Value placeholder="Select Category..." />
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="all">All Categories</Select.Item>
+                {categories?.map((c: any) => (
+                  <Select.Item key={c.id} value={c.handle}>
+                    {c.name}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -106,7 +125,7 @@ export const ProductSearchHeader = ({
           {/* Status Filter */}
           <Select
             value={statusFilter}
-            onValueChange={(value: "all" | "published") => {
+            onValueChange={(value: StatusFilter) => {
               setStatusFilter(value);
               setCurrentPage(0);
             }}
@@ -116,6 +135,7 @@ export const ProductSearchHeader = ({
             </Select.Trigger>
             <Select.Content>
               <Select.Item value="published">Published</Select.Item>
+              <Select.Item value="draft">Draft</Select.Item>
               <Select.Item value="all">All Statuses</Select.Item>
             </Select.Content>
           </Select>
