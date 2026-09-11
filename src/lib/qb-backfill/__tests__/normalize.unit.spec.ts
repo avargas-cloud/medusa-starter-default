@@ -1,4 +1,4 @@
-import { moneyToCents, normalizeRef, normalizeLinkedTxns, normalizePurchaseOrders } from "../normalize";
+import { moneyToCents, normalizeRef, normalizeLinkedTxns, normalizePurchaseOrders, normalizeVendorCredits } from "../normalize";
 
 describe("qb-backfill/normalize", () => {
   describe("moneyToCents", () => {
@@ -52,6 +52,16 @@ describe("qb-backfill/normalize", () => {
     });
     it("sin LinkedTxn → []", () => {
       expect(normalizeLinkedTxns({})).toEqual([]);
+    });
+  });
+
+  describe("normalizeVendorCredits", () => {
+    it("el total sale de CreditAmount (VendorCreditRet no trae TotalAmount)", () => {
+      const rs = { VendorCreditRet: { TxnID: "VC1", EditSequence: "1", TxnDate: "2026-02-01", CreditAmount: "231.60",
+        LinkedTxn: { TxnID: "B1", TxnType: "Bill", TxnDate: "2026-01-20", Amount: "-231.60" } } };
+      const [c] = normalizeVendorCredits(rs as never);
+      expect(c.amount_cents).toBe(23160);
+      expect(c.linked_txns).toEqual([{ txn_id: "B1", txn_type: "Bill", txn_date: "2026-01-20", amount_cents: -23160, ref_number: null }]);
     });
   });
 

@@ -189,7 +189,9 @@ export function normalizeVendorCredits(rs: Raw | null): QbVendorCredit[] {
     ref_number: r.RefNumber ?? null,
     vendor_ref: normalizeRef(r.VendorRef),
     txn_date: r.TxnDate,
-    amount_cents: moneyToCents(r.TotalAmount ?? r.Amount),
+    // `VendorCreditRet` no trae TotalAmount: el neto viene en `CreditAmount` (= Σ líneas en 158/160 medidos;
+    // difiere sólo con líneas negativas, que el POS no admite).
+    amount_cents: moneyToCents(r.CreditAmount ?? r.TotalAmount ?? r.Amount),
     memo: r.Memo ?? null,
     item_lines: asList<Raw>(r.ItemLineRet).map(normalizeItemLine),
     expense_lines: asList<Raw>(r.ExpenseLineRet).map(normalizeExpenseLine),
