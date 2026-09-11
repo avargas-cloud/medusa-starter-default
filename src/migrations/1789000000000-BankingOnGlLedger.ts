@@ -7,7 +7,9 @@ import { MigrationInterface, QueryRunner } from "typeorm";
  * 1. `bank_journal_entry_source_kind_check` += `'opening_balance'` — el
  *    mismo CHECK que `1783300000000-GeneralLedgerCore` creó, con un valor
  *    más en la lista (recrear el CHECK completo es la única forma de
- *    agregarle un valor a un `IN (...)`).
+ *    agregarle un valor a un `IN (...)`). La lista es la UNIÓN de todos los kinds vigentes
+ *    (core + compras, GeneralLedgerPurchases 1783500000000) + opening_balance: reemplazar el CHECK con
+ *    una lista parcial rompería los documentos de compras en producción (hallado 2026-09-10).
  * 2. Seed de `gl_account_map` para la key `opening_balance_equity` desde
  *    `qb_account.full_name = 'Opening Balance Equity'`. Si esa cuenta no
  *    existe en el ambiente, NO se inserta ninguna fila (mismo criterio que
@@ -24,7 +26,10 @@ export class BankingOnGlLedger1789000000000 implements MigrationInterface {
     );
     await queryRunner.query(`
       ALTER TABLE bank_journal_entry ADD CONSTRAINT bank_journal_entry_source_kind_check
-        CHECK (source_kind IN ('pos_invoice','pos_credit_memo','customer_payment','rounding_adjustment','opening_balance'))
+        CHECK (source_kind IN (
+          'pos_invoice','pos_credit_memo','customer_payment','rounding_adjustment',
+          'po_receipt','vendor_bill','vendor_credit','vendor_bill_payment',
+          'opening_balance'))
     `);
 
     await queryRunner.query(
