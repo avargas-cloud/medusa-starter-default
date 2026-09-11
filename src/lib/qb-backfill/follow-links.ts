@@ -21,16 +21,19 @@ import {
   buildBillByTxnIdsQbxml,
   buildItemReceiptByTxnIdsQbxml,
   buildPurchaseOrderByTxnIdsQbxml,
+  buildVendorCreditByTxnIdsQbxml,
 } from "./qb-queries";
-import { normalizeBills, normalizeItemReceipts, normalizePurchaseOrders } from "./normalize";
+import { normalizeBills, normalizeItemReceipts, normalizePurchaseOrders, normalizeVendorCredits } from "./normalize";
 import { linkedTxnIdsOfType } from "./links";
-import type { QbBill, QbBillPayment, QbItemReceipt, QbPurchaseOrder } from "./types";
+import type { QbBill, QbBillPayment, QbItemReceipt, QbPurchaseOrder, QbVendorCredit } from "./types";
 
 export interface LinkableBucket {
   bills: readonly QbBill[];
   item_receipts: readonly QbItemReceipt[];
   purchase_orders: readonly QbPurchaseOrder[];
   bill_payments: readonly QbBillPayment[];
+  /** Un crédito del rango aplicado a un bill = ese bill seguía abierto al inicio del rango (misma regla que un pago). */
+  vendor_credits?: readonly QbVendorCredit[];
 }
 
 /** TxnIDs ya presentes (del rango o de una iteración previa) — no se re-piden. */
@@ -38,12 +41,14 @@ export interface KnownTxnIdCache {
   bills: ReadonlySet<string>;
   purchase_orders: ReadonlySet<string>;
   item_receipts: ReadonlySet<string>;
+  vendor_credits?: ReadonlySet<string>;
 }
 
 export interface MissingLinks {
   bills: string[];
   purchase_orders: string[];
   item_receipts: string[];
+  vendor_credits: string[];
 }
 
 /**
@@ -63,10 +68,19 @@ export function collectMissingLinks(bucket: LinkableBucket, cache: KnownTxnIdCac
   const missingBills = new Set<string>();
   const missingPos = new Set<string>();
   const missingReceipts = new Set<string>();
+  const missingCredits = new Set<string>();
 
   for (const payment of bucket.bill_payments) {
     for (const app of payment.applications) {
       if (app.txn_type === "Bill" && !cache.bills.has(app.txn_id)) missingBills.add(app.txn_id);
+    }
+  }
+  // Un bill "pagado" con un crédito no tiene BillPayment en QB: el enlace vive en el
+  // VendorCredit (LinkedTxn TxnType=Bill). Medido 2026-09-11: 35 bills de 2025 cerrados
+  // por créditos de 2026 quedaban fuera (y sus aplicaciones, sin bill destino).
+  for (const credit of bucket.vendor_credits ?? []) {
+    for (const txnId of linkedTxnIdsOfType(credit.linked_txns, "Bill")) {
+      if (!cache.bills.has(txnId)) missingBills.add(txnId);
     }
   }
   for (const doc of [...bucket.bills, ...bucket.item_receipts]) {
@@ -77,6 +91,9 @@ export function collectMissingLinks(bucket: LinkableBucket, cache: KnownTxnIdCac
   for (const bill of bucket.bills) {
     for (const lt of bill.linked_txns) {
       if (lt.txn_type === "ItemReceipt" && afterFloor(lt.txn_date) && !cache.item_receipts.has(lt.txn_id)) missingReceipts.add(lt.txn_id);
+      // Un crédito aplicado a un bill del rango seguía abierto al inicio del rango: se sigue SIN piso
+      // (medido 2026-09-11: 2 créditos de 2025 aplicados a bills de 2026 quedaban fuera).
+      if (lt.txn_type === "VendorCredit" && cache.vendor_credits && !cache.vendor_credits.has(lt.txn_id)) missingCredits.add(lt.txn_id);
     }
   }
   // Y en la dirección inversa: un PO traído por enlace (típicamente de 2025) lista en su
@@ -90,7 +107,7 @@ export function collectMissingLinks(bucket: LinkableBucket, cache: KnownTxnIdCac
       if (lt.txn_type === "Bill" && !cache.bills.has(lt.txn_id)) missingBills.add(lt.txn_id);
     }
   }
-  return { bills: [...missingBills], purchase_orders: [...missingPos], item_receipts: [...missingReceipts] };
+  return { bills: [...missingBills], purchase_orders: [...missingPos], item_receipts: [...missingReceipts], vendor_credits: [...missingCredits] };
 }
 
 export interface FetchLinkedOptions {
@@ -149,6 +166,7 @@ export interface FetchLinkedResult {
   bills: QbBill[];
   purchase_orders: QbPurchaseOrder[];
   item_receipts: QbItemReceipt[];
+  vendor_credits: QbVendorCredit[];
 }
 
 /** Pide los TxnID de `missing` y normaliza con `via_link = true`. */
@@ -170,10 +188,19 @@ export async function fetchLinked(missing: MissingLinks, opts: FetchLinkedOption
     normalizeItemReceipts,
     opts
   );
+  const vendor_credits = await fetchByTxnIdsWithFallback(
+    missing.vendor_credits,
+    "credit",
+    buildVendorCreditByTxnIdsQbxml,
+    "VendorCreditQueryRs",
+    normalizeVendorCredits,
+    opts
+  );
   return {
     bills: bills.map((b) => ({ ...b, via_link: true })),
     purchase_orders: purchase_orders.map((p) => ({ ...p, via_link: true })),
     item_receipts: item_receipts.map((r) => ({ ...r, via_link: true })),
+    vendor_credits: vendor_credits.map((c) => ({ ...c, via_link: true })),
   };
 }
 
@@ -182,23 +209,24 @@ export interface FollowLinksMutableBucket {
   item_receipts: QbItemReceipt[];
   bills: QbBill[];
   bill_payments: QbBillPayment[];
+  vendor_credits?: QbVendorCredit[];
 }
 
 export interface FollowLinksReport {
   iterations: number;
-  fetched_by_type: { bills: number; purchase_orders: number; item_receipts: number };
-  fetched_by_year: Record<string, { bills: number; purchase_orders: number; item_receipts: number }>;
+  fetched_by_type: { bills: number; purchase_orders: number; item_receipts: number; vendor_credits: number };
+  fetched_by_year: Record<string, { bills: number; purchase_orders: number; item_receipts: number; vendor_credits: number }>;
   /**
    * TxnIDs efectivamente traídos por enlace — el verificador los necesita
    * para distinguir "fetched pero YA conocido" (no se crea nada, 0 marcados
    * via_link es correcto) de "fetched y creado sin su marcador" (bug real).
    */
-  fetched_txn_ids: { bills: string[]; purchase_orders: string[]; item_receipts: string[] };
+  fetched_txn_ids: { bills: string[]; purchase_orders: string[]; item_receipts: string[]; vendor_credits: string[] };
 }
 
 function bumpYear(report: FollowLinksReport, type: keyof FollowLinksReport["fetched_by_type"], txnDate: string): void {
   const year = txnDate.slice(0, 4);
-  const e = report.fetched_by_year[year] ?? { bills: 0, purchase_orders: 0, item_receipts: 0 };
+  const e = report.fetched_by_year[year] ?? { bills: 0, purchase_orders: 0, item_receipts: 0, vendor_credits: 0 };
   e[type] += 1;
   report.fetched_by_year[year] = e;
 }
@@ -217,25 +245,31 @@ export async function followLinks(
   const seenBills = new Set(bucket.bills.map((b) => b.txn_id));
   const seenPos = new Set(bucket.purchase_orders.map((p) => p.txn_id));
   const seenReceipts = new Set(bucket.item_receipts.map((r) => r.txn_id));
+  const seenCredits = bucket.vendor_credits ? new Set(bucket.vendor_credits.map((c) => c.txn_id)) : undefined;
   const report: FollowLinksReport = {
     iterations: 0,
-    fetched_by_type: { bills: 0, purchase_orders: 0, item_receipts: 0 },
+    fetched_by_type: { bills: 0, purchase_orders: 0, item_receipts: 0, vendor_credits: 0 },
     fetched_by_year: {},
-    fetched_txn_ids: { bills: [], purchase_orders: [], item_receipts: [] },
+    fetched_txn_ids: { bills: [], purchase_orders: [], item_receipts: [], vendor_credits: [] },
   };
 
   for (let i = 0; i < maxIterations; i++) {
-    const missing = collectMissingLinks(bucket, { bills: seenBills, purchase_orders: seenPos, item_receipts: seenReceipts }, opts.floorDate);
-    if (missing.bills.length === 0 && missing.purchase_orders.length === 0 && missing.item_receipts.length === 0) break;
+    const missing = collectMissingLinks(
+      bucket,
+      { bills: seenBills, purchase_orders: seenPos, item_receipts: seenReceipts, vendor_credits: seenCredits },
+      opts.floorDate
+    );
+    if (missing.bills.length === 0 && missing.purchase_orders.length === 0 && missing.item_receipts.length === 0 && missing.vendor_credits.length === 0) break;
     report.iterations++;
     opts.log(
-      `  followLinks iteración ${report.iterations}: bills ${missing.bills.length} · po ${missing.purchase_orders.length} · receipt ${missing.item_receipts.length}`
+      `  followLinks iteración ${report.iterations}: bills ${missing.bills.length} · po ${missing.purchase_orders.length} · receipt ${missing.item_receipts.length} · credit ${missing.vendor_credits.length}`
     );
     // Se marcan "vistos" ANTES de fetchear — un TxnID que QB no devuelve (no
     // existe / consulta falló) no debe volver a pedirse en la próxima iteración.
     for (const id of missing.bills) seenBills.add(id);
     for (const id of missing.purchase_orders) seenPos.add(id);
     for (const id of missing.item_receipts) seenReceipts.add(id);
+    for (const id of missing.vendor_credits) seenCredits?.add(id);
 
     const fetched = await fetchLinked(missing, opts);
     for (const b of fetched.bills) {
@@ -255,6 +289,12 @@ export async function followLinks(
       bumpYear(report, "item_receipts", r.txn_date);
       report.fetched_by_type.item_receipts++;
       report.fetched_txn_ids.item_receipts.push(r.txn_id);
+    }
+    for (const c of fetched.vendor_credits) {
+      bucket.vendor_credits?.push(c);
+      bumpYear(report, "vendor_credits", c.txn_date);
+      report.fetched_by_type.vendor_credits++;
+      report.fetched_txn_ids.vendor_credits.push(c.txn_id);
     }
   }
   return report;

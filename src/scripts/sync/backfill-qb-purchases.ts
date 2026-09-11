@@ -62,6 +62,7 @@ import {
   type ApplyContext,
 } from "../../lib/qb-backfill/apply-purchases";
 import { applyCredits, applyDeAdopt, applyPayments } from "../../lib/qb-backfill/apply-purchases-money";
+import { applyCreditApplications, loadCreditApplicationIndexes, planCreditApplications } from "../../lib/qb-backfill/apply-credit-links";
 import { followLinks, type FollowLinksReport } from "../../lib/qb-backfill/follow-links";
 import { USA_LOC } from "../../lib/locations";
 import type {
@@ -220,7 +221,7 @@ async function main() {
       log: (l) => console.log(l),
     });
     console.log(
-      `followLinks: ${followLinksReport.iterations} iteración(es) · traídos por enlace: bill ${followLinksReport.fetched_by_type.bills} · po ${followLinksReport.fetched_by_type.purchase_orders} · receipt ${followLinksReport.fetched_by_type.item_receipts}`
+      `followLinks: ${followLinksReport.iterations} iteración(es) · traídos por enlace: bill ${followLinksReport.fetched_by_type.bills} · po ${followLinksReport.fetched_by_type.purchase_orders} · receipt ${followLinksReport.fetched_by_type.item_receipts} · credit ${followLinksReport.fetched_by_type.vendor_credits}`
     );
     console.log(`  por año: ${JSON.stringify(followLinksReport.fetched_by_year)}`);
     const viaLinkPoTxnIds = new Set(bucket.purchase_orders.filter((p) => p.via_link).map((p) => p.txn_id));
@@ -353,6 +354,7 @@ async function main() {
       ensureLog,
       createdByUserId: "qb-backfill-system",
       stockLocationId: USA_LOC,
+      floorDate: FROM as string,
     };
     const resolveQbAccount = makeQbAccountLookup(client);
     const resolveBankAccount = makeBankAccountLookup(client);
@@ -418,6 +420,24 @@ async function main() {
       }
     } else {
       console.log(`--types no incluye 'payment' — sin clasificar`);
+    }
+
+    // ── Aplicaciones de créditos a bills (LinkedTxn bill↔VendorCredit de QB) — después de bills y créditos ──
+    console.log(`\n── Aplicaciones de Vendor Credits ──`);
+    if (TYPES.has("credit") && TYPES.has("bill")) {
+      const idx = await loadCreditApplicationIndexes(client);
+      const plan = planCreditApplications(bucket.bills, bucket.vendor_credits, idx.creditIndex, idx.billIndex, idx.existingPairs);
+      const byReason = new Map<string, number>();
+      for (const sk of plan.skipped) byReason.set(sk.reason, (byReason.get(sk.reason) ?? 0) + 1);
+      const planned = plan.rows.reduce((acc, r) => acc + r.amount_cents, 0);
+      console.log(`a aplicar: ${plan.rows.length} ($${(planned / 100).toFixed(2)}) · saltadas: ${[...byReason].map(([k, v]) => `${k}=${v}`).join(" ") || "0"}`);
+      for (const sk of plan.skipped.filter((x) => x.reason !== "already")) console.log(`  saltada ${sk.reason}: crédito ${sk.credit_txn_id} → bill ${sk.bill_txn_id}`);
+      if (APPLY) {
+        const res = await applyCreditApplications(client, plan, RUN_ID);
+        console.log(`aplicadas: ${res.inserted} · créditos recalculados: ${res.credits_touched}`);
+      }
+    } else {
+      console.log(`--types necesita 'bill' y 'credit' — sin clasificar`);
     }
 
     // ── de-adopt (fase 3) — corre APARTE del loop por tipos; batchea por lotes de 10 TxnID ──

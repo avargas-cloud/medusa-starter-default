@@ -128,6 +128,8 @@ export interface QbVendorCredit {
   item_lines: QbBillLine[];
   expense_lines: QbBillLine[];
   linked_txns: QbLinkedTxn[];
+  /** ídem `QbPurchaseOrder.via_link`. */
+  via_link?: boolean;
 }
 
 export interface QbBillPaymentApplication {

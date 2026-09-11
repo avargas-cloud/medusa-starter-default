@@ -113,6 +113,8 @@ export interface ApplyContext {
   ensureLog: EnsureLog;
   createdByUserId: string;
   stockLocationId: string;
+  /** Piso de fecha (el `--from`): ningún recibo —tampoco sintético— por debajo (regla del operador: "no pueden haber receipts en 2025"). */
+  floorDate?: string;
 }
 
 export async function applyReceipts(
@@ -259,7 +261,8 @@ export async function applyBills(
       const linked = await linkReceiptsToBill(ctx.client, result.vendor_bill_id, bill.txn_id, bill.linked_txns);
       report.receipts_linked += linked;
       await ctx.client.query("COMMIT");
-      if (linked === 0) {
+      const aboveFloor = !ctx.floorDate || bill.txn_date >= ctx.floorDate;
+      if (linked === 0 && aboveFloor) {
         await ctx.client.query("BEGIN");
         const synthetic = await maybeCreateSyntheticReceipt(bill, result.vendor_bill_id, localPo, ctx);
         await ctx.client.query("COMMIT");

@@ -22,8 +22,30 @@ import { ulid } from "ulid";
 import { ensureVendor, ensureItem, type EnsureLog, type QbItemLookup } from "./ensure";
 import { resolveItemRef, type ItemIndex, type QueryableDb, type VendorIndexEntry } from "./resolve";
 import { matchPoLineForVariant, type OpenPoLine } from "./links";
-import { businessInstant } from "./create-po";
+import { businessInstant, POS_GO_LIVE_DATE } from "./create-po";
 import type { QbBill } from "./types";
+
+/**
+ * Numeración de un bill del backfill (misma regla que `create-po.ts`, pedido
+ * del operador 2026-09-11): antes del go-live del POS (`POS_GO_LIVE_DATE`)
+ * va en el rango histórico `VB-0001..VB-0999`, en orden de creación (que es
+ * cronológico), para quedar ANTES de los `VB-1000+` del POS; desde el go-live
+ * toma `custom_vendor_bill_seq` como un bill nativo. Un bill sin número se
+ * listaba por su `id` interno (`vb_01k…`), que no identifica nada.
+ */
+export async function nextBackfillBillNumber(client: QueryableDb, txnDate: string): Promise<string> {
+  if (txnDate < POS_GO_LIVE_DATE) {
+    const { rows } = await client.query(
+      `SELECT COALESCE(MAX(substring(number FROM 4)::int), 0) + 1 AS n
+         FROM vendor_bill WHERE number ~ '^VB-0[0-9]{3}$'`
+    );
+    const n = Number((rows[0] as { n: string | number }).n);
+    if (n > 999) throw new Error("rango histórico VB-0001..VB-0999 agotado");
+    return `VB-${String(n).padStart(4, "0")}`;
+  }
+  const { rows } = await client.query(`SELECT nextval('custom_vendor_bill_seq') AS seq`);
+  return `VB-${(rows[0] as { seq: string | number }).seq}`;
+}
 
 function makeId(prefix: string): string {
   return `${prefix}_${ulid().toLowerCase()}`;
@@ -170,7 +192,7 @@ export interface CreateBillOptions extends BillLineOptions {
 
 export interface CreateBillResult {
   vendor_bill_id: string;
-  number: null;
+  number: string;
   item_lines: number;
   expense_lines: number;
 }
@@ -200,6 +222,7 @@ export async function createBillFromQb(
     `[qb_backfill run=${opts.runId} txn=${bill.txn_id}${bill.via_link ? " via_link" : ""}]` +
     (bill.memo ? ` ${bill.memo}` : "");
   const billType = deriveBillType(opts.resolvedPoId);
+  const number = await nextBackfillBillNumber(client, bill.txn_date);
 
   await client.query(
     `INSERT INTO vendor_bill (
@@ -209,7 +232,7 @@ export async function createBillFromQb(
      ) VALUES (
        $1, $2, $3, $4, $5,
        $6, 'synced', NULL, $7, $8, $9, $9,
-       $10, $11, $12, $10, NULL, $13, $10, $10
+       $10, $11, $12, $10, $14, $13, $10, $10
      )`,
     [
       billId,
@@ -225,11 +248,12 @@ export async function createBillFromQb(
       dueAt,
       bill.is_paid,
       notes,
+      number,
     ]
   );
 
   const { item_lines, expense_lines } = await insertBillLines(client, billId, bill, opts);
-  return { vendor_bill_id: billId, number: null, item_lines, expense_lines };
+  return { vendor_bill_id: billId, number, item_lines, expense_lines };
 }
 
 export interface DeAdoptOptions extends BillLineOptions {
