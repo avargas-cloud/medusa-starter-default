@@ -56,13 +56,19 @@ async function deniedRoutes(id: string) {
 }
 
 async function main() {
-  configureBankSandbox(); process.env.POS_URL = "http://localhost:3099"; process.env.MEDUSA_SANDBOX_URL = "http://localhost:9099";
+  configureBankSandbox(); process.env.POS_URL = "http://localhost:3099";
+  // banking-on-gl: configureBankSandbox() (src/lib/banking/sandbox-runtime.ts,
+  // out of scope to edit) hardcodes DATABASE_URL=.../medusa and :9099 for the
+  // shared sandbox; override here, defaults unchanged, to target ept-banking-gl.
+  process.env.DATABASE_URL = process.env.BANKING_SANDBOX_DATABASE_URL ?? process.env.DATABASE_URL;
+  const sandboxApiBase = process.env.BANKING_SANDBOX_API_BASE ?? "http://localhost:9099";
+  process.env.MEDUSA_SANDBOX_URL = sandboxApiBase;
   const pool = getDbPool(); const client = await pool.connect(); let owned = false; let jwt = "";
   let before: Record<string, unknown> | undefined;
   let banksBefore: Record<string, unknown> | undefined;
   const base = (id: string) => `/admin/banking/accounting/transactions/${id}`;
   const api = async (path: string, body?: Value, status = 200, key = randomUUID(), anonymous = false) => {
-    const response = await fetch(`http://localhost:9099${path}`, { method: body ? "POST" : "GET",
+    const response = await fetch(`${sandboxApiBase}${path}`, { method: body ? "POST" : "GET",
       headers: { "Content-Type": "application/json", ...(!anonymous && jwt ? { Authorization: `Bearer ${jwt}` } : {}), ...(body ? { "Idempotency-Key": key } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60000) });
     const value = record(await response.json());
