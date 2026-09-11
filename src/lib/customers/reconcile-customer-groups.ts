@@ -1,0 +1,147 @@
+/**
+ * Add-only reconciler: converts a customer's tier signal into group
+ * membership. Never removes a customer from a group (project-wide rule —
+ * "never remove anyone from a customer group"). If the customer ends up in
+ * no group at all (no signal, no existing membership), it defaults to
+ * Retail — everyone is in exactly one of {Retail, Wholesale} once
+ * reconciled, but a customer already correctly in Wholesale is left alone
+ * even if they also happen to sit in some other unrelated group.
+ */
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+
+import {
+  resolveCustomerTier,
+  type CustomerTierInput,
+} from "./customer-tier";
+import { resolveGroupIdByName } from "./resolve-group-ids";
+
+export interface PlanCustomerGroupReconcileInput {
+  tier: "wholesale" | "retail";
+  memberGroupIds: ReadonlyArray<string>;
+  wholesaleGroupId: string;
+  retailGroupId: string;
+}
+
+export interface PlanCustomerGroupReconcileResult {
+  add: string[];
+}
+
+/** Pure planning function — no I/O, easy to unit test and mutation test. */
+export function planCustomerGroupReconcile(
+  input: PlanCustomerGroupReconcileInput
+): PlanCustomerGroupReconcileResult {
+  const { tier, memberGroupIds, wholesaleGroupId, retailGroupId } = input;
+  const add: string[] = [];
+  const members = new Set(memberGroupIds);
+
+  if (tier === "wholesale" && !members.has(wholesaleGroupId)) {
+    add.push(wholesaleGroupId);
+  }
+
+  const afterAdds = new Set(members);
+  for (const id of add) afterAdds.add(id);
+
+  if (afterAdds.size === 0) {
+    add.push(retailGroupId);
+  }
+
+  return { add };
+}
+
+interface CustomerModuleLike {
+  addCustomerToGroup(input: {
+    customer_id: string;
+    customer_group_id: string;
+  }): Promise<unknown>;
+}
+
+interface QueryGraphLike {
+  graph(input: {
+    entity: string;
+    fields: string[];
+    filters?: Record<string, unknown>;
+  }): Promise<{
+    data: Array<{
+      id: string;
+      metadata: Record<string, unknown> | null;
+      groups?: Array<{ id: string; name: string | null }> | null;
+    }>;
+  }>;
+}
+
+interface ContainerLike {
+  resolve(key: string): unknown;
+}
+
+interface ReconcileLoggerLike {
+  info: (msg: string) => void;
+}
+
+export interface ReconcileCustomerGroupsResult {
+  added: string[];
+}
+
+/**
+ * Loads the customer (id, metadata, groups), resolves the Retail/Wholesale
+ * group ids BY NAME, plans the add-only diff, and applies it — idempotent
+ * (skips ids already applied by `planCustomerGroupReconcile`, and
+ * `addCustomerToGroup` itself is a no-op if already a member).
+ */
+export async function reconcileCustomerGroups(
+  container: ContainerLike,
+  customerId: string
+): Promise<ReconcileCustomerGroupsResult> {
+  const query = container.resolve(
+    ContainerRegistrationKeys.QUERY
+  ) as QueryGraphLike;
+  const customerModule = container.resolve(
+    Modules.CUSTOMER
+  ) as CustomerModuleLike;
+  const logger = container.resolve("logger") as ReconcileLoggerLike;
+
+  const { data } = await query.graph({
+    entity: "customer",
+    fields: ["id", "metadata", "groups.id", "groups.name"],
+    filters: { id: customerId },
+  });
+  const customer = data[0];
+  if (!customer) {
+    throw new Error(
+      `[reconcileCustomerGroups] Customer ${customerId} not found`
+    );
+  }
+
+  const [wholesaleGroupId, retailGroupId] = await Promise.all([
+    resolveGroupIdByName(container, "Wholesale"),
+    resolveGroupIdByName(container, "Retail"),
+  ]);
+
+  const memberGroupIds = (customer.groups ?? []).map((g) => g.id);
+  const tierInput: CustomerTierInput = {
+    groups: customer.groups ?? [],
+    metadata: customer.metadata ?? null,
+  };
+  const tier = resolveCustomerTier(tierInput);
+
+  const { add } = planCustomerGroupReconcile({
+    tier,
+    memberGroupIds,
+    wholesaleGroupId,
+    retailGroupId,
+  });
+
+  const added: string[] = [];
+  for (const groupId of add) {
+    if (memberGroupIds.includes(groupId)) continue; // already a member
+    await customerModule.addCustomerToGroup({
+      customer_id: customerId,
+      customer_group_id: groupId,
+    });
+    added.push(groupId);
+    logger.info(
+      `[reconcileCustomerGroups] Added customer ${customerId} to group ${groupId}`
+    );
+  }
+
+  return { added };
+}

@@ -1,5 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { MEDUSA_REGION_ID } from "../../../../lib/config/region";
+import { isWholesaleTier } from "../../../../lib/customers/customer-tier";
 
 /**
  * POST /store/products/batch-prices
@@ -57,7 +59,7 @@ export async function POST(
     // Build pricing context
     const pricingContext: Record<string, any> = {
       currency_code: "usd",
-      region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1", // Default region
+      region_id: MEDUSA_REGION_ID,
     };
 
     // 💰 SINGLE PRICE MODE GUARD
@@ -78,10 +80,8 @@ export async function POST(
 
         if (customer.groups?.length) {
           pricingContext.customer_group_id = customer.groups.map((g) => g.id);
-          isWholesale = customer.groups.some(
-            (g: any) => g.name?.toLowerCase() === "wholesale"
-          );
         }
+        isWholesale = isWholesaleTier(customer);
 
         // console.log(`[Batch Prices] Customer ${customerId} is ${isWholesale ? 'WHOLESALE' : 'RETAIL'}`);
       } catch (error) {

@@ -1,0 +1,65 @@
+[
+  {
+    "name": "only group Wholesale",
+    "input": { "groups": [{ "name": "Wholesale" }] },
+    "expected": "wholesale"
+  },
+  {
+    "name": "group name lowercase wholesale",
+    "input": { "groups": [{ "name": "wholesale" }] },
+    "expected": "wholesale"
+  },
+  {
+    "name": "group Wholesale Distributor is NOT an exact match",
+    "input": { "groups": [{ "name": "Wholesale Distributor" }] },
+    "expected": "retail"
+  },
+  {
+    "name": "Retail group only",
+    "input": { "groups": [{ "name": "Retail" }] },
+    "expected": "retail"
+  },
+  {
+    "name": "both Retail and Wholesale groups",
+    "input": { "groups": [{ "name": "Retail" }, { "name": "Wholesale" }] },
+    "expected": "wholesale"
+  },
+  {
+    "name": "no group, metadata price_level Wholesale",
+    "input": { "groups": [], "metadata": { "price_level": "Wholesale" } },
+    "expected": "wholesale"
+  },
+  {
+    "name": "metadata substring 'Wholesale (Net)'",
+    "input": { "groups": [], "metadata": { "price_level": "Wholesale (Net)" } },
+    "expected": "wholesale"
+  },
+  {
+    "name": "metadata is_wholesale string 'true'",
+    "input": { "groups": [], "metadata": { "is_wholesale": "true" } },
+    "expected": "wholesale"
+  },
+  {
+    "name": "top-level qb_price_level Wholesale",
+    "input": { "groups": [], "qb_price_level": "Wholesale" },
+    "expected": "wholesale"
+  },
+  {
+    "name": "metadata price_level Retail but group Wholesale wins (group is the truth)",
+    "input": {
+      "groups": [{ "name": "Wholesale" }],
+      "metadata": { "price_level": "Retail" }
+    },
+    "expected": "wholesale"
+  },
+  {
+    "name": "null customer",
+    "input": null,
+    "expected": "retail"
+  },
+  {
+    "name": "empty everything",
+    "input": {},
+    "expected": "retail"
+  }
+]

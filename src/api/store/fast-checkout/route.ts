@@ -6,6 +6,7 @@ import {
   createPaymentSessionsWorkflow,
   completeCartWorkflow,
 } from "@medusajs/medusa/core-flows";
+import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../utils/db-pool";
 import { repriceCart } from "../carts/[id]/reprice/reprice-cart";
@@ -339,15 +340,51 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
     }
 
+    // ── STEP 4a-guard: cart/actor identity must match ──────────────────────
+    // A cart already linked to a customer must not be completed by a
+    // DIFFERENT authenticated actor — guest checkout (no actorId) is
+    // unaffected. Checked BEFORE reprice/charge, never after.
+    const actorId = (req as any).auth_context?.actor_id;
+    if (actorId) {
+      try {
+        const cartModule = req.scope.resolve(Modules.CART);
+        const cartForIdentityCheck = (await cartModule.retrieveCart(
+          cartId,
+          {}
+        )) as any;
+        if (
+          cartForIdentityCheck?.customer_id &&
+          cartForIdentityCheck.customer_id !== actorId
+        ) {
+          console.error(
+            `[fast-checkout] ❌ Cart/actor mismatch: cart.customer_id=${cartForIdentityCheck.customer_id} actor=${actorId}`
+          );
+          return res.status(409).json({
+            code: "CART_CUSTOMER_MISMATCH",
+            message: "This cart belongs to a different customer.",
+          });
+        }
+      } catch (identityErr: any) {
+        console.error(
+          `[fast-checkout] ❌ Could not verify cart/actor identity: ${identityErr.message}`
+        );
+        return res.status(409).json({
+          code: "CART_CUSTOMER_MISMATCH",
+          message: "Could not verify the cart owner.",
+        });
+      }
+    }
+
     // ── STEP 4a: Reprice for the CURRENT auth tier before charging ────────
     // The cart total fetched above may be stale relative to the customer's
     // present price tier (e.g. they logged in/out mid-checkout, or their
     // customer-group pricing changed). We reprice using the same logic as
     // `POST /store/carts/:id/reprice`, re-fetch the cart, and use ITS total —
     // the customer is always charged the price that matches their current
-    // tier, never a cached one.
+    // tier, never a cached one. If the reprice fails, or the repriced cart
+    // has no usable total, checkout STOPS — the "keep the pre-reprice total"
+    // fallback let a stale/wrong amount get charged, so it is gone.
     try {
-      const actorId = (req as any).auth_context?.actor_id;
       await repriceCart(req.scope, cartId, actorId);
 
       const MEDUSA_URL =
@@ -362,29 +399,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           },
         }
       );
-      if (repricedRes.ok) {
-        const { cart: repricedCart } = await repricedRes.json();
-        cartItemsForValidation = repricedCart?.items ?? cartItemsForValidation;
-        if (repricedCart?.total && repricedCart.total > 0) {
-          const repricedAmountCents = Math.round(repricedCart.total * 100);
-          if (amountCents !== null && repricedAmountCents !== amountCents) {
-            console.log(
-              `[fast-checkout] ℹ️ Reprice changed cart total: cart=${cartId} before=${amountCents} after=${repricedAmountCents}`
-            );
-          }
-          amountCents = repricedAmountCents;
-        }
-      } else {
-        console.warn(
-          `[fast-checkout] Reprice re-fetch returned ${repricedRes.status}`
+      if (!repricedRes.ok) {
+        throw new Error(`Reprice re-fetch returned ${repricedRes.status}`);
+      }
+
+      const { cart: repricedCart } = await repricedRes.json();
+      if (!repricedCart?.total || repricedCart.total <= 0) {
+        throw new Error("Repriced cart has no usable total");
+      }
+
+      cartItemsForValidation = repricedCart.items ?? cartItemsForValidation;
+      const repricedAmountCents = Math.round(repricedCart.total * 100);
+      if (amountCents !== null && repricedAmountCents !== amountCents) {
+        console.log(
+          `[fast-checkout] ℹ️ Reprice changed cart total: cart=${cartId} before=${amountCents} after=${repricedAmountCents}`
         );
       }
+      amountCents = repricedAmountCents;
     } catch (repriceErr: any) {
-      // Non-fatal: keep the pre-reprice total (already computed above) rather
-      // than blocking checkout on a transient reprice failure.
-      console.warn(
-        `[fast-checkout] ⚠️ Reprice-before-charge failed (continuing with pre-reprice total): ${repriceErr.message}`
+      console.error(
+        `[fast-checkout] ❌ Reprice failed — refusing to charge: ${repriceErr.message}`
       );
+      return res.status(409).json({
+        code: "REPRICE_FAILED",
+        message: "Could not verify current pricing. Please try again.",
+      });
     }
 
     // ── GUARD: Validate item prices are non-zero ──────────────────────────

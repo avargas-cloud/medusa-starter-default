@@ -11,6 +11,8 @@ import {
   resolveRelatedProducts,
 } from "../../../../../../lib/related-products/resolve-related";
 import type { StorePricingContext } from "../../../../../../lib/store-pricing/pricing-context";
+import { MEDUSA_REGION_ID } from "../../../../../../lib/config/region";
+import { isWholesaleTier } from "../../../../../../lib/customers/customer-tier";
 
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
@@ -39,12 +41,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     // Build pricing context for customer-specific pricing
     const pricingContext: Record<string, any> = {
       currency_code: "usd",
-      region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1",
+      region_id: MEDUSA_REGION_ID,
     };
 
     // Get customer and their groups
     // @ts-ignore - auth_context is added by middleware
     const customerId = (req as any).auth_context?.actor_id;
+    let isWholesaleCustomer = false;
     if (customerId) {
       try {
         const customer = await customerModule.retrieveCustomer(customerId, {
@@ -56,6 +59,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             (g: any) => g.id
           );
         }
+        isWholesaleCustomer = isWholesaleTier(customer);
       } catch (error) {
         console.warn(
           `[WITH-PRICES-RELATED] ⚠️  Could not fetch customer groups`
@@ -249,6 +253,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       customer_context: {
         customer_id: customerId || "anonymous",
         customer_groups: pricingContext.customer_group_id || [],
+        is_wholesale: isWholesaleCustomer,
       },
     });
   } catch (error: any) {

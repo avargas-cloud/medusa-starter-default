@@ -1,5 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { USA_LOC } from "../../../../../lib/locations";
+import { MEDUSA_REGION_ID } from "../../../../../lib/config/region";
+import { isWholesaleTier } from "../../../../../lib/customers/customer-tier";
 
 // Cache manager removed - using fresh pricing calculations
 
@@ -20,7 +22,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     // Build pricing context
     const pricingContext: Record<string, any> = {
       currency_code: "usd",
-      region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1",
+      region_id: MEDUSA_REGION_ID,
     };
 
     // 💰 SINGLE PRICE MODE GUARD
@@ -45,14 +47,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
           pricingContext.customer_group_id = customer.groups.map(
             (g: any) => g.id
           );
-          isWholesaleCustomer = customer.groups.some(
-            (g: any) =>
-              g.name?.toLowerCase().includes("wholesale") ||
-              g.name?.toLowerCase().includes("distributor")
-          );
         }
+        isWholesaleCustomer = isWholesaleTier(customer);
       } catch (error) {
-        // Could not fetch customer groups
+        // Fail open (retail pricing) — but log which customer hit this so a
+        // pattern of failures for the same id is visible instead of silent.
+        console.warn(
+          `[PRICES-STOCK] Could not resolve customer tier for ${customerId}`
+        );
       }
     }
 

@@ -3,8 +3,7 @@ import { randomUUID } from "crypto";
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
-const WHOLESALE_PRICE_LIST_ID =
-  process.env.WHOLESALE_PRICE_LIST_ID ?? "plist_01KFTSDZZNTQRSYNMB4YST1HYA";
+import { WHOLESALE_PRICE_LIST_ID } from "../../../lib/config/price-lists";
 
 export type WholesalePriceInput = {
   variant_id: string;

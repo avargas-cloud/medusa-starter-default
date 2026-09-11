@@ -1,5 +1,7 @@
 import { Modules } from "@medusajs/utils";
 
+import { resolveCustomerTier } from "../customers/customer-tier";
+
 /**
  * Builds a customer's MeiliSearch document and upserts it into the
  * `customers` index.
@@ -44,11 +46,14 @@ export async function syncCustomerToMeili(
       meta.qb_customer_type || meta.customer_type || "Standard";
 
     const groupNames = customer.groups?.map((g: any) => g.name) || [];
-    const hasWholesaleGroup = groupNames.includes("Wholesale");
+    const tier = resolveCustomerTier({
+      groups: customer.groups ?? [],
+      metadata: meta,
+    });
     const priceLevel =
       meta.qb_price_level ||
       meta.price_level ||
-      (hasWholesaleGroup ? "Wholesale" : "Retail");
+      (tier === "wholesale" ? "Wholesale" : "Retail");
 
     const meiliDoc = {
       id: customer.id,

@@ -22,7 +22,9 @@
 
 import { randomUUID } from "node:crypto";
 
-export const WHOLESALE_PRICE_LIST_ID = "plist_01KFTSDZZNTQRSYNMB4YST1HYA";
+import { WHOLESALE_PRICE_LIST_ID } from "../config/price-lists";
+
+export { WHOLESALE_PRICE_LIST_ID };
 
 // The single-variant route generated insert ids as `price_${Date.now()}_r` —
 // collision-free with one variant per request, but the bulk editor inserts

@@ -6,6 +6,39 @@ import {
 import { Modules } from "@medusajs/utils";
 import { StepResponse } from "@medusajs/workflows-sdk";
 
+import { isWholesaleTier } from "../../lib/customers/customer-tier";
+import { resolveGroupIdByName } from "../../lib/customers/resolve-group-ids";
+
+/**
+ * Appends the Wholesale group id (resolved by name) to the group-id list
+ * used for pricing when the customer's TIER says wholesale but their live
+ * `groups` relation doesn't have it yet — i.e. before the
+ * `customer-group-reconcile` subscriber has caught up with a signal (e.g.
+ * freshly written `metadata.qb_price_level` from the QB sync). Without this,
+ * a customer whose tier is correct-by-signal but not yet reconciled into the
+ * group would price as retail until the subscriber runs.
+ */
+async function withWholesaleGroupIdIfNeeded(
+  container: { resolve: (key: string) => unknown },
+  customer: { groups?: Array<{ id: string; name?: string | null }> | null; metadata?: Record<string, unknown> | null },
+  groupIds: string[]
+): Promise<string[]> {
+  if (!isWholesaleTier({ groups: customer.groups, metadata: customer.metadata })) {
+    return groupIds;
+  }
+  try {
+    const wholesaleGroupId = await resolveGroupIdByName(container, "Wholesale");
+    return groupIds.includes(wholesaleGroupId)
+      ? groupIds
+      : [...groupIds, wholesaleGroupId];
+  } catch (error: any) {
+    console.warn(
+      `[PRICING-HOOK] ⚠️ Could not resolve Wholesale group id: ${error.message}`
+    );
+    return groupIds;
+  }
+}
+
 /**
  * 💰 WHOLESALE PRICING HOOK — Gold Standard Medusa v2 Implementation
  *
@@ -41,14 +74,20 @@ addToCartWorkflow.hooks.setPricingContext(async ({ cart }, { container }) => {
       relations: ["groups"],
     });
 
-    if (!customer.groups || customer.groups.length === 0) {
+    const baseGroupIds = (customer.groups ?? []).map((g: any) => g.id);
+    const groupIds = await withWholesaleGroupIdIfNeeded(
+      container,
+      customer,
+      baseGroupIds
+    );
+
+    if (groupIds.length === 0) {
       console.log(
         `[PRICING-HOOK] 👤 Customer ${cart.customer_id} has no groups — using default pricing`
       );
       return new StepResponse({});
     }
 
-    const groupIds = customer.groups.map((g: any) => g.id);
     console.log(
       `[PRICING-HOOK] 👑 Wholesale customer detected — groups: ${groupIds.join(", ")}`
     );
@@ -91,11 +130,17 @@ updateLineItemInCartWorkflow.hooks.setPricingContext(
         relations: ["groups"],
       });
 
-      if (!customer.groups || customer.groups.length === 0) {
+      const baseGroupIds = (customer.groups ?? []).map((g: any) => g.id);
+      const groupIds = await withWholesaleGroupIdIfNeeded(
+        container,
+        customer,
+        baseGroupIds
+      );
+
+      if (groupIds.length === 0) {
         return new StepResponse({});
       }
 
-      const groupIds = customer.groups.map((g: any) => g.id);
       console.log(
         `[PRICING-HOOK-UPDATE] 👑 Wholesale qty update — groups: ${groupIds.join(", ")}`
       );
@@ -153,11 +198,17 @@ refreshCartItemsWorkflow.hooks.setPricingContext(
         relations: ["groups"],
       });
 
-      if (!customer.groups || customer.groups.length === 0) {
+      const baseGroupIds = (customer.groups ?? []).map((g: any) => g.id);
+      const groupIds = await withWholesaleGroupIdIfNeeded(
+        container,
+        customer,
+        baseGroupIds
+      );
+
+      if (groupIds.length === 0) {
         return new StepResponse({});
       }
 
-      const groupIds = customer.groups.map((g: any) => g.id);
       console.log(
         `[PRICING-HOOK-REFRESH] 👑 Wholesale reprice — groups: ${groupIds.join(", ")}`
       );

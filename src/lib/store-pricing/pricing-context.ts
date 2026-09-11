@@ -1,5 +1,7 @@
 import type { MedusaRequest } from "@medusajs/framework/http";
 
+import { MEDUSA_REGION_ID } from "../config/region";
+
 /**
  * Pricing context for the Store API — retail by default, wholesale when the
  * logged-in customer belongs to a group with a price list.
@@ -9,7 +11,7 @@ import type { MedusaRequest } from "@medusajs/framework/http";
  * so far; the others keep their copy (out of scope, same behaviour).
  */
 export const STORE_CURRENCY = "usd";
-export const STORE_REGION_ID = "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1";
+export const STORE_REGION_ID = MEDUSA_REGION_ID;
 
 export interface StorePricingContext {
   currency_code: string;

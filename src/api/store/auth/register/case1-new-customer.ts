@@ -3,6 +3,7 @@ import { Modules } from "@medusajs/utils";
 
 import { buildWelcomeEmail } from "../../../../utils/email-templates";
 import { sendMail } from "../../../../utils/mailer";
+import { reconcileCustomerGroups } from "../../../../lib/customers/reconcile-customer-groups";
 
 /**
  * CASE 1: New Customer Registration
@@ -75,33 +76,12 @@ export async function handleNewCustomerRegistration(
 
     console.log(`✅ Customer account created via workflow: ${customer.id}`);
 
-    // Step 2.5: Auto-assign to "Retail" customer group
-    try {
-      const query = req.scope.resolve("query");
-      const customerModuleService = req.scope.resolve(Modules.CUSTOMER);
-
-      // Find the Retail group
-      const { data: retailGroups } = await query.graph({
-        entity: "customer_group",
-        fields: ["id", "name"],
-        filters: { name: "Retail" },
-      });
-
-      if (retailGroups.length > 0) {
-        await customerModuleService.addCustomerToGroup({
-          customer_id: customer.id,
-          customer_group_id: retailGroups[0]!.id, // Safe: filtered above
-        });
-        console.log(`✅ Customer auto-assigned to Retail group`);
-      } else {
-        console.log(
-          `⚠️  Retail group not found - customer not assigned to any group`
-        );
-      }
-    } catch (groupError) {
-      console.log(`⚠️  Could not assign to Retail group:`, groupError);
-      // Continue anyway - not critical
-    }
+    // Step 2.5: Reconcile the customer's group membership (Retail by default
+    // — this new customer has no tier signal yet, so the reconciler adds it
+    // to Retail). Unlike the previous best-effort block, a failure here
+    // PROPAGATES: registration must not succeed leaving a customer without a
+    // group (the group is the single truth for the price tier).
+    await reconcileCustomerGroups(req.scope, customer.id);
 
     // Step 3: Generate JWT token with explicit actor_id
     // Using generateJwtToken directly instead of generateJwtTokenForAuthIdentity
