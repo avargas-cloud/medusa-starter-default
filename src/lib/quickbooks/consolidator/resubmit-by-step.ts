@@ -276,6 +276,11 @@ export async function resubmitByStep(
             excludeRowId: row.id,
           }
         );
+        if (outcome === "deferred") {
+          // gateModDispatch put the row back to pending + next_retry_at behind
+          // an older in-flight operation; a later tick re-dispatches it.
+          break;
+        }
         if (outcome === "skipped") {
           await failPipelineRow(
             row.id,
@@ -333,6 +338,11 @@ export async function resubmitByStep(
           pipelineRowId: row.id,
           excludeRowId: row.id,
         });
+        if (outcome === "deferred") {
+          // gateModDispatch put the row back to pending + next_retry_at behind
+          // an older in-flight operation; a later tick re-dispatches it.
+          break;
+        }
         if (outcome === "skipped") {
           await failPipelineRow(
             row.id,
@@ -2487,22 +2497,25 @@ export async function resubmitByStep(
         );
     }
   } catch (err: any) {
+    const message = describeDispatchError(err) || `${row.step} dispatch failed`;
     logger.warn(
-      `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${err.message}`
+      `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${message}`
     );
     if (
       row.step === "vendor_bill_mod" ||
+      // A BillQuery is read-only, so a lost connection is only worth a
+      // backoff — not a dead row. 2026-09-11: two checks died terminal on
+      // `fetch failed` (undici connect timeout, 10 s) while 16 siblings in the
+      // same tick went through; terminal here means 12 h until the monitor
+      // re-elects the bill and a red badge nobody can act on.
+      row.step === "vendor_bill_payment_check" ||
       PURCHASE_OPERATION_STEPS.includes(
         row.step as (typeof PURCHASE_OPERATION_STEPS)[number]
       )
     ) {
-      await failOrRetryPipelineRow(
-        row.id,
-        err.message || `${row.step} dispatch failed`,
-        row.retry_count ?? 0
-      );
+      await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
     } else {
-      await failPipelineRow(row.id, err.message || "resubmitByStep failed");
+      await failPipelineRow(row.id, message);
     }
     if (row.step === "vendor_bill_mod" && row.reference_id) {
       const pool = getDbPool();
@@ -2511,7 +2524,7 @@ export async function resubmitByStep(
             SET status = 'error', qb_operation_id = NULL,
                 last_error = $2, updated_at = NOW()
           WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
-        [row.reference_id, err.message || "BillMod dispatch failed"]
+        [row.reference_id, message]
       );
     }
     if (
@@ -2519,10 +2532,26 @@ export async function resubmitByStep(
         row.step as (typeof PURCHASE_OPERATION_STEPS)[number]
       )
     ) {
-      await mirrorPurchaseOperationFailure(
-        row,
-        err.message || `${row.step} dispatch failed`
-      ).catch(() => undefined);
+      await mirrorPurchaseOperationFailure(row, message).catch(() => undefined);
     }
   }
+}
+
+/**
+ * Error text for a failed dispatch. Node's fetch wraps every connection-level
+ * failure as `TypeError: fetch failed` and hides the useful part in
+ * `err.cause.code` (UND_ERR_CONNECT_TIMEOUT, ECONNREFUSED, ENOTFOUND…). The
+ * pipeline row stores only the message, so without this the diagnosis of a
+ * network failure is guesswork. The message still starts with the original
+ * text, so `classifyQbError`'s network patterns keep matching.
+ */
+export function describeDispatchError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  const cause = (err as { cause?: unknown } | null)?.cause;
+  const code =
+    cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
+      ? ((cause as { code: string }).code)
+      : null;
+  if (!code || message.includes(code)) return message;
+  return `${message} (${code})`;
 }
