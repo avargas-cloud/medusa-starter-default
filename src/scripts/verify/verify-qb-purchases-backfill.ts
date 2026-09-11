@@ -334,7 +334,7 @@ async function main() {
 
     // (i) créditos: total_cents contra la caché QB
     const creditCacheFiles = existsSync(CACHE_DIR)
-      ? require("node:fs").readdirSync(CACHE_DIR).filter((f: string) => /^credit_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.json$/.test(f))
+      ? require("node:fs").readdirSync(CACHE_DIR).filter((f: string) => /^credit_(\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}|bytxn_[0-9a-f]+)\.json$/.test(f))
       : [];
     const qbCreditByTxn = new Map<string, { TotalAmount?: string; Amount?: string }>();
     for (const f of creditCacheFiles) {
