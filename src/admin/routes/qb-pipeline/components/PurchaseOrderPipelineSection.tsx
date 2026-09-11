@@ -35,7 +35,11 @@ type PoStep =
   | "mod_vendor_bill"
   | "preflight_vendor_bill_rebuild"
   | "delete_vendor_bill_rebuild"
-  | "delete_vendor_bill";
+  | "delete_vendor_bill"
+  | "add_vendor_credit"
+  | "void_vendor_credit"
+  | "add_bill_payment"
+  | "void_bill_payment";
 
 interface PoRow {
   id: string;
@@ -90,6 +94,10 @@ const STEP_ICON: Record<PoStep, string> = {
   preflight_vendor_bill_rebuild: "🔎",
   delete_vendor_bill_rebuild: "🧹",
   delete_vendor_bill: "🗑️",
+  add_vendor_credit: "↩️",
+  void_vendor_credit: "🚫",
+  add_bill_payment: "💵",
+  void_bill_payment: "🚫",
 };
 
 const STEP_LABEL: Record<PoStep, string> = {
@@ -104,6 +112,10 @@ const STEP_LABEL: Record<PoStep, string> = {
   preflight_vendor_bill_rebuild: "Verify Bill Rebuild",
   delete_vendor_bill_rebuild: "Prepare Bill Rebuild",
   delete_vendor_bill: "Delete Bill",
+  add_vendor_credit: "Vendor Credit",
+  void_vendor_credit: "Void Credit",
+  add_bill_payment: "Bill Payment",
+  void_bill_payment: "Void Payment",
 };
 
 type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
@@ -182,7 +194,10 @@ function PipelinePoRow({
   // no tendría a qué apuntar), así que no se ofrece — la ruta también lo
   // rechaza con 409. Retry sí es correcto: consulta QuickBooks antes de escribir.
   const isUnidentifiedAdd =
-    (step === "add_vendor_bill" || step === "add_item_receipt") &&
+    (step === "add_vendor_bill" ||
+      step === "add_item_receipt" ||
+      step === "add_vendor_credit" ||
+      step === "add_bill_payment") &&
     !row.qb_list_id;
 
   const updatedAt =

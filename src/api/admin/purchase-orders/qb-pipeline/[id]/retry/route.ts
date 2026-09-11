@@ -17,6 +17,11 @@
  *   - <uuid>__vendor_bill_mod   → qb_order_pipeline Vendor Bill MOD row
  *   - <uuid>__vendor_bill_rebuild_preflight
  *   - <uuid>__vendor_bill_rebuild_delete
+ *   - <uuid>__vendor_credit_add / __vendor_credit_void
+ *   - <uuid>__bill_payment_add / __bill_payment_void
+ *                               → qb_order_pipeline GL-purchases chain rows
+ *                                 (re-armed like the MODs; an ADD whose
+ *                                 document already has a TxnID is refused)
  *                               → qb_order_pipeline reviewed rebuild rows
  *   - qbvbpipe_<ulid>__vendor_bill_delete
  *                               → qb_vendor_bill_pipeline DELETE lane
@@ -135,6 +140,57 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // MUST be decided before the generic `__mod` suffix below: these ids end in
   // "__mod" too, and the generic branch would look them up in the legacy
   // ItemReceipt table and 404.
+  // ── Vendor Credit / Bill Payment chain rows (gl-purchases-v2) ───────────
+  // Same append-only table and the same re-arm as the chained MODs below, with
+  // one extra guard on the ADD steps: an ADD is not idempotent, so a row whose
+  // document ALREADY carries a QuickBooks TxnID is never re-dispatched (the
+  // dispatcher would refuse it anyway — `loadVendorCreditAddFacts` /
+  // `loadBillPaymentAddFacts` bail on an existing qb_txn_id — but a 409 here
+  // says why instead of leaving the row 'waiting' forever).
+  const glChainStep = (
+    [
+      "vendor_credit_add",
+      "vendor_credit_void",
+      "bill_payment_add",
+      "bill_payment_void",
+    ] as const
+  ).find((step) => rawId.endsWith(`__${step}`));
+  if (glChainStep) {
+    const orderPipelineId = rawId.slice(0, -`__${glChainStep}`.length);
+    const table = glChainStep.startsWith("vendor_credit")
+      ? "vendor_credit"
+      : "vendor_bill_payment";
+    const rows = await knex
+      .raw(
+        `SELECT qop.id, qop.status, doc.qb_txn_id AS doc_qb_txn_id
+           FROM qb_order_pipeline qop
+           LEFT JOIN ${table} doc ON doc.id = qop.reference_id
+          WHERE qop.id = ?::uuid AND qop.step = ? LIMIT 1`,
+        [orderPipelineId, glChainStep]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    if (!["pending", "waiting", "failed"].includes(String(row.status))) {
+      return res
+        .status(409)
+        .json({ error: `Cannot retry ${glChainStep} in status '${row.status}'` });
+    }
+    if (glChainStep.endsWith("_add") && row.doc_qb_txn_id) {
+      return res.status(409).json({
+        error:
+          "This document already has a QuickBooks TxnID — re-sending the Add would duplicate it. Mark it fixed instead.",
+        code: "gl_chain_add_already_in_qb",
+      });
+    }
+    await rearmDelegatedOperation(knex, orderPipelineId);
+    return res.json({
+      success: true,
+      message: `${glChainStep.replace(/_/g, " ")} re-queued`,
+    });
+  }
+
   const chainedModStep = rawId.endsWith("__purchase_order_mod")
     ? "purchase_order_mod"
     : rawId.endsWith("__item_receipt_mod")

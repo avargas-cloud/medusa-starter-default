@@ -11,6 +11,11 @@
  *   - <uuid>__purchase_order_mod / <uuid>__item_receipt_mod
  *                               → qb_order_pipeline chained MOD rows
  *   - <uuid>__vendor_bill_mod
+ *   - <uuid>__vendor_credit_add / __vendor_credit_void
+ *   - <uuid>__bill_payment_add / __bill_payment_void
+ *                               → qb_order_pipeline GL-purchases chain rows
+ *                                 (an ADD without TxnID is refused, like the
+ *                                 vendor bill ADD)
  *   - <uuid>__vendor_bill_rebuild_preflight / __vendor_bill_rebuild_delete
  *     are intentionally NOT mark-fixable; skipping either verification would
  *     make the dependent chain unsafe.
@@ -54,6 +59,49 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // ── Chained MOD history rows (append-only qb_order_pipeline) ─────────────
   // Decided before the generic `__mod` suffix below, which these ids also end
   // with and which resolves against the legacy ItemReceipt table.
+  // ── Vendor Credit / Bill Payment chain rows (gl-purchases-v2) ───────────
+  // 'fixed' = the operator resolved it in QuickBooks by hand. Like the vendor
+  // bill ADD, an ADD without a TxnID is refused: a fixed credit the poller
+  // cannot find later leaves its TxnVoid with nothing to void.
+  const glChainStep = (
+    [
+      "vendor_credit_add",
+      "vendor_credit_void",
+      "bill_payment_add",
+      "bill_payment_void",
+    ] as const
+  ).find((step) => rawId.endsWith(`__${step}`));
+  if (glChainStep) {
+    const orderPipelineId = rawId.slice(0, -`__${glChainStep}`.length);
+    const table = glChainStep.startsWith("vendor_credit")
+      ? "vendor_credit"
+      : "vendor_bill_payment";
+    const rows = await knex
+      .raw(
+        `SELECT qop.id, qop.status, COALESCE(qop.qb_txn_id, doc.qb_txn_id) AS qb_txn_id
+           FROM qb_order_pipeline qop
+           LEFT JOIN ${table} doc ON doc.id = qop.reference_id
+          WHERE qop.id = ?::uuid AND qop.step = ? LIMIT 1`,
+        [orderPipelineId, glChainStep]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    if (glChainStep.endsWith("_add") && !row.qb_txn_id) {
+      return res.status(409).json({
+        error:
+          "This Add has no QuickBooks TxnID yet — marking it fixed would declare a document nothing can find later. Retry it instead.",
+        code: "gl_chain_add_without_txn_id",
+      });
+    }
+    await markDelegatedOperationFixed(knex, orderPipelineId);
+    return res.json({
+      success: true,
+      message: `${glChainStep.replace(/_/g, " ")} marked as fixed`,
+    });
+  }
+
   const chainedModStep = rawId.endsWith("__purchase_order_mod")
     ? "purchase_order_mod"
     : rawId.endsWith("__item_receipt_mod")

@@ -516,6 +516,98 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
         LEFT JOIN purchase_order po ON po.id = qvb.purchase_order_id
         WHERE qvb.deleted_at IS NULL
           AND qvb.void_status IS NOT NULL
+
+        UNION ALL
+
+        -- ── Vendor Credit ADD / VOID (gl-purchases-v2 · vc-po-return) ───
+        -- These live ONLY in the append-only chain table (no legacy mirror):
+        -- without this lane a credit stuck or rejected by QuickBooks was
+        -- invisible here and only showed as a missing QB badge on the credit.
+        -- The credit's number rides in vendor_bill_number (same column the
+        -- row renders under the PO number); po_number is the PO the goods
+        -- came back from, when the credit has one.
+        SELECT
+          qop.id::text || '__' || qop.step               AS id,
+          NULL::bigint                                   AS seq,
+          ('C' || COALESCE(regexp_replace(vc.number, '\\D', '', 'g'), '?'))
+                                                           AS seq_label,
+          COALESCE(vc.purchase_order_id, vc.id)          AS parent_id,
+          po.number                                      AS po_number,
+          po.draft_number                                AS draft_number,
+          NULL::text                                     AS receipt_number,
+          vc.number                                      AS vendor_bill_number,
+          CASE
+            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
+            WHEN qop.status = 'skipped' THEN 'skipped'
+            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
+            WHEN qop.status = 'failed' THEN 'error'
+            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            ELSE 'waiting'
+          END                                            AS status,
+          qop.bridge_op_id                               AS qb_operation_id,
+          COALESCE(qop.qb_txn_id, vc.qb_txn_id)          AS qb_list_id,
+          COALESCE(qop.qb_ref_number, vc.number)         AS qb_txn_number,
+          qop.error                                      AS last_error,
+          COALESCE(qop.retry_count, 0)                   AS retries,
+          0                                              AS coalesced_edits,
+          qop.next_retry_at                              AS next_retry_at,
+          qop.confirmed_at                               AS synced_at,
+          qop.created_at                                 AS created_at,
+          COALESCE(qop.updated_at, qop.confirmed_at, qop.failed_at, qop.submitted_at, qop.created_at)
+                                                           AS updated_at,
+          COALESCE(vc.vendor_name_snapshot, po.vendor_name_snapshot, vc.vendor_id)
+                                                           AS vendor_name,
+          CASE WHEN qop.step = 'vendor_credit_add' THEN 'add_vendor_credit'
+               ELSE 'void_vendor_credit' END              AS step
+        FROM qb_order_pipeline qop
+        JOIN vendor_credit vc ON vc.id = qop.reference_id AND vc.deleted_at IS NULL
+        LEFT JOIN purchase_order po ON po.id = vc.purchase_order_id AND po.deleted_at IS NULL
+        WHERE qop.step IN ('vendor_credit_add', 'vendor_credit_void')
+
+        UNION ALL
+
+        -- ── Bill Payment ADD / VOID (gl-purchases-v2 pay bills) ──────────
+        -- The Bill Payments tab shows the legacy payment MONITOR step
+        -- (vendor_bill_payment_check); the POS-originated BillPaymentCheckAdd
+        -- and its TxnVoid are chain rows like the credits above, so they
+        -- render here. BP-#### rides in vendor_bill_number; no PO.
+        SELECT
+          qop.id::text || '__' || qop.step               AS id,
+          NULL::bigint                                   AS seq,
+          ('P' || COALESCE(regexp_replace(vbp.number, '\\D', '', 'g'), '?'))
+                                                           AS seq_label,
+          vbp.id                                         AS parent_id,
+          NULL::text                                     AS po_number,
+          NULL::text                                     AS draft_number,
+          NULL::text                                     AS receipt_number,
+          vbp.number                                     AS vendor_bill_number,
+          CASE
+            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
+            WHEN qop.status = 'skipped' THEN 'skipped'
+            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
+            WHEN qop.status = 'failed' THEN 'error'
+            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            ELSE 'waiting'
+          END                                            AS status,
+          qop.bridge_op_id                               AS qb_operation_id,
+          COALESCE(qop.qb_txn_id, vbp.qb_txn_id)         AS qb_list_id,
+          COALESCE(qop.qb_ref_number, vbp.reference, vbp.number)
+                                                           AS qb_txn_number,
+          qop.error                                      AS last_error,
+          COALESCE(qop.retry_count, 0)                   AS retries,
+          0                                              AS coalesced_edits,
+          qop.next_retry_at                              AS next_retry_at,
+          qop.confirmed_at                               AS synced_at,
+          qop.created_at                                 AS created_at,
+          COALESCE(qop.updated_at, qop.confirmed_at, qop.failed_at, qop.submitted_at, qop.created_at)
+                                                           AS updated_at,
+          COALESCE(vbp.vendor_name_snapshot, vbp.vendor_id)
+                                                           AS vendor_name,
+          CASE WHEN qop.step = 'bill_payment_add' THEN 'add_bill_payment'
+               ELSE 'void_bill_payment' END               AS step
+        FROM qb_order_pipeline qop
+        JOIN vendor_bill_payment vbp ON vbp.id = qop.reference_id AND vbp.deleted_at IS NULL
+        WHERE qop.step IN ('bill_payment_add', 'bill_payment_void')
       ) feed
       ) numbered
     `;

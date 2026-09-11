@@ -54,9 +54,21 @@ async function main(): Promise<void> {
     for (const [step, lane] of [
       ["purchase_order_mod", "mod_purchase_order"],
       ["item_receipt_mod", "mod_item_receipt"],
+      // GL-purchases chain rows (vc-po-return): counted through the same JOIN
+      // the feed uses — a row whose document was hard-deleted (test fixtures)
+      // is invisible in both.
+      ["vendor_credit_add", "add_vendor_credit"],
+      ["vendor_credit_void", "void_vendor_credit"],
+      ["bill_payment_add", "add_bill_payment"],
+      ["bill_payment_void", "void_bill_payment"],
     ] as const) {
+      const docJoin = step.startsWith("vendor_credit")
+        ? "JOIN vendor_credit doc ON doc.id = qop.reference_id AND doc.deleted_at IS NULL"
+        : step.startsWith("bill_payment")
+          ? "JOIN vendor_bill_payment doc ON doc.id = qop.reference_id AND doc.deleted_at IS NULL"
+          : "";
       const [source] = await q<{ count: string }>(
-        `SELECT COUNT(*) AS count FROM qb_order_pipeline WHERE step = $1`,
+        `SELECT COUNT(*) AS count FROM qb_order_pipeline qop ${docJoin} WHERE qop.step = $1`,
         [step]
       );
       const [feed] = await q<{ count: string }>(
@@ -112,6 +124,12 @@ async function main(): Promise<void> {
                             'vendor_bill_rebuild_delete'))
       + (SELECT COUNT(*) FROM qb_order_pipeline
           WHERE step IN ('purchase_order_mod', 'item_receipt_mod'))
+      + (SELECT COUNT(*) FROM qb_order_pipeline qop
+          JOIN vendor_credit vc ON vc.id = qop.reference_id AND vc.deleted_at IS NULL
+         WHERE qop.step IN ('vendor_credit_add', 'vendor_credit_void'))
+      + (SELECT COUNT(*) FROM qb_order_pipeline qop
+          JOIN vendor_bill_payment vbp ON vbp.id = qop.reference_id AND vbp.deleted_at IS NULL
+         WHERE qop.step IN ('bill_payment_add', 'bill_payment_void'))
       ) AS total
     `);
     check(
