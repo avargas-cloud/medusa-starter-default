@@ -151,6 +151,10 @@ export async function createPurchaseOrderFromQb(
   const totalUnitsReceived = po.lines.reduce((sum, l) => sum + l.received_quantity, 0);
 
   const poId = makeId("po");
+  // Convención del POS (medida 2026-09-11): `qb_purchase_order_txn_number` es el P.O. No. de QuickBooks
+  // (RefNumber), que es lo que la lista muestra como "QB REF #" y lo que se busca en QB. El TxnNumber
+  // interno (150051…) no se encuentra en "Find Purchase Orders" → sólo queda en metadata.
+  const qbPoNumber = po.ref_number && /^\d+$/.test(po.ref_number) ? Number(po.ref_number) : null;
   const metadata = JSON.stringify({
     qb_backfill: {
       run_id: opts.runId,
@@ -160,6 +164,8 @@ export async function createPurchaseOrderFromQb(
       // `true` cuando este PO entró por `follow-links.ts` (2025 fuera del rango
       // descargado, resuelto por LinkedTxn de un documento de 2026).
       via_link: po.via_link === true,
+      qb_txn_number: po.txn_number,
+      qb_ref_number: po.ref_number,
     },
   });
 
@@ -193,13 +199,13 @@ export async function createPurchaseOrderFromQb(
       subtotalCents, // 11
       otherFeesCents, // 12
       po.total_amount_cents, // 13
-      po.ref_number, // 14
+      null, // 14 — reference_number: los POs nativos lo dejan vacío; el número de QB va en la columna 20
       opts.createdByUserId, // 15
       po.lines.filter((l) => !isEmptyPoLine(l)).length, // 16 — sin las líneas de texto
       totalUnitsOrdered, // 17
       totalUnitsReceived, // 18
       po.txn_id, // 19
-      po.txn_number, // 20
+      qbPoNumber, // 20 — qb_purchase_order_txn_number guarda el RefNumber (P.O. No.) de QB, como hace el pipeline nativo (poller :691); el TxnNumber interno va en metadata
       po.edit_sequence, // 21
       metadata, // 22
       status === "voided" ? businessAt : null, // 23
