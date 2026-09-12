@@ -12,6 +12,8 @@ import {
 } from "../../_lib/sales-revenue"
 import { fetchShippingCentsForPeriod } from "../../_lib/shipping-revenue"
 import { fetchSettledCommissionCentsForPeriod } from "../../_lib/commission-expr"
+import { fetchPostedOutsourcedServiceCentsForPeriod } from "../../_lib/outsourced-services-expr"
+import { fetchOpenOrdersUninvoicedCents } from "../../_lib/open-orders-uninvoiced"
 import { cmNotFraudWriteoffSql } from "../../../../../lib/reports/fraud-writeoff"
 
 const ACTIVE = SALES_ACTIVE_STATUSES_SQL
@@ -116,6 +118,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       prevFraudLossCents,
       currShippingCents,
       prevShippingCents,
+      currOutsourcedCents,
+      prevOutsourcedCents,
+      openOrders,
     ] = await Promise.all([
       fetchPeriodStats(pg, range.from, range.to),
       fetchPeriodStats(pg, prior.from, prior.to),
@@ -133,6 +138,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       fetchFraudWriteoffCentsForPeriod(pg, prior.from, prior.to),
       fetchShippingCentsForPeriod(pg, range.from, range.to),
       fetchShippingCentsForPeriod(pg, prior.from, prior.to),
+      fetchPostedOutsourcedServiceCentsForPeriod(pg, range.from, range.to),
+      fetchPostedOutsourcedServiceCentsForPeriod(pg, prior.from, prior.to),
+      fetchOpenOrdersUninvoicedCents(pg),
     ])
 
     // GAAP-correct definitions:
@@ -160,6 +168,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const commission              = currCommissionCents / 100
     const profit_after_commissions = gross_profit - commission
 
+    // Subcontratos POSTED por fecha de liquidación — misma base que la
+    // comisión, misma conversión cents → dólares. El tile "Gross Profit" del
+    // Dashboard muestra `profit_after_costs`: el margen real de la venta
+    // después de los dos costos que la venta misma originó. `gross_profit`
+    // (sólo COGS) sigue expuesto para el tab Gross Profit y la conciliación QB.
+    const outsourced_services = currOutsourcedCents / 100
+    const profit_after_costs  = profit_after_commissions - outsourced_services
+
     // Pérdida por fraude / bad debt. NO está en `refunded` — un write-off no es
     // una devolución (la mercadería no volvió) y QuickBooks lo lleva a una
     // cuenta de gasto sin tocar las ventas. Se muestra acá para que la pérdida
@@ -174,6 +190,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const prevGrossProfit  = prevNetRevenue - prevCogs
     const prevCommission              = prevCommissionCents / 100
     const prevProfitAfterCommissions  = prevGrossProfit - prevCommission
+    const prevOutsourcedServices      = prevOutsourcedCents / 100
+    const prevProfitAfterCosts        = prevProfitAfterCommissions - prevOutsourcedServices
 
     const units_sold      = Number(curr.units_sold ?? 0)
     const units_returned  = Number(currUnitsRet ?? 0)
@@ -197,8 +215,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       gross_profit,
       commission,
       profit_after_commissions,
+      outsourced_services,
+      profit_after_costs,
       fraud_loss,
       profit_after_fraud_loss,
+      // Snapshot de HOY, sin rango: lo que las órdenes abiertas todavía no
+      // facturaron. Detalle del criterio en `_lib/open-orders-uninvoiced.ts`.
+      open_orders_uninvoiced: openOrders.uninvoicedCents / 100,
+      open_orders_count: openOrders.orderCount,
       margin_pct:  Math.round(margin_pct  * 10) / 10,
       aov: curr.invoice_count > 0 ? gross_revenue / Number(curr.invoice_count) : 0,
       units_sold,
@@ -217,6 +241,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         gross_profit: prevGrossProfit,
         commission: prevCommission,
         profit_after_commissions: prevProfitAfterCommissions,
+        outsourced_services: prevOutsourcedServices,
+        profit_after_costs: prevProfitAfterCosts,
         fraud_loss: prevFraudLossCents / 100,
         profit_after_fraud_loss:
           prevProfitAfterCommissions - prevFraudLossCents / 100,
