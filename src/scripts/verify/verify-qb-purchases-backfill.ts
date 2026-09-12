@@ -43,10 +43,23 @@
  *      del header, y toda asignación referencia un `vendor_bill` existente;
  *  (k) muestra de hasta `--sample` documentos de receipt/bill/credit/payment
  *      responde 200 en su ruta GET.
+ *
+ * Check (fix del PO llegado DESPUÉS por follow-links, `relink-bills.ts`):
+ *  (m) 0 `vendor_bill` (de TODO el universo, no sólo este run) con
+ *      `purchase_order_id IS NULL` cuyo `LinkedTxn` (TxnType `PurchaseOrder`,
+ *      caché QB) resuelve a un `purchase_order.qb_purchase_order_list_id`
+ *      YA EXISTENTE localmente — indica un bill al que
+ *      `relink-qb-backfill-bills.ts` todavía no aplicó. Non-vacuo: el
+ *      universo evaluado (bills con `purchase_order_id IS NULL` Y caché QB)
+ *      debe ser > 0.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Pool } from "pg";
+
+import { normalizeBills } from "../../lib/qb-backfill/normalize";
+import { linkedTxnIdsOfType } from "../../lib/qb-backfill/links";
+import type { QbBill } from "../../lib/qb-backfill/types";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -535,6 +548,56 @@ async function main() {
       }
     } else {
       console.log(`(l) sin \`follow_links\` en el inventario (run anterior a este paso) — sección sólo informativa`);
+    }
+
+    // (m) bills con purchase_order_id NULL cuyo LinkedTxn PurchaseOrder de la
+    // caché QB ya resuelve a un purchase_order local — deuda de relink.
+    // Universo TOTAL (no sólo este run): un bill así pudo haber sido creado
+    // por un run anterior y relinkeado (o no) por otro run posterior.
+    const billCacheFiles = existsSync(CACHE_DIR)
+      ? readdirSync(CACHE_DIR).filter((f: string) => /^bill_(\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}|bytxn_[0-9a-f]+)\.json$/.test(f))
+      : [];
+    const qbBillByTxn = new Map<string, QbBill>();
+    for (const f of billCacheFiles) {
+      const raw = JSON.parse(readFileSync(join(CACHE_DIR, f), "utf8")) as Record<string, unknown> | null;
+      for (const b of normalizeBills(raw)) qbBillByTxn.set(b.txn_id, b);
+    }
+
+    const { rows: nullPoBillRows } = await client.query(
+      `SELECT number, qb_txn_id FROM vendor_bill
+        WHERE deleted_at IS NULL AND qb_txn_id IS NOT NULL AND purchase_order_id IS NULL`
+    );
+    const { rows: activePoTxnRows } = await client.query(
+      `SELECT qb_purchase_order_list_id FROM purchase_order
+        WHERE deleted_at IS NULL AND qb_purchase_order_list_id IS NOT NULL`
+    );
+    const activePoTxnIds = new Set((activePoTxnRows as { qb_purchase_order_list_id: string }[]).map((r) => r.qb_purchase_order_list_id));
+
+    let evaluatedForM = 0;
+    const staleRelinks: { number: string; qb_txn_id: string }[] = [];
+    for (const row of nullPoBillRows as { number: string; qb_txn_id: string }[]) {
+      const qbBill = qbBillByTxn.get(row.qb_txn_id);
+      if (!qbBill) continue; // sin caché QB para este TxnID — fuera del alcance de este --cache-dir
+      const linkedPoTxnIds = linkedTxnIdsOfType(qbBill.linked_txns, "PurchaseOrder");
+      if (linkedPoTxnIds.length === 0) continue; // sin LinkedTxn PurchaseOrder — no es candidato de relink
+      evaluatedForM++;
+      if (linkedPoTxnIds.some((t) => activePoTxnIds.has(t))) {
+        staleRelinks.push({ number: row.number, qb_txn_id: row.qb_txn_id });
+      }
+    }
+    if (staleRelinks.length > 0) {
+      console.error(
+        `✗ (m) ${staleRelinks.length} bill(s) con purchase_order_id NULL cuyo PO enlazado YA EXISTE localmente (falta relink): ${staleRelinks.map((r) => r.number).join(", ")}`
+      );
+      failures++;
+    } else {
+      console.log(`(m) 0 bill(s) pendientes de relink`);
+    }
+    if (evaluatedForM === 0) {
+      console.error(`✗ control de vacuidad (m): 0 bill(s) evaluados (ninguno con purchase_order_id NULL + caché QB + LinkedTxn PurchaseOrder) — el check no evaluó nada`);
+      failures++;
+    } else {
+      console.log(`(m) universo evaluado: ${evaluatedForM} bill(s) con purchase_order_id NULL y LinkedTxn PurchaseOrder`);
     }
   } finally {
     client.release();
