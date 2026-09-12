@@ -42,7 +42,12 @@
  *      POS conoce tiene una `payment_application` de un pago `type='credit_memo'`
  *      (`metadata.qb_txn_id` = CM) con `amount_applied` = |Amount|; (n2) las facturas del run
  *      `paid` con total > 0 y sin aplicación son exactamente las que en QB no tienen ni
- *      ReceivePayment ni CM enlazado (se imprimen: pagos posteriores a `--to` o refunds).
+ *      ReceivePayment ni CM enlazado (se imprimen: pagos posteriores a `--to` o refunds);
+ *  (o) dinero de Medusa: `order_summary.totals.current_order_total` (versión vigente) ==
+ *      `order.metadata.pos_total` a ±1¢ en TODAS las órdenes del run (no-vacuo: > 0 órdenes);
+ *      INFO: cuántas quedan fuera de ±1¢ si se re-deriva el total como lo hace la API
+ *      (Σ (precio×qty − adjustments) × (1 + tasa) + envío) — las líneas cuyo `unit_price`
+ *      perdió los sub-centavos del Rate de QB se listan, no fallan (`sales-order-money.ts`).
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -541,6 +546,37 @@ async function main(): Promise<void> {
     check("n2", noApp.length === noQbSource.length, `facturas paid (total > 0) sin aplicación: ${noApp.length} == ${noQbSource.length} sin ReceivePayment ni CM en la caché QB`);
     showFirst(withQbSource.map((r) => `invoice ${r.invoice_number} (${r.txn_id}) paid sin aplicación pero QB la cobra`));
     info("n2", `sin fuente en QB (pago posterior a la ventana o refund): ${noAppRows.filter((r) => !paidByQb.has(String(r.txn_id))).map((r) => `INV-${r.invoice_number} $${(cents(r.total) / 100).toFixed(2)}`).join(", ") || "—"}`);
+
+    // ── (o) summary de Medusa == pos_total ───────────────────────────────
+    const { rows: moneyRows } = await client.query<Row>(
+      `WITH r AS (
+         SELECT o.id, o.version, o.metadata->>'document_number' AS dn, (o.metadata->>'pos_total')::numeric AS pos_total,
+                (SELECT (s.totals->>'current_order_total')::numeric FROM order_summary s
+                  WHERE s.order_id = o.id AND s.deleted_at IS NULL ORDER BY s.version DESC LIMIT 1) AS summary_total
+           FROM "order" o
+          WHERE o.deleted_at IS NULL AND o.metadata->'qb_backfill'->>'run_id' = $1),
+       api AS (
+         SELECT r.id,
+                COALESCE(SUM((l.unit_price * oi.quantity
+                   - COALESCE((SELECT SUM(a.amount) FROM order_line_item_adjustment a
+                                WHERE a.item_id = l.id AND a.deleted_at IS NULL AND a.version = r.version), 0))
+                   * (1 + COALESCE((SELECT SUM(t.rate) FROM order_line_item_tax_line t
+                                     WHERE t.item_id = l.id AND t.deleted_at IS NULL), 0) / 100)), 0)
+                + COALESCE((SELECT SUM(sm.amount) FROM order_shipping os JOIN order_shipping_method sm ON sm.id = os.shipping_method_id
+                             WHERE os.order_id = r.id AND os.version = r.version AND os.deleted_at IS NULL AND sm.deleted_at IS NULL), 0) AS api_total
+           FROM r
+           LEFT JOIN order_item oi ON oi.order_id = r.id AND oi.version = r.version AND oi.deleted_at IS NULL
+           LEFT JOIN order_line_item l ON l.id = oi.item_id
+          GROUP BY r.id, r.version)
+       SELECT r.dn, r.pos_total::text, r.summary_total::text, api.api_total::text
+         FROM r JOIN api ON api.id = r.id ORDER BY r.dn`,
+      [RUN_ID]
+    );
+    const offSummary = moneyRows.filter((r) => r.summary_total == null || r.pos_total == null || Math.abs(Number(r.summary_total) - Number(r.pos_total)) > 0.011);
+    check("o", moneyRows.length > 0 && offSummary.length === 0, `order_summary.current_order_total == pos_total (±1¢): ${moneyRows.length - offSummary.length}/${moneyRows.length} orden(es) del run`);
+    showFirst(offSummary.map((r) => `${r.dn}: summary ${r.summary_total ?? "—"} ≠ pos_total ${r.pos_total ?? "—"}`));
+    const offApi = moneyRows.filter((r) => Math.abs(Number(r.api_total) - Number(r.pos_total)) > 0.011);
+    info("o", `total re-derivado como la API (líneas × tasa + envío) fuera de ±1¢: ${offApi.length}/${moneyRows.length} — ${offApi.map((r) => `${r.dn} Δ${(Number(r.api_total) - Number(r.pos_total)).toFixed(2)}`).join(", ") || "—"}`);
   } finally {
     client.release();
     await pool.end();

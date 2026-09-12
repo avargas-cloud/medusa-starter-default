@@ -9,6 +9,8 @@
  *     subscribers → sin reservas ni stock. `order_status: "Fulfilled"` va
  *     sólo en metadata; el fulfillment real lo pone después
  *     `scripts/fix/fulfill-backfilled-qb-orders.ts` (no es tarea de acá).
+ *     Lleva tax lines / adjustments / shipping method como el POS nativo
+ *     (`sales-order-money.ts`); el summary se parchea en `backdateOrder`.
  *   - `pos_invoice` + ítems por el module service, `created_at` backdateado.
  *     La ORDEN se backdatea al final (`backdateOrder`), nunca antes de un
  *     service que dispare `recompute_order_money` (lock sobre `"order"`).
@@ -36,6 +38,7 @@ import {
   type QbBackfillMarker,
   type SalesApplyContext,
 } from "./sales-context";
+import { isQbLineTaxable, patchOrderSummaryFromPosInvoice, planSalesOrderMoney, toMedusaItemMoney } from "./sales-order-money";
 import type { QbInvoice, QbSalesReceipt } from "./sales-types";
 import type { QbRef } from "./types";
 
@@ -48,6 +51,7 @@ export interface ResolvedSalesLine {
   quantity: number;
   unit_price_cents: number;
   total_cents: number;
+  taxable: boolean; // `SalesTaxCodeRef` de la línea QB (`Non` = exenta): la verdad del documento, no del producto
   average_unit_cost: number | null;
 }
 
@@ -64,15 +68,9 @@ export async function resolveProductLines(ctx: SalesApplyContext, lines: readonl
       sku = ref.full_name.includes(":") ? ref.full_name.split(":").pop()! : ref.full_name;
     }
     out.push({
-      variant_id: variantId,
-      sku: sku || ref.full_name,
-      title: sku || ref.full_name,
-      product_title: ref.full_name,
-      description: c.line.description ?? ref.full_name,
-      quantity: c.quantity,
-      unit_price_cents: c.unit_price_cents,
-      total_cents: c.amount_cents,
-      average_unit_cost: null,
+      variant_id: variantId, sku: sku || ref.full_name, title: sku || ref.full_name, product_title: ref.full_name,
+      description: c.line.description ?? ref.full_name, quantity: c.quantity, unit_price_cents: c.unit_price_cents,
+      total_cents: c.amount_cents, taxable: isQbLineTaxable(c.line.sales_tax_code_ref?.full_name), average_unit_cost: null,
     });
   }
   const costs = await loadAvgCostDollars(ctx.client, out.map((l) => l.variant_id));
@@ -123,6 +121,8 @@ export async function createSalesOrderAndInvoice(ctx: SalesApplyContext, input: 
   const marker = backfillMarker(ctx.runId, header.txn_id, header.txn_type, header.via_link);
   const nowIso = marker.imported_at;
   const documentNumber = await allocateOrderDocumentNumber(ctx.client, header.txn_date, ctx.goLiveDate);
+  const money = planSalesOrderMoney(input.lines.map((l, i) => ({ key: String(i), net_cents: l.total_cents, taxable: l.taxable })), totals);
+  if (!money.ok) throw new Error(`${header.txn_id}: dinero no representable en Medusa (${money.reason}: ${money.detail})`); // fail-closed: ROLLBACK + cleanup
 
   const order = await ctx.services.orderModule.createOrders({
     region_id: ctx.regionId,
@@ -132,14 +132,16 @@ export async function createSalesOrderAndInvoice(ctx: SalesApplyContext, input: 
     currency_code: "usd",
     status: "completed",
     is_draft_order: false,
-    items: input.lines.map((l) => ({
+    items: input.lines.map((l, i) => ({
       variant_id: l.variant_id,
       variant_sku: l.sku,
       title: l.title,
       product_title: l.product_title,
       quantity: l.quantity,
       unit_price: l.unit_price_cents / 100,
+      ...toMedusaItemMoney(money.lines[i]!),
     })),
+    ...(money.shipping ? { shipping_methods: [{ name: money.shipping.name, amount: money.shipping.amount_cents / 100 }] } : {}),
     metadata: {
       document_number: documentNumber,
       pos_created: true,
@@ -212,6 +214,7 @@ export async function createSalesOrderAndInvoice(ctx: SalesApplyContext, input: 
         unit_price: l.unit_price_cents,
         total: l.total_cents,
         net_total_cents: l.total_cents,
+        taxable: l.taxable,
         // Aproximación: costo promedio VIGENTE, no el del día (ver `loadAvgCostDollars`).
         average_unit_cost: l.average_unit_cost,
         average_unit_cost_synced_at: l.average_unit_cost != null ? nowIso : null,
@@ -232,6 +235,7 @@ export async function createSalesOrderAndInvoice(ctx: SalesApplyContext, input: 
  * el service espera el lock y la transacción espera al service → deadlock.
  */
 export async function backdateOrder(ctx: SalesApplyContext, orderId: string, txnDate: string): Promise<void> {
+  await patchOrderSummaryFromPosInvoice(ctx.client, orderId); // dispara recompute_order_money (UPDATE "order") → va acá, último
   const at = businessInstant(txnDate);
   await ctx.client.query(`UPDATE "order" SET created_at = $1::timestamptz, updated_at = $1::timestamptz WHERE id = $2`, [at, orderId]);
   await ctx.client.query(
