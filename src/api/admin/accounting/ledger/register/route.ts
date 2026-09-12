@@ -39,6 +39,8 @@ interface RegisterRow {
   document_number: string | null;
   memo: string;
   payee_name: string | null;
+  account_list_id: string;
+  account_name: string | null;
   debit_cents: string;
   credit_cents: string;
   balance_cents: string;
@@ -119,6 +121,26 @@ export async function GET(
       .status(404)
       .json({ error: "account not found", code: "account_not_found" });
   }
+  // `include_children=true`: the register of a PARENT account rolls up its
+  // whole subtree (QB's "Transaction Detail by Account" on a "Total X" line).
+  // A parent rarely carries lines of its own — Services $0 vs its children
+  // $1,248.45 (operator 2026-09-12) — so the drill-down from a statement
+  // total is meaningless without this. `account_list_id` is returned per line.
+  const includeChildren = queryString(req, "include_children") === "true";
+  let accountIds: string[] = [account.list_id];
+  if (includeChildren) {
+    // Same resolution as `reports/hierarchy.ts`: the mirror carries
+    // `parent_list_id` on 0 rows (both DBs, 2026-09-12) — the tree lives in
+    // `parent_full_name` / the `A:B:C` full_name path, so the subtree is
+    // "full_name = mine OR starts with mine + ':'".
+    const subtree = await db.raw(
+      `SELECT qb_list_id FROM qb_account
+        WHERE deleted_at IS NULL
+          AND (qb_list_id = ? OR parent_list_id = ? OR full_name LIKE ? OR parent_full_name = ? OR parent_full_name LIKE ?)`,
+      [account.list_id, account.list_id, `${account.full_name}:%`, account.full_name, `${account.full_name}:%`]
+    );
+    accountIds = (subtree.rows as unknown as { qb_list_id: string }[]).map((r) => r.qb_list_id);
+  }
   const normalSide =
     account.normal_balance ?? normalBalanceFor(account.account_type);
   const sign = normalSide === "debit" ? 1 : -1;
@@ -130,12 +152,12 @@ export async function GET(
   const base = `
     WITH acct_lines AS (
       SELECT l.id AS line_id, l.entry_id, e.day, e.source_kind, e.source_id,
-             e.document_number, e.description, e.reference,
+             e.document_number, e.description, e.reference, l.account_list_id,
              l.debit_cents, l.credit_cents,
              NOT (${activeEntryPredicate("e")}) AS reversed
         FROM bank_journal_line l
         JOIN bank_journal_entry e ON e.id = l.entry_id
-       WHERE l.deleted_at IS NULL AND e.deleted_at IS NULL AND l.account_list_id = ?
+       WHERE l.deleted_at IS NULL AND e.deleted_at IS NULL AND l.account_list_id = ANY(string_to_array(?, ','))
     ),
     opening AS (
       SELECT COALESCE(SUM(debit_cents - credit_cents), 0) AS cents
@@ -151,7 +173,8 @@ export async function GET(
     ),
     detailed AS (
       SELECT r.line_id, r.entry_id, r.day, r.source_kind, r.source_id, r.description,
-             r.reference, r.debit_cents, r.credit_cents, r.reversed, r.raw_balance,
+             r.reference, r.debit_cents, r.credit_cents, r.reversed, r.raw_balance, r.account_list_id,
+             (SELECT qa.name FROM qb_account qa WHERE qa.qb_list_id = r.account_list_id) AS account_name,
              ${RESOLVED_DOC_NUMBER_SQL} AS document_number,
              ${payeeSql} AS payee_name,
              (SELECT m.statement_id FROM bank_statement_match m
@@ -176,7 +199,8 @@ export async function GET(
     filterBindings.push(like, like, like, like);
   }
   const filterSql = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-  const baseBindings = [accountListId, from, from, to];
+  // knex expande un array en '?, ?, ?' — se pasa como CSV y PG lo abre con string_to_array.
+  const baseBindings = [accountIds.join(","), from, from, to];
 
   const pageWhere = [
     ...filters,
@@ -185,7 +209,7 @@ export async function GET(
   const pageResult = await db.raw(
     `${base}
      SELECT d.entry_id, d.line_id, d.day, d.source_kind, d.source_id, d.document_number,
-            d.description AS memo, d.payee_name,
+            d.description AS memo, d.payee_name, d.account_list_id, d.account_name,
             d.debit_cents::text AS debit_cents, d.credit_cents::text AS credit_cents,
             (? * d.raw_balance)::text AS balance_cents, d.reversed, d.statement_id
        FROM detailed d
@@ -238,6 +262,8 @@ export async function GET(
       document_number: r.document_number,
       doc_label: docLabelFor(r.source_kind, r.document_number),
       payee_name: r.payee_name,
+      account_list_id: r.account_list_id,
+      account_name: r.account_name,
       memo: r.memo,
       debit_cents: r.debit_cents,
       credit_cents: r.credit_cents,
