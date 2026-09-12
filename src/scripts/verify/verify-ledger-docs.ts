@@ -16,14 +16,19 @@
  *  (e) year close: `net_income_cents` del preview == (Σcr−Σdr Income/OtherIncome)
  *      − (Σdr−Σcr COGS/Expense/OtherExpense) leído del journal con la misma
  *      definición de entrada activa que el trial balance;
- *  (f) no-vacuidad: cada check evaluó ≥1 fila real.
+ *  (f) no-vacuidad: cada check evaluó ≥1 fila real;
+ *  (g) una transferencia CON fee balancea: Dr to (amount − fee) / Dr gasto
+ *      (fee) / Cr from (amount), y el fee cae en la cuenta Expense elegida.
  */
 import { Pool, type PoolClient } from "pg";
 
 import {
   createBankCheck,
+  createBankTransfer,
   getBankCheck,
+  getBankTransfer,
   postBankCheck,
+  postBankTransfer,
   previewYearClose,
   voidBankCheck,
   LedgerError,
@@ -60,14 +65,15 @@ async function main() {
     console.log("verify-ledger-docs (todo dentro de una transacción; ROLLBACK al final)");
 
     const { rows: banks } = await client.query<{ qb_list_id: string }>(
-      `SELECT qb_list_id FROM qb_account WHERE account_type = 'Bank' AND is_active AND deleted_at IS NULL ORDER BY full_name LIMIT 1`
+      `SELECT qb_list_id FROM qb_account WHERE account_type = 'Bank' AND is_active AND deleted_at IS NULL ORDER BY full_name LIMIT 2`
     );
     const { rows: expenses } = await client.query<{ qb_list_id: string }>(
       `SELECT qb_list_id FROM qb_account WHERE account_type = 'Expense' AND is_active AND deleted_at IS NULL ORDER BY full_name LIMIT 2`
     );
     const bank = banks[0]?.qb_list_id;
+    const bank2 = banks[1]?.qb_list_id;
     const [exp1, exp2] = expenses.map((r) => r.qb_list_id);
-    if (!bank || !exp1 || !exp2) throw new Error("loader vacío: hacen falta 1 Bank + 2 Expense activas");
+    if (!bank || !bank2 || !exp1 || !exp2) throw new Error("loader vacío: hacen falta 2 Bank + 2 Expense activas");
 
     // Un día abierto: hoy (ET) — ningún mes cerrado puede contener hoy sin
     // bloquear al POS entero, así que es el día seguro para (a)-(c).
@@ -176,6 +182,38 @@ async function main() {
 
     // (f) ────────────────────────────────────────────────────────────────
     check("(f) no-vacuidad: (a) evaluó 3 líneas, (c) evaluó una reversa, (e) evaluó ≥1 línea P&L", lines.length === 3 && mirror.length === 3 && Number(tb[0]!.n) > 0, `P&L lines=${tb[0]!.n}`);
+
+    // (g) ────────────────────────────────────────────────────────────────
+    const trDraft = await createBankTransfer(
+      client,
+      { day, from_account_list_id: bank, to_account_list_id: bank2, amount_cents: 10_000n, fee_cents: 250n, fee_account_list_id: exp1, memo: "verify: fee" },
+      ACTOR
+    );
+    check("(g) draft con fee persistido (fee_cents=250, cuenta y snapshot)", trDraft.status === "draft" && trDraft.fee_cents === 250 && trDraft.fee_account_list_id === exp1 && trDraft.fee_account_snapshot?.id === exp1, JSON.stringify({ fee: trDraft.fee_cents, acct: trDraft.fee_account_list_id, snap: trDraft.fee_account_snapshot?.name }));
+    const trPosted = await postBankTransfer(client, trDraft.id, ACTOR);
+    const trLines = await entryLines(client, trPosted.entry_id);
+    const trDr = trLines.reduce((a, l) => a + BigInt(l.debit_cents), 0n);
+    const trCr = trLines.reduce((a, l) => a + BigInt(l.credit_cents), 0n);
+    const toLine = trLines.find((l) => l.role === "to_account");
+    const feeLine = trLines.find((l) => l.role === "fee_account");
+    const fromLine = trLines.find((l) => l.role === "from_account");
+    check("(g) transfer con fee balancea: D10000 = C10000 en 3 líneas", trDr === trCr && trDr === 10_000n && trLines.length === 3, `D${trDr} C${trCr} · ${trLines.length} líneas`);
+    check(
+      "(g) Dr to_account(9750) al banco destino, Dr fee_account(250) a la Expense, Cr from_account(10000) al origen",
+      toLine?.account_list_id === bank2 && toLine.debit_cents === "9750" && toLine.credit_cents === "0" &&
+        feeLine?.account_list_id === exp1 && feeLine.debit_cents === "250" && feeLine.credit_cents === "0" &&
+        fromLine?.account_list_id === bank && fromLine.credit_cents === "10000" && fromLine.debit_cents === "0",
+      trLines.map((l) => `${l.role}:${l.account_list_id} D${l.debit_cents}/C${l.credit_cents}`).join(" · ")
+    );
+    const trAfter = await getBankTransfer(client, trDraft.id);
+    check("(g) transfer posted con entry_id", trAfter?.status === "posted" && trAfter.entry_id === trPosted.entry_id);
+    let feeCode: string | null = null;
+    try {
+      await createBankTransfer(client, { day, from_account_list_id: bank, to_account_list_id: bank2, amount_cents: 100n, fee_cents: 5n, fee_account_list_id: bank2 }, ACTOR);
+    } catch (err) {
+      feeCode = err instanceof LedgerError ? String((err.details as { reason?: string } | null)?.reason ?? err.code) : String(err);
+    }
+    check("(g) fee contra una cuenta que no es Expense → GL_SOURCE_INVALID fee_account_type_not_expense", feeCode === "fee_account_type_not_expense", `reason=${feeCode}`);
   } finally {
     await client.query("ROLLBACK");
     client.release();

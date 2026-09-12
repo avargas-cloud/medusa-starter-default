@@ -104,11 +104,30 @@ export const bankTransferBodySchema = z
     from_account_list_id: z.string().trim().min(1),
     to_account_list_id: z.string().trim().min(1),
     amount_cents: CENTS_SCHEMA.positive(),
+    fee_cents: CENTS_SCHEMA.min(0).optional(),
+    fee_account_list_id: OPTIONAL_ID_SCHEMA,
     memo: MEMO_SCHEMA,
     evidence_id: OPTIONAL_ID_SCHEMA,
     post: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  // `fee_account_list_id` es obligatoria SÓLO si hay fee; el tipo (Expense activa)
+  // lo valida el builder contra la base.
+  .superRefine((body, ctx) => {
+    const fee = body.fee_cents ?? 0;
+    if (fee > 0 && !body.fee_account_list_id)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fee_account_list_id"],
+        message: "fee_account_list_id is required when fee_cents > 0",
+      });
+    if (fee >= body.amount_cents)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fee_cents"],
+        message: "fee_cents must be below amount_cents",
+      });
+  });
 
 export function toBankTransferInput(
   body: z.infer<typeof bankTransferBodySchema>
@@ -118,6 +137,9 @@ export function toBankTransferInput(
     from_account_list_id: body.from_account_list_id,
     to_account_list_id: body.to_account_list_id,
     amount_cents: BigInt(body.amount_cents),
+    fee_cents: BigInt(body.fee_cents ?? 0),
+    fee_account_list_id:
+      (body.fee_cents ?? 0) > 0 ? (body.fee_account_list_id ?? null) : null,
     memo: body.memo ?? null,
     evidence_id: body.evidence_id ?? null,
   };

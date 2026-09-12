@@ -28,7 +28,12 @@ export interface BankTransferWriteInput {
   day: string;
   from_account_list_id: string;
   to_account_list_id: string;
+  /** Lo que SALE de `from`. */
   amount_cents: bigint;
+  /** Comisión del banco; `to` recibe `amount − fee`. Null/0 = sin fee. */
+  fee_cents?: bigint | null;
+  /** Cuenta Expense del fee; obligatoria si `fee_cents > 0`. */
+  fee_account_list_id?: string | null;
   memo?: string | null;
   evidence_id?: string | null;
 }
@@ -42,6 +47,9 @@ export interface BankTransferDto {
   to_account_list_id: string;
   to_snapshot: AccountSnapshot;
   amount_cents: number;
+  fee_cents: number;
+  fee_account_list_id: string | null;
+  fee_account_snapshot: AccountSnapshot | null;
   memo: string | null;
   status: GlDocumentStatus;
   entry_id: string | null;
@@ -54,16 +62,21 @@ export interface BankTransferDto {
   updated_at: string;
 }
 
-type Row = Omit<BankTransferDto, "amount_cents"> & { amount_cents: string };
+type Row = Omit<BankTransferDto, "amount_cents" | "fee_cents"> & {
+  amount_cents: string;
+  fee_cents: string | null;
+};
 
 const COLUMNS = `d.id, d.doc_number, d.day::text AS day, d.from_account_list_id, d.from_snapshot,
-  d.to_account_list_id, d.to_snapshot, d.amount_cents::text AS amount_cents, d.memo, d.status, d.entry_id,
+  d.to_account_list_id, d.to_snapshot, d.amount_cents::text AS amount_cents,
+  d.fee_cents::text AS fee_cents, d.fee_account_list_id, d.fee_account_snapshot, d.memo, d.status, d.entry_id,
   d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason, d.evidence_id,
   d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at`;
 
 const toDto = (row: Row): BankTransferDto => ({
   ...row,
   amount_cents: Number(row.amount_cents),
+  fee_cents: Number(row.fee_cents ?? 0),
 });
 
 async function loadRow(
@@ -105,18 +118,29 @@ export async function listBankTransfers(
 }
 
 async function resolve(client: PoolClient, input: BankTransferWriteInput) {
+  const fee = input.fee_cents ?? 0n;
+  const feeListId = fee > 0n ? (input.fee_account_list_id ?? null) : null;
+  if (fee > 0n && !feeListId)
+    throw new LedgerError("GL_SOURCE_INVALID", {
+      reason: "fee_account_required",
+      fee_cents: fee.toString(),
+    });
   const accounts = await loadActiveAccounts(client, [
     input.from_account_list_id,
     input.to_account_list_id,
+    ...(feeListId ? [feeListId] : []),
   ]);
   const fromAccount = accounts.get(input.from_account_list_id)!;
   const toAccount = accounts.get(input.to_account_list_id)!;
+  const feeAccount = feeListId ? accounts.get(feeListId)! : null;
   const ledgerLines = buildBankTransferLines({
     fromAccount,
     toAccount,
     amount_cents: input.amount_cents,
+    fee_cents: fee,
+    feeAccount,
   });
-  return { fromAccount, toAccount, ledgerLines };
+  return { fromAccount, toAccount, feeAccount, ledgerLines };
 }
 
 export async function createBankTransfer(
@@ -130,8 +154,8 @@ export async function createBankTransfer(
     const docNumber = await allocateGlNumber(client, "gl_transfer", "TR");
     await client.query(
       `INSERT INTO gl_transfer (id, doc_number, day, from_account_list_id, from_snapshot, to_account_list_id, to_snapshot,
-         amount_cents, memo, evidence_id, status, created_by)
-       VALUES ($1,$2,$3::date,$4,$5::jsonb,$6,$7::jsonb,$8,$9,$10,'draft',$11)`,
+         amount_cents, fee_cents, fee_account_list_id, fee_account_snapshot, memo, evidence_id, status, created_by)
+       VALUES ($1,$2,$3::date,$4,$5::jsonb,$6,$7::jsonb,$8,$9,$10,$11::jsonb,$12,$13,'draft',$14)`,
       [
         id,
         docNumber,
@@ -141,6 +165,9 @@ export async function createBankTransfer(
         input.to_account_list_id,
         JSON.stringify(toAccountSnapshot(r.toAccount)),
         input.amount_cents,
+        r.feeAccount ? (input.fee_cents ?? 0n) : null,
+        r.feeAccount?.id ?? null,
+        r.feeAccount ? JSON.stringify(toAccountSnapshot(r.feeAccount)) : null,
         input.memo ?? null,
         input.evidence_id ?? null,
         actorId,
@@ -167,6 +194,7 @@ export async function postBankTransfer(
     const { ledgerLines } = await resolve(client, {
       ...row,
       amount_cents: BigInt(row.amount_cents),
+      fee_cents: BigInt(row.fee_cents ?? 0),
     });
     const sourceSnapshot = { header: row };
     const sourceHash = createHash("sha256")
