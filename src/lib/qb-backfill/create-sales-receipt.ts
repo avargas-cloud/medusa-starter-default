@@ -44,6 +44,8 @@ export async function createSalesReceiptFromQb(ctx: SalesApplyContext, sr: QbSal
       qb_sales_receipt_txn_id: sr.txn_id,
       qb_sales_receipt_ref_number: sr.ref_number,
       qb_sales_receipt_edit_sequence: sr.edit_sequence,
+      qb_invoice_ref_num: sr.ref_number,
+      qb_invoices: [{ txn_id: sr.txn_id, ref_number: sr.ref_number, kind: "sales_receipt" }],
       referential_deposit: total / 100,
     },
     invoiceMetadata: {

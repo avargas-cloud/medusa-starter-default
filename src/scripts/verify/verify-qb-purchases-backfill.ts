@@ -121,6 +121,9 @@ interface Inventory {
 }
 
 async function fetchToken(): Promise<string> {
+  // Producción: el operador entrega el JWT por env (nunca por archivo del repo);
+  // el login sandbox@test.com sólo existe en el sandbox.
+  if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN;
   const res = await fetch(`${ADMIN_URL}/auth/user/emailpass`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

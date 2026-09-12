@@ -83,6 +83,11 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<{ s
 }
 
 async function login(): Promise<void> {
+  // Contra prod: `GL_API_TOKEN` (el JWT del operador) en vez de emailpass del sandbox.
+  if (process.env.GL_API_TOKEN) {
+    token = process.env.GL_API_TOKEN;
+    return;
+  }
   for (let attempt = 1; attempt <= 6; attempt++) {
     try {
       const res = await fetch(`${API}/auth/user/emailpass`, {
@@ -244,6 +249,10 @@ async function main(): Promise<void> {
     }
 
     console.log("\n(f) accounts POST / PATCH round trip");
+    // `GL_READ_ONLY=1` (prod): (f) escribe cuentas de prueba — se salta y se declara.
+    if (process.env.GL_READ_ONLY === "1") {
+      console.log("  · omitida (GL_READ_ONLY=1): no se crean cuentas de prueba en este ambiente");
+    } else {
     const name = `Verify GL Reports ${Date.now()}`;
     const created = await api<{ list_id: string }>("POST", "/admin/accounting/accounts", { name, account_type: "Expense", description: "verify-gl-reports" });
     check("POST creates a pos_ account (201)", created.status === 201 && created.body.list_id?.startsWith("pos_"), `status ${created.status} ${JSON.stringify(created.body)}`);
@@ -259,6 +268,8 @@ async function main(): Promise<void> {
     check("GET lists it inactive, pos-owned, renamed, numbered", item?.is_active === false && item.is_pos_owned && item.full_name === `${name} renamed` && item.account_number === "69998", JSON.stringify(item));
     const activeOnly = await api<Accounts>("GET", `/admin/accounting/accounts?q=${encodeURIComponent(name)}`);
     check("GET without include_inactive hides it", !activeOnly.body.items?.some((i) => i.list_id === listId));
+
+    }
 
     console.log("\n(g) non-vacuity");
     check(`trial balance has ≥ 50 active accounts (${tb.body.accounts.filter((a) => a.has_activity).length})`, tb.body.accounts.filter((a) => a.has_activity).length >= 50);

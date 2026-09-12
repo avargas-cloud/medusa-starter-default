@@ -157,7 +157,7 @@ export async function createSalesOrderAndInvoice(ctx: SalesApplyContext, input: 
       ...(totals.discount_cents ? { computed_discount: totals.discount_cents / 100 } : {}),
       ...(totals.shipping_cents ? { computed_shipping: totals.shipping_cents / 100 } : {}),
       qb_skip: true,
-      qb_sync_status: "synced",
+      qb_sync_status: "child_synced",
       qb_synced_at: nowIso,
       qb_ref_number: header.ref_number,
       qb_list_id: header.customer_ref.list_id,
@@ -277,6 +277,10 @@ export async function createInvoiceFromQb(ctx: SalesApplyContext, inv: QbInvoice
       qb_invoice_txn_id: inv.txn_id,
       qb_invoice_ref_number: inv.ref_number,
       qb_invoice_edit_sequence: inv.edit_sequence,
+      // Forma nativa que lee la columna QB REF del POS (`OrderTableRow`):
+      // `qb_invoice_ref_num` + `qb_invoices[]` + `child_synced`.
+      qb_invoice_ref_num: inv.ref_number,
+      qb_invoices: [{ txn_id: inv.txn_id, ref_number: inv.ref_number, kind: "invoice" }],
       ...(inv.po_number ? { po_number: inv.po_number } : {}),
     },
     invoiceMetadata: {},

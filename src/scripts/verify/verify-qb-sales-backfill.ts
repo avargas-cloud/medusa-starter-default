@@ -137,6 +137,7 @@ function loadCache<T extends { txn_id: string }>(prefixes: RegExp, normalize: (r
 }
 
 async function fetchToken(): Promise<string> {
+  if (process.env.ADMIN_TOKEN) return process.env.ADMIN_TOKEN;
   const res = await fetch(`${ADMIN_URL}/auth/user/emailpass`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
