@@ -124,7 +124,17 @@ export interface MergeApplyResult {
  * genuine retry still proceeds. The bridge purges completed/failed ops after
  * 6h, so protection is bounded to that window — fine against our 20-minute
  * timeout, and the same bound every other keyed ADD already lives with.
+ *
+ * `depositAccount` SIEMPRE viaja. Sin `DepositToAccountRef`, QuickBooks Desktop
+ * no cae en Undeposited Funds: reusa la ÚLTIMA cuenta "Deposit To" del
+ * formulario Receive Payments. El 2026-09-10 las liquidaciones de comisión
+ * (handle-commission-settlement) fueron los primeros ReceivePayment con cuenta
+ * explícita (`Referral Commission Clearing`) y el siguiente pago del POS sin
+ * cuenta —#3797, 1D0A48— quedó en esa cuenta de clearing. Un caller que
+ * necesite otra cuenta la pasa; el default cubre a los que no lo pensaron.
  */
+export const DEFAULT_RECEIVE_PAYMENT_DEPOSIT_ACCOUNT = "Undeposited Funds";
+
 export async function receivePaymentInQb(
   payload: QbReceivePaymentPayload,
   opts?: { idempotencyKey?: string }
@@ -148,6 +158,10 @@ export async function receivePaymentInQb(
     const body = {
       autoApply: false, // default: keep as open credit for e-commerce flow
       ...payload,
+      // Después del spread: un `depositAccount: undefined` explícito tampoco
+      // puede dejar el request sin cuenta.
+      depositAccount:
+        payload.depositAccount ?? DEFAULT_RECEIVE_PAYMENT_DEPOSIT_ACCOUNT,
     };
     const data = await bridgeFetch(
       "POST",
