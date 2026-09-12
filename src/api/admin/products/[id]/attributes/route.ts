@@ -271,13 +271,18 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
         if (!existingOption) {
           console.log(`   Creating option: ${optionTitle}`);
-          await productService.createProductOptions([
-            {
-              product_id: productId,
-              title: optionTitle,
-              values: optionValues,
-            },
+          // Medusa 2.17+: las opciones son globales; una opción propia del
+          // producto se crea `is_exclusive` y se ENLAZA (product_product_option).
+          const [createdOption] = await productService.createProductOptions([
+            { title: optionTitle, values: optionValues, is_exclusive: true },
           ]);
+          if (!createdOption) {
+            throw new Error(`createProductOptions no devolvió la opción "${optionTitle}"`);
+          }
+          await productService.addProductOptionToProduct({
+            product_option_id: createdOption.id,
+            product_id: productId,
+          });
         } else {
           const existingValues = (existingOption.values ?? []).map(
             (v: any) => v.value

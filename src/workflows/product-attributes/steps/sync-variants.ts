@@ -67,15 +67,16 @@ export const syncVariantsStep = createStep(
       logger.info(
         `[Sync Variants] Creating missing Option: ${attributeKey.label}`
       );
+      // Medusa 2.17+: opción exclusiva del producto = crear + enlazar.
       targetOption = await productModule
         .createProductOptions([
-          {
-            title: attributeKey.label,
-            product_id: product.id,
-            values: [],
-          },
+          { title: attributeKey.label, values: [], is_exclusive: true },
         ])
         .then((res) => res[0]);
+      await productModule.addProductOptionToProduct({
+        product_option_id: targetOption.id,
+        product_id: product.id,
+      });
     }
 
     const updates: any[] = [];

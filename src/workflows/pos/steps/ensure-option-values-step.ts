@@ -38,7 +38,8 @@ export const ensureOptionValuesStep = createStep(
     const { data: opts } = await query.graph({
       entity: "product_option",
       fields: ["id", "title", "values.id", "values.value"],
-      filters: { product_id: input.product_id },
+      // Medusa 2.17+: product_option ya no tiene product_id; se filtra por el enlace.
+      filters: { products: { id: input.product_id } },
     });
     const optsByTitle = new Map<
       string,

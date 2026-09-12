@@ -83,14 +83,15 @@ export const _createVariantsStep = createStep(
 
         if (!existingOption) {
           console.log(`   Creating option: ${optionTitle}`);
+          // Medusa 2.17+: opción exclusiva del producto = crear + enlazar.
           const newOptions = await productModuleService.createProductOptions([
-            {
-              product_id: productId,
-              title: optionTitle,
-              values: optionValues,
-            },
+            { title: optionTitle, values: optionValues, is_exclusive: true },
           ]);
           if (newOptions[0]) {
+            await productModuleService.addProductOptionToProduct({
+              product_option_id: newOptions[0].id,
+              product_id: productId,
+            });
             createdOptions.push(newOptions[0].id);
             console.log(`   ✅ Option created: ${newOptions[0].id}`);
           }

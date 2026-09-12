@@ -1,8 +1,8 @@
 diff --git a/node_modules/@medusajs/utils/dist/totals/line-item/index.js b/node_modules/@medusajs/utils/dist/totals/line-item/index.js
-index 44970f2..9433964 100644
+index 1f69d65..dff591d 100644
 --- a/node_modules/@medusajs/utils/dist/totals/line-item/index.js
 +++ b/node_modules/@medusajs/utils/dist/totals/line-item/index.js
-@@ -69,7 +69,10 @@ function getLineItemTotals(item, context) {
+@@ -75,7 +75,10 @@ function getLineItemTotals(item, context) {
      });
      const originalTaxTotal = (0, tax_1.calculateTaxTotal)({
          taxLines: item.tax_lines || [],
@@ -14,7 +14,7 @@ index 44970f2..9433964 100644
          setTotalField: "subtotal",
      });
      // Compute full-quantity net total after discounts and taxes to derive per-unit totals
-@@ -93,7 +96,10 @@ function getLineItemTotals(item, context) {
+@@ -99,7 +102,10 @@ function getLineItemTotals(item, context) {
          // Discount values prorated to the current quantity
          discount_subtotal: new big_number_1.BigNumber(currentDiscountsSubtotal),
          discount_tax_total: new big_number_1.BigNumber(math_1.MathBN.sub(originalTaxTotal, taxTotal)),
