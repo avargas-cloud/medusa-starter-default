@@ -1,7 +1,7 @@
 /**
  * src/api/admin/inventory-counts/[id]/approve/route.ts
  *
- * POST /admin/inventory-counts/:id/approve (manager-only)
+ * POST /admin/inventory-counts/:id/approve (manager-only + supervisor PIN)
  *
  * Loads the count + lines + live stock, then runs approveInventoryCountWorkflow.
  * The workflow handles classification (with the projected-negative guard),
@@ -23,6 +23,13 @@ import {
   endApproval,
   releaseClaimsForLines,
 } from "../../../../../lib/inventory-count/item-claims";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import { approveInventoryCountWorkflow } from "../../../../../workflows/inventory-count/approve-inventory-count";
 import {
   ManagerRoleRequiredError,
@@ -82,6 +89,27 @@ export async function POST(
     });
   }
 
+  const knex = req.scope.resolve(
+    ContainerRegistrationKeys.PG_CONNECTION
+  ) as Knex;
+
+  // ── Supervisor PIN ────────────────────────────────────────────────────────
+  // Approve mueve stock y encola el ajuste a QuickBooks: `requireManager` dice
+  // QUIÉN puede aprobar y el PIN dice que un supervisor lo autorizó.
+  // El PIN viaja en el header `x-supervisor-pin` (un admin puede mandar
+  // `confirm`); se verifica DESPUÉS del 404 y del 409 de estado para que un id
+  // malo o un conteo ya cerrado no quemen un intento del throttle.
+  const pinGuard = await guardSupervisorPin({
+    scope: req.scope as unknown as { resolve: (k: string) => unknown },
+    db: knex as PinConn,
+    pin: extractSupervisorPin(req),
+    actorId: resolveActorId(req),
+  });
+  if (!pinGuard.ok) {
+    const { status, body } = pinGuardResponse(pinGuard);
+    return res.status(status).json(body);
+  }
+
   // Load lines that are still pending or blocked (re-approval after partial)
   const lines = await service.listInventoryCountLines(
     {
@@ -129,10 +157,6 @@ export async function POST(
   // Step 1 doubles as a self-heal: acquire is idempotent for the same count, so
   // a line we already own is a no-op, a line nobody owns gets claimed now, and
   // a line owned by ANOTHER count comes back as a conflict.
-  const knex = req.scope.resolve(
-    ContainerRegistrationKeys.PG_CONNECTION
-  ) as Knex;
-
   const claimConflicts = await acquireItemClaims(knex, {
     inventoryCountId: id,
     stockLocationId: count.stock_location_id,

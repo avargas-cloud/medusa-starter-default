@@ -298,6 +298,19 @@ const MUST_GATE_ROUTES: {
     rel: "api/admin/pos/price-batches/[id]/approve/route.ts",
     what: "applies an approved price-change batch's cost/retail/wholesale changes",
   },
+  // Conteos de inventario (2026-09-12): aprobar mueve stock y encola el ajuste
+  // a QuickBooks; voidear lo revierte y manda un TxnVoid. `requireManager`
+  // dice QUIÉN puede; el PIN dice que un supervisor lo autorizó. Reject no
+  // gatea. Callsite del POS: `lib/api/inventory-counts.ts` (URL literal a
+  // propósito, para que §4c la vea).
+  {
+    rel: "api/admin/inventory-counts/[id]/approve/route.ts",
+    what: "aplica los deltas de un conteo al stock y los encola a QuickBooks",
+  },
+  {
+    rel: "api/admin/inventory-counts/[id]/void/route.ts",
+    what: "revierte los deltas de un conteo aprobado y voidea el ajuste en QuickBooks",
+  },
   {
     rel: "api/admin/quickbooks/bill-match/adopt/route.ts",
     what: "registra un bill de QuickBooks contra un PO",
