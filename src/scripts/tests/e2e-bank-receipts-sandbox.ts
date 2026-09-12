@@ -1,8 +1,6 @@
 /** Real v9 HTTP/PG/browser checks; all Finance mutations are newly created orderless fixtures. */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { getDbPool } from "../../api/utils/db-pool";
 import { configureBankSandbox } from "../../lib/banking/sandbox-runtime";
 import { postReceiptAccounting } from "../../lib/banking/receipts-core";
@@ -191,9 +189,12 @@ async function main() {
     const browserPayment=await seedReceiptPayment(client,"browser"), browserDeposit=await makeDeposit("browser",[[browserPayment,"120.01"]],"2.00");
     const browserMatchPayment=await seedReceiptPayment(client,"browser_match",843), browserMatch=await seedReceiptMovement(client,"browser_match","-8.43");
     await post("receipt",browserMatchPayment);await match(browserMatch,browserMatchPayment);
-    const browser=await import(pathToFileURL(resolve(__dirname,"../../../../store-pos/scripts/e2e/bank-receipts.mjs")).href);
-    const ui=await browser.runReceiptsBrowser({paymentId:browserPayment,depositId:browserDeposit.id,matchTransactionId:browserMatch,reverseDay:laterDay,accountId:account});
-    checks+=ui.checks;check(ui.receiptJournalId&&ui.depositJournalId&&ui.depositReversalId&&ui.matchJournalId&&ui.matchReversalId,"Real browser completes receipt, deposit and Match accounting");
+    // 2026-09-12: la página Banks → Receipts se retiró (los cobros sueltos se depositan
+    // desde Record Deposits: `deposits/from-payment`). Los journals `receipt` /
+    // `payment_match` siguen válidos y los cubre la API arriba; el tramo de browser
+    // (`store-pos/scripts/e2e/bank-receipts.mjs`) ya no existe — la UI la cubre
+    // `store-pos/scripts/e2e/accounting-banking-ux.mjs` (picker de dos pestañas).
+    check(Boolean(browserPayment&&browserDeposit.id&&browserMatch),"Legacy receipt/match fixtures still post via API (browser leg retired)");
   } catch(error) { console.error("V9 primary failure before cleanup:",error instanceof Error?error.message:"UNKNOWN_ERROR"); throw error; }
   finally {
     try { if(owns){await client.query("ROLLBACK");if(seeded)await cleanReceiptFixtures(client);
