@@ -14,11 +14,25 @@
  * DRY-RUN por default: imprime el plan (bill → PO) y cuenta por año.
  * `--apply` aplica (setea `purchase_order_id`/`purchase_order_line_id`, NUNCA
  * toca amounts/costs/status/stock/pipeline). `--rollback` revierte por el
- * marcador de `notes` de ese `--run-id`. `--apply` exige
- * `ECOPOWERTECH_ENV=sandbox` (mismo guard que `backfill-qb-purchases.ts`) —
- * nunca escribe contra producción.
+ * marcador de `notes` de ese `--run-id`. `--apply` exige sandbox
+ * (`ECOPOWERTECH_ENV=sandbox` + DATABASE_URL en :5499) o el camino explícito de
+ * producción — `lib/qb-backfill/target-guard.ts`. El dry-run deja
+ * `<cache-dir>/relink-plan_<run>.json` (cardinalidad del plan).
+ *
+ * PRODUCCIÓN (lo corre el OPERADOR desde su terminal, `! <cmd>`). Primero el
+ * dry-run contra prod con el MISMO `--run-id` (sin él `--target-production` se
+ * niega), después:
+ *
+ *   cd backend && nohup env DATABASE_URL="$(grep ^DATABASE_URL= .env|cut -d= -f2-)" \
+ *     ECOPOWERTECH_ENV=production DISABLE_SCHEDULED_JOBS=true \
+ *     CONFIRM_PRODUCTION_RUN=qbbf-relink-prod-20260911 \
+ *     ./node_modules/.bin/tsx src/scripts/sync/relink-qb-backfill-bills.ts \
+ *       --cache-dir .qb-docs-cache --run-id qbbf-relink-prod-20260911 --apply --target-production \
+ *     > .qb-docs-cache/relink-prod_qbbf-relink-prod-20260911.log 2>&1 &
+ *
+ *   (nunca la URL literal; tarda más de 2 min → nohup … &)
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Pool } from "pg";
 
@@ -32,6 +46,7 @@ import {
   rollbackBillRelink,
   type BillRelinkRow,
 } from "../../lib/qb-backfill/relink-bills";
+import { assertDryRunEvidence, formatWriteTargetError, readJsonFile, resolveWriteTarget } from "../../lib/qb-backfill/target-guard";
 import type { QbBill } from "../../lib/qb-backfill/types";
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -60,9 +75,22 @@ if (!DATABASE_URL) {
   console.error("DATABASE_URL es obligatoria");
   process.exit(2);
 }
-if (APPLY && process.env.ECOPOWERTECH_ENV !== "sandbox") {
-  console.error("--apply exige ECOPOWERTECH_ENV=sandbox — este script sólo escribe en sandbox");
-  process.exit(2);
+const PLAN_PATH = join(CACHE_DIR, `relink-plan_${RUN_ID}.json`);
+if (APPLY) {
+  try {
+    const target = resolveWriteTarget({ argv: process.argv, env: process.env, databaseUrl: DATABASE_URL, runId: RUN_ID });
+    console.log(`destino: ${target.target} (${target.reason})`);
+    const plan = existsSync(PLAN_PATH) ? readJsonFile<{ plan_count?: number; by_year?: Record<string, number> }>(PLAN_PATH) : null;
+    assertDryRunEvidence(
+      target.target,
+      RUN_ID,
+      plan ? { path: PLAN_PATH, cardinality: { plan_count: plan.plan_count ?? null, by_year: JSON.stringify(plan.by_year ?? {}) } } : null,
+      (l) => console.log(l)
+    );
+  } catch (err) {
+    console.error(formatWriteTargetError(err));
+    process.exit(2);
+  }
 }
 
 /** Lee TODOS los bills cacheados (ventanas mensuales `bill_<from>_<to>.json` + lotes por TxnID `bill_bytxn_*.json`) y dedupea por TxnID — el mismo bill puede vivir en más de un archivo (ventana + follow-links). */
@@ -126,6 +154,12 @@ async function main() {
     console.log(`por año: ${JSON.stringify(Object.fromEntries([...byYear.entries()].sort()))}`);
 
     if (!APPLY) {
+      mkdirSync(CACHE_DIR, { recursive: true });
+      writeFileSync(
+        PLAN_PATH,
+        JSON.stringify({ run_id: RUN_ID, apply: false, plan_count: plan.length, by_year: Object.fromEntries([...byYear.entries()].sort()), plan }, null, 1)
+      );
+      console.log(`plan: ${PLAN_PATH}`);
       console.log(`\nDRY-RUN — nada aplicado. Correr con --apply para relinkear.`);
       return;
     }

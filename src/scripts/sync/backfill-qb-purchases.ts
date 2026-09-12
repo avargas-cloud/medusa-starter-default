@@ -15,10 +15,26 @@
  * dependencia (un tipo posterior necesita ver los documentos que el mismo
  * run creó antes — el índice de PO/bills se recarga entre tipos).
  *
- * `--apply`/`--de-adopt` exigen `ECOPOWERTECH_ENV=sandbox` (mismo guard que
- * import-qb-general-ledger.ts) — nunca escribe contra producción.
+ * `--apply`/`--de-adopt` exigen sandbox (`ECOPOWERTECH_ENV=sandbox` + DATABASE_URL
+ * en :5499) o el camino explícito de producción — `lib/qb-backfill/target-guard.ts`.
+ *
+ * PRODUCCIÓN (lo corre el OPERADOR desde su terminal, `! <cmd>`). Primero el
+ * dry-run contra prod con el MISMO `--run-id` (deja `.qb-docs-cache/inventario_<run>.json`
+ * con `apply:false`; sin él `--target-production` se niega), después:
+ *
+ *   cd backend && nohup env DATABASE_URL="$(grep ^DATABASE_URL= .env|cut -d= -f2-)" \
+ *     QB_BRIDGE_URL="$(grep ^QB_BRIDGE_URL= .env|cut -d= -f2-)" QB_API_KEY="$(grep ^QB_API_KEY= .env|cut -d= -f2-)" \
+ *     ECOPOWERTECH_ENV=production DISABLE_SCHEDULED_JOBS=true \
+ *     CONFIRM_PRODUCTION_RUN=qbbf-prod-20260911 \
+ *     ./node_modules/.bin/tsx src/scripts/sync/backfill-qb-purchases.ts \
+ *       --from 2025-01-01 --to 2026-09-11 --types po,receipt,bill,credit,payment \
+ *       --run-id qbbf-prod-20260911 --apply --target-production \
+ *     > .qb-docs-cache/apply-prod_qbbf-prod-20260911.log 2>&1 &
+ *
+ *   `--de-adopt --target-production` igual (mismo run id ya dry-runeado).
+ *   (nunca la URL literal; tarda más de 2 min → nohup … &)
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Pool } from "pg";
 
@@ -65,6 +81,7 @@ import { applyCredits, applyDeAdopt, applyPayments } from "../../lib/qb-backfill
 import { applyCreditApplications, loadCreditApplicationIndexes, planCreditApplications } from "../../lib/qb-backfill/apply-credit-links";
 import { followLinks, type FollowLinksReport } from "../../lib/qb-backfill/follow-links";
 import { USA_LOC } from "../../lib/locations";
+import { assertDryRunEvidence, formatWriteTargetError, readJsonFile, resolveWriteTarget } from "../../lib/qb-backfill/target-guard";
 import type {
   QbBill,
   QbBillPayment,
@@ -102,9 +119,37 @@ if (!DATABASE_URL) {
   console.error("DATABASE_URL es obligatoria");
   process.exit(2);
 }
-if ((APPLY || DE_ADOPT) && process.env.ECOPOWERTECH_ENV !== "sandbox") {
-  console.error("--apply/--de-adopt exigen ECOPOWERTECH_ENV=sandbox — este script sólo escribe en sandbox");
-  process.exit(2);
+if (APPLY || DE_ADOPT) {
+  try {
+    const target = resolveWriteTarget({ argv: process.argv, env: process.env, databaseUrl: DATABASE_URL, runId: RUN_ID });
+    console.log(`destino: ${target.target} (${target.reason})`);
+    // Evidencia: el inventario de un DRY-RUN puro (sin --apply ni --de-adopt) del mismo run id.
+    const inventoryPath = join(CACHE_DIR, `inventario_${RUN_ID}.json`);
+    const inv = existsSync(inventoryPath) ? readJsonFile<Record<string, unknown>>(inventoryPath) : null;
+    const scope = (k: string) => (inv?.[k] as { already?: number; create?: number; blocked?: unknown[] } | null | undefined) ?? null;
+    assertDryRunEvidence(
+      target.target,
+      RUN_ID,
+      inv && inv.apply === false && inv.de_adopt === false
+        ? {
+            path: inventoryPath,
+            cardinality: {
+              po_create: (inv.po_scope as { create?: number } | undefined)?.create ?? null,
+              receipt_create: scope("receipt_scope")?.create ?? null,
+              bill_create: scope("bill_scope")?.create ?? null,
+              credit_create: scope("credit_scope")?.create ?? null,
+              payment_create: scope("payment_scope")?.create ?? null,
+              missing_vendors: (inv.missing_vendors as unknown[] | undefined)?.length ?? null,
+              missing_items: (inv.missing_items as unknown[] | undefined)?.length ?? null,
+            },
+          }
+        : null,
+      (l) => console.log(l)
+    );
+  } catch (err) {
+    console.error(formatWriteTargetError(err));
+    process.exit(2);
+  }
 }
 
 type Bucket = {

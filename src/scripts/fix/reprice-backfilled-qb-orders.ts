@@ -9,9 +9,25 @@
  * Correr (dry-run por default):
  *   env DATABASE_URL=… DISABLE_SCHEDULED_JOBS=true QB_BRIDGE_DISABLED=true \
  *     ./node_modules/.bin/medusa exec ./src/scripts/fix/reprice-backfilled-qb-orders.ts
- * Aplicar:               APPLY=true …
+ * Aplicar:               APPLY=true ECOPOWERTECH_ENV=sandbox …   (sandbox: DATABASE_URL en :5499)
  * Otro run:              RUN_ID=qbsb-xxx …          (default qbsb-20260911)
  * Limitar:               LIMIT=50 …  ·  ORDERS=order_a,order_b …
+ *
+ * El dry-run deja `.qb-docs-cache/reprice-backfilled-qb-orders_<run>-dryrun.json`.
+ * Escribir exige sandbox o el camino explícito de producción —
+ * `lib/qb-backfill/target-guard.ts`, acá por env: `TARGET_PRODUCTION=1` +
+ * `ECOPOWERTECH_ENV=production` + `CONFIRM_PRODUCTION_RUN=<RUN_ID>`, y el
+ * reporte del dry-run previo del MISMO RUN_ID (sin él se niega).
+ *
+ * PRODUCCIÓN (lo corre el OPERADOR desde su terminal, `! <cmd>`), después del dry-run:
+ *
+ *   cd backend && nohup env DATABASE_URL="$(grep ^DATABASE_URL= .env|cut -d= -f2-)" \
+ *     ECOPOWERTECH_ENV=production DISABLE_SCHEDULED_JOBS=true QB_BRIDGE_DISABLED=true \
+ *     APPLY=true TARGET_PRODUCTION=1 RUN_ID=qbsb-prod-20260911 CONFIRM_PRODUCTION_RUN=qbsb-prod-20260911 \
+ *     ./node_modules/.bin/medusa exec ./src/scripts/fix/reprice-backfilled-qb-orders.ts \
+ *     > .qb-docs-cache/reprice-prod_qbsb-prod-20260911.log 2>&1 &
+ *
+ *   (nunca la URL literal; tarda más de 2 min → nohup … &)
  *
  * ── Qué escribe (por orden, UNA transacción, mismo molde que
  *    `lib/order-discount/apply-order-discount.ts`) ─────────────────────────────
@@ -37,11 +53,14 @@
  *   Y tax lines/adjustments/shipping iguales a los que se escribirían. Un
  *   summary "casualmente" igual con el desglose mal NO se saltea.
  */
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+
 import type { ExecArgs, Logger } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, generateEntityId } from "@medusajs/utils";
 import type { PoolClient } from "pg";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { assertDryRunEvidence, readJsonFile, resolveWriteTarget } from "../../lib/qb-backfill/target-guard";
 import {
   headerFromPosInvoice,
   patchOrderSummaryCents,
@@ -58,6 +77,7 @@ const LIMIT = process.env.LIMIT ? Number(process.env.LIMIT) : undefined;
 const ONLY = (process.env.ORDERS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const TAG = "reprice-backfilled-qb-orders";
 const TOLERANCE = 0.011;
+const DRY_RUN_REPORT = `.qb-docs-cache/${TAG}_${RUN_ID}-dryrun.json`;
 
 type Target = {
   order_id: string;
@@ -195,6 +215,17 @@ async function applyPlan(client: PoolClient, t: Target, plan: SalesOrderMoneyPla
 
 export default async function repriceBackfilledQbOrders({ container }: ExecArgs) {
   const logger = container.resolve<Logger>(ContainerRegistrationKeys.LOGGER);
+  if (APPLY) {
+    const target = resolveWriteTarget({ argv: process.argv, env: process.env, databaseUrl: process.env.DATABASE_URL, runId: RUN_ID });
+    logger.info(`[${TAG}] destino: ${target.target} (${target.reason})`);
+    const dry = existsSync(DRY_RUN_REPORT) ? readJsonFile<Record<string, number>>(DRY_RUN_REPORT) : null;
+    assertDryRunEvidence(
+      target.target,
+      RUN_ID,
+      dry ? { path: DRY_RUN_REPORT, cardinality: { targets: dry.targets, would_reprice: dry.would_reprice, skipped: dry.skipped, rejected: dry.rejected } } : null,
+      (l) => logger.info(l)
+    );
+  }
   const pool = getDbPool();
   const all = (await pool.query<Target>(TARGET_SQL, [RUN_ID])).rows;
   const filtered = all.filter((t) => ONLY.length === 0 || ONLY.includes(t.order_id));
@@ -250,12 +281,23 @@ export default async function repriceBackfilledQbOrders({ container }: ExecArgs)
   // Después (relectura real, no lo que se planeó).
   const after = (await pool.query<Target>(TARGET_SQL, [RUN_ID])).rows.filter((t) => targets.some((x) => x.order_id === t.order_id));
   const stillOff = after.filter((t) => !(residual(t) <= TOLERANCE));
+  if (!APPLY) {
+    mkdirSync(".qb-docs-cache", { recursive: true });
+    writeFileSync(
+      DRY_RUN_REPORT,
+      JSON.stringify(
+        { run_id: RUN_ID, apply: false, targets: targets.length, would_reprice: targets.length - skipped - rejected.length, skipped, rejected: rejected.length, by_policy: byPolicy },
+        null,
+        2
+      )
+    );
+  }
   logger.info(
     `${"─".repeat(72)}\n${APPLY ? "APLICADO" : "DRY-RUN"} · ${applied} reprecificada(s) · ${skipped} ya estaban · ${rejected.length} rechazada(s)` +
       ` · tasa: statutory ${byPolicy.statutory} / effective ${byPolicy.effective} / sin impuesto ${byPolicy.none}` +
       `\n  después: ${stillOff.length} con |summary − pos_total| > 1¢ · residual máx $${Math.max(0, ...stillOff.map(residual)).toFixed(2)}` +
       (rejected.length ? `\n  rechazadas:\n    ${rejected.slice(0, 20).join("\n    ")}${rejected.length > 20 ? `\n    … +${rejected.length - 20}` : ""}` : "") +
-      (APPLY ? "" : "\nPara aplicar: APPLY=true") +
+      (APPLY ? "" : `\n  reporte: ${DRY_RUN_REPORT}\nPara aplicar: APPLY=true`) +
       `\n${"─".repeat(72)}`
   );
   await pool.end();

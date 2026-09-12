@@ -10,9 +10,23 @@
  *
  * - DRY-RUN por default: descarga (o lee de caché), parsea, clasifica, arma y
  *   cuenta. NO escribe en la DB. `--apply` postea.
- * - `--apply` exige `ECOPOWERTECH_ENV=sandbox`; contra producción hace falta
- *   además `--target-production` (checkpoint R3 del plan, con la cardinalidad
- *   medida acá).
+ * - `--apply` exige sandbox (`ECOPOWERTECH_ENV=sandbox` + DATABASE_URL en :5499)
+ *   o el camino explícito de producción — `lib/qb-backfill/target-guard.ts`.
+ *   El run id de este script es `<from>_<to>` (la clave del reporte).
+ *
+ * PRODUCCIÓN (checkpoint R3; lo corre el OPERADOR desde su terminal, `! <cmd>`).
+ * Primero el dry-run contra prod (deja `.qb-gl-cache/import-report_<from>_<to>_dry_*.json`,
+ * sin él `--target-production` se niega), después:
+ *
+ *   cd backend && nohup env DATABASE_URL="$(grep ^DATABASE_URL= .env|cut -d= -f2-)" \
+ *     QB_BRIDGE_URL="$(grep ^QB_BRIDGE_URL= .env|cut -d= -f2-)" QB_API_KEY="$(grep ^QB_API_KEY= .env|cut -d= -f2-)" \
+ *     ECOPOWERTECH_ENV=production DISABLE_SCHEDULED_JOBS=true \
+ *     CONFIRM_PRODUCTION_RUN=2026-01-01_2026-09-11 \
+ *     ./node_modules/.bin/tsx src/scripts/sync/import-qb-general-ledger.ts \
+ *       --from 2026-01-01 --to 2026-09-11 --apply --target-production \
+ *     > .qb-gl-cache/apply-prod.log 2>&1 &
+ *
+ *   (nunca la URL literal; tarda más de 2 min → nohup … &)
  * - Idempotente: re-correr con `--apply` cuenta `already_posted`, nunca duplica.
  * - La fidelidad del parseo se afirma por ventana contra los subtotales por
  *   cuenta del propio reporte; una ventana que no cuadra ABORTA la corrida.
@@ -36,6 +50,14 @@ import {
   verifyParsedTotals,
 } from "../../lib/ledger/qb-import";
 import type { BlockedDocument, ImportPolicy, QbGlDocument } from "../../lib/ledger/qb-import";
+import {
+  assertDryRunEvidence,
+  describeDbTarget,
+  formatWriteTargetError,
+  latestFile,
+  readJsonFile,
+  resolveWriteTarget,
+} from "../../lib/qb-backfill/target-guard";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -62,19 +84,35 @@ if (!DATABASE_URL) {
   console.error("DATABASE_URL es obligatoria");
   process.exit(2);
 }
-if (APPLY && process.env.ECOPOWERTECH_ENV !== "sandbox" && !flag("target-production")) {
-  console.error("--apply fuera de sandbox exige --target-production (checkpoint R3)");
-  process.exit(2);
-}
-
-const dbTarget = (() => {
+const RUN_ID = `${FROM}_${TO}`;
+const dbTarget = describeDbTarget(DATABASE_URL);
+if (APPLY) {
   try {
-    const u = new URL(DATABASE_URL);
-    return `${u.hostname}:${u.port || "5432"}${u.pathname}`;
-  } catch {
-    return "<url ilegible>";
+    const target = resolveWriteTarget({ argv: process.argv, env: process.env, databaseUrl: DATABASE_URL, runId: RUN_ID });
+    console.log(`destino: ${target.target} (${target.reason})`);
+    const evidencePath = latestFile(CACHE_DIR, new RegExp(`^import-report_${FROM}_${TO}_dry_\\d+\\.json$`));
+    const evidence = evidencePath ? readJsonFile<Record<string, unknown>>(evidencePath) : null;
+    assertDryRunEvidence(
+      target.target,
+      RUN_ID,
+      evidencePath && evidence
+        ? {
+            path: evidencePath,
+            cardinality: {
+              documents_to_import: evidence.documents_to_import as number,
+              documents_ready: evidence.documents_ready as number,
+              blocked_count: evidence.blocked_count as number,
+              reconcile_candidates: (evidence.reconcile_known_after_cutoff as { candidates?: number } | undefined)?.candidates ?? null,
+            },
+          }
+        : null,
+      (l) => console.log(l)
+    );
+  } catch (err) {
+    console.error(formatWriteTargetError(err));
+    process.exit(2);
   }
-})();
+}
 
 type TypeCounter = Record<string, { import: number; import_qb_only: number; skip_after_cutoff: number; blocked: number }>;
 const bump = (c: TypeCounter, t: string, k: keyof TypeCounter[string]) => {

@@ -15,10 +15,25 @@
  *   los `pos_credit_memo` del run YA en la DB (`metadata.qb_linked_txns`), no
  *   desde la clasificación — `lib/qb-backfill/apply-sales-credit-links.ts`.
  *
- * Guards: sin `APPLY=true` es dry-run (cuenta, no escribe); se NIEGA a correr
- * si `ECOPOWERTECH_ENV !== 'sandbox'` (este plan todavía no tiene R3 para
- * producción). `DISABLE_SCHEDULED_JOBS=true` no es opcional: sin él
- * `medusa exec` levanta los crons del pipeline de QuickBooks.
+ * Guards: sin `APPLY=true`/`ROLLBACK=true` es dry-run (cuenta, no escribe).
+ * Escribir exige sandbox (`ECOPOWERTECH_ENV=sandbox` + DATABASE_URL en :5499) o
+ * el camino explícito de producción — `lib/qb-backfill/target-guard.ts`, acá por
+ * env: `TARGET_PRODUCTION=1` + `ECOPOWERTECH_ENV=production` +
+ * `CONFIRM_PRODUCTION_RUN=<RUN_ID>`. `DISABLE_SCHEDULED_JOBS=true` no es
+ * opcional: sin él `medusa exec` levanta los crons del pipeline de QuickBooks.
+ *
+ * PRODUCCIÓN (lo corre el OPERADOR desde su terminal, `! <cmd>`). Primero el
+ * dry-run contra prod con el MISMO RUN_ID (deja
+ * `.qb-docs-cache/sales-apply_<run>-dryrun.json`; sin él se niega), después:
+ *
+ *   cd backend && nohup env DATABASE_URL="$(grep ^DATABASE_URL= .env|cut -d= -f2-)" \
+ *     ECOPOWERTECH_ENV=production DISABLE_SCHEDULED_JOBS=true QB_BRIDGE_DISABLED=true \
+ *     APPLY=true TARGET_PRODUCTION=1 RUN_ID=qbsb-prod-20260911 CONFIRM_PRODUCTION_RUN=qbsb-prod-20260911 \
+ *     CLASSIFICATION=.qb-docs-cache/sales-classification_qbsb-prod-20260911.json \
+ *     ./node_modules/.bin/medusa exec ./src/scripts/sync/backfill-qb-sales-apply.ts \
+ *     > .qb-docs-cache/sales-apply-prod_qbsb-prod-20260911.log 2>&1 &
+ *
+ *   (nunca la URL literal; tarda más de 2 min → nohup … &)
  *
  * Escrituras: module services (orden, factura, pago, credit memo) + SQL crudo
  * transaccional por documento (`lib/qb-backfill/apply-sales.ts`). Nunca
@@ -37,6 +52,7 @@ import { POS_GO_LIVE_DATE } from "../../lib/qb-backfill/create-po";
 import { newEnsureLog } from "../../lib/qb-backfill/ensure";
 import { loadItemIndex } from "../../lib/qb-backfill/resolve";
 import { loadCustomerIndex, makeEnsureCustomer, type SalesApplyContext, type SalesServices } from "../../lib/qb-backfill/sales-context";
+import { assertDryRunEvidence, readJsonFile, resolveWriteTarget } from "../../lib/qb-backfill/target-guard";
 
 const APPLY = process.env.APPLY === "true";
 const ROLLBACK = process.env.ROLLBACK === "true";
@@ -66,11 +82,31 @@ export default async function backfillQbSalesApply({ container }: ExecArgs): Pro
   const logger = container.resolve<Logger>(ContainerRegistrationKeys.LOGGER);
   const log = (s: string) => logger.info(s);
 
-  if (process.env.ECOPOWERTECH_ENV !== "sandbox") {
-    throw new Error("backfill-qb-sales-apply: sólo corre con ECOPOWERTECH_ENV=sandbox (sin R3 para producción)");
-  }
   if (!RUN_ID) throw new Error("RUN_ID es obligatorio");
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL es obligatorio");
+  if (APPLY || ROLLBACK) {
+    const target = resolveWriteTarget({ argv: process.argv, env: process.env, databaseUrl: process.env.DATABASE_URL, runId: RUN_ID });
+    log(`destino: ${target.target} (${target.reason})`);
+    const dryPath = `.qb-docs-cache/sales-apply_${RUN_ID}-dryrun.json`;
+    const dry = existsSync(dryPath) ? readJsonFile<{ report?: SalesApplyReport }>(dryPath) : null;
+    assertDryRunEvidence(
+      target.target,
+      RUN_ID,
+      dry?.report
+        ? {
+            path: dryPath,
+            cardinality: {
+              invoices_create: dry.report.invoices.create,
+              sales_receipts_create: dry.report.sales_receipts.create,
+              receive_payments_create: dry.report.receive_payments.create,
+              credit_memos_create: dry.report.credit_memos.create,
+              total_mismatch: dry.report.total_mismatch.length,
+            },
+          }
+        : null,
+      log
+    );
+  }
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const client = await pool.connect();

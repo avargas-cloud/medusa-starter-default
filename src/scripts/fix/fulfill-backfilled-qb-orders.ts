@@ -4,8 +4,25 @@
  * Correr (dry-run por default):
  *   env DATABASE_URL=... DISABLE_SCHEDULED_JOBS=true \
  *     ./node_modules/.bin/medusa exec ./src/scripts/fix/fulfill-backfilled-qb-orders.ts
- * Aplicar:              APPLY=true ...
+ * Aplicar:              APPLY=true ECOPOWERTECH_ENV=sandbox ...   (sandbox: DATABASE_URL en :5499)
  * Limitar a facturas:   INVOICES=21698,21699 ...
+ * Run id:               RUN_ID=fulfill-xxx ...  (default `fulfill-<YYYYMMDD>`; nombra el
+ *                       reporte del dry-run `.qb-docs-cache/fulfill-backfilled-qb-orders_<run>-dryrun.json`)
+ *
+ * Escribir exige sandbox o el camino explícito de producción —
+ * `lib/qb-backfill/target-guard.ts`, acá por env: `TARGET_PRODUCTION=1` +
+ * `ECOPOWERTECH_ENV=production` + `CONFIRM_PRODUCTION_RUN=<RUN_ID>`, y el
+ * reporte del dry-run previo del MISMO RUN_ID (sin él se niega).
+ *
+ * PRODUCCIÓN (lo corre el OPERADOR desde su terminal, `! <cmd>`), después del dry-run:
+ *
+ *   cd backend && nohup env DATABASE_URL="$(grep ^DATABASE_URL= .env|cut -d= -f2-)" \
+ *     ECOPOWERTECH_ENV=production DISABLE_SCHEDULED_JOBS=true QB_BRIDGE_DISABLED=true \
+ *     APPLY=true TARGET_PRODUCTION=1 RUN_ID=fulfill-prod-20260911 CONFIRM_PRODUCTION_RUN=fulfill-prod-20260911 \
+ *     ./node_modules/.bin/medusa exec ./src/scripts/fix/fulfill-backfilled-qb-orders.ts \
+ *     > .qb-docs-cache/fulfill-prod_fulfill-prod-20260911.log 2>&1 &
+ *
+ *   (nunca la URL literal; tarda más de 2 min → nohup … &)
  *
  * ── Por qué existe ───────────────────────────────────────────────────────────
  *
@@ -46,12 +63,13 @@
  *   - `fulfilled_quantity > 0` en algún ítem → se rechaza
  */
 
-import { appendFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 
 import type { ExecArgs } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
+import { assertDryRunEvidence, readJsonFile, resolveWriteTarget } from "../../lib/qb-backfill/target-guard";
 import { syncOrders } from "../../subscribers/order-meilisearch-sync";
 
 const APPLY = process.env.APPLY === "true";
@@ -61,6 +79,8 @@ const ONLY = (process.env.INVOICES ?? "")
   .filter(Boolean);
 const TAG = "fulfill-backfilled-qb-orders";
 const AUDIT_FILE = join(__dirname, `${TAG}.audit.jsonl`);
+const RUN_ID = process.env.RUN_ID ?? `fulfill-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
+const DRY_RUN_REPORT = `.qb-docs-cache/${TAG}_${RUN_ID}-dryrun.json`;
 
 type Target = {
   invoice_id: string;
@@ -144,6 +164,18 @@ export default async function fulfillBackfilledQbOrders({ container }: ExecArgs)
   const link = container.resolve(ContainerRegistrationKeys.LINK);
   const orderModule = container.resolve(Modules.ORDER);
   const fulfillmentModule = container.resolve(Modules.FULFILLMENT);
+
+  if (APPLY) {
+    const target = resolveWriteTarget({ argv: process.argv, env: process.env, databaseUrl: process.env.DATABASE_URL, runId: RUN_ID });
+    logger.info(`[${TAG}] destino: ${target.target} (${target.reason})`);
+    const dry = existsSync(DRY_RUN_REPORT) ? readJsonFile<Record<string, number>>(DRY_RUN_REPORT) : null;
+    assertDryRunEvidence(
+      target.target,
+      RUN_ID,
+      dry ? { path: DRY_RUN_REPORT, cardinality: { candidates: dry.candidates, would_fulfill: dry.would_fulfill, skipped: dry.skipped, rejected: dry.rejected } } : null,
+      (l) => logger.info(l)
+    );
+  }
 
   const targets = ((await knex.raw(TARGET_SQL)).rows as Target[]).filter(
     (t) => ONLY.length === 0 || ONLY.includes(t.invoice_number)
@@ -290,9 +322,16 @@ export default async function fulfillBackfilledQbOrders({ container }: ExecArgs)
     done++;
   }
 
+  if (!APPLY) {
+    mkdirSync(".qb-docs-cache", { recursive: true });
+    writeFileSync(
+      DRY_RUN_REPORT,
+      JSON.stringify({ run_id: RUN_ID, apply: false, candidates: targets.length, would_fulfill: targets.length - skipped - rejected, skipped, rejected }, null, 2)
+    );
+  }
   logger.info(
-    `${"─".repeat(72)}\n${APPLY ? "APLICADO" : "DRY-RUN"} · ${done} fulfilleada(s) · ${skipped} ya estaban · ${rejected} rechazada(s)` +
-      (APPLY ? `\naudit: ${AUDIT_FILE}` : "\nPara aplicar: APPLY=true") +
+    `${"─".repeat(72)}\n${APPLY ? "APLICADO" : "DRY-RUN"} · run ${RUN_ID} · ${done} fulfilleada(s) · ${skipped} ya estaban · ${rejected} rechazada(s)` +
+      (APPLY ? `\naudit: ${AUDIT_FILE}` : `\nreporte: ${DRY_RUN_REPORT}\nPara aplicar: APPLY=true`) +
       `\n${"─".repeat(72)}`
   );
 }
