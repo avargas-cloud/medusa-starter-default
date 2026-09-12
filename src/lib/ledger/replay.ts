@@ -11,6 +11,7 @@ import { postReceipt, reverseReceipt } from "./documents/receipt";
 import { postVendorBill, reverseVendorBill } from "./documents/vendor-bill";
 import { postVendorCredit, reverseVendorCredit } from "./documents/vendor-credit";
 import { postBillPayment, reverseBillPayment } from "./documents/bill-payment";
+import { activeEntryPredicate } from "./reports/active-entries";
 import { LedgerError, LedgerSourceKind } from "./types";
 
 export interface ReplayOptions {
@@ -69,6 +70,28 @@ function emptyCounts(): ReplayCounts {
 
 type Candidate = { id: string; terminal: "post" | "reverse" };
 
+/**
+ * Backlog > `limit` (medido en prod el 2026-09-12: 4.400 documentos, tope 200
+ * por corrida del reconciler): `ORDER BY id LIMIT n` sobre la tabla fuente
+ * devolvía SIEMPRE los mismos n primeros, ya posteados → `already_posted`=n,
+ * `posted`=0, y el replay nunca avanzaba. El tope tiene que aplicarse a los
+ * documentos que todavía tienen trabajo: `post` sin asiento activo, o
+ * `reverse` con asiento activo. `activeEntryPredicate` es la misma
+ * definición de "activo" que usan los reportes.
+ */
+function pending(kind: LedgerSourceKind, inner: string): string {
+  const active =
+    `SELECT 1 FROM bank_journal_entry __e WHERE __e.kind = 'document' ` +
+    `AND __e.source_kind = '${kind}' AND __e.source_id = __c.id AND ${activeEntryPredicate("__e")}`;
+  return (
+    `SELECT __c.id, __c.terminal FROM (${inner}) __c ` +
+    `WHERE (__c.terminal = 'post' AND NOT EXISTS (${active})) ` +
+    `OR (__c.terminal = 'reverse' AND EXISTS (${active})) ` +
+    `ORDER BY __c.id LIMIT $3`
+  );
+}
+
+
 async function candidates(
   client: PoolClient,
   kind: LedgerSourceKind,
@@ -79,48 +102,44 @@ async function candidates(
   if (kind === "opening_balance") return [];
   if (kind === "pos_invoice") {
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
        FROM pos_invoice
        WHERE deleted_at IS NULL
          AND COALESCE(voided_at, issued_at)::date BETWEEN $1::date AND $2::date
-         AND status IN ('issued','partial','paid','partially_refunded','refunded','voided')
-       ORDER BY id LIMIT $3`,
+         AND status IN ('issued','partial','paid','partially_refunded','refunded','voided')`),
       [from, to, limitParam(limit)]
     );
     return rows;
   }
   if (kind === "pos_credit_memo") {
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
        FROM pos_credit_memo
        WHERE deleted_at IS NULL
          AND COALESCE(voided_at, completed_at)::date BETWEEN $1::date AND $2::date
          AND status IN ('completed','voided')
          AND COALESCE(metadata->>'is_internal_adjustment', 'false') <> 'true'
-         AND COALESCE(metadata->>'never_sync_to_qb', 'false') <> 'true'
-       ORDER BY id LIMIT $3`,
+         AND COALESCE(metadata->>'never_sync_to_qb', 'false') <> 'true'`),
       [from, to, limitParam(limit)]
     );
     return rows;
   }
   if (kind === "customer_payment") {
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
        FROM customer_payment
        WHERE deleted_at IS NULL AND type IN ('payment','refund') AND amount > 0
-         AND received_at::date BETWEEN $1::date AND $2::date
-       ORDER BY id LIMIT $3`,
+         AND received_at::date BETWEEN $1::date AND $2::date`),
       [from, to, limitParam(limit)]
     );
     return rows;
   }
   if (kind === "rounding_adjustment") {
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN voided_at IS NOT NULL THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN voided_at IS NOT NULL THEN 'reverse' ELSE 'post' END AS terminal
        FROM pos_rounding_adjustment
        WHERE deleted_at IS NULL
-         AND COALESCE(voided_at, created_at)::date BETWEEN $1::date AND $2::date
-       ORDER BY id LIMIT $3`,
+         AND COALESCE(voided_at, created_at)::date BETWEEN $1::date AND $2::date`),
       [from, to, limitParam(limit)]
     );
     return rows;
@@ -129,47 +148,43 @@ async function candidates(
     // gl-purchases-v2 §5: SIN filtro `deleted_at IS NULL` — un receipt
     // borrado (soft-delete) tiene que seguir candidateándose para su reversa.
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN voided_at IS NOT NULL OR deleted_at IS NOT NULL THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN voided_at IS NOT NULL OR deleted_at IS NOT NULL THEN 'reverse' ELSE 'post' END AS terminal
        FROM purchase_order_receipt
        WHERE COALESCE(voided_at, deleted_at, updated_at, received_at)::date BETWEEN $1::date AND $2::date
-         AND status IN ('applied','synced','voided')
-       ORDER BY id LIMIT $3`,
+         AND status IN ('applied','synced','voided')`),
       [from, to, limitParam(limit)]
     );
     return rows;
   }
   if (kind === "vendor_bill") {
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN status IN ('cancelled','voided') THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN status IN ('cancelled','voided') THEN 'reverse' ELSE 'post' END AS terminal
        FROM vendor_bill
        WHERE deleted_at IS NULL
          AND COALESCE(document_date, confirmed_at, updated_at)::date BETWEEN $1::date AND $2::date
-         AND status IN ('confirmed','synced','cancelled','voided')
-       ORDER BY id LIMIT $3`,
+         AND status IN ('confirmed','synced','cancelled','voided')`),
       [from, to, limitParam(limit)]
     );
     return rows;
   }
   if (kind === "vendor_credit") {
     const { rows } = await client.query<Candidate>(
-      `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
+      pending(kind, `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
        FROM vendor_credit
        WHERE deleted_at IS NULL
          AND COALESCE(voided_at, credit_date)::date BETWEEN $1::date AND $2::date
-         AND status IN ('posted','voided')
-       ORDER BY id LIMIT $3`,
+         AND status IN ('posted','voided')`),
       [from, to, limitParam(limit)]
     );
     return rows;
   }
   // vendor_bill_payment
   const { rows } = await client.query<Candidate>(
-    `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
+    pending(kind, `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
      FROM vendor_bill_payment
      WHERE deleted_at IS NULL
        AND COALESCE(voided_at, payment_date)::date BETWEEN $1::date AND $2::date
-       AND status IN ('posted','voided')
-     ORDER BY id LIMIT $3`,
+       AND status IN ('posted','voided')`),
     [from, to, limitParam(limit)]
   );
   return rows;
