@@ -1,19 +1,21 @@
 {
-  "extends": "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/tsconfig.json",
+  "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend"
+    "rootDir": "."
   },
   "include": [
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/backfill-qb-purchases.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/verify/verify-qb-purchases-backfill.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/relink-qb-backfill-bills.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/lib/qb-backfill/relink-bills.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/backfill-qb-sales.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/backfill-qb-sales-apply.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/verify/verify-qb-sales-backfill.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/fix/reprice-backfilled-qb-orders.ts",
-    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/.medusa/types/*"
+    "src/scripts/sync/backfill-qb-purchases.ts",
+    "src/scripts/verify/verify-qb-purchases-backfill.ts",
+    "src/scripts/sync/relink-qb-backfill-bills.ts",
+    "src/lib/qb-backfill/relink-bills.ts",
+    "src/scripts/sync/backfill-qb-sales.ts",
+    "src/scripts/sync/backfill-qb-sales-apply.ts",
+    "src/scripts/verify/verify-qb-sales-backfill.ts",
+    "src/scripts/fix/reprice-backfilled-qb-orders.ts",
+    "src/scripts/fix/china-finance-drop-backfilled-bills.ts",
+    "src/scripts/verify/verify-china-finance-backfill-exclusion.ts",
+    ".medusa/types/*"
   ],
   "exclude": []
 }

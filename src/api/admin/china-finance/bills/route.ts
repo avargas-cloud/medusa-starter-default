@@ -14,6 +14,7 @@ import type {
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { applyBillTotalChange } from "../../../../lib/china-finance/bill-delta-engine";
+import { vendorBillNotBackfilledSql } from "../../../../lib/china-finance/backfill-exclusion";
 import { describeDrift, loadBillDrift } from "../../../../lib/china-finance/bill-drift";
 
 const VEETECH_VENDOR_ID = "qbvnd_01KPGGSG2J1BEEWQE5ET30AHFC";
@@ -65,6 +66,7 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
        WHERE vb.vendor_id = ?
          AND vb.bill_type IN ('regular','service','freight')
          AND vb.deleted_at IS NULL
+         AND ${vendorBillNotBackfilledSql("vb")}
      )
      SELECT cfb.id AS root_id, lt.new_amount,
             COALESCE((SELECT SUM(g.amount_cents)::integer FROM china_finance_bill g WHERE g.split_group_id = cfb.id),
@@ -116,6 +118,7 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
        WHERE vb.vendor_id = ?
          AND vb.bill_type IN ('regular','service','freight')
          AND vb.deleted_at IS NULL
+         AND ${vendorBillNotBackfilledSql("vb")}
      )
      UPDATE china_finance_bill cfb
      SET
@@ -152,7 +155,11 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
           OR child.due_date IS DISTINCT FROM root.due_date)`
   );
 
-  // Find confirmed/draft non-tariff Veetech VBs with no cfb record
+  // Find confirmed/draft non-tariff Veetech VBs with no cfb record.
+  // EXCLUDES vendor_bill created by the QB→POS purchases backfill
+  // (`lib/qb-backfill/create-bill.ts`): those bills were already paid and
+  // reconciled in QuickBooks, so they must never re-enter China Finance as
+  // pending — see `lib/china-finance/backfill-exclusion.ts`.
   const { rows: unlinked } = await knex.raw(
     `SELECT
        vb.id, vb.reference_id, vb.bill_type,
@@ -171,6 +178,7 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
      WHERE vb.vendor_id = ?
        AND vb.bill_type IN ('regular','service','freight')
        AND vb.deleted_at IS NULL
+       AND ${vendorBillNotBackfilledSql("vb")}
        AND NOT EXISTS (
          SELECT 1 FROM china_finance_bill cfb
          WHERE cfb.vendor_bill_id = vb.id
