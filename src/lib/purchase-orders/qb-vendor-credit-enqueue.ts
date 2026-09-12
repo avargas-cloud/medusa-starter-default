@@ -472,6 +472,7 @@ export async function enqueueVendorCreditMod(
   knex: EnqueueKnex,
   vendorCreditId: string
 ): Promise<EnqueueResult> {
+  if (!isQbSyncEnabled()) return { queued: false, reason: "QB_SYNC_ENABLED=false" };
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
@@ -493,5 +494,7 @@ export async function enqueueVendorCreditMod(
     qbTxnId: facts.txnId,
     operationKey: purchaseOperationKey("vendor_credit_mod", vendorCreditId, payload),
   });
+  // Ya se chequeó isQbSyncEnabled() arriba — defensa por si un caller futuro cambia.
+  if (!operation) return { queued: false, reason: "QB_SYNC_ENABLED=false" };
   return { queued: true, pipelineRowId: operation.id };
 }
