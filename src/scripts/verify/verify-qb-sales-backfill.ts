@@ -54,7 +54,7 @@ import { join } from "node:path";
 import { Pool, type PoolClient } from "pg";
 
 import { normalizeCreditMemos, normalizeInvoices, normalizeReceivePayments, normalizeSalesReceipts } from "../../lib/qb-backfill/sales-normalize";
-import { invoiceTotalCents } from "../../lib/qb-backfill/sales-derive";
+import { derivePaymentRefund, derivePaymentStatus, invoiceTotalCents, isRefundApplication } from "../../lib/qb-backfill/sales-derive";
 import { isHistoricalSalesDate } from "../../lib/qb-backfill/sales-numbering";
 import { loadPosKnownTxnIds } from "../../lib/ledger/qb-import/pos-links";
 import { findPosInvoiceByQbTxnId } from "../../lib/qb-backfill/sales-context";
@@ -218,6 +218,8 @@ async function main(): Promise<void> {
     const { rows: payRows } = await client.query<Row>(
       `SELECT p.id, p.display_id, p.amount, p.status,
               (p.received_at AT TIME ZONE 'UTC')::date::text AS received_date,
+              p.metadata->>'refund_amount' AS refund_amount,
+              p.metadata->>'refund_txn_date' AS refund_txn_date,
               p.metadata->>'qb_txn_id' AS txn_id,
               p.metadata->>'qb_parent_txn_id' AS parent_txn,
               p.metadata->'qb_backfill'->>'run_id' AS run_id,
@@ -342,6 +344,7 @@ async function main(): Promise<void> {
       let expected = 0;
       for (const a of qb.applied) {
         if (a.amount_cents <= 0) continue;
+        if (isRefundApplication(a)) continue; // devolución: va en (d2), no es una factura desconocida
         if (a.txn_type === "Invoice" && posInvoiceTxns.has(a.txn_id)) expected += a.amount_cents;
         else unlinked++;
       }
@@ -352,6 +355,24 @@ async function main(): Promise<void> {
     showFirst(badD);
     info("d", `aplicaciones a facturas que el POS no conoce: ${unlinked} (apply reportó ${report.unlinked_application.length})`);
     check("d", unlinked === report.unlinked_application.length, `unlinked_application: ${unlinked} == ${report.unlinked_application.length} del apply`);
+    // ── (d2) status del pago = el derivado de QB; devolución con metadata ──
+    // Lo que #4915 (prod 2026-09-12) hubiera necesitado: un ReceivePayment aplicado a un
+    // ARRefundCreditCard nacía `applied` con 0 aplicaciones = $ libre fantasma en Unlinked.
+    const badD2: string[] = [];
+    let refunds = 0;
+    for (const [t, r] of rpByTxn) {
+      const qb = qbRp.get(t);
+      if (!qb) continue;
+      const expectedStatus = derivePaymentStatus(qb);
+      if (String(r.status) !== expectedStatus) badD2.push(`pago PAY-${r.display_id} (${t}): status ${r.status} ≠ derivado ${expectedStatus}`);
+      const refund = derivePaymentRefund(qb);
+      if (refund.refund_cents <= 0) continue;
+      refunds++;
+      if (Number(r.refund_amount ?? 0) !== refund.refund_cents) badD2.push(`pago PAY-${r.display_id} (${t}): refund_amount ${r.refund_amount} ≠ ${refund.refund_cents}`);
+      if (String(r.refund_txn_date ?? "") !== (refund.refund_txn_date ?? qb.txn_date)) badD2.push(`pago PAY-${r.display_id} (${t}): refund_txn_date ${r.refund_txn_date} ≠ ${refund.refund_txn_date}`);
+    }
+    check("d2", badD2.length === 0, `status == derivado de QB en ${rpByTxn.size} pago(s), ${refunds} con devolución (apply reportó ${report.refund_application?.length ?? 0}): ${badD2.length} mismatch(es)`);
+    showFirst(badD2);
     const badSr: string[] = [];
     for (const [t, r] of srByTxn) {
       const pays = srPayByParent.get(t) ?? [];

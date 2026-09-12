@@ -74,7 +74,7 @@ function summarize(report: SalesApplyReport): string[] {
     line("credit_memos", report.credit_memos),
     line("credit_applic.", report.credit_applications) +
       ` payments_created=${report.credit_applications.payments_created} applications_created=${report.credit_applications.applications_created} unlinked_credit_link=${report.unlinked_credit_link.length}`,
-    `  unlinked_application=${report.unlinked_application.length} discount_ignored=${report.discount_ignored.length} set_credit_ignored=${report.set_credit_ignored.length} total_mismatch=${report.total_mismatch.length}`,
+    `  unlinked_application=${report.unlinked_application.length} refund_application=${report.refund_application.length} discount_ignored=${report.discount_ignored.length} set_credit_ignored=${report.set_credit_ignored.length} total_mismatch=${report.total_mismatch.length}`,
   ];
 }
 

@@ -13,7 +13,7 @@
  * "Transfer"/"Wire Transfer" no tienen inversa unívoca (no es Zelle ni ACH
  * con certeza) → `other`, conservando el nombre de QB en metadata.
  */
-import type { QbCreditMemo, QbInvoice, QbLinkedTxn, QbReceivePayment } from "./sales-types";
+import type { QbCreditMemo, QbInvoice, QbLinkedTxn, QbReceivePayment, QbReceivePaymentApplication } from "./sales-types";
 
 export type PosPaymentMethod =
   | "credit_card"
@@ -77,10 +77,50 @@ export function deriveInvoiceStatus(inv: Pick<QbInvoice, "is_paid" | "balance_re
   return { status: paid > 0 ? "partial" : "issued", amount_paid_cents: paid, balance_due_cents: balance };
 }
 
-export type PosPaymentStatus = "applied" | "partially_applied" | "available";
+export type PosPaymentStatus = "applied" | "partially_applied" | "available" | "refunded" | "partial_refunded";
 
-/** `UnusedPayment` de QB: 0 → todo aplicado; parte → parcial; nada aplicado → disponible. */
-export function derivePaymentStatus(rp: Pick<QbReceivePayment, "total_amount_cents" | "unused_payment_cents">): PosPaymentStatus {
+/**
+ * Un ReceivePayment puede estar aplicado a una DEVOLUCIÓN en vez de a una factura:
+ * `ARRefundCreditCard` (reembolso a tarjeta) o `Check` (cheque de devolución). QB lo
+ * cuenta como "usado" (`UnusedPayment` 0), pero para el POS esa plata volvió al cliente.
+ * Mismos tipos que `deriveRefundMethod` mira en los enlaces de un credit memo.
+ */
+export const REFUND_APPLIED_TXN_TYPES: ReadonlySet<string> = new Set(["ARRefundCreditCard", "Check"]);
+
+export interface PaymentRefundDerivation {
+  refund_cents: number;
+  /** TxnDate de la primera devolución (la fecha en que la plata salió), null si no hay. */
+  refund_txn_date: string | null;
+  refund_txn_ids: string[];
+}
+
+export function isRefundApplication(a: Pick<QbReceivePaymentApplication, "txn_type" | "amount_cents">): boolean {
+  return REFUND_APPLIED_TXN_TYPES.has(a.txn_type) && a.amount_cents > 0;
+}
+
+export function derivePaymentRefund(rp: { applied?: readonly QbReceivePaymentApplication[] }): PaymentRefundDerivation {
+  const refunds = (rp.applied ?? []).filter(isRefundApplication);
+  return {
+    refund_cents: refunds.reduce((s, a) => s + a.amount_cents, 0),
+    refund_txn_date: refunds.find((a) => a.txn_date)?.txn_date ?? null,
+    refund_txn_ids: refunds.map((a) => a.txn_id),
+  };
+}
+
+type PaymentStatusInput = Pick<QbReceivePayment, "total_amount_cents" | "unused_payment_cents"> & { applied?: readonly QbReceivePaymentApplication[] };
+
+/**
+ * Con devolución: `refunded` si nada quedó aplicado a facturas, `partial_refunded` si algo sí
+ * (medido: #4915, $411.45 devueltos a la Visa dos días después — nacía `applied` con 0
+ * aplicaciones). Sin devolución, `UnusedPayment` de QB manda: 0 → todo aplicado; parte →
+ * parcial; nada aplicado → disponible.
+ */
+export function derivePaymentStatus(rp: PaymentStatusInput): PosPaymentStatus {
+  const { refund_cents } = derivePaymentRefund(rp);
+  if (refund_cents > 0) {
+    const appliedToInvoices = (rp.applied ?? []).some((a) => !isRefundApplication(a) && a.amount_cents > 0);
+    return appliedToInvoices ? "partial_refunded" : "refunded";
+  }
   if (rp.unused_payment_cents <= 0) return "applied";
   if (rp.unused_payment_cents >= rp.total_amount_cents) return "available";
   return "partially_applied";

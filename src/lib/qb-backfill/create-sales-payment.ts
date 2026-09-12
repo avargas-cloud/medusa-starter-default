@@ -18,7 +18,7 @@
  * `row-mutations.ts` (índice único `uq_qb_pipeline_apply_payment_papp`).
  */
 import { businessInstant } from "./create-po";
-import { derivePaymentStatus, mapQbPaymentMethod } from "./sales-derive";
+import { derivePaymentRefund, derivePaymentStatus, isRefundApplication, mapQbPaymentMethod } from "./sales-derive";
 import { allocatePaymentDisplayId } from "./sales-numbering";
 import {
   BACKFILL_ACTOR,
@@ -39,14 +39,24 @@ export interface UnlinkedApplication {
   amount_cents: number;
 }
 
+/** Aplicación a una DEVOLUCIÓN (ARRefundCreditCard/Check): no es una factura desconocida, es plata que volvió. */
+export interface RefundApplication {
+  payment_txn_id: string;
+  refund_txn_id: string;
+  refund_txn_type: string;
+  refund_ref_number: string | null;
+  amount_cents: number;
+}
+
 export interface PaymentNotes {
   unlinked_application: UnlinkedApplication[];
+  refund_application: RefundApplication[];
   discount_ignored: Array<{ payment_txn_id: string; invoice_txn_id: string; discount_cents: number }>;
   set_credit_ignored: Array<{ payment_txn_id: string; invoice_txn_id: string; credit_txn_id: string; amount_cents: number }>;
 }
 
 export function newPaymentNotes(): PaymentNotes {
-  return { unlinked_application: [], discount_ignored: [], set_credit_ignored: [] };
+  return { unlinked_application: [], refund_application: [], discount_ignored: [], set_credit_ignored: [] };
 }
 
 export interface PlannedApplication {
@@ -66,6 +76,10 @@ export function planPaymentApplications(rp: QbReceivePayment, resolved: readonly
       notes.set_credit_ignored.push({ payment_txn_id: rp.txn_id, invoice_txn_id: a.txn_id, credit_txn_id: c.credit_txn_id, amount_cents: c.applied_amount_cents });
     }
     if (a.amount_cents <= 0) continue; // línea de sólo-descuento/crédito, sin plata del pago
+    if (isRefundApplication(a)) {
+      notes.refund_application.push({ payment_txn_id: rp.txn_id, refund_txn_id: a.txn_id, refund_txn_type: a.txn_type, refund_ref_number: a.ref_number, amount_cents: a.amount_cents });
+      continue;
+    }
     if (!p.invoice) {
       notes.unlinked_application.push({ payment_txn_id: rp.txn_id, invoice_txn_id: a.txn_id, invoice_ref_number: a.ref_number, amount_cents: a.amount_cents });
       continue;
@@ -96,6 +110,19 @@ export async function createReceivePaymentFromQb(ctx: SalesApplyContext, rp: QbR
   const marker = backfillMarker(ctx.runId, rp.txn_id, "ReceivePayment", rp.via_link);
   const displayId = await allocatePaymentDisplayId(ctx.client);
   const status = derivePaymentStatus(rp);
+  const refund = derivePaymentRefund(rp);
+  // Mismo shape que escribe `customer-payments/[id]/refund/route.ts` (y que Banking lee:
+  // `refund_amount` + `refund_txn_date`), así el pago devuelto se ve igual que uno nativo.
+  const refundMeta = refund.refund_cents > 0
+    ? {
+        refund_amount: refund.refund_cents,
+        refund_txn_date: refund.refund_txn_date ?? rp.txn_date,
+        refunded_at: businessInstant(refund.refund_txn_date ?? rp.txn_date),
+        refunded_by: BACKFILL_ACTOR,
+        refund_notes: `Devolución importada de QB: ${rp.applied.filter(isRefundApplication).map((a) => `${a.txn_type} ${a.ref_number ?? a.txn_id}`).join(", ")}`,
+        qb_refund_txn_ids: refund.refund_txn_ids,
+      }
+    : {};
   const invoiceIds = linked.map((l) => l.invoice!.invoice_id);
   const firstOrderId = linked[0]?.invoice?.order_id ?? null;
 
@@ -122,6 +149,7 @@ export async function createReceivePaymentFromQb(ctx: SalesApplyContext, rp: QbR
         qb_deposit_to_account: rp.deposit_to_account_ref?.full_name ?? null,
         invoices_affected: invoiceIds,
         invoices_affected_friendly: linked.map((l) => `INV-${l.invoice!.invoice_number}`),
+        ...refundMeta,
         qb_txn_id: rp.txn_id,
         qb_ref_number: rp.ref_number,
         qb_edit_sequence: rp.edit_sequence,

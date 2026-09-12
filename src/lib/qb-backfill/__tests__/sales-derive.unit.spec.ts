@@ -1,5 +1,6 @@
 import {
   deriveInvoiceStatus,
+  derivePaymentRefund,
   derivePaymentStatus,
   deriveRefundMethod,
   invoiceTotalCents,
@@ -51,6 +52,33 @@ describe("qb-backfill/sales-derive · status de pago y refund_method", () => {
     expect(derivePaymentStatus({ total_amount_cents: 100, unused_payment_cents: 40 })).toBe("partially_applied");
     expect(derivePaymentStatus({ total_amount_cents: 100, unused_payment_cents: 100 })).toBe("available");
   });
+  // #4915 (prod 2026-09-12): ReceivePayment aplicado a un ARRefundCreditCard nacía `applied`
+  // con 0 aplicaciones y $411.45 de saldo fantasma. Una aplicación a un refund ES la devolución.
+  describe("derivePaymentRefund / derivePaymentStatus con devoluciones", () => {
+    const applied = (txn_type: string, amount_cents: number, txn_id = txn_type, txn_date: string | null = "2026-04-13"): QbReceivePaymentApplication => ({
+      txn_id, txn_type, txn_date, ref_number: "020074", balance_remaining_cents: 0, amount_cents,
+      discount_amount_cents: null, discount_account_ref: null, set_credits: [],
+    });
+    it("refund total: ARRefundCreditCard por el monto entero → refunded", () => {
+      const rp = { total_amount_cents: 41145, unused_payment_cents: 0, applied: [applied("ARRefundCreditCard", 41145, "1C06E8")] };
+      expect(derivePaymentRefund(rp)).toEqual({ refund_cents: 41145, refund_txn_date: "2026-04-13", refund_txn_ids: ["1C06E8"] });
+      expect(derivePaymentStatus(rp)).toBe("refunded");
+    });
+    it("refund parcial: parte a factura, parte devuelta por cheque → partial_refunded", () => {
+      const rp = { total_amount_cents: 1000, unused_payment_cents: 0, applied: [applied("Invoice", 600, "INV1", null), applied("Check", 400, "CHK1")] };
+      expect(derivePaymentRefund(rp)).toEqual({ refund_cents: 400, refund_txn_date: "2026-04-13", refund_txn_ids: ["CHK1"] });
+      expect(derivePaymentStatus(rp)).toBe("partial_refunded");
+    });
+    it("sin devolución: sólo facturas → la regla de UnusedPayment manda", () => {
+      const rp = { total_amount_cents: 1000, unused_payment_cents: 0, applied: [applied("Invoice", 1000, "INV1", null)] };
+      expect(derivePaymentRefund(rp)).toEqual({ refund_cents: 0, refund_txn_date: null, refund_txn_ids: [] });
+      expect(derivePaymentStatus(rp)).toBe("applied");
+    });
+    it("una devolución en 0 no cuenta", () => {
+      const rp = { total_amount_cents: 1000, unused_payment_cents: 1000, applied: [applied("ARRefundCreditCard", 0)] };
+      expect(derivePaymentStatus(rp)).toBe("available");
+    });
+  });
   it("deriveRefundMethod: cheque o reembolso a tarjeta = refund; si no, store_credit", () => {
     const inv = { txn_id: "i", txn_type: "Invoice", txn_date: null, amount_cents: -1, ref_number: null };
     expect(deriveRefundMethod([inv])).toBe("store_credit");
@@ -90,5 +118,20 @@ describe("qb-backfill/create-sales-payment · planPaymentApplications (puro)", (
     expect(notes.unlinked_application).toEqual([{ payment_txn_id: "PAY1", invoice_txn_id: "INV2", invoice_ref_number: "18850", amount_cents: 1000 }]);
     expect(notes.discount_ignored).toEqual([{ payment_txn_id: "PAY1", invoice_txn_id: "INV3", discount_cents: 50 }]);
     expect(notes.set_credit_ignored).toEqual([{ payment_txn_id: "PAY1", invoice_txn_id: "INV4", credit_txn_id: "CM1", amount_cents: 300 }]);
+  });
+
+  it("una aplicación a un refund NO es una factura desconocida: va a refund_application y no se linkea", () => {
+    const notes = newPaymentNotes();
+    const linked = planPaymentApplications(
+      rp,
+      [
+        { application: app({ txn_id: "1C06E8", txn_type: "ARRefundCreditCard", ref_number: "020074", amount_cents: 41145 }), invoice: null },
+        { application: app({}), invoice: inv },
+      ],
+      notes
+    );
+    expect(linked.map((l) => l.application.txn_id)).toEqual(["INV1"]);
+    expect(notes.unlinked_application).toEqual([]);
+    expect(notes.refund_application).toEqual([{ payment_txn_id: "PAY1", refund_txn_id: "1C06E8", refund_txn_type: "ARRefundCreditCard", refund_ref_number: "020074", amount_cents: 41145 }]);
   });
 });
