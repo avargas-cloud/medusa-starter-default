@@ -53,9 +53,13 @@ export function buildOpeningBalanceLines(input: OpeningBalanceInput): LedgerLine
     throw new LedgerError("GL_SOURCE_INVALID", {
       reason: "account_normal_balance_missing",
     });
-  if (balance_cents < 0n)
+  // Un saldo NEGATIVO es una cuenta contra su dirección normal (depreciación
+  // acumulada, AP con saldo deudor, sub-cuentas de VEETECH — el Balance Sheet
+  // de QB al 2025-12-31 trae 11 así): se postea del lado opuesto. Sólo se
+  // permite sin `items`: un banco en rojo con partidas pendientes es otro caso.
+  if (balance_cents < 0n && items.length > 0)
     throw new LedgerError("GL_SOURCE_INVALID", {
-      reason: "negative_balance",
+      reason: "negative_balance_with_items",
       balance_cents: balance_cents.toString(),
     });
   if (balance_cents === 0n && items.length === 0)
@@ -96,23 +100,25 @@ export function buildOpeningBalanceLines(input: OpeningBalanceInput): LedgerLine
   let equityDebit = 0n;
   let equityCredit = 0n;
 
-  if (balance_cents > 0n) {
-    if (account.normal_balance === "debit") {
+  if (balance_cents !== 0n) {
+    const magnitude = balance_cents < 0n ? -balance_cents : balance_cents;
+    const debitSide = (account.normal_balance === "debit") === balance_cents > 0n;
+    if (debitSide) {
       lines.push({
         role: "opening",
         account,
-        debit_cents: balance_cents,
+        debit_cents: magnitude,
         credit_cents: 0n,
       });
-      equityCredit += balance_cents;
+      equityCredit += magnitude;
     } else {
       lines.push({
         role: "opening",
         account,
         debit_cents: 0n,
-        credit_cents: balance_cents,
+        credit_cents: magnitude,
       });
-      equityDebit += balance_cents;
+      equityDebit += magnitude;
     }
   }
 

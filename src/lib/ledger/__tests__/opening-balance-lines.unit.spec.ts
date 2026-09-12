@@ -32,6 +32,45 @@ describe("buildOpeningBalanceLines", () => {
     expect(sumDebits(lines)).toBe(sumCredits(lines));
   });
 
+  it("a NEGATIVE balance on a debit-normal account (contra asset) credits `opening`, debits `equity`", () => {
+    const depreciation = account("FA-DEP", "FixedAsset", "debit");
+    const lines = buildOpeningBalanceLines({
+      account: depreciation,
+      balance_cents: -9_530_471n,
+      items: [],
+      equity,
+    });
+    expect(lines.find((l) => l.role === "opening")?.credit_cents).toBe(9_530_471n);
+    expect(lines.find((l) => l.role === "opening")?.debit_cents).toBe(0n);
+    expect(lines.find((l) => l.role === "equity")?.debit_cents).toBe(9_530_471n);
+    expect(sumDebits(lines)).toBe(sumCredits(lines));
+  });
+
+  it("a NEGATIVE balance on a credit-normal account (AP with a debit balance) debits `opening`", () => {
+    const ap = account("AP-1", "AccountsPayable", "credit");
+    const lines = buildOpeningBalanceLines({
+      account: ap,
+      balance_cents: -2_224_572n,
+      items: [],
+      equity,
+    });
+    expect(lines.find((l) => l.role === "opening")?.debit_cents).toBe(2_224_572n);
+    expect(lines.find((l) => l.role === "equity")?.credit_cents).toBe(2_224_572n);
+    expect(sumDebits(lines)).toBe(sumCredits(lines));
+  });
+
+  it("rejects a negative balance together with items", () => {
+    const bank = account("BANK-1", "Bank", "debit");
+    expect(() =>
+      buildOpeningBalanceLines({
+        account: bank,
+        balance_cents: -100n,
+        items: [{ key: "chk-1", kind: "outstanding_check", amount_cents: 50n, description: "x" }],
+        equity,
+      })
+    ).toThrow(LedgerError);
+  });
+
   it("Bank with an outstanding check and a deposit in transit nets a single `equity` line", () => {
     const bank = account("BANK-1", "Bank", "debit");
     const lines = buildOpeningBalanceLines({
