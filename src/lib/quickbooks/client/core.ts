@@ -2,6 +2,7 @@ import { QbAsyncResult, QbUpdateCustomerPayload } from "./types";
 import { pollBridgeStatus } from "../bridge-fetch";
 import { requireBridgeUrl } from "../bridge-url";
 import { requireQbApiKey } from "../qb-api-key";
+import { QbSyncDisabledError, isQbSyncEnabled } from "../sync-enabled";
 
 export const DRY_RUN = process.env.QB_DRY_RUN === "true";
 
@@ -23,6 +24,10 @@ export async function bridgeFetch(
   body?: object,
   opts?: { idempotencyKey?: string }
 ): Promise<any> {
+  if (!isQbSyncEnabled()) {
+    throw new QbSyncDisabledError();
+  }
+
   const url = `${requireBridgeUrl()}${path}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), BRIDGE_FETCH_TIMEOUT_MS);

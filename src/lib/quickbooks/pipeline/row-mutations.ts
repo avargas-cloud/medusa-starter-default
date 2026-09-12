@@ -1,6 +1,9 @@
+import { randomUUID } from "crypto";
+
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { WritePipelineRowInput } from "./types";
 import { decideRetry, type RetryDecision } from "../retry-config";
+import { isQbSyncEnabled } from "../sync-enabled";
 import {
   CREATE_STEP_TO_MOD_STEP,
   enqueueSalesMutation,
@@ -135,6 +138,13 @@ async function canonicalizeApplyPaymentInput(
 export async function writePipelineRow(
   input: WritePipelineRowInput
 ): Promise<string> {
+  // Global QB sync switch: no `qb_order_pipeline` row is written while sync is
+  // off. The fabricated UUID never matches a row, so any later by-id
+  // transition (submit/confirm/fail) is a harmless zero-row UPDATE no-op.
+  if (!isQbSyncEnabled()) {
+    return randomUUID();
+  }
+
   const pool = getDbPool();
 
   // CENTRAL GUARD: canonicalize apply_payment cpay_ → papp_ before any SQL, so the
@@ -593,6 +603,10 @@ export async function requeueApplyPaymentWaiting(input: {
   medusaRefNumber?: string | null;
   referenceType?: string | null;
 }): Promise<{ rowId: string | null; mode: "updated" | "inserted" | "noop" }> {
+  if (!isQbSyncEnabled()) {
+    return { rowId: null, mode: "noop" };
+  }
+
   const pool = getDbPool();
   const { rows: updated } = await pool.query(
     `UPDATE qb_order_pipeline

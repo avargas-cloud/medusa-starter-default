@@ -23,6 +23,7 @@ import {
   enqueuePurchaseQbOperation,
   purchaseOperationKey,
 } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
+import { isQbSyncEnabled } from "../../../../lib/quickbooks/sync-enabled";
 // 1.5.4: handleDraftOrderCreated import removed — pos/sync now enqueues
 // 'pending' rows for the consolidator's pending-dispatch pass.
 
@@ -42,6 +43,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   if (!type || !id) {
     return res.status(400).json({ error: "Missing type or id" });
+  }
+  // Every action this route handles is a manual sync-to-QuickBooks trigger.
+  if (!isQbSyncEnabled()) {
+    return res.status(409).json({
+      error: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false).",
+      code: "QB_SYNC_DISABLED",
+    });
   }
 
   logger.info(
@@ -189,6 +197,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             orderPayload
           ),
         });
+        // Already checked isQbSyncEnabled() at the top of this route —
+        // defense against a future caller change, not an expected path.
+        if (!operation) {
+          return res.status(409).json({
+            error: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false).",
+            code: "QB_SYNC_DISABLED",
+          });
+        }
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
               SET order_pipeline_id = ?, updated_at = NOW()

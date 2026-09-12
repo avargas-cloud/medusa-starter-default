@@ -12,8 +12,9 @@ import {
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import {
   accessFailure,
-  assertAccounting,
+  assertOwner,
 } from "../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../lib/quickbooks/qb-sync-disabled-response";
 
 interface CustomerCreditRow extends QbCustomerCredit {
   /** true when a POS store-credit already points at this QB TxnID. */
@@ -35,7 +36,7 @@ export async function GET(
   res: MedusaResponse
 ): Promise<void> {
   try {
-    await assertAccounting(req as AuthenticatedMedusaRequest);
+    await assertOwner(req as AuthenticatedMedusaRequest);
   } catch (error) {
     return accessFailure(res, error);
   }
@@ -103,6 +104,7 @@ export async function GET(
 
     res.json({ success: true, customer_qb_linked: true, credits: enriched });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg =
       error instanceof Error ? error.message : "Failed to query QB credits";
     console.error(`[QB Customer Credits ${customerId}] Error:`, error);

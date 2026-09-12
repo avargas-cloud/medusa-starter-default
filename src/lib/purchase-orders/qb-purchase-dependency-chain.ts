@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "crypto";
 
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+
 export type PurchaseQbStep =
   | "purchase_order_mod"
   | "item_receipt_add"
@@ -102,11 +104,24 @@ const COALESCIBLE_STATUSES = new Set(["pending", "waiting", "failed"]);
  * already has an unsent MOD at the tail REWRITES that row rather than queueing a
  * second trip to QuickBooks — see `coalesceIntoTail`. The returned id is then
  * the existing row's, with `reused: true`.
+ *
+ * Returns `null` when QB_SYNC_ENABLED=false — no row is written to
+ * `qb_purchase_dependency_chain` or `qb_order_pipeline`. Unlike the sales-lane
+ * helpers (`enqueueSalesMutation`, `writePipelineRow`), this does NOT
+ * fabricate a skip id: `qb_item_receipt_pipeline`, `qb_purchase_order_pipeline`,
+ * `qb_vendor_bill_pipeline`, and `qb_purchase_dependency_chain` itself all
+ * carry real FK constraints to `qb_order_pipeline(id)` — a caller that wrote a
+ * child row pointing at a nonexistent id would hit a live FK violation, not a
+ * silent no-op. Every caller MUST check for `null` and skip its own
+ * child-table insert while leaving its business write (the receipt, PO edit,
+ * cost propagation, etc.) intact.
  */
 export async function enqueuePurchaseQbOperation(
   db: PurchaseDependencyKnex,
   input: EnqueuePurchaseQbOperationInput
-): Promise<EnqueuedPurchaseQbOperation> {
+): Promise<EnqueuedPurchaseQbOperation | null> {
+  if (!isQbSyncEnabled()) return null;
+
   const existing = await findByOperationKey(db, input.operationKey);
   if (existing) return toResult(existing, true);
   if (!db.transaction) {

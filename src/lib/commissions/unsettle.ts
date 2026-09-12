@@ -26,6 +26,7 @@ import { randomUUID } from "crypto";
 import type { PoolClient } from "pg";
 import { canUnsettle } from "./transitions";
 import { CommissionError, type RecipientRow } from "./writer";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 interface SettlementRow {
   id: string;
@@ -143,7 +144,7 @@ export async function unsettleRecipient(
             WHERE vendor_bill_id = $1 AND status = 'confirmed'`,
           [bill.id]
         );
-        if (bill.status === "synced") {
+        if (bill.status === "synced" && isQbSyncEnabled()) {
           await client.query(
             `INSERT INTO qb_order_pipeline
                (id, reference_id, reference_type, step, status,

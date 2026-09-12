@@ -60,7 +60,6 @@ async function buildReceiptPreview(
     amount_cents: evidence.source.amount_cents!,
     lines: evidence.lines,
     blockers: [],
-    opening_pending: true,
     coverage: "partial",
     preview_hash: reviewHash({
       source_hash: evidence.source_hash,

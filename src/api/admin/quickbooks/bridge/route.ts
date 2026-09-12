@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { bridgeFetch } from "../../../../lib/quickbooks/client/core";
+import { respondQbSyncDisabled } from "../../../../lib/quickbooks/qb-sync-disabled-response";
 
 /**
  * GET  /admin/quickbooks/bridge  — queue stats from the bridge
@@ -12,6 +13,7 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse) {
     const stats = await bridgeFetch("GET", "/api/sync/queue-stats");
     res.json({ success: true, ...stats });
   } catch (err: any) {
+    if (respondQbSyncDisabled(err, res)) return;
     res.status(502).json({ success: false, error: err.message });
   }
 }
@@ -24,6 +26,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const result = await bridgeFetch("POST", "/api/sync/reset-busy");
       res.json({ success: true, ...result });
     } catch (err: any) {
+      if (respondQbSyncDisabled(err, res)) return;
       res.status(502).json({ success: false, error: err.message });
     }
     return;
@@ -34,6 +37,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const result = await bridgeFetch("POST", "/api/sync/queue/purge");
       res.json({ success: true, ...result });
     } catch (err: any) {
+      if (respondQbSyncDisabled(err, res)) return;
       res.status(502).json({ success: false, error: err.message });
     }
     return;

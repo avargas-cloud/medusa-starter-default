@@ -25,11 +25,14 @@ import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-can
 // 1.5.5: handleOrderPlaced import removed — subscriber enqueues now.
 import { handlePaymentCaptured } from "../lib/quickbooks/handlers/handle-payment-captured";
 import { isPosOrder } from "../lib/quickbooks/handlers/utils";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 export default async function qbOrderSubscriber({
   event: { name, data },
   container,
 }: SubscriberArgs<any>) {
+  if (!isQbSyncEnabled()) return;
+
   const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
   const orderModule = container.resolve("order");
   const customerModule = container.resolve("customer");

@@ -54,6 +54,7 @@ import {
   enqueuePurchaseQbOperation,
   purchaseOperationKey,
 } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
+import { isQbSyncEnabled } from "../../../../lib/quickbooks/sync-enabled";
 
 interface QbVendorLike {
   id: string;
@@ -600,6 +601,8 @@ export async function GET(
         status: string;
         total_units_received?: number | null;
         vendor_id: string;
+        metadata?: Record<string, unknown> | null;
+        ordered_at?: string | Date | null;
       };
       const required = await vendorIsChinaAgent(knex, poLike.vendor_id);
       return deriveChinaTransferState({
@@ -607,6 +610,11 @@ export async function GET(
         hasLinkedTransfer: Boolean(linked_inventory_transfer),
         status: poLike.status,
         unitsReceived: Number(poLike.total_units_received ?? 0),
+        // histórico = traído de QB por el backfill Y anterior al go-live (2026-04-14); un PO de QB
+        // posterior es un PO corriente y sí necesita su Inventory Transfer.
+        historical:
+          Boolean(poLike.metadata?.qb_backfill) &&
+          new Date(poLike.ordered_at ?? 0).toISOString() < "2026-04-14",
       });
     } catch {
       return null;
@@ -1554,7 +1562,11 @@ export async function PATCH(
     // refused by QuickBooks (3060). It is NOT enqueued: the operator gets
     // `qb_repair_required` on this response and the repair sequence deletes
     // the Bill first. The local PO is already saved and correct either way.
-    qbRepairRequired.length === 0
+    qbRepairRequired.length === 0 &&
+    // Global QB sync switch: the PO was already saved locally above — this
+    // whole block only stages the QuickBooks Mod, so with sync off it's
+    // skipped entirely, same as any other reason this block doesn't run.
+    isQbSyncEnabled()
   ) {
     let delegatedPipelineRowIsDurable = false;
     try {
@@ -1674,12 +1686,16 @@ export async function PATCH(
           orderPayload
         ),
       });
-      await knex.raw(
-        `UPDATE qb_purchase_order_pipeline
-            SET order_pipeline_id = ?, updated_at = NOW()
-          WHERE id = ?`,
-        [operation.id, legacyPipelineId]
-      );
+      // Already checked isQbSyncEnabled() in the outer `if` above — defense
+      // against a future caller change, not an expected path.
+      if (operation) {
+        await knex.raw(
+          `UPDATE qb_purchase_order_pipeline
+              SET order_pipeline_id = ?, updated_at = NOW()
+            WHERE id = ?`,
+          [operation.id, legacyPipelineId]
+        );
+      }
     } catch (qbErr) {
       console.error("[po-patch] Failed to enqueue QB MOD:", qbErr);
       if (!delegatedPipelineRowIsDurable) {

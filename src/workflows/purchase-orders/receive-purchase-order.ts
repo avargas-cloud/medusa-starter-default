@@ -69,7 +69,8 @@ export interface ReceivePurchaseOrderWorkflowOutput {
   po_status_after: "partially_received" | "received";
   total_units_received: number;
   total_units_ordered: number;
-  qb_pipeline_id: string;
+  /** null when QB_SYNC_ENABLED=false — nothing was queued to QuickBooks. */
+  qb_pipeline_id: string | null;
 }
 
 export const receivePurchaseOrderWorkflow = createWorkflow(

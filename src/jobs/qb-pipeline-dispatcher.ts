@@ -2,6 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import {
   runBlockedDependentsPass,
   runPendingDispatchPass,
@@ -39,6 +40,7 @@ export default async function qbPipelineDispatcher(
   container: MedusaContainer
 ): Promise<void> {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
 

@@ -7,6 +7,7 @@ import {
   POLL_INTERVAL_MS,
   MAX_POLL_ATTEMPTS,
 } from "../../../../../lib/quickbooks/client/core";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
 /**
  * POST /admin/quickbooks/import/sales-orders
@@ -139,6 +140,7 @@ export async function POST(
       },
     });
   } catch (error: any) {
+    if (respondQbSyncDisabled(error, res)) return;
     console.error(`[QB Import SO #${refNumber}] Error:`, error);
     res
       .status(500)

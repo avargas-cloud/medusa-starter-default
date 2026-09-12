@@ -20,6 +20,7 @@ import {
 } from "../../../lib/purchase-orders/qb-purchase-dependency-chain";
 import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
 import { toQbRefNumber } from "../../../lib/quickbooks/qb-ref-number";
+import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
 
 export interface EnqueueQbItemReceiptStepInputLine {
   receipt_line_id: string;
@@ -49,7 +50,9 @@ export interface EnqueueQbItemReceiptStepInput {
 }
 
 export interface EnqueueQbItemReceiptStepOutput {
-  pipeline_id: string;
+  pipeline_id: string | null;
+  /** true when QB_SYNC_ENABLED=false — no qb_item_receipt_pipeline/qb_order_pipeline row was written. */
+  skipped?: boolean;
 }
 
 interface QbItemReceiptPayload {
@@ -85,6 +88,14 @@ export const enqueueQbItemReceiptStep = createStep(
     input: EnqueueQbItemReceiptStepInput,
     { container }
   ): Promise<StepResponse<EnqueueQbItemReceiptStepOutput, null>> => {
+    // Global QB sync switch: the receipt itself was already persisted by an
+    // earlier step — this step's entire job is queuing it to QuickBooks, so
+    // with sync off it does nothing at all (no qb_item_receipt_pipeline row,
+    // no qb_order_pipeline row, no compensation to undo).
+    if (!isQbSyncEnabled()) {
+      return new StepResponse({ pipeline_id: null, skipped: true }, null);
+    }
+
     const service = container.resolve(
       PURCHASE_ORDERS_MODULE
     ) as unknown as PurchaseOrdersModuleService;
@@ -167,6 +178,13 @@ export const enqueueQbItemReceiptStep = createStep(
         orderPayload
       ),
     });
+    // enqueuePurchaseQbOperation only returns null on the sync switch, which
+    // was already checked above — this is defense against a future caller
+    // change, not an expected path: fabricating an id here would violate the
+    // real FK from qb_item_receipt_pipeline to qb_order_pipeline.
+    if (!operation) {
+      return new StepResponse({ pipeline_id: row.id, skipped: true }, null);
+    }
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
           SET add_order_pipeline_id = ?, updated_at = NOW()

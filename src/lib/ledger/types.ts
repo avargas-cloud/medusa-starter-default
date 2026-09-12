@@ -11,7 +11,8 @@ export type LedgerSourceKind =
   | "po_receipt"
   | "vendor_bill"
   | "vendor_credit"
-  | "vendor_bill_payment";
+  | "vendor_bill_payment"
+  | "opening_balance";
 
 export interface LedgerAccount {
   id: string;
@@ -37,8 +38,33 @@ export interface LedgerClaim {
   source_hash: string;
 }
 
+/**
+ * qb-gl-import (docs/QB_GL_IMPORT.md): documentos importados del reporte
+ * General Ledger de QuickBooks. Deliberadamente FUERA de `LedgerSourceKind`:
+ * ese union es lo que el replay enumera (`Record<LedgerSourceKind, …>` en
+ * replay.ts), y un documento importado nunca se replaya — se postea una vez
+ * por TxnID desde el script y se reversa por el mismo mecanismo que los demás.
+ */
+export type LedgerImportSourceKind = "qb_import";
+
+/**
+ * Documentos MANUALES del GL (journal entries, checks/expenses/card charges,
+ * transfers y el cierre de ejercicio). También FUERA de `LedgerSourceKind`:
+ * el documento vive en su tabla `gl_*` con estado draft/posted/voided y se
+ * postea/reversa a demanda desde su ruta — nunca lo enumera el replay.
+ */
+export type LedgerManualSourceKind =
+  | "journal_entry"
+  | "bank_check"
+  | "bank_transfer"
+  | "year_close";
+export type LedgerDocumentSourceKind =
+  | LedgerSourceKind
+  | LedgerImportSourceKind
+  | LedgerManualSourceKind;
+
 export interface PostDocumentInput {
-  source_kind: LedgerSourceKind;
+  source_kind: LedgerDocumentSourceKind;
   source_id: string;
   document_number: string;
   /** YYYY-MM-DD en ET (etMidnightUtc / getBusinessDateString). */
@@ -67,7 +93,10 @@ export type LedgerErrorCode =
   | "GL_UNBALANCED_DOCUMENT"
   | "GL_PERIOD_CLOSED"
   | "GL_SOURCE_INVALID"
-  | "GL_ALREADY_POSTED";
+  | "GL_ALREADY_POSTED"
+  | "GL_DOCUMENT_NOT_FOUND"
+  | "GL_DOCUMENT_NOT_DRAFT"
+  | "GL_DOCUMENT_NOT_POSTED";
 
 export class LedgerError extends Error {
   code: LedgerErrorCode;
@@ -80,7 +109,7 @@ export class LedgerError extends Error {
   }
 }
 
-/** Claves de `gl_account_map` — §3. */
+/** Claves de `gl_account_map` — §3 (las 9 históricas). */
 export const ACCOUNT_MAP_KEYS = [
   "accounts_receivable",
   "undeposited_funds",
@@ -113,6 +142,26 @@ export const PURCHASE_ACCOUNT_MAP_KEYS = [
 export type PurchaseAccountMapKey = (typeof PURCHASE_ACCOUNT_MAP_KEYS)[number];
 export type PurchaseAccountMap = AccountMap &
   Record<PurchaseAccountMapKey, LedgerAccount>;
+
+/**
+ * Banking-on-GL §2/§6: sólo el documento `opening_balance` necesita
+ * `opening_balance_equity`; fuera de `ACCOUNT_MAP_KEYS` por la misma razón que
+ * las de compras — un ambiente sin sembrarla no rompe los demás documentos.
+ */
+export const OPENING_ACCOUNT_MAP_KEYS = ["opening_balance_equity"] as const;
+export type OpeningAccountMapKey = (typeof OPENING_ACCOUNT_MAP_KEYS)[number];
+export type OpeningAccountMap = AccountMap &
+  Record<OpeningAccountMapKey, LedgerAccount>;
+
+/**
+ * Cierre de ejercicio (`year_close`): la única key que exige es
+ * `retained_earnings` (Equity). Fuera de `ACCOUNT_MAP_KEYS` por la misma
+ * razón — un ambiente sin sembrarla sólo pierde el cierre, nunca los demás
+ * documentos.
+ */
+export const YEAR_CLOSE_ACCOUNT_MAP_KEYS = ["retained_earnings"] as const;
+export type YearCloseAccountMapKey = (typeof YEAR_CLOSE_ACCOUNT_MAP_KEYS)[number];
+export type YearCloseAccountMap = Record<YearCloseAccountMapKey, LedgerAccount>;
 
 /** Una línea de invoice ya resuelta contra cuentas — el builder es puro, sin DB. */
 export interface InvoiceLineSnapshot {

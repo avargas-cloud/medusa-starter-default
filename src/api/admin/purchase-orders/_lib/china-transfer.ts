@@ -44,8 +44,17 @@ export function deriveChinaTransferState(args: {
   hasLinkedTransfer: boolean;
   status: string;
   unitsReceived: number;
+  /**
+   * PO HISTÓRICO traído de QuickBooks por `lib/qb-backfill` (`metadata.qb_backfill`): ya
+   * recibido en su momento, su stock entró por el conteo del go-live, no por un Inventory
+   * Transfer del POS. No requiere IT (decisión del operador 2026-09-11) → `not_required`.
+   */
+  historical?: boolean;
 }): ChinaTransferInfo {
   const { required, hasLinkedTransfer, status, unitsReceived } = args;
+  if (args.historical) {
+    return { required: false, has_linked_transfer: hasLinkedTransfer, state: "not_required" };
+  }
 
   if (!required) {
     return { required: false, has_linked_transfer: hasLinkedTransfer, state: "not_required" };
@@ -94,12 +103,13 @@ export async function enrichChinaTransferMap(
                WHERE it.linked_purchase_order_id = po.id
                  AND it.status <> 'voided'
                  AND it.deleted_at IS NULL
-            ) AS has_linked_transfer
+            ) AS has_linked_transfer,
+            ((po.metadata -> 'qb_backfill') IS NOT NULL AND po.ordered_at < '2026-04-14') AS historical
        FROM purchase_order po
        LEFT JOIN qb_vendor v ON v.id = po.vendor_id AND v.deleted_at IS NULL
       WHERE po.id = ANY (?::text[])`,
     [ids]
-  )) as { rows: Array<{ id: string; vendor_is_china_agent: boolean; has_linked_transfer: boolean }> };
+  )) as { rows: Array<{ id: string; vendor_is_china_agent: boolean; has_linked_transfer: boolean; historical: boolean }> };
 
   const byId = new Map(result.rows.map((r) => [r.id, r]));
   for (const row of rows) {
@@ -111,6 +121,7 @@ export async function enrichChinaTransferMap(
         hasLinkedTransfer: Boolean(enr?.has_linked_transfer),
         status: row.status,
         unitsReceived: Number(row.total_units_received ?? 0),
+        historical: Boolean(enr?.historical),
       })
     );
   }

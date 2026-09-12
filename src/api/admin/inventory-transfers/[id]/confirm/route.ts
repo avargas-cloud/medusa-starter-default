@@ -18,6 +18,7 @@ import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_
 import { PURCHASE_ORDERS_MODULE } from "../../../../../modules/purchase-orders";
 import { rebuildTransferChinaReservations } from "../../../../../lib/inventory-transfer-reservations";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
+import { isQbSyncEnabled } from "../../../../../lib/quickbooks/sync-enabled";
 
 // ── Knex type ─────────────────────────────────────────────────────────────────
 
@@ -284,32 +285,35 @@ export async function POST(
 
   // Transfer-created POs are already submitted, so they must explicitly
   // enqueue the same frozen QuickBooks payload as the normal PO submit workflow.
-  await knex.raw(
-    `INSERT INTO qb_purchase_order_pipeline (
-      id, purchase_order_id, status, payload, created_at, updated_at
-    ) VALUES (
-      ?, ?, 'waiting', ?::jsonb, ?, ?
-    )`,
-    [
-      generateEntityId("", "qbpopipe"),
-      poId,
-      JSON.stringify({
-        po_id: poId,
-        po_number: poNumber,
-        vendor_qb_list_id: vendorQbListId,
-        vendor_name: transfer.vendor_name_snapshot ?? transfer.vendor_id ?? "",
-        ordered_at: null,
-        expected_at: transfer.expected_arrival_at
-          ? new Date(transfer.expected_arrival_at).toISOString()
-          : null,
-        memo: `Medusa PO ${poSeq}`,
-        reference_number: transfer.reference_number ?? null,
-        lines: qbPayloadLines,
-      }),
-      now,
-      now,
-    ]
-  );
+  // Global QB sync switch: no qb_purchase_order_pipeline row while sync is off.
+  if (isQbSyncEnabled()) {
+    await knex.raw(
+      `INSERT INTO qb_purchase_order_pipeline (
+        id, purchase_order_id, status, payload, created_at, updated_at
+      ) VALUES (
+        ?, ?, 'waiting', ?::jsonb, ?, ?
+      )`,
+      [
+        generateEntityId("", "qbpopipe"),
+        poId,
+        JSON.stringify({
+          po_id: poId,
+          po_number: poNumber,
+          vendor_qb_list_id: vendorQbListId,
+          vendor_name: transfer.vendor_name_snapshot ?? transfer.vendor_id ?? "",
+          ordered_at: null,
+          expected_at: transfer.expected_arrival_at
+            ? new Date(transfer.expected_arrival_at).toISOString()
+            : null,
+          memo: `Medusa PO ${poSeq}`,
+          reference_number: transfer.reference_number ?? null,
+          lines: qbPayloadLines,
+        }),
+        now,
+        now,
+      ]
+    );
+  }
 
   // 8. Update transfer to confirmed
   await knex.raw(

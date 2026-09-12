@@ -2,6 +2,7 @@ import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../api/utils/db-pool";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 /**
  * AUTO-ENQUEUE CUSTOMER DATA-EXT TO QB
@@ -91,6 +92,8 @@ export default async function handler({
   event,
   container,
 }: SubscriberArgs<any>) {
+  if (!isQbSyncEnabled()) return;
+
   const logger = container.resolve("logger");
   const customerModule = container.resolve(Modules.CUSTOMER);
 

@@ -33,7 +33,10 @@ import { bankId } from "./store";
 export async function saveBankDeposit(
   actorId: string,
   key: string | undefined,
-  input: DepositSaveBody
+  input: DepositSaveBody,
+  /** Who built the deposit (`deposit-from-payment.ts`); surfaces as the
+   * "from bank feed" badge via `DEPOSIT_SELECT_SQL.origin`. Manual = absent. */
+  origin?: "bank_feed" | "deposits_page"
 ): Promise<{ deposit: BankDeposit }> {
   const parsed = depositSaveSchema.safeParse(input);
   if (!parsed.success) throw new BankingError("BANKING_INVALID_REQUEST");
@@ -81,7 +84,7 @@ export async function saveBankDeposit(
             // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositAccount() throws BANKING_ACCOUNT_SETUP_REQUIRED if review_start_date is null
             account.review_start_date!,
             body.date,
-            line.expected_source_hash
+            "expected_source_hash" in line ? line.expected_source_hash : ""
           )
         );
       }
@@ -119,43 +122,45 @@ export async function saveBankDeposit(
       await client.query(
         `UPDATE bank_deposit_line SET deleted_at=now(),updated_at=now()
       WHERE deposit_id=$1 AND NOT(COALESCE(payment_id=ANY($2::text[]),false)
-        OR COALESCE(opening_item_id=ANY($3::text[]),false)) AND deleted_at IS NULL`,
+        OR COALESCE(manual_reference=ANY($3::text[]),false)) AND deleted_at IS NULL`,
         [
           id,
+          body.lines.flatMap((line) => (line.payment_id ? [line.payment_id] : [])),
           body.lines.flatMap((line) =>
-            "payment_id" in line ? [line.payment_id] : []
-          ),
-          body.lines.flatMap((line) =>
-            "opening_item_id" in line ? [line.opening_item_id] : []
+            "reference" in line ? [line.reference] : []
           ),
         ]
       );
       for (const line of body.lines) {
-        const paymentId = "payment_id" in line ? line.payment_id : null;
-        const openingItemId =
-          "opening_item_id" in line ? line.opening_item_id : null;
+        const paymentId = line.payment_id;
+        const manualReference = "reference" in line ? line.reference : null;
         const existing = await client.query<{ id: string }>(
           `SELECT id FROM bank_deposit_line WHERE deposit_id=$1
-        AND (($2::text IS NOT NULL AND payment_id=$2) OR ($3::text IS NOT NULL AND opening_item_id=$3))
+        AND (($2::text IS NOT NULL AND payment_id=$2) OR ($3::text IS NOT NULL AND manual_reference=$3))
         ORDER BY deleted_at NULLS FIRST,id LIMIT 1`,
-          [id, paymentId, openingItemId]
+          [id, paymentId, manualReference]
         );
         if (!existing.rows[0])
           await reviewCapacity(client, "bank_deposit_line", 2000);
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- payments was populated by iterating this same body.lines, so every line's key is present
         const payment = payments.get(depositSourceKey(line))!;
+        const manualDescription =
+          "description" in line ? line.description || null : null;
         await client.query(
-          `INSERT INTO bank_deposit_line(id,deposit_id,payment_id,opening_item_id,amount,source_hash,payment_snapshot)
-        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb) ON CONFLICT(id) DO UPDATE SET amount=EXCLUDED.amount,
-          source_hash=EXCLUDED.source_hash,payment_snapshot=EXCLUDED.payment_snapshot,deleted_at=NULL,updated_at=now()`,
+          `INSERT INTO bank_deposit_line(id,deposit_id,payment_id,amount,source_hash,payment_snapshot,manual_reference,manual_description)
+        VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT(id) DO UPDATE SET amount=EXCLUDED.amount,
+          source_hash=EXCLUDED.source_hash,payment_snapshot=EXCLUDED.payment_snapshot,
+          manual_reference=EXCLUDED.manual_reference,manual_description=EXCLUDED.manual_description,
+          deleted_at=NULL,updated_at=now()`,
           [
             existing.rows[0]?.id ?? bankId("bdl"),
             id,
             paymentId,
-            openingItemId,
             depositMajor(depositCents(line.amount)),
             payment.source_hash,
             JSON.stringify(payment),
+            manualReference,
+            manualDescription,
           ]
         );
       }
@@ -167,7 +172,7 @@ export async function saveBankDeposit(
         entity_id: id,
         action: "deposit_saved",
         actor_id: actorId,
-        details: { before, after: deposit },
+        details: { before, after: deposit, ...(origin ? { origin } : {}) },
       });
       return { deposit };
     }

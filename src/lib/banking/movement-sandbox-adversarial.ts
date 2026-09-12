@@ -37,11 +37,7 @@ import type {
   MovementInput,
   MovementPreview,
 } from "./movement-types";
-import {
-  OpeningSandboxApi,
-  openingApiBase,
-  openingItem,
-} from "./opening-sandbox-api";
+import { OpeningSandboxApi } from "./opening-sandbox-api";
 import { withReviewLock, reviewHash } from "./review-common";
 import { transaction } from "./store";
 
@@ -591,82 +587,17 @@ export async function runMovementAdversarial({
     if (pending) await pending.catch(() => undefined);
     holder.release();
   }
-  // V10 source ownership race requires a pre-existing verified setup, never overwrites operator setup.
-  const setup = (
-    await client.query(
-      "SELECT cut_date FROM bank_accounting_setup WHERE id='local-usd'"
-    )
-  ).rows[0];
-  assert(
-    setup,
-    "Parent verifier must provide local-usd setup before V11 opening-clear check"
-  );
-  const cutDate = String(setup.cut_date);
-  assert(cutDate <= day && cutDate > "1900-01-01");
-  const originalDay = new Date(Date.parse(cutDate + "T12:00:00Z") - 86400000)
-    .toISOString()
-    .slice(0, 10);
-  const ev = await test.evidence(prefix + "opening.pdf");
-  const opening = await test.save({
-    expected_revision: 0,
-    kind: "bank",
-    bank_account_id: banks[0],
-    book_balance_cents: 0,
-    statement_balance_cents: 911,
-    statement_evidence_id: ev,
-    books_evidence_id: ev,
-    reference: prefix + "opening",
-    items: [
-      {
-        ...openingItem("outstanding_check", 911, prefix + "opening_check", ev),
-        original_day: originalDay,
-      },
-    ],
-  });
-  const adopted = await test.adopt(opening.opening.id),
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- opening was created above with exactly one item; adopt() mirrors items 1:1
-    item = adopted.items[0]!;
-  const openingTx = await seedMovementTransaction(
-      client,
-      "opening_race_tx",
-      911
-    ),
-    competitor = await make("opening_race", {
-      amount_cents: 911,
-      transaction_id: openingTx,
-    });
-  const competitorPreview = await test.api(
-    `${base}/${competitor.ctx.movement.id}/preview`,
-    { expected_revision: 1 }
-  );
-  const openingRace = await Promise.all([
-    test.api(
-      `${openingApiBase}/items/${item.id}/clear`,
-      {
-        transaction_id: openingTx,
-        expected_source_version: 1,
-        expected_item_hash: item.source_hash,
-      },
-      [200, 409]
-    ),
-    test.api(
-      `${base}/${competitor.ctx.movement.id}/post`,
-      { expected_revision: 1, preview_hash: competitorPreview.preview_hash },
-      [200, 409]
-    ),
-  ]);
-  const count = (
-    await client.query(
-      `SELECT (SELECT count(*) FROM bank_opening_clear c WHERE transaction_id=$1 AND kind='clear'
-      AND NOT EXISTS(SELECT 1 FROM bank_opening_clear r WHERE r.reverses_clear_id=c.id)) +
-    (SELECT count(*) FROM bank_journal_entry e WHERE transaction_id=$1 AND kind='movement'
-      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)) AS n`,
-      [openingTx]
-    )
-  ).rows[0].n;
-  test.check(
-    Number(count) === 1 && openingRace.filter((r) => r.code).length === 1,
-    "Opening clear and movement race cannot create both zero-GL and new-GL claims"
-  );
+  // REMOVED (banking-on-gl port, task-authorized deletion — not a mechanical
+  // rename): this raced the retired `/admin/banking/accounting/openings/items/:id/clear`
+  // against a competing movement POST for the same `transaction_id`, asserting
+  // exactly one of {bank_opening_clear row, bank_journal_entry kind='movement'}
+  // survives. There is no GL equivalent to reconstruct this AS-IS: movement-core.ts
+  // never calls `assertNoJournalClaim` (grepped — only accounting-source.ts's
+  // direct-expense route does), so a movement POST and a `bank_statement_match`
+  // on an `uncleared_<key>` journal line do not compete for the same
+  // `transaction_id` today. Building an equivalent race would mean standing up a
+  // full statement (evidence + declared lines + /matches) inside this adversarial
+  // harness — a new scenario, not a port — and it was left out rather than guessed.
+  // Kept `void loanAccount` below: it was already unused before this removal.
   void loanAccount;
 }

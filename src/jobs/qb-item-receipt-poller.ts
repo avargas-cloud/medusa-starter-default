@@ -30,6 +30,7 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import {
   markStaleRowsAsFailed,
   STANDARD_STALE_CONFIG,
@@ -382,6 +383,7 @@ const holdModRowForPoSync = async (
 
 export default async function qbItemReceiptPoller(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger") as any;
   const knex = (container as any).resolve("__pg_connection__");

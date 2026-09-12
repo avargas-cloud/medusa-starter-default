@@ -1,4 +1,5 @@
 import { getDbPool } from "../../../api/utils/db-pool";
+import { isQbSyncEnabled } from "../sync-enabled";
 
 /**
  * Reclama el derecho a emitir UN `CheckAdd` para un refund, ANTES de tocar el bridge.
@@ -28,13 +29,17 @@ import { getDbPool } from "../../../api/utils/db-pool";
  */
 export type WriteCheckClaim =
   | { ok: true; rowId: string; reused: boolean }
-  | { ok: false; reason: "in_flight" };
+  | { ok: false; reason: "in_flight" | "sync_disabled" };
 
 export async function claimWriteCheckAttempt(input: {
   referenceId: string;
   medusaRefNumber: string;
   payload: Record<string, unknown>;
 }): Promise<WriteCheckClaim> {
+  if (!isQbSyncEnabled()) {
+    return { ok: false, reason: "sync_disabled" };
+  }
+
   const pool = getDbPool();
   const payloadJson = JSON.stringify(input.payload);
 

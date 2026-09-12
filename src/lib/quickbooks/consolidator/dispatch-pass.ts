@@ -8,6 +8,7 @@ import {
   purchaseOperationKey,
   type PurchaseDependencyKnex,
 } from "../../purchase-orders/qb-purchase-dependency-chain";
+import { isQbSyncEnabled } from "../sync-enabled";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -20,6 +21,11 @@ export async function runPurchaseDelegationRepairPass(
   container: MedusaContainer,
   logger: any
 ): Promise<void> {
+  // Only reachable from the (already-gated) qb-pipeline-dispatcher job, but
+  // gated here too: this pass only ever repairs/creates qb_order_pipeline
+  // rows, so with sync off there is nothing for it to do.
+  if (!isQbSyncEnabled()) return;
+
   const knex = container.resolve(
     "__pg_connection__"
   ) as PurchaseDependencyKnex;
@@ -62,6 +68,8 @@ export async function runPurchaseDelegationRepairPass(
           payload
         ),
       });
+      // Already checked isQbSyncEnabled() at the top of this pass.
+      if (!operation) continue;
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
             SET order_pipeline_id = ?, status = 'waiting',
@@ -149,6 +157,12 @@ export async function runPurchaseDelegationRepairPass(
             payload
           ),
         });
+        // Already checked isQbSyncEnabled() at the top of this pass.
+        if (!operation) {
+          logger.warn(
+            `${LOG_PREFIX} skipped ADD dependency repair for receipt pipeline ${row.id} — QB_SYNC_ENABLED=false`
+          );
+        } else {
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
               SET add_order_pipeline_id = ?, status = 'waiting',
@@ -160,6 +174,7 @@ export async function runPurchaseDelegationRepairPass(
         logger.warn(
           `${LOG_PREFIX} 🩹 Repaired missing ADD dependency for receipt pipeline ${row.id}`
         );
+        }
       }
 
       if (
@@ -188,6 +203,8 @@ export async function runPurchaseDelegationRepairPass(
           modPayload
         ),
       });
+      // Already checked isQbSyncEnabled() at the top of this pass.
+      if (!modOperation) continue;
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET mod_order_pipeline_id = ?, mod_status = 'waiting',

@@ -41,6 +41,13 @@ export interface ReplayReport {
   blocked: ReplayBlock[];
 }
 
+/**
+ * `opening_balance` NUNCA se replaya (§2: se postea a mano una vez, en
+ * `2026-04-13`, fuera de la ventana `[from,to]` del replay) — por eso queda
+ * afuera de `ALL_KINDS`, el default de `options.kinds`. `HANDLERS` y
+ * `candidates` igual necesitan una rama explícita para ese kind: el tipo es
+ * `Record<LedgerSourceKind, …>`, así que sin ella no compila.
+ */
 const ALL_KINDS: LedgerSourceKind[] = [
   "pos_invoice",
   "pos_credit_memo",
@@ -69,6 +76,7 @@ async function candidates(
   to: string,
   limit: number
 ): Promise<Candidate[]> {
+  if (kind === "opening_balance") return [];
   if (kind === "pos_invoice") {
     const { rows } = await client.query<Candidate>(
       `SELECT id, CASE WHEN status = 'voided' THEN 'reverse' ELSE 'post' END AS terminal
@@ -177,6 +185,13 @@ type Handler = {
   reverse: (client: PoolClient, id: string, actor: string) => Promise<{ status: string }>;
 };
 
+/** `opening_balance` nunca llega acá: `candidates()` devuelve `[]` y `ALL_KINDS` no lo incluye. */
+async function neverReplayed(): Promise<{ status: string }> {
+  throw new LedgerError("GL_SOURCE_INVALID", {
+    reason: "opening_balance_is_not_replayed",
+  });
+}
+
 const HANDLERS: Record<LedgerSourceKind, Handler> = {
   pos_invoice: { post: postInvoice, reverse: reverseInvoice },
   pos_credit_memo: { post: postCreditMemo, reverse: reverseCreditMemo },
@@ -186,6 +201,7 @@ const HANDLERS: Record<LedgerSourceKind, Handler> = {
   vendor_bill: { post: postVendorBill, reverse: reverseVendorBill },
   vendor_credit: { post: postVendorCredit, reverse: reverseVendorCredit },
   vendor_bill_payment: { post: postBillPayment, reverse: reverseBillPayment },
+  opening_balance: { post: neverReplayed, reverse: neverReplayed },
 };
 
 /**
@@ -203,6 +219,7 @@ export async function replayLedger(
   const limit = options.limit ?? 200;
   const counts = {} as Record<LedgerSourceKind, ReplayCounts>;
   for (const k of ALL_KINDS) counts[k] = emptyCounts();
+  counts.opening_balance = emptyCounts();
   const blocked: ReplayBlock[] = [];
 
   for (const kind of kinds) {

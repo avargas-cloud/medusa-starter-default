@@ -18,8 +18,9 @@ import {
 import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import {
   accessFailure,
-  assertAccounting,
+  assertOwner,
 } from "../../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
 interface AdoptBody {
   po_id?: string;
@@ -46,7 +47,7 @@ interface AdoptBody {
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   try {
-    await assertAccounting(req as AuthenticatedMedusaRequest);
+    await assertOwner(req as AuthenticatedMedusaRequest);
   } catch (error) {
     return accessFailure(res, error);
   }
@@ -297,6 +298,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       expense_lines: reconstructed?.expense_lines.length ?? 0,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Failed to adopt QB bill";
     console.error(`[QB Bill Match adopt txn=${txn_id}] Error:`, error);
     res.status(500).json({ error: msg });

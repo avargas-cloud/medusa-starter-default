@@ -15,8 +15,13 @@ const roots = ["src/lib/banking", "src/api/admin/banking", "src/api/pub/banking"
 /** Fixtures, bootstrap and the sandbox runtime are sandbox-only by contract; migrations are frozen history. */
 const allowlist = [/\/modules\/banking\/migrations\//, /sandbox-runtime\.ts$/, /completion-sandbox-/, /bank-completion-/,
   /-sandbox-(adversarial|permissions|periods|api)\.ts$/, /\/scripts\/tests\//, /\/scripts\/verify\//, /\/lib\/banking\/security\.ts$/];
-/** Ratchet: the exact number of environment predicates today. Dropping one turns red; adding one is a deliberate update. */
-const EXPECTED_PREDICATES = 42;
+/**
+ * Ratchet: the exact number of environment predicates today. Dropping one turns red;
+ * adding one is a deliberate update. banking-on-gl (2026-09-10) retired the openings
+ * feature (`lib/banking/opening-{core,read,funding,validation}.ts` and the
+ * `api/admin/banking/accounting/openings/**` routes) and dropped it from 42 to 41.
+ */
+const EXPECTED_PREDICATES = 41;
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap(name => {
@@ -33,6 +38,7 @@ for (const root of roots) {
     const source = readFileSync(file, "utf8");
     const rel = relative(backend, file);
     files++;
+    let insideHosts = false;
     source.split("\n").forEach((line, index) => {
       const where = `${rel}:${index + 1}`;
       // 1. Any environment literal, in any quoting, in a query-like context.
@@ -49,7 +55,11 @@ for (const root of roots) {
       if (/'sandbox'|'production'/.test(line)) problems.push(`${where}: single-quoted environment literal (SQL fragment?)`);
       // 3. Token prefixes and hosts must not name an environment either.
       if (/["'`](public|access|link)-sandbox-/.test(line) && !/prefix/.test(line)) problems.push(`${where}: sandbox token prefix literal`);
-      if (/sandbox\.plaid\.com|production\.plaid\.com/.test(line) && !/HOSTS\s*=/.test(line)) problems.push(`${where}: Plaid host literal outside the closed table`);
+      // Prettier lays the closed table out over several lines (2026-09-09), so "inside HOSTS = {…}" is what is allowed —
+      // not "on the HOSTS line". A host literal anywhere else is still a leak.
+      if (/HOSTS\s*=\s*\{/.test(line)) insideHosts = true;
+      if (/sandbox\.plaid\.com|production\.plaid\.com/.test(line) && !insideHosts) problems.push(`${where}: Plaid host literal outside the closed table`);
+      if (insideHosts && /\}/.test(line)) insideHosts = false;
     });
   }
 }

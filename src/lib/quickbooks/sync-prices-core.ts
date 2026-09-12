@@ -7,6 +7,7 @@ import { syncInventoryWorkflow } from "../../workflows/sync-inventory";
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { requireBridgeUrl } from "./bridge-url";
 import { requireQbApiKey } from "./qb-api-key";
+import { isQbSyncEnabled } from "./sync-enabled";
 
 // Config — URLs and keys from env vars, no hardcoded secrets
 
@@ -53,6 +54,27 @@ export async function syncPricesCore(
   options: { dryRun?: boolean; onLog?: (line: string) => void } = {}
 ): Promise<SyncPricesResult> {
   const dryRun = options.dryRun || process.env.QB_DRY_RUN === "true";
+
+  // Global QB sync switch (QB_SYNC_ENABLED=false) — checked before the
+  // per-integration DB kill switch below.
+  if (!isQbSyncEnabled()) {
+    options.onLog?.("[QB] QB_SYNC_ENABLED=false. Skipping price sync.");
+    return {
+      success: false,
+      dryRun,
+      stats: {
+        totalLinkedVariants: 0,
+        foundInQb: 0,
+        missingInQb: 0,
+        updatedPrice: 0,
+        updatedWholesale: 0,
+        skippedNoChange: 0,
+        skippedNoPrice: 0,
+        skippedAnomaly: 0,
+      },
+      error: "QB sync is disabled (QB_SYNC_ENABLED=false)",
+    };
+  }
 
   // Master integration kill switch — check DB + env var
   if (!(await isQbIntegrationEnabled())) {

@@ -39,3 +39,9 @@ google-chrome-stable_current_amd64.deb
 .env.backup
 .data/
 .vercel
+
+# qb-gl-import: caché en disco del reporte General Ledger de QuickBooks (1,5 MB por semana)
+.qb-gl-cache/
+
+# qb-docs-backfill: caché de consultas QBXML con líneas (PO, ItemReceipt, Bill, VendorCredit, BillPayment)
+.qb-docs-cache/

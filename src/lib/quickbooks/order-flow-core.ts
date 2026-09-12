@@ -1396,9 +1396,11 @@ export async function processSalesReceiptInQb(receipt: {
       });
   if (!claim.ok) {
     console.log(
-      `${prefix} ⏸ Sales Receipt already in-flight for order ${receipt.orderId} (ref ${receipt.referenceId}) — skipping duplicate attempt`
+      claim.reason === "sync_disabled"
+        ? `${prefix} ⏸ QB_SYNC_ENABLED=false — skipping Sales Receipt for order ${receipt.orderId} (ref ${receipt.referenceId})`
+        : `${prefix} ⏸ Sales Receipt already in-flight for order ${receipt.orderId} (ref ${receipt.referenceId}) — skipping duplicate attempt`
     );
-    return { enabled: true, skipped: true, skipReason: "in_flight" };
+    return { enabled: true, skipped: true, skipReason: claim.reason };
   }
   const rowId = claim.rowId;
 

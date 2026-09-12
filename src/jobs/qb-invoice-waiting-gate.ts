@@ -33,6 +33,7 @@ import {
 import { INVOICE_MODULE } from "../modules/invoices";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 const MAX_ROWS_PER_TICK = 20;
 
 type DispatchPayload = {
@@ -47,6 +48,7 @@ type DispatchPayload = {
 
 export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const invoiceService = container.resolve(INVOICE_MODULE) as any;

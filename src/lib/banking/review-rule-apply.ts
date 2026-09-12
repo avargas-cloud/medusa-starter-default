@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-import { assertNoOpeningClear } from "./opening-guards";
+import { assertNoJournalClaim } from "./journal-claim";
 import { appendReviewEvent, stableReviewHash } from "./review-common";
 import { BankingError } from "./security";
 import { bankId } from "./store";
@@ -183,7 +183,7 @@ export async function applyRuleChanges(
   if (count + changes.filter((change) => !change.source.review).length > 2000)
     throw new BankingError("BANKING_REVIEW_LIMIT", 409);
   for (const { source, rule } of changes) {
-    await assertNoOpeningClear(client, source.id);
+    await assertNoJournalClaim(client, source.id);
     const before = source.review;
     const id = before?.id ?? bankId("brvw");
     await client.query(

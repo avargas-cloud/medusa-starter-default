@@ -84,7 +84,6 @@ export async function receiptContext(
     history,
     consumed_cents: consumed,
     available_cents: available,
-    opening_pending: true,
     coverage: "partial",
   };
 }

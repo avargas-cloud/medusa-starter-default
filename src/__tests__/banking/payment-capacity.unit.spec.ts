@@ -56,7 +56,7 @@ describe("posted deposit and account guards", () => {
   function reader(posted: boolean, closed: boolean) {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("FROM bank_journal_entry entry")) return { rows: posted ? [{ id: "posted" }] : [], rowCount: posted ? 1 : 0 };
-      if (sql.includes("FROM bank_opening_balance b")) return { rows: [], rowCount: 0 };
+      if (sql.includes("FROM bank_journal_line l")) return { rows: [], rowCount: 0 };
       if (sql.includes("bank_day_close")) return { rows: [{ closed }], rowCount: 1 };
       throw new Error(`Unexpected guard query: ${sql}`);
     });
@@ -88,7 +88,7 @@ describe("feed evidence cannot release a posted direct receipt", () => {
     const queries: string[] = [];
     const client = { query: async (sql: string) => {
       queries.push(sql);
-      if (sql.includes("FROM bank_opening_clear claim")) return { rows: [], rowCount: 0 };
+      if (sql.includes("FROM bank_statement_match m")) return { rows: [], rowCount: 0 };
       if (sql.includes("FROM bank_journal_entry entry")) return { rows: directPosted ? [{ id: "posted" }] : [], rowCount: directPosted ? 1 : 0 };
       if (sql.includes("SELECT COUNT(*)")) return { rows: [{ count: "0" }] };
       if (sql.includes("INSERT INTO bank_transaction_review")) return { rows: [result] };

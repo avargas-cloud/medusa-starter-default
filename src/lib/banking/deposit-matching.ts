@@ -9,6 +9,7 @@ import {
 } from "./deposit-projection";
 import { depositAccount, loadBankDeposit } from "./deposit-read";
 import { depositSourceKey, type BankDeposit } from "./deposit-types";
+import { journalClaimExistsSql } from "./journal-claim";
 import {
   validateDepositFee,
   validateDepositFunding,
@@ -25,8 +26,7 @@ export const DEPOSIT_MATCH_FROM_SQL = `FROM bank_transaction t JOIN bank_account
     AND d.currency=upper(t.currency) AND d.net_amount::numeric=-t.amount::numeric`;
 export const DEPOSIT_MATCH_VALID_SQL = `t.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL
   AND bc.environment=${bankingEnvSql()} AND a.type='depository' AND t.status='posted' AND t.amount::numeric<0
-  AND NOT EXISTS(SELECT 1 FROM bank_opening_clear claim WHERE claim.transaction_id=t.id AND claim.kind='clear'
-    AND NOT EXISTS(SELECT 1 FROM bank_opening_clear undo WHERE undo.reverses_clear_id=claim.id))
+  AND NOT ${journalClaimExistsSql("t.id")}
   AND d.deleted_at IS NULL AND d.status='ready' AND NOT ${DEPOSIT_STALE_SQL}
   AND NOT EXISTS(SELECT 1 FROM bank_transaction_review reserved WHERE reserved.matched_deposit_id=d.id
     AND reserved.transaction_id<>t.id AND reserved.status<>'excluded' AND reserved.deleted_at IS NULL)`;

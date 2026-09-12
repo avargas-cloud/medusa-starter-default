@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { getDbPool } from "../api/utils/db-pool";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 const LOG_PREFIX = "[QB-VENDOR-BILL-PAYMENT-MONITOR]";
 const BATCH_SIZE = 20;
@@ -18,6 +19,7 @@ export default async function qbVendorBillPaymentMonitor(
   container: MedusaContainer
 ): Promise<void> {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
   if (process.env.QB_ORDER_FLOW_ENABLED !== "true") return;
 
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);

@@ -1,4 +1,5 @@
 import { getDbPool } from "../../../api/utils/db-pool";
+import { isQbSyncEnabled } from "../sync-enabled";
 
 /**
  * Reclama el derecho a emitir UN `SalesReceiptAdd` para una orden/invoice,
@@ -30,7 +31,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
  */
 export type SalesReceiptClaim =
   | { ok: true; rowId: string; reused: boolean }
-  | { ok: false; reason: "in_flight" };
+  | { ok: false; reason: "in_flight" | "sync_disabled" };
 
 export async function claimSalesReceiptAttempt(input: {
   orderId: string;
@@ -38,6 +39,10 @@ export async function claimSalesReceiptAttempt(input: {
   medusaRefNumber?: string | null;
   payload: Record<string, unknown>;
 }): Promise<SalesReceiptClaim> {
+  if (!isQbSyncEnabled()) {
+    return { ok: false, reason: "sync_disabled" };
+  }
+
   const pool = getDbPool();
   const payloadJson = JSON.stringify(input.payload);
 

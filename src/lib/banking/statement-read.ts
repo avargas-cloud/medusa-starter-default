@@ -60,8 +60,11 @@ export async function statementContext(
     blockers.push(...line.blockers);
   }
   blockers.push(...statementDocumentBlockers({ ...statement, lines }));
+  let mappedOpening: Awaited<ReturnType<typeof statementBank>>["opening"] | null =
+    null;
   try {
     const mapped = await statementBank(client, statement.bank_account_id);
+    mappedOpening = mapped.opening;
     if (
       mapped.account.id !== statement.account_list_id ||
       mapped.opening.id !== statement.opening_id
@@ -122,8 +125,9 @@ export async function statementContext(
     }
   } else if (
     statement.predecessor_id ||
-    statement.from !== book.opening.cut_date ||
-    statement.opening_balance_cents !== book.opening.statement_balance_cents
+    !mappedOpening ||
+    statement.from !== mappedOpening.cut_date ||
+    statement.opening_balance_cents !== mappedOpening.statement_balance_cents
   )
     blockers.push("BANKING_STATEMENT_PREDECESSOR_REQUIRED");
   const feedGaps = await client.query(

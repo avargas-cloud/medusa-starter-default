@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
 import { bridgeFetch } from "../../../../../lib/quickbooks/client/core";
+import { QbSyncDisabledError } from "../../../../../lib/quickbooks/sync-enabled";
 
 /**
  * DELETE /admin/quickbooks/pipeline
@@ -39,7 +40,10 @@ export async function DELETE(
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      result.bridge = { error: msg };
+      result.bridge =
+        err instanceof QbSyncDisabledError
+          ? { error: msg, code: "QB_SYNC_DISABLED" }
+          : { error: msg };
     }
   }
 

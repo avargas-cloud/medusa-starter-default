@@ -9,6 +9,7 @@ import {
   getActorUserId,
   UnauthenticatedError,
 } from "../../../purchase-orders/_lib/auth";
+import { isQbSyncEnabled } from "../../../../../lib/quickbooks/sync-enabled";
 
 type KnexLike = {
   raw: (
@@ -30,6 +31,13 @@ export async function POST(
         .json({ error: error.message, code: error.code });
     }
     throw error;
+  }
+
+  if (!isQbSyncEnabled()) {
+    return res.status(409).json({
+      error: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false).",
+      code: "QB_SYNC_DISABLED",
+    });
   }
 
   const { id } = req.params as { id: string };

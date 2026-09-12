@@ -21,10 +21,14 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+
 export default async function qbMetadataInitSubscriber({
   event: { data },
   container,
 }: SubscriberArgs<{ id: string }>) {
+  if (!isQbSyncEnabled()) return;
+
   const orderId: string = data.id;
   if (!orderId) return;
 

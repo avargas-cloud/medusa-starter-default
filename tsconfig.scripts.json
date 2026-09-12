@@ -1,0 +1,19 @@
+{
+  "extends": "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend"
+  },
+  "include": [
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/backfill-qb-purchases.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/verify/verify-qb-purchases-backfill.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/relink-qb-backfill-bills.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/lib/qb-backfill/relink-bills.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/backfill-qb-sales.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/sync/backfill-qb-sales-apply.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/verify/verify-qb-sales-backfill.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/src/scripts/fix/reprice-backfilled-qb-orders.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/.worktrees/bankgl/backend/.medusa/types/*"
+  ],
+  "exclude": []
+}

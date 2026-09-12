@@ -21,7 +21,8 @@ export type BankingKeyRing = {
 const SANDBOX_TARGET = {
   hosts: ["localhost", "127.0.0.1"],
   port: "5499",
-  pathname: "/medusa",
+  // One sandbox DB per session (docs/SANDBOX.md, 2026-09-10): `medusa` plus clones such as `medusa_gl`, `medusa_bgl`.
+  pathname: /^\/medusa(_[a-z0-9]{1,32})?$/,
 };
 const HEX_KEY = /^[a-f0-9]{64}$/i;
 const PRODUCTION_KEY_ID = /^production-v[1-9][0-9]{0,3}$/;
@@ -54,7 +55,7 @@ function isSandboxTarget(target: {
     ["postgres:", "postgresql:"].includes(target.protocol) &&
     SANDBOX_TARGET.hosts.includes(target.host) &&
     target.port === SANDBOX_TARGET.port &&
-    target.pathname === SANDBOX_TARGET.pathname
+    SANDBOX_TARGET.pathname.test(target.pathname)
   );
 }
 function httpsUrlError(value: string | undefined, code: string): string | null {

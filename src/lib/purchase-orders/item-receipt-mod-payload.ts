@@ -29,6 +29,7 @@ import {
 } from "./qb-purchase-dependency-chain";
 import { randomUUID } from "crypto";
 import { qbItemReceiptIdentityMemo } from "./qb-item-receipt-identity";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 export type KnexRaw = {
   raw: (
@@ -217,6 +218,9 @@ export async function enqueueItemReceiptModAtomic(
   pipelineId: string,
   payload: ItemReceiptModPayload
 ): Promise<boolean> {
+  // Global QB sync switch: no mod_status flip, no qb_order_pipeline row.
+  if (!isQbSyncEnabled()) return false;
+
   const res = await knex.raw(
     `UPDATE qb_item_receipt_pipeline
         SET mod_status        = 'waiting',
@@ -251,6 +255,11 @@ export async function enqueueItemReceiptModAtomic(
       orderPayload
     ),
   });
+  // Already checked isQbSyncEnabled() above — this null branch is defense
+  // against a future caller change, not an expected path. The mod_status
+  // flip already committed, so surface it as claimed-but-unqueued (false)
+  // rather than leave the row silently stuck at 'waiting' forever.
+  if (!operation) return false;
   await knex.raw(
     `UPDATE qb_item_receipt_pipeline
         SET mod_order_pipeline_id = ?, updated_at = NOW()

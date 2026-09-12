@@ -13,6 +13,7 @@ import {
   resolveActorId,
 } from "../../../../../lib/pos/supervisor-pin-guard";
 import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+import { isQbSyncEnabled } from "../../../../../lib/quickbooks/sync-enabled";
 
 /**
  * POST /admin/customer-payments/:id/transfer
@@ -282,7 +283,7 @@ export async function POST(
         dependsOn = latest.id;
       }
 
-      if (!coalesced) {
+      if (!coalesced && isQbSyncEnabled()) {
         await client.query(
           `INSERT INTO qb_order_pipeline
              (reference_id, reference_type, step, status, depends_on, payload, retry_count)

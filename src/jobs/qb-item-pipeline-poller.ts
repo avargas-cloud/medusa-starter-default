@@ -11,6 +11,7 @@ import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meil
 import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-inventory-item-meilisearch";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 // Read at call time so tests can override QB_BRIDGE_URL after module load.
 const bridgeUrl = (): string =>
@@ -272,6 +273,7 @@ const resubmitToBridge = async (
 
 export default async function qbItemPipelinePoller(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);

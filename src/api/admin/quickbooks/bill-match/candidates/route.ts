@@ -6,8 +6,9 @@ import { queryVendorBills } from "../_lib/bill-query";
 import { classifyMismatch, classifyQbLinkState } from "../_lib/classify";
 import {
   accessFailure,
-  assertAccounting,
+  assertOwner,
 } from "../../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
 /**
  * GET /admin/quickbooks/bill-match/candidates?po_id=&from=&to=
@@ -25,7 +26,7 @@ function fmtUtc(dt: Date): string {
 
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   try {
-    await assertAccounting(req as AuthenticatedMedusaRequest);
+    await assertOwner(req as AuthenticatedMedusaRequest);
   } catch (error) {
     return accessFailure(res, error);
   }
@@ -137,6 +138,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
       candidates,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Failed to query QB bill candidates";
     console.error(`[QB Bill Match candidates po=${poId}] Error:`, error);
     res.status(500).json({ error: msg });

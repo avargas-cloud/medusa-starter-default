@@ -13,6 +13,7 @@ import { pgAsPinConn } from "../../../lib/pos/verify-supervisor-pin";
 import { handleDraftOrderUpdated } from "../../../lib/quickbooks/handlers/handle-draft-order-updated";
 import { handleOrderUpdated } from "../../../lib/quickbooks/handlers/handle-order-updated";
 import { getEstimateTxnId, getSoTxnId } from "../../../lib/quickbooks/qb-metadata-types";
+import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
 
 /**
  * POST /admin/pos-transfer
@@ -405,7 +406,7 @@ async function transferLinkedPayments(
         ]
       );
 
-      if (needsQb || dependsOn) {
+      if ((needsQb || dependsOn) && isQbSyncEnabled()) {
         await client.query(
           `INSERT INTO qb_order_pipeline
              (reference_id, reference_type, step, status, depends_on, payload, retry_count)

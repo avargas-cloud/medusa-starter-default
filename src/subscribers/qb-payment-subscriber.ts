@@ -1,6 +1,7 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 
 import { handlePosPaymentUnapplied } from "../lib/quickbooks/handlers/handle-pos-payment-unapplied";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 // ⚠️ ARCHITECTURE NOTE:
 // pos.payment.created  → handled DIRECTLY in /api/admin/finance/payments/route.ts  (setTimeout)
@@ -12,6 +13,8 @@ export default async function qbPaymentSubscriber({
   event: { name, data },
   container,
 }: SubscriberArgs<any>) {
+  if (!isQbSyncEnabled()) return;
+
   const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
   const logger = container.resolve("logger");
 

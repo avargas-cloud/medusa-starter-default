@@ -7,6 +7,7 @@ import {
   MAX_POLL_ATTEMPTS,
 } from "../../../../../lib/quickbooks/client/core";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
 export interface StagedPaymentRecord {
   id: number;
@@ -371,6 +372,7 @@ export async function POST(
 
     res.status(400).json({ error: "action must be 'sync' or 'apply'" });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Operation failed";
     console.error("[QB Staged Payments POST] Error:", error);
     res.status(500).json({ error: msg });

@@ -17,6 +17,7 @@ import { bridgeFetch } from "../lib/quickbooks/client/core";
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 const LOG_PREFIX = "[QB-RECOVERY]";
 
 interface StuckLog {
@@ -223,6 +224,7 @@ async function applyRecoveryResult(
 
 export default async function qbOperationRecovery(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   if (!(await isQbIntegrationEnabled())) return;
 

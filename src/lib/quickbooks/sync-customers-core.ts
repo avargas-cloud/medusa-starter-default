@@ -8,6 +8,7 @@ import postgres from "postgres";
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { requireBridgeUrl } from "./bridge-url";
 import { requireQbApiKey } from "./qb-api-key";
+import { isQbSyncEnabled } from "./sync-enabled";
 
 // Config — from env vars
 
@@ -108,6 +109,22 @@ export async function syncCustomersCore(
   };
 
   try {
+    // Global QB sync switch (QB_SYNC_ENABLED=false)
+    if (!isQbSyncEnabled()) {
+      logger.info("[QB] QB_SYNC_ENABLED=false. Skipping customer sync.");
+      return {
+        success: false,
+        stats: {
+          totalInQb: 0,
+          alreadyInMedusa: 0,
+          imported: 0,
+          emailsUpdated: 0,
+          errors: 0,
+        },
+        error: "QB sync is disabled (QB_SYNC_ENABLED=false)",
+      };
+    }
+
     // Master integration kill switch
     if (!(await isQbIntegrationEnabled())) {
       logger.info("[QB] Integration is DISABLED. Skipping customer sync.");

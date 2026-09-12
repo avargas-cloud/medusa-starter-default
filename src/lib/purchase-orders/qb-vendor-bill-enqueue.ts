@@ -69,6 +69,7 @@ import {
   type CostTruncationLine,
 } from "./qb-vendor-bill-cost-truncation-guard";
 import { resolveVendorIdentityForBill } from "./vendor-bill-vendor-identity";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 export type EnqueueKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
@@ -130,6 +131,9 @@ export async function enqueueQbVendorBillAdd(
   knex: EnqueueKnex,
   vendorBillId: string
 ): Promise<EnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
@@ -691,6 +695,11 @@ export async function enqueueQbVendorBillAdd(
       orderPayload
     ),
   });
+  // Already checked isQbSyncEnabled() at the top of this function — defense
+  // against a future caller change, not an expected path.
+  if (!operation) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   await knex.raw(
     `UPDATE qb_vendor_bill_pipeline
         SET order_pipeline_id = ?, updated_at = NOW()

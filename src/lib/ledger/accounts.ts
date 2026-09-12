@@ -5,8 +5,12 @@ import {
   AccountMap,
   LedgerAccount,
   LedgerError,
+  OPENING_ACCOUNT_MAP_KEYS,
+  OpeningAccountMap,
   PURCHASE_ACCOUNT_MAP_KEYS,
   PurchaseAccountMap,
+  YEAR_CLOSE_ACCOUNT_MAP_KEYS,
+  YearCloseAccountMap,
 } from "./types";
 
 type MapRow = {
@@ -35,10 +39,11 @@ function toAccount(row: MapRow): LedgerAccount {
 }
 
 /**
- * §3/§5: resuelve las 9 keys de `gl_account_map` contra el snapshot congelado
- * en la fila (no vuelve a leer `qb_account` para currency/type — eso es lo que
- * mantiene la pantalla y el motor sincronizados con lo que un owner aprobó) más
- * el `normal_balance` VIVO de `qb_account` (informativo, no valida contra él).
+ * Las 9 keys históricas de `gl_account_map` — el default de `loadAccountMap`
+ * cuando el caller no pide un subconjunto explícito. `opening_balance_equity`
+ * (Banking-on-GL §2/§6) queda AFUERA a propósito: sólo la exige quien postea
+ * `opening_balance`, así que un ambiente sin esa fila sembrada no rompe los
+ * documentos existentes — la key es opcional para todo lo demás.
  */
 async function loadAccountMapByKeys(
   client: PoolClient,
@@ -74,11 +79,29 @@ export async function loadAccountMap(client: PoolClient): Promise<AccountMap> {
  * — un ambiente sin sembrarlas no debe romper plan-1). Una sola query trae
  * las 9+2 keys.
  */
+/** Banking-on-GL: las 9 keys + `opening_balance_equity`; sólo lo pide `postOpeningBalance`. */
+export async function loadOpeningAccountMap(
+  client: PoolClient
+): Promise<OpeningAccountMap> {
+  const keys = [...ACCOUNT_MAP_KEYS, ...OPENING_ACCOUNT_MAP_KEYS];
+  return (await loadAccountMapByKeys(client, keys)) as OpeningAccountMap;
+}
+
 export async function loadPurchaseAccountMap(
   client: PoolClient
 ): Promise<PurchaseAccountMap> {
   const keys = [...ACCOUNT_MAP_KEYS, ...PURCHASE_ACCOUNT_MAP_KEYS];
   return (await loadAccountMapByKeys(client, keys)) as PurchaseAccountMap;
+}
+
+/** Cierre de ejercicio: sólo `retained_earnings` — no exige las 9 base. */
+export async function loadYearCloseAccountMap(
+  client: PoolClient
+): Promise<YearCloseAccountMap> {
+  return (await loadAccountMapByKeys(
+    client,
+    YEAR_CLOSE_ACCOUNT_MAP_KEYS
+  )) as YearCloseAccountMap;
 }
 
 /**

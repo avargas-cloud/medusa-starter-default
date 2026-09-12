@@ -1,7 +1,7 @@
 /**
  * src/api/admin/inventory-counts/[id]/void/route.ts
  *
- * POST /admin/inventory-counts/:id/void (manager-only)
+ * POST /admin/inventory-counts/:id/void (manager-only + supervisor PIN)
  *
  * Voids a previously approved count. Reverses the original stock deltas in
  * Medusa, marks the count 'voided', and queues a TxnVoidRq to QuickBooks
@@ -19,6 +19,13 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import type { Knex } from "knex";
 
 import { releaseClaimsForCount } from "../../../../../lib/inventory-count/item-claims";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import { voidInventoryCountWorkflow } from "../../../../../workflows/inventory-count/void-inventory-count";
 import {
   ManagerRoleRequiredError,
@@ -78,6 +85,27 @@ export async function POST(
     });
   }
 
+  const knex = req.scope.resolve(
+    ContainerRegistrationKeys.PG_CONNECTION
+  ) as Knex;
+
+  // ── Supervisor PIN ────────────────────────────────────────────────────────
+  // Void revierte stock y manda un TxnVoid a QuickBooks: `requireManager` dice
+  // QUIÉN puede voidear y el PIN dice que un supervisor lo autorizó.
+  // El PIN viaja en el header `x-supervisor-pin` (un admin puede mandar
+  // `confirm`); se verifica DESPUÉS del 404 y del 409 de estado para que un id
+  // malo o un conteo ya cerrado no quemen un intento del throttle.
+  const pinGuard = await guardSupervisorPin({
+    scope: req.scope as unknown as { resolve: (k: string) => unknown },
+    db: knex as PinConn,
+    pin: extractSupervisorPin(req),
+    actorId: resolveActorId(req),
+  });
+  if (!pinGuard.ok) {
+    const { status, body } = pinGuardResponse(pinGuard);
+    return res.status(status).json(body);
+  }
+
   // Lines that actually moved stock (applied or overridden) must be reversed.
   // Skipped / blocked / verified lines never touched stock — leave them.
   const allLines = await service.listInventoryCountLines(
@@ -129,10 +157,7 @@ export async function POST(
     // Void is terminal: nothing this count holds will ever be applied, so any
     // items it was still holding (a partially_applied count keeps claims on its
     // blocked lines) go back to the pool.
-    await releaseClaimsForCount(
-      req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION) as Knex,
-      id
-    );
+    await releaseClaimsForCount(knex, id);
 
     return res.status(200).json({
       inventory_count_id: id,
