@@ -8,6 +8,10 @@ import {
   requireFullAdmin,
 } from "../../../../../lib/accounting/month-close-auth";
 import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
+import {
+  ACCOUNT_TYPE_ORDER,
+  activeEntryPredicate,
+} from "../../../../../lib/ledger/reports";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -37,31 +41,13 @@ interface TrialBalanceRow {
   has_activity: boolean;
 }
 
-/** QB's standard chart-of-accounts group order (Bank first, OtherExpense last). */
-const ACCOUNT_TYPE_ORDER = [
-  "Bank",
-  "AccountsReceivable",
-  "OtherCurrentAsset",
-  "FixedAsset",
-  "OtherAsset",
-  "AccountsPayable",
-  "CreditCard",
-  "OtherCurrentLiability",
-  "LongTermLiability",
-  "Equity",
-  "Income",
-  "CostOfGoodsSold",
-  "Expense",
-  "OtherIncome",
-  "OtherExpense",
-];
-
 /**
  * Every active chart-of-accounts row (`qb_account`, active, non-deleted,
  * excluding NonPosting) LEFT JOINed with journal lines (legacy + completion +
  * document families) rolled up per account, over the requested `[from, to]`
- * window. "Active" line = no other entry reverses it (a reversal entry counts
- * its own lines — nothing reverses a reversal). Accounts without movement
+ * window. "Active" entry = `activeEntryPredicate` (lib/ledger/reports): neither
+ * reversed nor a reversal — until 2026-09-11 this kept the reversal's mirrored
+ * lines and netted every reversed pair to −original. Accounts without movement
  * come back zeroed with `has_activity: false`; `?include_zero=false` drops
  * them. Amounts travel as strings (bigint-safe); the caller sums with BigInt,
  * never Number.
@@ -92,11 +78,7 @@ export async function GET(
     `WITH active_entries AS (
        SELECT e.id, e.day
        FROM bank_journal_entry e
-       WHERE e.deleted_at IS NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM bank_journal_entry r
-           WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL
-         )
+       WHERE ${activeEntryPredicate("e")}
      ),
      opening AS (
        SELECT l.account_list_id,

@@ -93,10 +93,53 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     "accounting/month-close/resolve-delta/route.ts",
     "accounting/month-close/reverse-adjustment/route.ts",
     "reports/profit-loss/payroll/route.ts",
+    "accounting/payables/route.ts",
+    "accounting/ledger/account-map/route.ts",
+    "accounting/ledger/entries/route.ts",
+    "accounting/ledger/trial-balance/route.ts",
+    "accounting/ledger/opening-balances/route.ts",
+    "accounting/ledger/opening-balances/evidence/route.ts",
+    "accounting/ledger/opening-balances/[accountListId]/reverse/route.ts",
   ].map((file) => ({
     file,
     call: "requireFullAdmin(",
     why: "delega en lib/accounting/month-close-auth.ts",
+  })),
+  ...[
+    "accounting/ledger/register/route.ts",
+    "accounting/ledger/profit-loss/route.ts",
+    "accounting/ledger/balance-sheet/route.ts",
+    "accounting/ledger/sales-tax/route.ts",
+    "accounting/accounts/route.ts",
+  ].map((file) => ({
+    file,
+    call: "requireAccountingOr403(",
+    why: "delega en lib/ledger/reports/route-common.ts (GL reports; accounts POST exige además assertOwner)",
+  })),
+  /**
+   * E1 (gl-documents): las rutas de documentos del GL. Si todavía no existen
+   * en este árbol el chequeo 1 lo dice ("NO EXISTE") — una lista que apunta a
+   * la nada aprueba en vacío, así que se declaran por NOMBRE desde ya.
+   */
+  ...[
+    "accounting/journal-entries/route.ts",
+    "accounting/journal-entries/[id]/route.ts",
+    "accounting/journal-entries/[id]/post/route.ts",
+    "accounting/journal-entries/[id]/void/route.ts",
+    "accounting/checks/route.ts",
+    "accounting/checks/[id]/route.ts",
+    "accounting/checks/[id]/post/route.ts",
+    "accounting/checks/[id]/void/route.ts",
+    "accounting/transfers/route.ts",
+    "accounting/transfers/[id]/route.ts",
+    "accounting/transfers/[id]/post/route.ts",
+    "accounting/transfers/[id]/void/route.ts",
+    "accounting/ledger/year-close/route.ts",
+    "accounting/ledger/year-close/reverse/route.ts",
+  ].map((file) => ({
+    file,
+    call: "assertAccounting(",
+    why: "documentos del GL (E1) — guard directo",
   })),
   ...[
     "inventory-counts/[id]/approve/route.ts",
@@ -157,6 +200,7 @@ const MUST_REQUIRE_OWNER: Entry[] = [
   "search/vendors/sync/route.ts",
   "settings/payment-batch-cutoff/route.ts",
   "settings/shipping-dispatch-provider/route.ts",
+  "accounting/accounts/[listId]/route.ts",
 ].map((file) => ({ file, call: "assertOwner(", why: "pantalla de Admin Tools" }));
 
 // ── 1 + 2 · cada ruta declarada llama a su guard ─────────────────────────────
@@ -202,6 +246,10 @@ const DELEGATES: Array<{ file: string; calls: string[] }> = [
   },
   {
     file: "src/api/admin/inventory-counts/_lib/auth.ts",
+    calls: ["assertAccounting("],
+  },
+  {
+    file: "src/lib/ledger/reports/route-common.ts",
     calls: ["assertAccounting("],
   },
 ];
