@@ -6,7 +6,7 @@ import { deriveBilledStatus } from "../../../purchase-orders/_lib/billed-status"
 import { queryVendorBills } from "../_lib/bill-query";
 import {
   accessFailure,
-  assertAccounting,
+  assertOwner,
 } from "../../../../../lib/pos/access-level";
 import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
@@ -44,7 +44,7 @@ function fmtUtc(dt: Date): string {
 
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   try {
-    await assertAccounting(req as AuthenticatedMedusaRequest);
+    await assertOwner(req as AuthenticatedMedusaRequest);
   } catch (error) {
     return accessFailure(res, error);
   }

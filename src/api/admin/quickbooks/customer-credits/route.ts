@@ -12,7 +12,7 @@ import {
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import {
   accessFailure,
-  assertAccounting,
+  assertOwner,
 } from "../../../../lib/pos/access-level";
 import { respondQbSyncDisabled } from "../../../../lib/quickbooks/qb-sync-disabled-response";
 
@@ -36,7 +36,7 @@ export async function GET(
   res: MedusaResponse
 ): Promise<void> {
   try {
-    await assertAccounting(req as AuthenticatedMedusaRequest);
+    await assertOwner(req as AuthenticatedMedusaRequest);
   } catch (error) {
     return accessFailure(res, error);
   }

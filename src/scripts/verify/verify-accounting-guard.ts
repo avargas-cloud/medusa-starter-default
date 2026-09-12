@@ -76,13 +76,6 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     "finance/qb-refunds/[id]/void/route.ts",
     "finance/qb-refunds/[id]/revert/route.ts",
     "finance/qb-refunds/[id]/confirm-qb-cleanup/route.ts",
-    "quickbooks/bill-match/candidates/route.ts",
-    "quickbooks/bill-match/candidates-by-vendor/route.ts",
-    "quickbooks/bill-match/unbilled-pos/route.ts",
-    "quickbooks/bill-match/adopt/route.ts",
-    "quickbooks/bill-match/undo/route.ts",
-    "quickbooks/customer-credits/route.ts",
-    "quickbooks/customer-credits/import/route.ts",
     "pos/price-batches/[id]/approve/route.ts",
     "pos/price-batches/[id]/reject/route.ts",
   ].map((file) => ({ file, call: "assertAccounting(", why: "guard directo" })),
@@ -178,6 +171,15 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
 
 /** Pantallas de Admin Tools: owner y nadie más. */
 const MUST_REQUIRE_OWNER: Entry[] = [
+  // Herramientas de la era QuickBooks (Import QB Credit · Match QB Bills): pasaron
+  // de Accounting a System Tools el 2026-09-12 — sólo el owner.
+  "quickbooks/bill-match/candidates/route.ts",
+  "quickbooks/bill-match/candidates-by-vendor/route.ts",
+  "quickbooks/bill-match/unbilled-pos/route.ts",
+  "quickbooks/bill-match/adopt/route.ts",
+  "quickbooks/bill-match/undo/route.ts",
+  "quickbooks/customer-credits/route.ts",
+  "quickbooks/customer-credits/import/route.ts",
   "pos-users/route.ts",
   "pos-users/[id]/route.ts",
   "pos-users/invite/route.ts",

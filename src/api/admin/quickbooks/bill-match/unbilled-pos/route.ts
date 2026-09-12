@@ -5,7 +5,7 @@ import { Client } from "pg";
 import { deriveBilledStatus } from "../../../purchase-orders/_lib/billed-status";
 import {
   accessFailure,
-  assertAccounting,
+  assertOwner,
 } from "../../../../../lib/pos/access-level";
 
 /**
@@ -53,7 +53,7 @@ interface QueueVendor {
 
 export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   try {
-    await assertAccounting(req as AuthenticatedMedusaRequest);
+    await assertOwner(req as AuthenticatedMedusaRequest);
   } catch (error) {
     return accessFailure(res, error);
   }
