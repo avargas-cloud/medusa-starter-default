@@ -26,11 +26,13 @@ import {
   type KnexRaw,
 } from "../lib/purchase-orders/item-receipt-mod-payload";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 const TAG = "[qb-drift-detector]";
 
 export default async function qbDriftDetector(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger") as {
     warn: (m: string) => void;

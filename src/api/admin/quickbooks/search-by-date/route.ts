@@ -10,6 +10,7 @@ import {
   accessFailure,
   assertOwner,
 } from "../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../lib/quickbooks/qb-sync-disabled-response";
 
 type DateSearchDocType = "InventoryAdjustment" | "ItemReceipt";
 
@@ -171,6 +172,7 @@ export async function POST(
       results,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg =
       error instanceof Error ? error.message : "Failed to search QB transactions";
     console.error(`[QB Search By Date ${docType} ${date}] Error:`, error);

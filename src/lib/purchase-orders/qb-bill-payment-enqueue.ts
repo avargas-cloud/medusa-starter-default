@@ -39,6 +39,7 @@ import {
 } from "../quickbooks/bill-payment-add";
 import { buildTxnVoidQbxml } from "../quickbooks/txn-void-add";
 import { toQbRefNumber } from "../quickbooks/qb-ref-number";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 export type EnqueueKnex = PurchaseDependencyKnex;
 
@@ -305,6 +306,9 @@ export async function enqueueBillPaymentAdd(
   knex: EnqueueKnex,
   vendorBillPaymentId: string
 ): Promise<EnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
@@ -337,6 +341,12 @@ export async function enqueueBillPaymentAdd(
     operationKey: purchaseOperationKey("bill_payment_add", vendorBillPaymentId, payload),
   });
 
+  // Already checked isQbSyncEnabled() at the top of this function — defense
+  // against a future caller change, not an expected path.
+  if (!operation) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
+
   if (!facts.ready) {
     const blockerOpId = await findBlockingBillAddOperationId(
       knex,
@@ -357,6 +367,9 @@ export async function enqueueBillPaymentVoid(
   knex: EnqueueKnex,
   vendorBillPaymentId: string
 ): Promise<EnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
@@ -412,6 +425,12 @@ export async function enqueueBillPaymentVoid(
     qbTxnId: payment.qb_txn_id,
     operationKey: purchaseOperationKey("bill_payment_void", payment.id, payload),
   });
+
+  // Already checked isQbSyncEnabled() at the top of this function — defense
+  // against a future caller change, not an expected path.
+  if (!operation) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
 
   return { queued: true, pipelineRowId: operation.id };
 }

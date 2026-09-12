@@ -18,6 +18,7 @@ import {
   type QbCreditDocType,
 } from "../_lib/qb-credit-query";
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 import {
   accessFailure,
   assertAccounting,
@@ -282,6 +283,7 @@ export async function POST(
       doc_type,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg =
       error instanceof Error ? error.message : "Failed to import QB credit";
     console.error(`[QB Import Credit ${txn_id}] Error:`, error);

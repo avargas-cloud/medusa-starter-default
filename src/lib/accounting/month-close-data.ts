@@ -1,4 +1,5 @@
 import { avgCostDollars } from "../cost/cost-sql";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 import { etMidnightUtc } from "../date/et";
 import {
   COGS_JOIN,
@@ -323,6 +324,12 @@ export async function loadOpenDocuments(
 }
 
 export function buildReadiness(open: OpenDocumentCounts) {
+  // While QB_SYNC_ENABLED=false, nothing is being dispatched to QuickBooks by
+  // design — a pile of `qb_order_pipeline` rows sitting pending/waiting is the
+  // EXPECTED state of the switch, not an open-document problem the operator
+  // needs to clear before closing the month. Ignore it as a blocker (still
+  // reported as a count — just not counted toward `has_blockers`).
+  const qbUnsyncedBlocks = isQbSyncEnabled() ? open.qb_unsynced : 0;
   return {
     warnings: {
       orders: open.orders,
@@ -338,7 +345,7 @@ export function buildReadiness(open: OpenDocumentCounts) {
     has_warnings:
       open.orders + open.purchase_orders + open.invoices + open.vendor_bills > 0,
     has_blockers:
-      open.credit_memos + open.inventory_adjustments + open.qb_unsynced > 0,
+      open.credit_memos + open.inventory_adjustments + qbUnsyncedBlocks > 0,
   };
 }
 

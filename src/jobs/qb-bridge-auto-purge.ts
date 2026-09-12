@@ -3,6 +3,7 @@ import { MedusaContainer } from "@medusajs/framework/types";
 import { bridgeFetch } from "../lib/quickbooks/client/core";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 /**
  * Nightly auto-purge of the QB Web Connector bridge queue history.
  *
@@ -34,6 +35,7 @@ export default async function qbBridgeAutoPurge(
   container: MedusaContainer
 ): Promise<void> {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger");
 

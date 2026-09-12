@@ -38,6 +38,7 @@ import {
   cacheEditSequence,
   requireQbCustomer,
 } from "../lib/quickbooks/qb-pipeline";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 const LOG_PREFIX = "[QB-DRAFT]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -62,6 +63,9 @@ async function qbDraftOrderSubscriber({
   container,
 }: SubscriberArgs<any>) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+
+  // ── Guard: global QB sync switch ─────────────────────────────────────────
+  if (!isQbSyncEnabled()) return;
 
   // ── Guard: feature flag ──────────────────────────────────────────────────
   if (!ENABLED) {

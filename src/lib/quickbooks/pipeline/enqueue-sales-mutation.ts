@@ -1,4 +1,7 @@
+import { randomUUID } from "crypto";
+
 import { getDbPool } from "../../../api/utils/db-pool";
+import { isQbSyncEnabled } from "../sync-enabled";
 import type { PipelineStep } from "./types";
 
 /**
@@ -89,7 +92,14 @@ export interface EnqueueSalesMutationInput {
 
 export interface EnqueueSalesMutationResult {
   rowId: string;
-  mode: "inserted" | "coalesced";
+  /**
+   * "skipped" — QB_SYNC_ENABLED=false: no row was written to
+   * `qb_order_pipeline`. `rowId` is a fabricated UUID that never exists in
+   * the table — callers that thread it through submit/confirm/fail (which
+   * are all `UPDATE ... WHERE id = $1`) get a harmless zero-row no-op, never
+   * an error, so no caller needs to special-case this mode.
+   */
+  mode: "inserted" | "coalesced" | "skipped";
 }
 
 /**
@@ -145,6 +155,9 @@ export async function enqueueSalesMutation(
     throw new Error(
       `enqueueSalesMutation: step "${input.step}" is not a sales mutation step`
     );
+  }
+  if (!isQbSyncEnabled()) {
+    return { rowId: randomUUID(), mode: "skipped" };
   }
   // payment_txndate_change resolves its target document LIVE at dispatch (an
   // SR-embedded payment has no ReceivePayment TxnID to carry) — see the

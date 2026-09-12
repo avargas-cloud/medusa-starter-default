@@ -4,6 +4,7 @@ import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
 import { buildPrefVendorRef } from "../../../lib/quickbooks/pref-vendor-ref";
 import { upsertItemPipelineRow } from "../../../lib/quickbooks/upsert-item-pipeline-row";
 import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
+import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -77,6 +78,14 @@ const buildQbPayload = (item: EnqueueQbItemInput) => {
 const postToBridge = async (
   payload: Record<string, unknown>
 ): Promise<BridgeResponse> => {
+  // Global QB sync switch: return the same "no operationId" shape the
+  // bridge's own error path already produces, before ANY network call — the
+  // caller's existing error handling (mark the item 'error', skip the rest)
+  // takes it from there, so this step always succeeds without QB when off.
+  if (!isQbSyncEnabled()) {
+    return { error: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false)" };
+  }
+
   const res = await fetch(`${requireBridgeUrl()}/api/products`, {
     method: "POST",
     headers: {

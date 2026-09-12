@@ -14,6 +14,7 @@ import {
   costTruncationDriftCents,
   type CostTruncationLine,
 } from "./qb-vendor-bill-cost-truncation-guard";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 export type VendorBillModKnex = {
   raw: (
@@ -551,6 +552,9 @@ export async function enqueueChinaAgencyVendorBillModGroup(
   db: VendorBillModKnex,
   editedBillId: string
 ): Promise<VendorBillModEnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill'" };
   }
@@ -725,6 +729,9 @@ async function enqueueOneBillMod(
         orderPayload
       ),
     });
+    // Already checked isQbSyncEnabled() in the caller — defense against a
+    // future caller change, not an expected path.
+    if (!operation) return;
     await db.raw(
       `UPDATE qb_vendor_bill_pipeline
           SET order_pipeline_id = ?, updated_at = NOW()
@@ -761,6 +768,9 @@ export async function enqueueVendorBillModSingle(
   db: VendorBillModKnex,
   vendorBillId: string
 ): Promise<VendorBillModEnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill'" };
   }

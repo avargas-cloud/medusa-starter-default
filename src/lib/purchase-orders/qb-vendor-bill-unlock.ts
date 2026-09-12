@@ -5,6 +5,7 @@ import {
   purchaseOperationKey,
   type PurchaseDependencyKnex,
 } from "./qb-purchase-dependency-chain";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 /**
  * Stages the destructive half of a Vendor Bill rebuild.
@@ -27,7 +28,8 @@ export type ClaimUnlockResult =
   | { ok: false; code: "bill_not_synced"; message: string }
   | { ok: false; code: "bill_rebuild_not_required"; message: string }
   | { ok: false; code: "adopted_bill_readonly"; message: string }
-  | { ok: false; code: "unlock_already_in_flight"; message: string };
+  | { ok: false; code: "unlock_already_in_flight"; message: string }
+  | { ok: false; code: "qb_sync_disabled"; message: string };
 
 export interface ClaimUnlockInput {
   reason: string;
@@ -81,6 +83,17 @@ export async function claimUnlock(
 ): Promise<ClaimUnlockResult> {
   if (!db.transaction) {
     throw new Error("Vendor Bill rebuild requires a database transaction");
+  }
+  // The entire point of this function is staging a destructive QuickBooks
+  // operation (TxnDel + a fresh BillAdd behind it) — with sync off there is
+  // nothing local-only to do: refuse before writing anything, including the
+  // qb_vendor_bill_pipeline row.
+  if (!isQbSyncEnabled()) {
+    return {
+      ok: false,
+      code: "qb_sync_disabled",
+      message: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false) — cannot stage a bill rebuild.",
+    };
   }
 
   return db.transaction(async (trx) => {
@@ -269,6 +282,15 @@ export async function claimUnlock(
         commonPayload
       ),
     });
+    // Already checked isQbSyncEnabled() above — defense against a future
+    // caller change, not an expected path.
+    if (!preflight) {
+      return {
+        ok: false,
+        code: "qb_sync_disabled",
+        message: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false) — cannot stage a bill rebuild.",
+      };
+    }
     const deletePayload = {
       ...commonPayload,
       preflight_operation_id: preflight.id,
@@ -286,6 +308,13 @@ export async function claimUnlock(
         deletePayload
       ),
     });
+    if (!deletion) {
+      return {
+        ok: false,
+        code: "qb_sync_disabled",
+        message: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false) — cannot stage a bill rebuild.",
+      };
+    }
     await trx.raw(
       `UPDATE qb_vendor_bill_pipeline
           SET order_pipeline_id = ?, updated_at = NOW()

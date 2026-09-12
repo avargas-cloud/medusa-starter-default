@@ -23,6 +23,7 @@ import {
   collectLostSiblingBillSection,
 } from "./_lib/_qb-vendor-bill-invariant-sections";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
 const ADMIN_BASE_URL =
@@ -776,6 +777,7 @@ export default async function qbPipelineErrorDigest(
   container: MedusaContainer
 ) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger");
   const knex = (container as any).resolve("__pg_connection__");

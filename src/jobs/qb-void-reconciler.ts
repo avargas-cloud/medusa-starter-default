@@ -42,11 +42,13 @@ import { MedusaContainer } from "@medusajs/framework/types";
 import { scanVoidOrphans } from "../lib/quickbooks/pipeline/void-orphan-scan";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 const TAG = "[qb-void-reconciler]";
 
 export default async function qbVoidReconciler(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger") as {
     warn: (m: string) => void;

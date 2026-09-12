@@ -10,6 +10,8 @@
  * This module standardizes: 404 → expired sentinel, other non-2xx → BridgeFetchError.
  */
 
+import { QbSyncDisabledError, isQbSyncEnabled } from "./sync-enabled";
+
 export class BridgeFetchError extends Error {
   constructor(
     public readonly status: number,
@@ -51,6 +53,10 @@ export async function bridgeFetch<T = unknown>(
   path: string,
   opts: BridgeFetchOptions = {}
 ): Promise<T> {
+  if (!isQbSyncEnabled()) {
+    throw new QbSyncDisabledError();
+  }
+
   const method = opts.method ?? "GET";
   const url = `${bridgeUrl()}${path.startsWith("/") ? path : "/" + path}`;
 

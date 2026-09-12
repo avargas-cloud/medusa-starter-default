@@ -34,6 +34,7 @@ import {
   purchaseOperationKey,
   type PurchaseDependencyKnex,
 } from "./qb-purchase-dependency-chain";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 /** PO lifecycle states whose QuickBooks document still accepts a Mod. */
 const QB_MODDABLE_STATUSES = new Set([
@@ -228,6 +229,17 @@ export async function propagateUnitCostsToPurchaseOrder(
     return { updated_line_ids: updated, qb_mod_enqueued: false, skipped_reason: null };
   }
 
+  // Global QB sync switch: the local cost write above (the business effect
+  // this function exists for) already happened and stays. Only the QB Mod
+  // — qb_purchase_order_pipeline + qb_order_pipeline — is skipped.
+  if (!isQbSyncEnabled()) {
+    return {
+      updated_line_ids: updated,
+      qb_mod_enqueued: false,
+      skipped_reason: "qb_sync_disabled",
+    };
+  }
+
   const freshLinesResult = await db.raw(
     `SELECT id, qty_ordered, unit_cost_cents, tax_cents, sku_snapshot,
             description_snapshot, qb_item_list_id_snapshot, qb_txn_line_id, line_order
@@ -328,6 +340,15 @@ export async function propagateUnitCostsToPurchaseOrder(
       orderPayload
     ),
   });
+  // Already checked isQbSyncEnabled() above — defense against a future
+  // caller change, not an expected path.
+  if (!operation) {
+    return {
+      updated_line_ids: updated,
+      qb_mod_enqueued: false,
+      skipped_reason: "qb_sync_disabled",
+    };
+  }
   await db.raw(
     `UPDATE qb_purchase_order_pipeline
         SET order_pipeline_id = ?, updated_at = NOW()

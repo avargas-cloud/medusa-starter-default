@@ -29,6 +29,7 @@ import {
 } from "../../../lib/purchase-orders/qb-purchase-dependency-chain";
 import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
 import { toQbRefNumber } from "../../../lib/quickbooks/qb-ref-number";
+import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
 
 export interface EnqueueQbItemReceiptModStepInput {
   receipt_id: string;
@@ -83,6 +84,12 @@ export const enqueueQbItemReceiptModStep = createStep(
     { container }
   ): Promise<StepResponse<EnqueueQbItemReceiptModStepOutput, null>> => {
     if (!input.should_enqueue) {
+      return new StepResponse({ pipeline_id: null, enqueued: false }, null);
+    }
+    // Global QB sync switch: this step's entire job is queuing to
+    // QuickBooks — with sync off it's a full no-op, same shape as
+    // should_enqueue=false (no mod_status flip, no qb_order_pipeline row).
+    if (!isQbSyncEnabled()) {
       return new StepResponse({ pipeline_id: null, enqueued: false }, null);
     }
 
@@ -256,6 +263,15 @@ export const enqueueQbItemReceiptModStep = createStep(
         orderPayload
       ),
     });
+    // Already checked isQbSyncEnabled() above — defense against a future
+    // caller change, not an expected path. The mod_status flip already
+    // committed; report it as not enqueued rather than leave a dangling id.
+    if (!operation) {
+      return new StepResponse(
+        { pipeline_id: String(header.pipeline_id), enqueued: false },
+        null
+      );
+    }
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
           SET mod_order_pipeline_id = ?, updated_at = NOW()

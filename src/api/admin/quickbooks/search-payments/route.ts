@@ -10,6 +10,7 @@ import {
   accessFailure,
   assertOwner,
 } from "../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../lib/quickbooks/qb-sync-disabled-response";
 
 interface PaymentSearchResult {
   txnId: string;
@@ -158,6 +159,7 @@ export async function POST(
       payments,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg =
       error instanceof Error ? error.message : "Failed to search payments";
     console.error(`[QB Search Payments ${date}] Error:`, error);

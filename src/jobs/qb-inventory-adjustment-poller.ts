@@ -18,6 +18,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { INVENTORY_COUNT_MODULE } from "../modules/inventory-count";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 /**
  * QB Inventory Adjustment poller.
@@ -221,6 +222,7 @@ export default async function qbInventoryAdjustmentPoller(
   container: MedusaContainer
 ) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);

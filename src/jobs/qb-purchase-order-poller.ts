@@ -29,6 +29,7 @@ import {
 } from "../lib/quickbooks/stale-row-cleanup";
 import { classifyQbError } from "../lib/quickbooks/error-classifier";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import {
   orderPurchaseOrderModLines,
   type PurchaseOrderModLineLike,
@@ -350,6 +351,7 @@ export default async function qbPurchaseOrderPoller(
   container: MedusaContainer
 ) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger") as any;
   const knex = (container as any).resolve("__pg_connection__");

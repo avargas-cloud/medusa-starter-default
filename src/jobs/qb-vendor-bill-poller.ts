@@ -16,6 +16,7 @@ import {
 } from "../lib/purchase-orders/qb-purchase-dependency-chain";
 import { PURCHASE_EXISTENCE_CHECK_KEY } from "../lib/quickbooks/consolidator/purchase-operations";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 export type KnexRaw = PurchaseDependencyKnex;
 
@@ -163,6 +164,9 @@ export async function adoptLegacyVendorBillRow(
         payload
       ),
     });
+    // The job that calls this already checked isQbSyncEnabled() — defense
+    // against a future caller change, not an expected path.
+    if (!operation) return null;
 
     if (
       (row.status === "submitted" || row.status === "processing") &&
@@ -220,6 +224,7 @@ export async function adoptLegacyVendorBillRow(
 
 export default async function qbVendorBillPoller(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger") as {
     info: (message: string) => void;

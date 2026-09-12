@@ -14,6 +14,7 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { INVENTORY_COUNT_MODULE } from "../../../modules/inventory-count";
 import type InventoryCountModuleService from "../../../modules/inventory-count/service";
+import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
 
 export interface PipelineRowToVoid {
   /** id of the confirmed qb_order_pipeline inventory_adjustment row */
@@ -67,7 +68,7 @@ export const persistVoidResultsStep = createStep(
     // confirmed inventory_adjustment row. The consolidator/resubmit-by-step
     // picks these up and sends TxnVoidRq to QB Desktop.
     let pipeline_void_queued = 0;
-    if (input.pipeline_rows.length > 0) {
+    if (input.pipeline_rows.length > 0 && isQbSyncEnabled()) {
       const pool = getDbPool();
       for (const src of input.pipeline_rows) {
         const refId = `${src.id}:void`;

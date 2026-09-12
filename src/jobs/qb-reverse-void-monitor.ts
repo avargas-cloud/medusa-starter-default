@@ -15,11 +15,13 @@ import { getDbPool } from "../api/utils/db-pool";
 import { runReverseVoidSweep } from "../lib/quickbooks/reverse-void-sweep";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
+import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 
 const TAG = "[qb-reverse-void-monitor]";
 
 export default async function qbReverseVoidMonitor(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
+  if (!isQbSyncEnabled()) return;
 
   const logger = container.resolve("logger") as {
     info: (m: string) => void;

@@ -252,6 +252,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     payload: { bankAccountId: qb_bank_account_id, txnDate: refundDate },
   });
   if (!claim.ok) {
+    if (claim.reason === "sync_disabled") {
+      return res.status(409).json({
+        error: "QuickBooks sync is disabled (QB_SYNC_ENABLED=false).",
+        code: "QB_SYNC_DISABLED",
+      });
+    }
     return res.status(409).json({
       error:
         "A QB Write Check for this refund is already in flight. Wait for it to confirm or fail before retrying.",

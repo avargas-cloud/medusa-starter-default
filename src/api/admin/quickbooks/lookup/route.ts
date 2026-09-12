@@ -10,6 +10,7 @@ import {
   accessFailure,
   assertOwner,
 } from "../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../lib/quickbooks/qb-sync-disabled-response";
 
 type QbDocType =
   | "Estimate"
@@ -229,6 +230,7 @@ export async function POST(
       amount: amount || null,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg =
       error instanceof Error ? error.message : "Failed to look up TXIND";
     console.error(`[QB Lookup ${docType} #${body.refNumber}] Error:`, error);
@@ -407,6 +409,7 @@ async function handleCustomerLookup(
 
     res.json({ success: true, results });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Customer lookup failed";
     console.error(`[QB Lookup Customer ${field}=${value}] Error:`, error);
     res.status(500).json({ error: msg });
@@ -499,6 +502,7 @@ async function handleItemLookup(
 
     res.json({ success: true, results });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Item lookup failed";
     console.error(`[QB Lookup Item ${sku}] Error:`, error);
     res.status(500).json({ error: msg });

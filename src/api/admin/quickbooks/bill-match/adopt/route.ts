@@ -20,6 +20,7 @@ import {
   accessFailure,
   assertAccounting,
 } from "../../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
 interface AdoptBody {
   po_id?: string;
@@ -297,6 +298,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       expense_lines: reconstructed?.expense_lines.length ?? 0,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Failed to adopt QB bill";
     console.error(`[QB Bill Match adopt txn=${txn_id}] Error:`, error);
     res.status(500).json({ error: msg });

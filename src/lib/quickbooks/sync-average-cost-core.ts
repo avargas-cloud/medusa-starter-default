@@ -10,6 +10,7 @@ import {
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { requireBridgeUrl } from "./bridge-url";
 import { requireQbApiKey } from "./qb-api-key";
+import { isQbSyncEnabled } from "./sync-enabled";
 
 const POLL_INTERVAL_MS = 30_000;
 const MAX_POLL_ATTEMPTS = 20;
@@ -405,6 +406,16 @@ export async function syncAverageCostCore(
     skippedNoChange: 0,
     meiliReindexed: 0,
   };
+
+  if (!isQbSyncEnabled()) {
+    log("[QB] QB_SYNC_ENABLED=false. Skipping average cost sync.");
+    return {
+      success: false,
+      dryRun,
+      stats,
+      error: "QB sync is disabled (QB_SYNC_ENABLED=false)",
+    };
+  }
 
   if (!(await isQbIntegrationEnabled())) {
     log("[QB] Integration is DISABLED. Skipping average cost sync.");

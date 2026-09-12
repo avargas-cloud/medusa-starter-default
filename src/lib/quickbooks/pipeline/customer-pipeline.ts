@@ -1,6 +1,9 @@
+import { randomUUID } from "crypto";
+
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { PipelineStep } from "./types";
 import { writePipelineRow } from "./row-mutations";
+import { isQbSyncEnabled } from "../sync-enabled";
 
 /**
  * Idempotent upsert of a step='customer' pipeline row keyed by customer_id.
@@ -17,6 +20,13 @@ export async function ensureCustomerPipelineRow(
   customerId: string,
   customerEmail: string | null
 ): Promise<string> {
+  // Global QB sync switch: no `qb_order_pipeline` row is written while sync is
+  // off. The fabricated UUID never matches a row — any later by-id transition
+  // is a harmless zero-row UPDATE no-op.
+  if (!isQbSyncEnabled()) {
+    return randomUUID();
+  }
+
   const pool = getDbPool();
 
   // 1) In-flight row (pending/submitted/waiting) or already confirmed → reuse.

@@ -8,6 +8,7 @@ import {
   accessFailure,
   assertAccounting,
 } from "../../../../../lib/pos/access-level";
+import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
 
 /**
  * GET /admin/quickbooks/bill-match/candidates-by-vendor?vendor_id=&from=&to=
@@ -236,6 +237,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
       bills: billOut,
     });
   } catch (error: unknown) {
+    if (respondQbSyncDisabled(error, res)) return;
     const msg = error instanceof Error ? error.message : "Failed to query vendor bill candidates";
     console.error(`[QB Bill Match candidates-by-vendor ${vendorId}] Error:`, error);
     res.status(500).json({ error: msg });

@@ -34,6 +34,7 @@ import {
 import { reverseVendorBill } from "../../../../../lib/ledger";
 import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
 import { resolveActorId } from "../../../../../lib/pos/supervisor-pin-guard";
+import { isQbSyncEnabled } from "../../../../../lib/quickbooks/sync-enabled";
 import { getPurchaseOrdersService } from "../../../purchase-orders/_lib/service-resolver";
 
 // ── Knex type ─────────────────────────────────────────────────────────────────
@@ -185,7 +186,7 @@ export async function POST(
       [bill.id]
     );
 
-    if (bill.status === "synced") {
+    if (bill.status === "synced" && isQbSyncEnabled()) {
       await trx.raw(
         `INSERT INTO qb_order_pipeline
            (id, reference_id, reference_type, step, status,

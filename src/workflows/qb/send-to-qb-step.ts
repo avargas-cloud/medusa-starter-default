@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
 import { upsertItemPipelineRow } from "../../lib/quickbooks/upsert-item-pipeline-row";
+import { isQbSyncEnabled } from "../../lib/quickbooks/sync-enabled";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -47,6 +48,22 @@ export const sendToQbStep = createStep(
     if (input.skip) {
       logger.info(
         `[sendToQbStep] skipped — no QB-relevant fields changed (action=${input.action})`
+      );
+      const result: SendToQbResult = {
+        success: true,
+        operationId: null,
+        response: null,
+        pipeline_row_id: null,
+        qb_op_queued: false,
+      };
+      return new StepResponse(result, null);
+    }
+
+    // Global QB sync switch: no qb_item_pipeline row, no bridge call, no
+    // compensation — identical shape to the input.skip branch above.
+    if (!isQbSyncEnabled()) {
+      logger.info(
+        `[sendToQbStep] QB_SYNC_ENABLED=false — skipping (action=${input.action})`
       );
       const result: SendToQbResult = {
         success: true,

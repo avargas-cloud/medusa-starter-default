@@ -38,6 +38,7 @@ import {
 } from "../quickbooks/vendor-credit-mod";
 import { buildTxnVoidQbxml } from "../quickbooks/txn-void-add";
 import { toQbRefNumber } from "../quickbooks/qb-ref-number";
+import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 export type EnqueueKnex = PurchaseDependencyKnex;
 
@@ -257,6 +258,9 @@ export async function enqueueVendorCreditAdd(
   knex: EnqueueKnex,
   vendorCreditId: string
 ): Promise<EnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
@@ -281,6 +285,12 @@ export async function enqueueVendorCreditAdd(
     operationKey: purchaseOperationKey("vendor_credit_add", vendorCreditId, payload),
   });
 
+  // Already checked isQbSyncEnabled() at the top of this function — defense
+  // against a future caller change, not an expected path.
+  if (!operation) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
+
   return { queued: true, pipelineRowId: operation.id };
 }
 
@@ -288,6 +298,9 @@ export async function enqueueVendorCreditVoid(
   knex: EnqueueKnex,
   vendorCreditId: string
 ): Promise<EnqueueResult> {
+  if (!isQbSyncEnabled()) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
   if (process.env.QB_VENDOR_BILL_MODE !== "bill") {
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
@@ -330,6 +343,12 @@ export async function enqueueVendorCreditVoid(
     qbTxnId: credit.qb_txn_id,
     operationKey: purchaseOperationKey("vendor_credit_void", credit.id, payload),
   });
+
+  // Already checked isQbSyncEnabled() at the top of this function — defense
+  // against a future caller change, not an expected path.
+  if (!operation) {
+    return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+  }
 
   return { queued: true, pipelineRowId: operation.id };
 }

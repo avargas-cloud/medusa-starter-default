@@ -13,6 +13,10 @@
  * never reuse them.
  */
 
+import { randomUUID } from "crypto";
+
+import { isQbSyncEnabled } from "./sync-enabled";
+
 export type CatalogPipelineService = {
   listQbItemPipelines: (
     filters: Record<string, unknown>,
@@ -55,6 +59,13 @@ export async function upsertItemPipelineRow(
   input: UpsertItemPipelineInput,
   logger?: MinimalLogger
 ): Promise<UpsertItemPipelineResult> {
+  if (!isQbSyncEnabled()) {
+    logger?.info(
+      `[upsertItemPipelineRow] QB_SYNC_ENABLED=false — skipping ${input.sku}`
+    );
+    return { id: randomUUID(), reused: false };
+  }
+
   // Each mod is its own QB operation — never dedup.
   if (input.op_action !== "add") {
     const row = await catalog.createQbItemPipelines(input);

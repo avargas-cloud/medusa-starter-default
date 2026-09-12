@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { getBusinessDateString } from "../../../lib/date/et";
+import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
 
 import type { AppliedDelta } from "./apply-stock-deltas-step";
 import type { ClassifiedLine } from "./classify-lines-step";
@@ -45,6 +46,12 @@ export const enqueueQbAdjustmentsStep = createStep(
     input: EnqueueQbAdjustmentsStepInput
   ): Promise<StepResponse<EnqueueQbAdjustmentsStepOutput, null>> => {
     if (input.applied.length === 0) {
+      return new StepResponse({ pipeline_ids: [], groups: [] }, null);
+    }
+
+    // Global QB sync switch: skip the enqueue entirely — no
+    // qb_order_pipeline row is written while sync is off.
+    if (!isQbSyncEnabled()) {
       return new StepResponse({ pipeline_ids: [], groups: [] }, null);
     }
 
