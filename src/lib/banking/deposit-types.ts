@@ -94,6 +94,8 @@ export type BankDeposit = {
   source_hash: string;
   stale: boolean;
   accounting_posted: boolean;
+  /** `bank_feed` when the matcher built it from one receipt; null when recorded by hand. */
+  origin?: "bank_feed" | "deposits_page" | null;
   lines: DepositLine[];
 };
 

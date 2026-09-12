@@ -39,6 +39,8 @@ export const DEPOSIT_SELECT_SQL = `d.id,d.revision,d.status,d.account_id,d.curre
   EXISTS(SELECT 1 FROM bank_journal_entry entry WHERE entry.deposit_id=d.id AND entry.kind='deposit'
     AND NOT EXISTS(SELECT 1 FROM bank_journal_entry reversal WHERE reversal.reverses_entry_id=entry.id)) AS accounting_posted,
   ${DEPOSIT_SOURCE_HASH_SQL} AS source_hash,${DEPOSIT_STALE_SQL} AS stale,
+  (SELECT e.details->>'origin' FROM bank_review_event e WHERE e.entity_type='deposit' AND e.entity_id=d.id
+    AND e.action='deposit_saved' AND e.details ? 'origin' ORDER BY e.created_at,e.id LIMIT 1) AS origin,
   COALESCE((SELECT jsonb_agg(jsonb_build_object('id',dl.id,'payment_id',dl.payment_id,
     'payment_display_id',dl.payment_snapshot->'display_id','customer_id',dl.payment_snapshot->>'customer_id',
     'customer_name',dl.payment_snapshot->>'customer_name','method',dl.payment_snapshot->>'method',

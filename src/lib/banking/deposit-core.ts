@@ -33,7 +33,10 @@ import { bankId } from "./store";
 export async function saveBankDeposit(
   actorId: string,
   key: string | undefined,
-  input: DepositSaveBody
+  input: DepositSaveBody,
+  /** Who built the deposit (`deposit-from-payment.ts`); surfaces as the
+   * "from bank feed" badge via `DEPOSIT_SELECT_SQL.origin`. Manual = absent. */
+  origin?: "bank_feed" | "deposits_page"
 ): Promise<{ deposit: BankDeposit }> {
   const parsed = depositSaveSchema.safeParse(input);
   if (!parsed.success) throw new BankingError("BANKING_INVALID_REQUEST");
@@ -169,7 +172,7 @@ export async function saveBankDeposit(
         entity_id: id,
         action: "deposit_saved",
         actor_id: actorId,
-        details: { before, after: deposit },
+        details: { before, after: deposit, ...(origin ? { origin } : {}) },
       });
       return { deposit };
     }
