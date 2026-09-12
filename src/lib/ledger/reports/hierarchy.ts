@@ -24,6 +24,10 @@ export interface HierarchyRow {
   /** Own movement plus every descendant's — a parent shows its subtotal. */
   cents: bigint;
   compare_cents: bigint | null;
+  /** Postings on the account ITSELF (the "<Parent> – Other" line of a statement). */
+  own_cents: bigint;
+  own_compare_cents: bigint | null;
+  has_children: boolean;
 }
 
 function siblingOrder(a: HierarchyInput, b: HierarchyInput): number {
@@ -88,17 +92,22 @@ export function buildHierarchy(
       depth,
       cents: row.cents,
       compare_cents: row.compare_cents,
+      own_cents: row.cents,
+      own_compare_cents: row.compare_cents,
+      has_children: false,
     };
     out.push(own);
     let cents = row.cents;
     let compare = row.compare_cents;
+    let hasChildren = false;
     for (const child of children.get(row.list_id) ?? []) {
       if (visited.has(child.list_id)) continue;
+      hasChildren = true;
       const sub = walk(child, depth + 1);
       cents += sub.cents;
       if (compare !== null && sub.compare !== null) compare += sub.compare;
     }
-    out[index] = { ...own, cents, compare_cents: compare };
+    out[index] = { ...own, cents, compare_cents: compare, has_children: hasChildren };
     return { cents, compare };
   };
 
@@ -120,4 +129,37 @@ export function sumRootsCompare(rows: readonly HierarchyRow[]): bigint | null {
   const roots = rows.filter((r) => r.depth === 0);
   if (roots.some((r) => r.compare_cents === null)) return null;
   return roots.reduce((acc, r) => acc + (r.compare_cents ?? 0n), 0n);
+}
+
+function isZeroRow(r: HierarchyRow): boolean {
+  return (
+    r.cents === 0n &&
+    r.own_cents === 0n &&
+    (r.compare_cents ?? 0n) === 0n &&
+    (r.own_compare_cents ?? 0n) === 0n
+  );
+}
+
+/**
+ * Drops rows with no movement in either window, but never a parent whose
+ * subtree still has a kept row — otherwise a parent netting to zero (own +10,
+ * child −10) would vanish and leave its children orphaned at depth 1.
+ */
+export function pruneZeroRows(rows: readonly HierarchyRow[]): HierarchyRow[] {
+  const keep = new Array<boolean>(rows.length).fill(false);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (!row) continue;
+    if (!isZeroRow(row)) {
+      keep[i] = true;
+      continue;
+    }
+    for (let j = i + 1; j < rows.length && (rows[j]?.depth ?? 0) > row.depth; j++) {
+      if (keep[j]) {
+        keep[i] = true;
+        break;
+      }
+    }
+  }
+  return rows.filter((_, i) => keep[i]);
 }

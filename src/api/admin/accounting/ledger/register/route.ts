@@ -3,15 +3,15 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
-import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
 import {
   activeEntryPredicate,
+  detectGlCheckPayeeColumn,
   docLabelFor,
-  GL_CHECK_PAYEE_COLUMNS,
   glCheckJoinSql,
   normalBalanceFor,
   PAYEE_JOIN_SQL,
   payeeColumnSql,
+  RESOLVED_DOC_NUMBER_SQL,
 } from "../../../../../lib/ledger/reports";
 import {
   DAY_RE,
@@ -51,25 +51,6 @@ interface TotalsRow {
   credit_cents: string;
   opening_cents: string;
   closing_cents: string;
-}
-
-/**
- * E1's `gl_check` may not exist yet (or may exist without a name column):
- * detect both at query time so the register degrades to `payee_name: null`
- * for checks instead of failing the whole page.
- */
-async function glCheckPayeeColumn(db: SqlClient): Promise<string | null> {
-  const result = await db.raw(
-    `SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'gl_check'
-        AND to_regclass('public.gl_check') IS NOT NULL
-        AND column_name = ANY(?::text[])`,
-    [[...GL_CHECK_PAYEE_COLUMNS]]
-  );
-  const present = new Set(
-    (result.rows as Array<{ column_name: string }>).map((r) => r.column_name)
-  );
-  return GL_CHECK_PAYEE_COLUMNS.find((c) => present.has(c)) ?? null;
 }
 
 /**
@@ -142,7 +123,7 @@ export async function GET(
     account.normal_balance ?? normalBalanceFor(account.account_type);
   const sign = normalSide === "debit" ? 1 : -1;
 
-  const payeeColumn = await glCheckPayeeColumn(db);
+  const payeeColumn = await detectGlCheckPayeeColumn(db);
   const payeeSql = payeeColumnSql(payeeColumn);
   const joins = PAYEE_JOIN_SQL + glCheckJoinSql(payeeColumn);
 
@@ -169,7 +150,10 @@ export async function GET(
        WHERE a.day >= ? AND a.day <= ?
     ),
     detailed AS (
-      SELECT r.*, ${payeeSql} AS payee_name,
+      SELECT r.line_id, r.entry_id, r.day, r.source_kind, r.source_id, r.description,
+             r.reference, r.debit_cents, r.credit_cents, r.reversed, r.raw_balance,
+             ${RESOLVED_DOC_NUMBER_SQL} AS document_number,
+             ${payeeSql} AS payee_name,
              (SELECT m.statement_id FROM bank_statement_match m
                WHERE m.book_kind = 'journal_line' AND m.book_id = r.line_id
                  AND m.deleted_at IS NULL

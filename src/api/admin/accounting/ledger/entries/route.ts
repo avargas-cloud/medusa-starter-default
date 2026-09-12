@@ -8,6 +8,14 @@ import {
   requireFullAdmin,
 } from "../../../../../lib/accounting/month-close-auth";
 import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
+import {
+  detectGlCheckPayeeColumn,
+  docLabelFor,
+  glCheckJoinSql,
+  PAYEE_JOIN_SQL,
+  payeeColumnSql,
+  RESOLVED_DOC_NUMBER_SQL,
+} from "../../../../../lib/ledger/reports";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -41,6 +49,7 @@ interface EntryRow {
   reason: string | null;
   created_at: string;
   reversed_by: string | null;
+  payee_name: string | null;
 }
 
 interface LineRow {
@@ -55,7 +64,9 @@ interface LineRow {
 /**
  * Journal entries with lines, over `[from, to]`, optionally filtered by
  * account / source. Keyset pagination on (day, id) ascending — `cursor` is
- * `"<day>,<id>"` of the last row of the previous page.
+ * `"<day>,<id>"` of the last row of the previous page. `document_number`,
+ * `doc_label` and `payee_name` are resolved like the register's (audit
+ * P1-11: never a raw `cpay_…` id on screen).
  */
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -135,16 +146,20 @@ export async function GET(
   }
 
   const whereSql = where.join(" AND ");
+  const payeeColumn = await detectGlCheckPayeeColumn(db);
 
   const entriesResult = await db.raw(
     `SELECT e.id, e.day, e.kind, e.amount_cents::text AS amount_cents, e.currency,
             e.reference, e.description, e.source_kind, e.source_id,
-            e.document_number, e.posted_by, e.actor_id, e.reverses_entry_id,
+            ${RESOLVED_DOC_NUMBER_SQL} AS document_number,
+            ${payeeColumnSql(payeeColumn)} AS payee_name,
+            e.posted_by, e.actor_id, e.reverses_entry_id,
             e.reason, e.created_at,
             (SELECT r.id FROM bank_journal_entry r
               WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL
               LIMIT 1) AS reversed_by
        FROM bank_journal_entry e
+       ${PAYEE_JOIN_SQL}${glCheckJoinSql(payeeColumn)}
       WHERE ${whereSql}
       ORDER BY e.day ASC, e.id ASC
       LIMIT ?`,
@@ -186,6 +201,8 @@ export async function GET(
     source_kind: entry.source_kind,
     source_id: entry.source_id,
     document_number: entry.document_number,
+    doc_label: docLabelFor(entry.source_kind, entry.document_number),
+    payee_name: entry.payee_name,
     posted_by: entry.posted_by,
     actor_id: entry.actor_id,
     reverses_entry_id: entry.reverses_entry_id,

@@ -30,6 +30,10 @@ interface CustomerRow {
 interface PayableRow {
   payable_opening_cents: string;
   payable_closing_cents: string;
+  /** Net credits on the payable from QB-IMPORTED sales documents in range. */
+  imported_tax_cents: string;
+  /** Credits on the payable from non-document sources (adjusting journals). */
+  adjustment_credits_cents: string;
 }
 
 /**
@@ -52,6 +56,13 @@ const LIABILITY_SOURCE_SQL = `(
  * journal on the `sales_tax_payable` account of `gl_account_map`.
  * `tax_rate_pct` is the EFFECTIVE rate (collected ÷ taxable), null when
  * nothing taxable was sold.
+ *
+ * Reconciliation (audit P1-10): `payable_opening + tax_collected +
+ * imported_tax + adjustment_credits − payments == payable_closing`. The two
+ * extra terms are what the document-based `tax_collected` cannot see — tax
+ * on QuickBooks-imported invoices / sales receipts (no `pos_invoice` row)
+ * and credits posted by adjusting journals — so the screen can print an
+ * equation that closes instead of a balance that "does not add up".
  */
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -176,12 +187,16 @@ export async function GET(
     ),
     db.raw(
       `SELECT (-COALESCE(SUM(CASE WHEN e.day < ? THEN l.debit_cents - l.credit_cents ELSE 0 END), 0))::text AS payable_opening_cents,
-              (-COALESCE(SUM(l.debit_cents - l.credit_cents), 0))::text AS payable_closing_cents
+              (-COALESCE(SUM(l.debit_cents - l.credit_cents), 0))::text AS payable_closing_cents,
+              COALESCE(SUM(CASE WHEN e.day >= ? AND e.source_kind = 'qb_import' AND ${LIABILITY_SOURCE_SQL}
+                                THEN l.credit_cents - l.debit_cents ELSE 0 END), 0)::text AS imported_tax_cents,
+              COALESCE(SUM(CASE WHEN e.day >= ? AND NOT ${LIABILITY_SOURCE_SQL}
+                                THEN l.credit_cents ELSE 0 END), 0)::text AS adjustment_credits_cents
          FROM bank_journal_line l
          JOIN bank_journal_entry e ON e.id = l.entry_id
         WHERE l.deleted_at IS NULL AND ${activeEntryPredicate("e")}
           AND l.account_list_id = ? AND e.day <= ?`,
-      [from, payableListId, to]
+      [from, from, from, payableListId, to]
     ),
   ]);
 
@@ -192,6 +207,8 @@ export async function GET(
   )[0] ?? {
     payable_opening_cents: "0",
     payable_closing_cents: "0",
+    imported_tax_cents: "0",
+    adjustment_credits_cents: "0",
   };
 
   const sum = (pick: (m: MonthRow) => string) =>
@@ -216,6 +233,8 @@ export async function GET(
     payable_opening_cents: payable.payable_opening_cents,
     payable_closing_cents: payable.payable_closing_cents,
     payments_cents: payments.toString(),
+    imported_tax_cents: payable.imported_tax_cents,
+    adjustment_credits_cents: payable.adjustment_credits_cents,
     by_month: months.map((m) => ({
       month: m.month,
       taxable_sales_cents: m.taxable_sales_cents,

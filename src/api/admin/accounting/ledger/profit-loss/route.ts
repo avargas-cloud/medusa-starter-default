@@ -7,6 +7,7 @@ import {
   buildHierarchy,
   normalizeSign,
   plSectionFor,
+  pruneZeroRows,
   sumRoots,
   sumRootsCompare,
   type HierarchyInput,
@@ -31,6 +32,10 @@ interface SectionOut {
     depth: number;
     cents: string;
     compare_cents: string | null;
+    /** Postings on the account itself — `cents` minus its children ("– Other"). */
+    own_cents: string;
+    own_compare_cents: string | null;
+    has_children: boolean;
   }>;
   total_cents: string;
   compare_total_cents: string | null;
@@ -52,6 +57,10 @@ function serialize(rows: HierarchyRow[]): SectionOut {
       cents: r.cents.toString(),
       compare_cents:
         r.compare_cents === null ? null : r.compare_cents.toString(),
+      own_cents: r.own_cents.toString(),
+      own_compare_cents:
+        r.own_compare_cents === null ? null : r.own_compare_cents.toString(),
+      has_children: r.has_children,
     })),
     total_cents: sumRoots(rows).toString(),
     compare_total_cents: sumRootsCompare(rows)?.toString() ?? null,
@@ -134,10 +143,7 @@ export async function GET(
 
   const section = (key: PlSection): SectionOut => {
     const tree = buildHierarchy(inputs.get(key) ?? []);
-    const kept = includeZero
-      ? tree
-      : tree.filter((r) => r.cents !== 0n || (r.compare_cents ?? 0n) !== 0n);
-    return serialize(kept);
+    return serialize(includeZero ? tree : pruneZeroRows(tree));
   };
 
   const income = section("income");

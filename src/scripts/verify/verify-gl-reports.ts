@@ -22,6 +22,15 @@
  *       pair-cancelled recomputation — regression guard for the 2026-09-11
  *       bug (reversal mirror lines counted). Before the fix the four accounts
  *       in BEFORE_FIX_DELTAS were off by exactly those amounts.
+ *   (i) statement hierarchy (audit P1-2): on every P&L / balance-sheet
+ *       section, for each parent row `Σ children.cents + own_cents == cents`
+ *       (the "<Parent> – Other" line closes the identity) and a leaf has
+ *       own == cents. Requires at least one parent WITH own postings so the
+ *       "– Other" branch is exercised, not vacuous.
+ *   (j) chart of accounts (audit P1-3): `balance_rollup_cents` of every
+ *       balance-sheet account == the balance sheet's row `cents` as of today,
+ *       and `balance_own_cents` == what its subtree recomputes; requires ≥1
+ *       account where rollup ≠ own (Loan Receivable-style) so it is not vacuous.
  *
  * Mutation-tested (see the report in the session that added it):
  *   (a) flip the sign of equity in the BS aggregation → red
@@ -95,16 +104,17 @@ async function login(): Promise<void> {
 }
 
 type Cents = string;
-interface Section { rows: Array<{ list_id: string; cents: Cents }>; total_cents: Cents }
+interface StatementRow { list_id: string; name: string; depth: number; cents: Cents; own_cents: Cents; has_children: boolean }
+interface Section { rows: StatementRow[]; total_cents: Cents }
 interface BalanceSheet {
-  assets: { total_cents: Cents };
-  liabilities: { total_cents: Cents };
-  equity: { rows: unknown[]; retained_earnings_cents: Cents; net_income_cents: Cents; total_cents: Cents };
+  assets: { current: Section; fixed: Section; other: Section; total_cents: Cents };
+  liabilities: { current: Section; long_term: Section; total_cents: Cents };
+  equity: { rows: StatementRow[]; retained_earnings_cents: Cents; net_income_cents: Cents; total_cents: Cents };
   total_assets_cents: Cents;
   total_liabilities_equity_cents: Cents;
   balanced: boolean;
 }
-interface ProfitLoss { income: Section; net_income: { total_cents: Cents } }
+interface ProfitLoss { income: Section; cogs: Section; expenses: Section; other_income: Section; other_expense: Section; net_income: { total_cents: Cents } }
 interface TrialBalance {
   accounts: Array<{ list_id: string; account_type: string; normal_balance: string | null; closing_cents: Cents; has_activity: boolean }>;
 }
@@ -115,8 +125,43 @@ interface Register {
   closing_cents: Cents;
   next_cursor: string | null;
 }
-interface SalesTax { tax_collected_cents: Cents; taxable_sales_cents: Cents; by_month: unknown[] }
-interface Accounts { items: Array<{ list_id: string; full_name: string; is_active: boolean; is_pos_owned: boolean; account_number: string | null }> }
+interface SalesTax {
+  tax_collected_cents: Cents; taxable_sales_cents: Cents; by_month: unknown[];
+  payable_opening_cents: Cents; payable_closing_cents: Cents; payments_cents: Cents;
+  imported_tax_cents: Cents; adjustment_credits_cents: Cents;
+}
+interface Accounts { items: Array<{ list_id: string; full_name: string; is_active: boolean; is_pos_owned: boolean; account_number: string | null; balance_cents: Cents; balance_own_cents: Cents; balance_rollup_cents: Cents; has_children: boolean }> }
+
+/**
+ * (i) For every row of a section: children (the depth+1 rows that follow it
+ * before the next row at ≤ its depth) + own == cents. Returns the violations
+ * and how many parents carried own postings (the "– Other" branch).
+ */
+function checkSectionIdentity(rows: StatementRow[]): { bad: string[]; parents: number; withOther: number } {
+  const bad: string[] = [];
+  let parents = 0;
+  let withOther = 0;
+  rows.forEach((row, i) => {
+    let sum = 0n;
+    let children = 0;
+    for (let j = i + 1; j < rows.length && rows[j].depth > row.depth; j++) {
+      if (rows[j].depth === row.depth + 1) {
+        sum += BigInt(rows[j].cents);
+        children += 1;
+      }
+    }
+    if (children === 0) {
+      if (row.own_cents !== row.cents) bad.push(`${row.name}: leaf own ${row.own_cents} ≠ cents ${row.cents}`);
+      return;
+    }
+    parents += 1;
+    if (BigInt(row.own_cents) !== 0n) withOther += 1;
+    if (sum + BigInt(row.own_cents) !== BigInt(row.cents)) {
+      bad.push(`${row.name}: Σchildren ${sum} + other ${row.own_cents} ≠ ${row.cents}`);
+    }
+  });
+  return { bad, parents, withOther };
+}
 
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
@@ -186,6 +231,11 @@ async function main(): Promise<void> {
       [process.env.QB_DOC_TIMEZONE || "America/New_York", lmFrom, lmTo]
     );
     check(`${lmFrom}..${lmTo}: tax_collected ${st.body.tax_collected_cents} == Σinvoice.tax − ΣCM.tax ${docs?.collected}`, st.body.tax_collected_cents === docs?.collected);
+    // (d2) the on-screen equation closes: opening + collected + imported + adjustments − paid == closing (audit P1-10)
+    const qStart = `${today.slice(0, 4)}-${String(Math.floor((Number(today.slice(5, 7)) - 1) / 3) * 3 + 1).padStart(2, "0")}-01`;
+    const stq = await api<SalesTax>("GET", `/admin/accounting/ledger/sales-tax?from=${qStart}&to=${today}`);
+    const lhs = BigInt(stq.body.payable_opening_cents ?? "0") + BigInt(stq.body.tax_collected_cents ?? "0") + BigInt(stq.body.imported_tax_cents ?? "0") + BigInt(stq.body.adjustment_credits_cents ?? "0") - BigInt(stq.body.payments_cents ?? "0");
+    check(`${qStart}..${today}: opening + collected + imported (${stq.body.imported_tax_cents}) + adjustments (${stq.body.adjustment_credits_cents}) − paid == closing (${lhs} vs ${stq.body.payable_closing_cents})`, stq.status === 200 && lhs === BigInt(stq.body.payable_closing_cents ?? "1"));
 
     console.log("\n(e) register running balance ends at closing");
     for (const [listId, reg] of registers) {
@@ -238,6 +288,47 @@ async function main(): Promise<void> {
       const delta = tbRow ? BigInt(tbRow.closing_cents) - (directMap.get(id) ?? 0n) : null;
       check(`${label}: delta before fix ${before}, now ${delta}`, delta === 0n);
     }
+
+    console.log("\n(i) statements: children + '– Other' == parent, every section");
+    const sections: Array<[string, Section | undefined]> = [
+      ["P&L income", pl.body.income], ["P&L cogs", pl.body.cogs], ["P&L expenses", pl.body.expenses],
+      ["P&L other_income", pl.body.other_income], ["P&L other_expense", pl.body.other_expense],
+      ["BS assets.current", bs.body.assets?.current], ["BS assets.fixed", bs.body.assets?.fixed],
+      ["BS assets.other", bs.body.assets?.other], ["BS liabilities.current", bs.body.liabilities?.current],
+      ["BS liabilities.long_term", bs.body.liabilities?.long_term], ["BS equity", { rows: bs.body.equity?.rows ?? [], total_cents: "0" }],
+    ];
+    let parentsSeen = 0;
+    let othersSeen = 0;
+    for (const [label, sec] of sections) {
+      const rows = sec?.rows ?? [];
+      check(`${label}: every row carries own_cents/has_children`, rows.every((r) => typeof r.own_cents === "string" && typeof r.has_children === "boolean"), `${rows.length} rows`);
+      const r = checkSectionIdentity(rows);
+      parentsSeen += r.parents;
+      othersSeen += r.withOther;
+      check(`${label}: identity holds on ${r.parents} parent(s), ${r.withOther} with own postings`, r.bad.length === 0, r.bad.slice(0, 3).join("; "));
+    }
+    check(`(i) non-vacuous: ≥1 parent with children (${parentsSeen}) and ≥1 with own postings (${othersSeen})`, parentsSeen >= 1 && othersSeen >= 1);
+
+    console.log("\n(j) chart of accounts roll-up == balance-sheet parent rows");
+    const coa = await api<Accounts>("GET", "/admin/accounting/accounts?include_inactive=true");
+    check("accounts answers 200 with balance_own_cents + balance_rollup_cents", coa.status === 200 && coa.body.items.every((a) => typeof a.balance_own_cents === "string" && typeof a.balance_rollup_cents === "string"), `status ${coa.status}`);
+    const coaMap = new Map(coa.body.items.map((a) => [a.list_id, a]));
+    const bsRows = [
+      ...(bs.body.assets?.current?.rows ?? []), ...(bs.body.assets?.fixed?.rows ?? []), ...(bs.body.assets?.other?.rows ?? []),
+      ...(bs.body.liabilities?.current?.rows ?? []), ...(bs.body.liabilities?.long_term?.rows ?? []), ...(bs.body.equity?.rows ?? []),
+    ];
+    const coaDiffs: string[] = [];
+    let rollupDiffersFromOwn = 0;
+    for (const r of bsRows) {
+      const a = coaMap.get(r.list_id);
+      if (!a) { coaDiffs.push(`${r.name}: missing from /accounts`); continue; }
+      if (a.balance_rollup_cents !== r.cents) coaDiffs.push(`${r.name}: CoA rollup ${a.balance_rollup_cents} ≠ BS ${r.cents}`);
+      if (a.balance_own_cents !== r.own_cents) coaDiffs.push(`${r.name}: CoA own ${a.balance_own_cents} ≠ BS own ${r.own_cents}`);
+      if (a.balance_rollup_cents !== a.balance_own_cents) rollupDiffersFromOwn += 1;
+    }
+    check(`CoA balances match the balance sheet on ${bsRows.length} rows`, coaDiffs.length === 0, coaDiffs.slice(0, 5).join("; "));
+    check(`(j) non-vacuous: ≥1 account where rollup ≠ own (${rollupDiffersFromOwn})`, rollupDiffersFromOwn >= 1);
+    check("balance_cents keeps the OWN semantics (register closing)", coa.body.items.every((a) => a.balance_cents === a.balance_own_cents));
   } finally {
     await pool.end();
   }

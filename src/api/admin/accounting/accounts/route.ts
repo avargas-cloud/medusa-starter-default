@@ -6,6 +6,7 @@ import type {
 import {
   ACCOUNT_TYPE_ORDER,
   activeEntryPredicate,
+  buildHierarchy,
   normalBalanceFor,
   normalizeSign,
 } from "../../../../lib/ledger/reports";
@@ -41,6 +42,13 @@ interface AccountRow {
  * balance of each account, signed by its normal side. Active only unless
  * `?include_inactive=true`; `?q=` matches name / full_name / account_number.
  * Read = accounting; POST/PATCH = owner.
+ *
+ * `balance_cents` = `balance_own_cents` = postings on the account itself (what
+ * its register closes at). `balance_rollup_cents` = own + every descendant —
+ * the figure the Balance Sheet prints on a parent row (audit P1-3: the chart
+ * said `Loan Receivable $0.00` while the statement said `($2,064.85)`). The
+ * roll-up is computed over the WHOLE chart before the active/q filters, so a
+ * parent keeps its subtotal when its children are hidden.
  */
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -52,13 +60,6 @@ export async function GET(
   const q = queryString(req, "q");
   const where = ["qa.deleted_at IS NULL", "qa.account_type <> 'NonPosting'"];
   const bindings: unknown[] = [];
-  if (!includeInactive) where.push("qa.is_active");
-  if (q) {
-    where.push(
-      "(qa.full_name ILIKE ? OR COALESCE(qa.account_number, '') ILIKE ?)"
-    );
-    bindings.push(`%${q}%`, `%${q}%`);
-  }
 
   const result = await dbFrom(req).raw(
     `WITH balance AS (
@@ -79,12 +80,39 @@ export async function GET(
                qa.account_number NULLS LAST, qa.full_name`,
     [...bindings, ...ACCOUNT_TYPE_ORDER]
   );
-  const rows = result.rows as unknown as AccountRow[];
-  const byFullName = new Map(rows.map((r) => [r.full_name, r.list_id]));
+  const allRows = result.rows as unknown as AccountRow[];
+  const byFullName = new Map(allRows.map((r) => [r.full_name, r.list_id]));
+  // Roll-up over the whole chart (raw Σdebit − Σcredit; signed per row below).
+  const rollup = new Map(
+    buildHierarchy(
+      allRows.map((r) => ({
+        list_id: r.list_id,
+        name: r.name,
+        full_name: r.full_name,
+        account_number: r.account_number,
+        parent_list_id: r.parent_list_id,
+        parent_full_name: r.parent_full_name,
+        cents: BigInt(r.raw_cents),
+        compare_cents: null,
+      }))
+    ).map((h) => [h.list_id, h])
+  );
+
+  const needle = q?.toLowerCase() ?? null;
+  const rows = allRows.filter(
+    (r) =>
+      (includeInactive || r.is_active) &&
+      (!needle ||
+        r.full_name.toLowerCase().includes(needle) ||
+        (r.account_number ?? "").toLowerCase().includes(needle))
+  );
 
   return res.json({
     items: rows.map((r) => {
       const normal = r.normal_balance ?? normalBalanceFor(r.account_type);
+      const own = normalizeSign(BigInt(r.raw_cents), r.account_type);
+      const tree = rollup.get(r.list_id);
+      const rolled = tree ? normalizeSign(tree.cents, r.account_type) : own;
       return {
         list_id: r.list_id,
         name: r.name,
@@ -100,10 +128,10 @@ export async function GET(
         is_active: r.is_active,
         is_pos_owned: r.list_id.startsWith("pos_"),
         description: r.description,
-        balance_cents: normalizeSign(
-          BigInt(r.raw_cents),
-          r.account_type
-        ).toString(),
+        balance_cents: own.toString(),
+        balance_own_cents: own.toString(),
+        balance_rollup_cents: rolled.toString(),
+        has_children: tree?.has_children ?? false,
       };
     }),
   });
