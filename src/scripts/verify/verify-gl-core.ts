@@ -205,7 +205,9 @@ async function sectionC(pool: Pool): Promise<void> {
             ) AS missing
        FROM pos_invoice i
       WHERE i.status IN ('issued', 'partial', 'paid', 'partially_refunded', 'refunded')
-        AND i.issued_at >= $1`,
+        AND i.issued_at >= $1
+        -- una factura de $0 SIN ítems no tiene asiento (documento vacío → skipped en postInvoice)
+        AND NOT (i.total = 0 AND NOT EXISTS (SELECT 1 FROM pos_invoice_item ii WHERE ii.invoice_id = i.id))`,
     [GL_GO_LIVE]
   );
   const invMissing = Number(invoiceRows[0]?.missing ?? 0);

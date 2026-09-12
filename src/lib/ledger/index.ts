@@ -52,6 +52,55 @@ export type {
   PostOpeningBalanceInput,
   OpeningBalanceListItem,
 } from "./documents/opening-balance";
+export { buildJournalEntryLines } from "./lines/journal-entry";
+export type { JournalEntryLineInput as JournalEntryBuilderLine } from "./lines/journal-entry";
+export { buildBankCheckLines, deriveBankCheckKind, bankCheckTotal } from "./lines/bank-check";
+export type { BankCheckKind } from "./lines/bank-check";
+export { buildBankTransferLines, TRANSFER_ACCOUNT_TYPES } from "./lines/bank-transfer";
+export { computeYearClose, YEAR_CLOSE_ACCOUNT_TYPES } from "./lines/year-close";
+export type { YearCloseBalance, YearCloseComputation } from "./lines/year-close";
+export {
+  createJournalEntry,
+  updateJournalEntry,
+  getJournalEntry,
+  listJournalEntries,
+  postJournalEntry,
+  voidJournalEntry,
+} from "./documents/journal-entry";
+export type {
+  JournalEntryDto,
+  JournalEntryLineDto,
+  JournalEntryWriteInput,
+  PostGlDocumentResult,
+} from "./documents/journal-entry";
+export {
+  createBankCheck,
+  updateBankCheck,
+  getBankCheck,
+  listBankChecks,
+  postBankCheck,
+  voidBankCheck,
+} from "./documents/bank-check";
+export type { BankCheckDto, BankCheckLineDto, BankCheckWriteInput, CheckPayeeType } from "./documents/bank-check";
+export {
+  createBankTransfer,
+  getBankTransfer,
+  listBankTransfers,
+  postBankTransfer,
+  voidBankTransfer,
+} from "./documents/bank-transfer";
+export type { BankTransferDto, BankTransferWriteInput } from "./documents/bank-transfer";
+export {
+  previewYearClose,
+  postYearClose,
+  reverseYearClose,
+  loadYearBalances,
+  yearCloseDay,
+  YEAR_RE,
+} from "./documents/year-close";
+export type { YearClosePreview, YearCloseAccountPreview } from "./documents/year-close";
+export type { ListFilters, ListPage } from "./documents/manual-list";
+export type { AccountSnapshot, GlDocumentStatus } from "./documents/manual-shared";
 export { replayLedger } from "./replay";
 export type { ReplayOptions, ReplayReport, ReplayCounts, ReplayBlock } from "./replay";
 export {

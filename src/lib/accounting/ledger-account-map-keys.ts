@@ -1,5 +1,5 @@
 /**
- * The 9 keys of `gl_account_map` (plan `gl-core-v1` §3). This is the single
+ * The keys of `gl_account_map` (plan `gl-core-v1` §3, 9 históricas + compras + `retained_earnings` del cierre de ejercicio). This is the single
  * source of truth for the key list, its label and its allowed QB account
  * types — the account-map GET/POST routes and (via the JSON they return) the
  * POS screen all derive from this list, never a re-typed copy.
@@ -65,6 +65,11 @@ export const LEDGER_ACCOUNT_MAP_KEYS: LedgerAccountMapKeyDef[] = [
     key: "inventory_offset",
     label: "Inventory Offset Account",
     allowedTypes: ["OtherCurrentLiability"],
+  },
+  {
+    key: "retained_earnings",
+    label: "Retained Earnings",
+    allowedTypes: ["Equity"],
   },
 ];
 

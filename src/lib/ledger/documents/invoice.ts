@@ -120,6 +120,13 @@ export async function postInvoice(
   const lineRows = await loadLines(client, invoiceId);
   const { map, snapshot } = await buildSnapshot(client, header, lineRows);
   const lines = buildInvoiceLines(snapshot, map);
+  // Una factura de $0 sin líneas ni costo (garantía/cortesía sin ítems, o un
+  // documento de QB en cero) no tiene NADA que asentar: el motor exige 2..200
+  // líneas y la rechazaría como GL_UNBALANCED_DOCUMENT. No es un bloqueo, es
+  // un documento vacío — se salta y el verificador lo excluye por la misma regla.
+  if (lines.length === 0) {
+    return { status: "skipped", reason: "empty_document" };
+  }
   const day = getBusinessDateString(header.issued_at);
   const sourceSnapshot = { header, lines: lineRows };
   const sourceHash = createHash("sha256")

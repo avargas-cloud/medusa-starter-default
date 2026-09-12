@@ -9,6 +9,8 @@ import {
   OpeningAccountMap,
   PURCHASE_ACCOUNT_MAP_KEYS,
   PurchaseAccountMap,
+  YEAR_CLOSE_ACCOUNT_MAP_KEYS,
+  YearCloseAccountMap,
 } from "./types";
 
 type MapRow = {
@@ -90,6 +92,16 @@ export async function loadPurchaseAccountMap(
 ): Promise<PurchaseAccountMap> {
   const keys = [...ACCOUNT_MAP_KEYS, ...PURCHASE_ACCOUNT_MAP_KEYS];
   return (await loadAccountMapByKeys(client, keys)) as PurchaseAccountMap;
+}
+
+/** Cierre de ejercicio: sólo `retained_earnings` — no exige las 9 base. */
+export async function loadYearCloseAccountMap(
+  client: PoolClient
+): Promise<YearCloseAccountMap> {
+  return (await loadAccountMapByKeys(
+    client,
+    YEAR_CLOSE_ACCOUNT_MAP_KEYS
+  )) as YearCloseAccountMap;
 }
 
 /**
