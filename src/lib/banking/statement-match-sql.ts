@@ -20,14 +20,21 @@ BEGIN
  SELECT l.debit_cents-l.credit_cents,l.account_list_id,e.day INTO cents,mapped,d
    FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
    WHERE l.id=NEW.book_id AND l.account_snapshot->>'account_type'='Bank';
+ -- Sin exigir el mismo signo (2026-09-14): la procesadora de tarjetas deposita ventas MENOS
+ -- reembolsos del día, así que una línea del banco se explica con depósitos (+) y reembolsos (−).
+ -- El asiento de signo opuesto RESTA en la línea (ver el cierre y statement-read).
  IF cents IS NULL OR mapped IS DISTINCT FROM parent.account_list_id OR d>parent.to_day
-   OR sign(cents)<>sign(line.amount_cents) THEN RAISE EXCEPTION 'BANKING_STATEMENT_MATCH_INVALID'; END IF;
+   THEN RAISE EXCEPTION 'BANKING_STATEMENT_MATCH_INVALID'; END IF;
  SELECT COALESCE(SUM(amount_cents),0) INTO used FROM bank_statement_match
    WHERE book_kind=NEW.book_kind AND book_id=NEW.book_id AND deleted_at IS NULL;
  IF used+NEW.amount_cents>abs(cents) THEN RAISE EXCEPTION 'BANKING_STATEMENT_BOOK_OVERCONSUMED'; END IF;
- SELECT COALESCE(SUM(amount_cents),0) INTO used FROM bank_statement_match
-   WHERE statement_line_id=NEW.statement_line_id AND deleted_at IS NULL;
- IF used+NEW.amount_cents>abs(line.amount_cents) THEN RAISE EXCEPTION 'BANKING_STATEMENT_LINE_OVERCONSUMED'; END IF;
+ -- Capacidad de la línea con signo: un asiento del signo opuesto RESTA. Los de signo opuesto
+ -- se insertan primero (el casador los ordena así) para que la suma parcial nunca exceda.
+ SELECT COALESCE(SUM(CASE WHEN sign(b.debit_cents-b.credit_cents)=sign(line.amount_cents) THEN m.amount_cents ELSE -m.amount_cents END),0)
+   INTO used FROM bank_statement_match m JOIN bank_journal_line b ON b.id=m.book_id
+   WHERE m.statement_line_id=NEW.statement_line_id AND m.deleted_at IS NULL;
+ IF used+(CASE WHEN sign(cents)=sign(line.amount_cents) THEN NEW.amount_cents ELSE -NEW.amount_cents END)>abs(line.amount_cents)
+   THEN RAISE EXCEPTION 'BANKING_STATEMENT_LINE_OVERCONSUMED'; END IF;
  RETURN NEW;
 END $$;
 CREATE TRIGGER bank_statement_match_capacity BEFORE INSERT OR UPDATE ON bank_statement_match
@@ -54,7 +61,8 @@ BEGIN
    OR (s.payload->>'opening_balance_cents')::numeric+credits-debits IS DISTINCT FROM (s.payload->>'closing_balance_cents')::numeric
  THEN RAISE EXCEPTION 'BANKING_STATEMENT_INCOMPLETE'; END IF;
  IF EXISTS(SELECT 1 FROM bank_statement_line l WHERE l.statement_id=s.id AND l.deleted_at IS NULL
-   AND (l.day<s.from_day OR l.day>s.to_day OR (SELECT COALESCE(SUM(m.amount_cents),0) FROM bank_statement_match m WHERE m.statement_line_id=l.id AND m.deleted_at IS NULL)<>abs(l.amount_cents)
+   AND (l.day<s.from_day OR l.day>s.to_day OR (SELECT COALESCE(SUM(CASE WHEN sign(b.debit_cents-b.credit_cents)=sign(l.amount_cents) THEN m.amount_cents ELSE -m.amount_cents END),0)
+       FROM bank_statement_match m JOIN bank_journal_line b ON b.id=m.book_id WHERE m.statement_line_id=l.id AND m.deleted_at IS NULL)<>abs(l.amount_cents)
      OR EXISTS(SELECT 1 FROM bank_statement_match m WHERE m.statement_line_id=l.id AND m.deleted_at IS NULL AND m.line_hash<>l.source_hash)))
  THEN RAISE EXCEPTION 'BANKING_STATEMENT_UNMATCHED_LINES'; END IF;
  IF EXISTS(SELECT 1 FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id WHERE a.qb_list_id=s.account_list_id

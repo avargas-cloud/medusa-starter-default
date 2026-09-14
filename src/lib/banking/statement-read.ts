@@ -51,12 +51,10 @@ export async function statementContext(
     line.blockers = [...current.blockers];
     if (current.hash !== line.source_hash)
       line.blockers.push("BANKING_STATEMENT_LINE_SOURCE_DRIFT");
-    line.matched_cents = matches
-      .filter((match) => match.statement_line_id === line.id)
-      .reduce((sum, match) => sum + match.amount_cents, 0);
-    line.remaining_cents = Math.abs(line.amount_cents) - line.matched_cents;
-    if (line.remaining_cents !== 0)
-      blockers.push("BANKING_STATEMENT_UNMATCHED_LINES");
+    // matched/remaining se calculan más abajo, cuando el libro ya está cargado: el signo de
+    // cada asiento casado decide si SUMA o RESTA en la línea (depósitos neteados, 2026-09-14).
+    line.matched_cents = 0;
+    line.remaining_cents = Math.abs(line.amount_cents);
     blockers.push(...line.blockers);
   }
   blockers.push(...statementDocumentBlockers({ ...statement, lines }));
@@ -76,6 +74,22 @@ export async function statementContext(
   }
   const evidence = await completionEvidence(client, statement.evidence_id);
   const book = await statementBook(client, statement);
+  // Un asiento del signo OPUESTO a la línea la reduce: la procesadora de tarjetas deposita
+  // ventas menos reembolsos del día, así que una línea de $3.444,84 se explica con dos
+  // depósitos (+$3.726,42) y tres reembolsos (−$281,58). El monto del match sigue siendo lo
+  // que CONSUME del asiento (positivo); el signo lo aporta el asiento.
+  const bookSign = new Map(book.items.map((item) => [`${item.kind}:${item.id}`, Math.sign(item.amount_cents)]));
+  for (const line of lines) {
+    line.matched_cents = matches
+      .filter((match) => match.statement_line_id === line.id)
+      .reduce((sum, match) => {
+        const sign = bookSign.get(`${match.book_kind}:${match.book_id}`) ?? Math.sign(line.amount_cents);
+        return sum + (sign === Math.sign(line.amount_cents) ? match.amount_cents : -match.amount_cents);
+      }, 0);
+    line.remaining_cents = Math.abs(line.amount_cents) - line.matched_cents;
+    if (line.remaining_cents !== 0)
+      blockers.push("BANKING_STATEMENT_UNMATCHED_LINES");
+  }
   for (const item of book.items) blockers.push(...item.blockers);
   for (const match of matches) {
     const item = book.items.find(
