@@ -1,6 +1,7 @@
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { ownerEmails } from "../pos/access-level";
 
 import { bankIdentity } from "./auth";
 import {
@@ -71,6 +72,15 @@ type ReviewPermissionRow = {
   can_close: boolean;
   can_post: boolean;
 };
+/**
+ * Sólo un usuario con nivel Accounting (grant vivo en `pos_accounting_grant`) puede
+ * recibir granos de Banking: la "puerta cero" de `reviewAccess` ya los ignora sin
+ * ese nivel, así que listarlos u otorgárselos a cualquier usuario de Medusa era
+ * teatro (2026-09-14). Los owners no se listan: administran por definición.
+ */
+const ACCOUNTING_USER_SQL = `EXISTS (SELECT 1 FROM pos_accounting_grant g WHERE g.user_id=u.id AND g.revoked_at IS NULL)
+      AND NOT (lower(u.email)=ANY($1::text[]))`;
+
 export async function listReviewPermissions(): Promise<{
   users: ReviewPermissionRow[];
 }> {
@@ -80,7 +90,8 @@ export async function listReviewPermissions(): Promise<{
     `SELECT u.id,u.email,COALESCE(p.can_review,false) AS can_review,COALESCE(p.can_close,false) AS can_close,
       COALESCE(p.can_post,false) AS can_post
       FROM "user" u LEFT JOIN bank_review_permission p ON p.user_id=u.id AND p.deleted_at IS NULL
-      WHERE u.deleted_at IS NULL ORDER BY u.email,u.id`
+      WHERE u.deleted_at IS NULL AND ${ACCOUNTING_USER_SQL} ORDER BY u.email,u.id`,
+    [ownerEmails()]
   );
   return { users: result.rows };
 }
@@ -108,11 +119,14 @@ export async function saveReviewPermission(
   return runReviewCommand(
     { actorId, key, operation: "permission", entityId: body.user_id, body },
     async (client) => {
-      const user = await client.query<{ id: string }>(
-        'SELECT id FROM "user" WHERE id=$1 AND deleted_at IS NULL FOR SHARE',
-        [body.user_id]
+      const user = await client.query<{ id: string; accounting: boolean }>(
+        `SELECT u.id,(${ACCOUNTING_USER_SQL}) AS accounting
+           FROM "user" u WHERE u.id=$2 AND u.deleted_at IS NULL FOR SHARE OF u`,
+        [ownerEmails(), body.user_id]
       );
       if (!user.rows[0]) throw new BankingError("BANKING_USER_NOT_FOUND", 404);
+      if (!user.rows[0].accounting)
+        throw new BankingError("BANKING_ACCOUNTING_LEVEL_REQUIRED", 409);
       const old = await client.query<{
         id: string;
         can_review: boolean;
