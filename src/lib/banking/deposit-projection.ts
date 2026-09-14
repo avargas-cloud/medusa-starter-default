@@ -45,7 +45,8 @@ export const DEPOSIT_SELECT_SQL = `d.id,d.revision,d.status,d.account_id,d.curre
     'payment_display_id',dl.payment_snapshot->'display_id','customer_id',dl.payment_snapshot->>'customer_id',
     'customer_name',dl.payment_snapshot->>'customer_name','method',dl.payment_snapshot->>'method',
     'payment_amount',dl.payment_snapshot->>'amount','amount',dl.amount,'source_hash',dl.source_hash,
-    'surcharge_amount',COALESCE(dl.payment_snapshot->>'surcharge_amount','0.00'))
+    'surcharge_amount',COALESCE(dl.payment_snapshot->>'surcharge_amount','0.00'),
+    'card_brand',dl.payment_snapshot->>'card_brand')
     || CASE
       WHEN dl.manual_reference IS NOT NULL THEN jsonb_build_object('source_type','manual','manual',true,
         'reference',dl.manual_reference,'description',dl.manual_description)

@@ -15,9 +15,16 @@
  *    cash siga siendo elegible.
  * §4 negativo: un pago SIN metadata de surcharge tiene surcharge_cents=0 y
  *    su asiento tiene exactamente 2 líneas.
+ * §5 card type change guard: chequeo ESTÁTICO (read-only, la ruta no se
+ *    puede ejercitar sin HTTP desde acá) — la ruta PATCH de customer-payments
+ *    contiene el 409 PAYMENT_IN_DEPOSIT y la clave card_type_change_log, y
+ *    DEPOSIT_RECEIPT_SQL expone card_brand.
  *
  * Run: cd backend && yarn medusa exec ./src/scripts/verify/verify-payment-surcharge.ts
  */
+import { readFileSync } from "fs";
+import { join } from "path";
+
 import type { ExecArgs } from "@medusajs/framework/types";
 
 import { buildCustomerPaymentLines } from "../../lib/ledger/lines/customer-payment";
@@ -254,6 +261,28 @@ export default async function verifyPaymentSurcharge({ container }: ExecArgs) {
       const n = Number(lineCount[0]?.n ?? 0);
       check(n === 0 || n === 2, `${row.id}: su asiento tiene 2 líneas (o 0 si nunca posteó) — tiene ${n}`);
     }
+  }
+
+  log("");
+  log("§5 card type change guard (estático)");
+  {
+    const routePath = join(
+      __dirname,
+      "../../api/admin/customer-payments/[id]/route.ts"
+    );
+    const routeSrc = readFileSync(routePath, "utf8");
+    check(
+      routeSrc.includes("PAYMENT_IN_DEPOSIT"),
+      "route.ts contiene el literal PAYMENT_IN_DEPOSIT"
+    );
+    check(
+      routeSrc.includes("card_type_change_log"),
+      "route.ts contiene la clave card_type_change_log"
+    );
+    check(
+      DEPOSIT_RECEIPT_SQL.includes("card_brand"),
+      "DEPOSIT_RECEIPT_SQL contiene card_brand"
+    );
   }
 
   log("");

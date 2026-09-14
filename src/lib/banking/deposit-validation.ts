@@ -119,6 +119,7 @@ export async function validateDepositFunding(
     customer_id: "",
     customer_name: description || reference,
     method: "manual_uf",
+    card_brand: null,
     date,
     reference,
     amount,

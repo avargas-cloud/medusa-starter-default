@@ -41,10 +41,11 @@ export type DepositCandidate = {
   manual_reference?: string | null;
   manual_description?: string | null;
   payment_id?: null;
+  card_brand: string | null;
 };
 export const DEPOSIT_RECEIPT_SQL = `mp.id,mp.display_id,mp.customer_id,
   COALESCE(NULLIF(c.company_name,''),NULLIF(trim(concat_ws(' ',c.first_name,c.last_name)),''),c.email,c.id) AS customer_name,
-  mp.method,to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD') AS date,mp.reference,
+  mp.method,mp.card_brand,to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD') AS date,mp.reference,
   (mp.amount::numeric/100)::numeric(30,2)::text AS amount,upper(mp.currency) AS currency,
   ${PAYMENT_FINGERPRINT_SQL} AS source_hash,2 AS fingerprint_version,${LEGACY_PAYMENT_FINGERPRINT_SQL} AS legacy_source_hash,
   (COALESCE(mp.surcharge_cents,0)::numeric/100)::numeric(30,2)::text AS surcharge_amount,
@@ -133,7 +134,7 @@ export async function depositCandidates(input: {
     WHERE ${DEPOSIT_PAYMENT_ELIGIBLE_SQL} AND ${NO_DIRECT_RESERVATION_SQL} AND upper(mp.currency)=$1
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date >= $3::date
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date <= (now() AT TIME ZONE 'America/New_York')::date
-  ), normal AS (SELECT id,display_id,customer_id,customer_name,method,date,reference,amount,available_amount,surcharge_amount,currency,source_hash,fingerprint_version
+  ), normal AS (SELECT id,display_id,customer_id,customer_name,method,card_brand,date,reference,amount,available_amount,surcharge_amount,currency,source_hash,fingerprint_version
     FROM eligible WHERE available_amount::numeric>0 AND ($4::text='' OR concat_ws(' ',customer_name,reference,display_id::text) ILIKE '%'||$4||'%')),
   matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal),
   page AS (SELECT id,date,candidate FROM matching WHERE $5::text IS NULL OR (date,id) > ($5::text,$6::text))

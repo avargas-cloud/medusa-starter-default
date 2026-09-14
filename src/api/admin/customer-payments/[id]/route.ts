@@ -216,6 +216,58 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const meta = (payment.metadata as Record<string, any>) ?? {};
+
+    // ── Method change guards ──────────────────────────────────────────────
+    // A receipt already swept into a bank deposit is frozen: the deposit's
+    // source_hash fingerprints the payment's method, so changing it here
+    // would silently make the deposit's evidence stale.
+    if (method !== undefined && method !== (payment as any).method) {
+      const knex = req.scope.resolve("__pg_connection__") as {
+        raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+      };
+      const { rows: inDepositRows } = await knex.raw(
+        `SELECT 1 FROM bank_deposit_line dl JOIN bank_deposit d ON d.id=dl.deposit_id
+         WHERE dl.payment_id=? AND dl.deleted_at IS NULL AND d.deleted_at IS NULL AND d.status<>'void' LIMIT 1`,
+        [id]
+      );
+      if (inDepositRows.length > 0) {
+        return res.status(409).json({
+          error: "PAYMENT_IN_DEPOSIT",
+          code: "PAYMENT_IN_DEPOSIT",
+          message:
+            "This receipt is already inside a bank deposit; remove it from the deposit before changing its method.",
+        });
+      }
+
+      // Card-to-card method changes (e.g. credit_card → debit_card) are
+      // audited: they don't change the receipt's economics, but they DO
+      // change what QB's PaymentMethodRef says happened.
+      const CARD_METHODS = new Set(["credit_card", "debit_card", "card"]);
+      if (
+        CARD_METHODS.has((payment as any).method) &&
+        CARD_METHODS.has(method)
+      ) {
+        const existingLog = Array.isArray(meta.card_type_change_log)
+          ? meta.card_type_change_log
+          : [];
+        const actorId =
+          (req as unknown as { auth_context?: { actor_id?: string } })
+            .auth_context?.actor_id ?? "unknown";
+        const changeReason = (req.body as { reason?: string })?.reason
+          ?.slice(0, 200);
+        meta.card_type_change_log = [
+          ...existingLog,
+          {
+            from: (payment as any).method,
+            to: method,
+            at: new Date().toISOString(),
+            by: actorId,
+            reason: changeReason ?? null,
+          },
+        ];
+      }
+    }
+
     const fields: Record<string, any> = {};
     if (method) fields.method = method;
     if (reference !== undefined) fields.reference = reference;
@@ -225,6 +277,12 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     if (batchDayChanged) fields.batch_day = batch_day;
     if (pos_payment_method !== undefined) {
       fields.metadata = { ...meta, pos_payment_method };
+    } else if (meta.card_type_change_log !== undefined) {
+      // pos_payment_method wasn't part of this request, but the card-type
+      // audit log above added a key to `meta` — persist it (read-modify-write
+      // the full metadata object; Medusa's update deep-merges JSONB, but
+      // arrays are replaced wholesale, so `meta` must already hold the full array).
+      fields.metadata = { ...meta };
     }
 
     await financeService.updateCustomerPayments({ id, ...fields });

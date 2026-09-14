@@ -73,6 +73,8 @@ export type DepositLine = {
   payment_amount: string;
   /** Customer-paid card surcharge inside `amount`; "0.00" for cash/check and pre-2026-09-14 snapshots. */
   surcharge_amount: string;
+  /** Card network (e.g. "visa"); null for cash/check and for snapshots recorded before 2026-09-14. */
+  card_brand: string | null;
   amount: string;
   source_hash: string;
 };
