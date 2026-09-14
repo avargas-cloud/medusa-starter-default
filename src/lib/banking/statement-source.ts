@@ -5,13 +5,20 @@ import { receiptAccounts, receiptMapping, receiptSetup } from "./receipts-setup"
 import { reviewHash } from "./review-common";
 import { reviewToday } from "./review-date";
 import { BankingError, bankingEnvSql } from "./security";
-import type { StatementDocument, StatementInput } from "./statement-types";
+import {
+  STATEMENT_ACCOUNT_TYPES,
+  type StatementDocument,
+  type StatementInput,
+} from "./statement-types";
 
 /**
  * banking-on-gl: a statement's anchor is the GL `opening_balance` document for the
  * account (`bank_journal_entry.source_kind='opening_balance'`), not a declared
  * `bank_opening_balance` row. `cut_date` is the entry's own day; the statement
  * balance at cut is the `opening` role line's signed amount on this account.
+ * Bank AND CreditCard accounts (Plaid `depository`/`credit`), both in GL sign — see
+ * `STATEMENT_ACCOUNT_TYPES`. A card with a $0 balance at the cut has no `opening`
+ * line (the builder skips zero) and therefore cannot anchor a statement yet.
  */
 export async function statementBank(
   client: PoolClient,
@@ -25,7 +32,7 @@ export async function statementBank(
   const bank = (
     await client.query<{ qb_list_id: string }>(
       `SELECT a.qb_list_id FROM bank_account a JOIN bank_connection c ON c.id=a.connection_id
-    WHERE a.id=$1 AND a.is_active AND a.is_selected AND a.currency='USD' AND a.type='depository'
+    WHERE a.id=$1 AND a.is_active AND a.is_selected AND a.currency='USD' AND a.type IN ('depository','credit')
       AND a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.environment=${bankingEnvSql()} FOR SHARE OF a,c`,
       [accountId]
     )
@@ -34,7 +41,11 @@ export async function statementBank(
     ? (await receiptAccounts(client, [bank.qb_list_id]))[0]
     : null;
   const account = live ? receiptMapping(live, setup.attested) : null;
-  if (!account || account.account_type !== "Bank" || account.currency !== "USD")
+  if (
+    !account ||
+    !STATEMENT_ACCOUNT_TYPES.includes(account.account_type) ||
+    account.currency !== "USD"
+  )
     throw new BankingError("BANKING_OPENING_ACCOUNT_INVALID", 409);
   const opening = (
     await client.query<{
@@ -93,7 +104,7 @@ export async function statementLineFacts(
       `SELECT t.id,
     (-t.amount::numeric*100)::float8 AS amount_cents,t.currency,t.status,t.transaction_date AS day,t.source_version,
     (t.deleted_at IS NOT NULL OR a.deleted_at IS NOT NULL OR c.deleted_at IS NOT NULL) AS deleted,a.qb_list_id AS account_list_id,
-    (a.is_active AND a.is_selected AND a.type='depository' AND a.currency='USD' AND c.environment=${bankingEnvSql()}) AS active
+    (a.is_active AND a.is_selected AND a.type IN ('depository','credit') AND a.currency='USD' AND c.environment=${bankingEnvSql()}) AS active
     FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection c ON c.id=a.connection_id
     WHERE t.id=$1 FOR SHARE OF t,a,c`,
       [line.transaction_id]

@@ -19,7 +19,7 @@ BEGIN
  THEN RAISE EXCEPTION 'BANKING_STATEMENT_MATCH_INVALID'; END IF;
  SELECT l.debit_cents-l.credit_cents,l.account_list_id,e.day INTO cents,mapped,d
    FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
-   WHERE l.id=NEW.book_id AND l.account_snapshot->>'account_type'='Bank';
+   WHERE l.id=NEW.book_id AND l.account_snapshot->>'account_type' IN ('Bank','CreditCard');
  -- Sin exigir el mismo signo (2026-09-14): la procesadora de tarjetas deposita ventas MENOS
  -- reembolsos del día, así que una línea del banco se explica con depósitos (+) y reembolsos (−).
  -- El asiento de signo opuesto RESTA en la línea (ver el cierre y statement-read).
@@ -79,14 +79,14 @@ BEGIN
  THEN RAISE EXCEPTION 'BANKING_STATEMENT_PREDECESSOR_REQUIRED'; END IF;
  SELECT COALESCE(SUM(l.debit_cents-l.credit_cents),0) INTO book
    FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id WHERE l.account_list_id=s.account_list_id
-   AND l.account_snapshot->>'account_type'='Bank' AND e.day<=s.to_day;
+   AND l.account_snapshot->>'account_type' IN ('Bank','CreditCard') AND e.day<=s.to_day;
  SELECT COALESCE(SUM(item.amount_cents-sign(item.amount_cents)*COALESCE((SELECT SUM(m.amount_cents)
    FROM bank_statement_match m JOIN bank_statement owner ON owner.id=m.statement_id
    WHERE m.book_kind='journal_line' AND m.book_id=item.id AND m.deleted_at IS NULL AND owner.to_day<=s.to_day),0)),0)
  INTO pending FROM (
    SELECT l.id,l.debit_cents-l.credit_cents amount_cents FROM bank_journal_line l
      JOIN bank_journal_entry e ON e.id=l.entry_id WHERE l.account_list_id=s.account_list_id
-     AND l.account_snapshot->>'account_type'='Bank' AND l.role<>'opening' AND e.day<=s.to_day
+     AND l.account_snapshot->>'account_type' IN ('Bank','CreditCard') AND l.role<>'opening' AND e.day<=s.to_day
  ) item;
  IF book-(s.payload->>'closing_balance_cents')::numeric-pending<>0
    OR (s.closed_snapshot->>'book_balance_cents')::numeric IS DISTINCT FROM book

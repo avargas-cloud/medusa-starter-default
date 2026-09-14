@@ -3,6 +3,17 @@ import { z } from "zod";
 import { movementId } from "./movement-types";
 import { reviewDate } from "./review-date";
 
+/**
+ * QuickBooks account types a statement can reconcile. Everything stays in GL sign
+ * (`Σ debit − credit`): a `CreditCard` liability carries a NEGATIVE book balance, a
+ * charge is a negative statement line and a payment a positive one, so the
+ * `opening + credits − debits = closing` invariant and both Postgres triggers work
+ * unchanged (2026-09-14). The POS flips the sign for display only.
+ */
+export const STATEMENT_ACCOUNT_TYPES: readonly string[] = ["Bank", "CreditCard"];
+/** Plaid account types the statement flow accepts — the counterpart of the list above. */
+export const STATEMENT_PLAID_TYPES: readonly string[] = ["depository", "credit"];
+
 export const statementCents = z
   .number()
   .int()

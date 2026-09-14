@@ -46,7 +46,7 @@ export function receiptMapping(
   const local =
     attested &&
     account.currency === null &&
-    ["AccountsReceivable", "OtherCurrentAsset", "Bank"].includes(
+    ["AccountsReceivable", "OtherCurrentAsset", "Bank", "CreditCard"].includes(
       account.account_type
     );
   return {
@@ -63,7 +63,7 @@ export async function receiptAccounts(
     await client.query<AccountingAccount>(
       `SELECT qb_list_id AS id,full_name AS name,account_type,currency
     FROM qb_account WHERE is_active AND deleted_at IS NULL AND ($1::text[] IS NULL OR qb_list_id=ANY($1::text[]))
-    AND account_type IN ('AccountsReceivable','OtherCurrentAsset','Bank','Expense','OtherExpense')
+    AND account_type IN ('AccountsReceivable','OtherCurrentAsset','Bank','CreditCard','Expense','OtherExpense')
     ORDER BY full_name,qb_list_id FOR SHARE`,
       [ids ?? null]
     )

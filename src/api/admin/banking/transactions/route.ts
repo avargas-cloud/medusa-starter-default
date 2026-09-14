@@ -28,7 +28,7 @@ const query = z.object({
   offset: integerQuery(Number.MAX_SAFE_INTEGER, 0),
   limit: integerQuery(100, 50, 1),
   review_status: z
-    .enum(["all", "pending", "confirmed", "excluded", "closed"])
+    .enum(["all", "pending", "confirmed", "excluded", "closed", "reconciled"])
     .default("all"),
   q: z.string().max(200).default(""),
   date_from: z

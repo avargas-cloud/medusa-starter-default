@@ -58,9 +58,11 @@ export interface BankTransactionView {
   status: "pending" | "posted" | "removed";
   source_version: number;
   review: Review | null;
-  review_status: "pending" | "confirmed" | "excluded" | "closed";
+  review_status: "pending" | "confirmed" | "excluded" | "closed" | "reconciled";
   attachment_count: number;
   day_closed: boolean;
+  /** Set when the transaction is a line of a CLOSED statement (`review_status='reconciled'`). */
+  reconciled: { statement_id: string; from_day: string; to_day: string } | null;
   stale: boolean;
   opening_clear?: { id: string; item_id: string; reference: string };
 }
@@ -152,7 +154,7 @@ export interface TransactionFilters {
   status?: BankTransactionView["status"];
   offset: number;
   limit: number;
-  review_status?: "all" | "pending" | "confirmed" | "excluded" | "closed";
+  review_status?: "all" | "pending" | "confirmed" | "excluded" | "closed" | "reconciled";
   q?: string;
   date_from?: string;
   date_to?: string;
@@ -195,11 +197,11 @@ export async function bankingTransactions(
                ILIKE '%' || $8 || '%')
      ), matching AS NOT MATERIALIZED (
        SELECT id,account_id,date,name,merchant_name,amount,currency,status,source_version,
-         review,review_status,stale,day_closed,attachment_count FROM projected
+         review,review_status,stale,day_closed,reconciled,attachment_count FROM projected
        WHERE $9::text='all' OR review_status=$9::text
      ), page AS (
        SELECT id,account_id,date,name,merchant_name,amount,currency,status,source_version,
-         review,review_status,stale,day_closed,attachment_count
+         review,review_status,stale,day_closed,reconciled,attachment_count
          FROM matching ORDER BY date DESC, id DESC LIMIT $3 OFFSET $4
      )
      SELECT EXISTS(SELECT 1 FROM account_scope) AS account_exists,

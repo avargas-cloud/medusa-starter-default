@@ -96,6 +96,23 @@ export async function createBillPayment(
     }
 
     await assertBankAccountingPeriodOpen(client as unknown as PoolClient, input.payment_date);
+    // A closed bank/card statement freezes the account's book balance: the GL post of
+    // this payment is best-effort AFTER commit (`runLedgerHook`), so without this
+    // preflight a backdated payment would save fine and stay blocked from the ledger
+    // for good. Same day rule as `bank_statement_journal_guard` (2026-09-14).
+    const { rows: closedStatement } = await client.query(
+      `SELECT id FROM bank_statement
+        WHERE account_list_id = $1 AND status = 'closed' AND deleted_at IS NULL
+          AND $2::text BETWEEN from_day AND to_day LIMIT 1`,
+      [input.bank_account_list_id, input.payment_date]
+    );
+    if (closedStatement.length > 0) {
+      throw new BillPaymentError(
+        "statement_period_closed",
+        `${input.payment_date} falls inside a closed statement of ${bankAccount.full_name}; reopen it before dating a payment there.`,
+        409
+      );
+    }
 
     // Lock bills in a fixed order (their own ids) — the same discipline the
     // China-finance recompute uses for its groups, and the reason to avoid

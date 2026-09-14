@@ -98,7 +98,7 @@ export async function statementBook(
     FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
     LEFT JOIN bank_journal_entry original ON original.id=e.reverses_entry_id
     LEFT JOIN bank_receipt_accounting a ON a.id=e.receipt_id
-    WHERE l.account_list_id=$1 AND l.account_snapshot->>'account_type'='Bank' AND e.day<=$2
+    WHERE l.account_list_id=$1 AND l.account_snapshot->>'account_type' IN ('Bank','CreditCard') AND e.day<=$2
     ORDER BY e.day,e.created_at,l.id LIMIT 10001`,
       [statement.account_list_id, statement.to]
     )

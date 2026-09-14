@@ -1,4 +1,22 @@
-/** Additive guards for every legacy/new Bank line and financial evidence mutation. */
+/**
+ * The one guard the card-statements migration reinstalls on its own (2026-09-14):
+ * a closed statement promises its book balance cannot move, so every new Bank OR
+ * CreditCard line dated inside a closed period is rejected — card charges, bill
+ * payments by card and backdated imports included (reopen the statement first).
+ */
+export const statementJournalGuardSql = `
+CREATE FUNCTION bank_statement_journal_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE d text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
+ SELECT day INTO d FROM bank_journal_entry WHERE id=NEW.entry_id;
+ IF NEW.account_snapshot->>'account_type' IN ('Bank','CreditCard') THEN PERFORM bank_statement_assert_open(NEW.account_list_id,d); END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER bank_statement_journal_guard BEFORE INSERT ON bank_journal_line
+ FOR EACH ROW EXECUTE FUNCTION bank_statement_journal_guard();
+`;
+/** Additive guards for every legacy/new Bank/CreditCard line and financial evidence mutation. */
 export const statementGuardSql = `
 CREATE FUNCTION bank_statement_assert_open(account_id text,business_day text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
@@ -46,16 +64,7 @@ CREATE TRIGGER bank_statement_line_guard BEFORE INSERT OR UPDATE OR DELETE ON ba
  FOR EACH ROW EXECUTE FUNCTION bank_statement_document_guard();
 CREATE TRIGGER bank_statement_match_guard BEFORE INSERT OR UPDATE OR DELETE ON bank_statement_match
  FOR EACH ROW EXECUTE FUNCTION bank_statement_document_guard();
-CREATE FUNCTION bank_statement_journal_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE d text;
-BEGIN
- PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
- SELECT day INTO d FROM bank_journal_entry WHERE id=NEW.entry_id;
- IF NEW.account_snapshot->>'account_type'='Bank' THEN PERFORM bank_statement_assert_open(NEW.account_list_id,d); END IF;
- RETURN NEW;
-END $$;
-CREATE TRIGGER bank_statement_journal_guard BEFORE INSERT ON bank_journal_line
- FOR EACH ROW EXECUTE FUNCTION bank_statement_journal_guard();
+${statementJournalGuardSql}
 CREATE FUNCTION bank_statement_evidence_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE txid text; mapped text; d text; previous_mapped text;
 BEGIN

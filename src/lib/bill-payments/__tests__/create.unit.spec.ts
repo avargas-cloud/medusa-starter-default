@@ -46,11 +46,25 @@ describe("createBillPayment", () => {
     });
   });
 
+  it("refuses a payment dated inside a closed bank statement", async () => {
+    const client = fakeClient([
+      { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
+      { match: "FROM qb_account", rows: [BANK_ACCOUNT] },
+      { match: "FROM accounting_period_close", rows: [] },
+      { match: "FROM bank_statement", rows: [{ id: "bstm_closed_sep" }] },
+    ]);
+    await expect(createBillPayment(client as never, baseInput)).rejects.toMatchObject({
+      code: "statement_period_closed",
+      status: 409,
+    });
+  });
+
   it("refuses when a bill is not confirmed/synced", async () => {
     const client = fakeClient([
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
       { match: "FROM qb_account", rows: [BANK_ACCOUNT] },
       { match: "FROM accounting_period_close", rows: [] },
+      { match: "FROM bank_statement", rows: [] },
       { match: "FROM vendor_bill\n", rows: [{ ...BILL, status: "draft" }] },
     ]);
     await expect(createBillPayment(client as never, baseInput)).rejects.toMatchObject({
@@ -63,6 +77,7 @@ describe("createBillPayment", () => {
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
       { match: "FROM qb_account", rows: [BANK_ACCOUNT] },
       { match: "FROM accounting_period_close", rows: [] },
+      { match: "FROM bank_statement", rows: [] },
       { match: "FROM vendor_bill\n", rows: [BILL] },
       {
         match: "FROM vendor_bill vb",
@@ -91,6 +106,7 @@ describe("createBillPayment", () => {
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },
       { match: "FROM qb_account", rows: [BANK_ACCOUNT] },
       { match: "FROM accounting_period_close", rows: [] },
+      { match: "FROM bank_statement", rows: [] },
       { match: "FROM vendor_bill\n", rows: [BILL] },
       {
         match: "FROM vendor_bill vb",
