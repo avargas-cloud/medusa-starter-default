@@ -11,27 +11,31 @@ import { statementMatchSql } from "../lib/banking/statement-match-sql";
  * `account_type='Bank'` → `IN ('Bank','CreditCard')`.
  *
  * - `bank_statement_match_capacity` / `bank_statement_check_close`: desde
- *   `lib/banking/statement-match-sql.ts` (mismo patrón que BankingStatementNetMatch).
+ *   `lib/banking/statement-match-sql.ts`.
  * - `bank_statement_journal_guard`: una línea de tarjeta fechada en un mes ya cerrado
  *   también se rechaza (cargos, pagos de bills con tarjeta, importaciones tardías).
- *   Reinstala SÓLO esa función: `statementGuardSql` entero crearía de nuevo los otros
- *   guards que ya existen (`statementJournalGuardSql` es el extracto dedicado).
  *
- * Sólo funciones/triggers: ni tablas ni columnas (expand-only).
+ * Sólo CUERPOS de función, con `CREATE OR REPLACE` y SIN tocar los triggers: la primera
+ * versión hacía `DROP TRIGGER … ON bank_journal_line` (ACCESS EXCLUSIVE sobre una tabla
+ * que el pipeline de QB y los hooks del GL escriben cada minuto) y el predeploy de Railway
+ * murió con `deadlock detected` (2026-09-14 21:53Z, deploy 670576b5). Reemplazar el cuerpo
+ * sólo bloquea el objeto función, no la tabla, y el trigger existente lo llama por nombre.
+ * Expand-only: ni tablas ni columnas.
  */
 export class BankingCardStatements20260915000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP TRIGGER IF EXISTS bank_statement_match_capacity ON bank_statement_match`);
-    await queryRunner.query(`DROP TRIGGER IF EXISTS bank_statement_close_valid ON bank_statement`);
-    await queryRunner.query(`DROP TRIGGER IF EXISTS bank_statement_journal_guard ON bank_journal_line`);
-    await queryRunner.query(`DROP FUNCTION IF EXISTS bank_statement_match_capacity()`);
-    await queryRunner.query(`DROP FUNCTION IF EXISTS bank_statement_check_close()`);
-    await queryRunner.query(`DROP FUNCTION IF EXISTS bank_statement_journal_guard()`);
-    await queryRunner.query(statementMatchSql);
-    await queryRunner.query(statementJournalGuardSql);
+    await queryRunner.query(functionBodiesOnly(statementMatchSql));
+    await queryRunner.query(functionBodiesOnly(statementJournalGuardSql));
   }
 
   public async down(): Promise<void> {
     throw new Error("Banking statement trigger history requires reviewed rollback.");
   }
+}
+
+/** `CREATE FUNCTION` → `CREATE OR REPLACE FUNCTION`; drops every `CREATE [CONSTRAINT] TRIGGER …;` (they already exist). */
+export function functionBodiesOnly(sql: string): string {
+  return sql
+    .replace(/CREATE (?:CONSTRAINT )?TRIGGER[^;]*;/g, "")
+    .replace(/CREATE FUNCTION/g, "CREATE OR REPLACE FUNCTION");
 }
