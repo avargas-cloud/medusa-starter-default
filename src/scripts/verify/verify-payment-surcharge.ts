@@ -7,7 +7,12 @@
  * §3 paridad contra el feed bancario, día de negocio ET, control 2026-09-03 →
  *    2026-09-04 ($1608.98) — sólo exigible DESPUÉS del backfill
  *    (`fix/backfill-payment-surcharge.ts`); antes reporta cuántos pagos
- *    siguen en 0 con metadata y no falla la sección.
+ *    siguen en 0 con metadata y no falla la sección. En una base SIN créditos
+ *    `MER BNKCD` (el sandbox no tiene feed de Plaid) la sección es informativa:
+ *    el control sólo se afirma contra producción (lectura declarada en el plan).
+ * §2b tarjetas como candidatas REALES: corre `DEPOSIT_PAYMENT_ELIGIBLE_SQL` +
+ *    `DEPOSIT_RECEIPT_SQL` de producción (no la fórmula re-tipeada) y exige que
+ *    cash siga siendo elegible.
  * §4 negativo: un pago SIN metadata de surcharge tiene surcharge_cents=0 y
  *    su asiento tiene exactamente 2 líneas.
  *
