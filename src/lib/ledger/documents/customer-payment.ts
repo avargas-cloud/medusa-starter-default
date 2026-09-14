@@ -5,7 +5,7 @@ import { getBusinessDateString } from "../../date/et";
 import { buildCustomerPaymentLines } from "../lines/customer-payment";
 import { centsFromNumeric } from "../money";
 import { postDocumentJournal, reverseDocumentJournal } from "../post";
-import { loadAccountMap } from "../accounts";
+import { loadAccountMap, loadSurchargeAccount } from "../accounts";
 import { LedgerClaim, LedgerError, PaymentSnapshot, PostResult, ReverseResult } from "../types";
 
 /** §6: sólo pagos/refunds con monto > 0 y no voideados postean. */
@@ -21,6 +21,7 @@ type PaymentRow = {
   amount: string;
   status: string;
   received_at: string;
+  surcharge_cents: number;
 };
 
 async function loadPayment(
@@ -28,7 +29,8 @@ async function loadPayment(
   paymentId: string
 ): Promise<PaymentRow | null> {
   const { rows } = await client.query<PaymentRow>(
-    `SELECT id, type, amount::text, status, received_at::text
+    `SELECT id, type, amount::text, status, received_at::text,
+       COALESCE(surcharge_cents,0)::int AS surcharge_cents
      FROM customer_payment WHERE id = $1 AND deleted_at IS NULL`,
     [paymentId]
   );
@@ -58,11 +60,17 @@ export async function postCustomerPayment(
     throw new LedgerError("GL_SOURCE_INVALID", { amountCents: amountCents.toString() });
 
   const map = await loadAccountMap(client);
+  const surchargeCents = BigInt(payment.surcharge_cents);
   const snapshot: PaymentSnapshot = {
     type: payment.type === "refund" ? "refund" : "payment",
     amountCents,
+    surchargeCents,
   };
-  const lines = buildCustomerPaymentLines(snapshot, map);
+  const surchargeAccount =
+    snapshot.type === "payment" && surchargeCents > 0n
+      ? await loadSurchargeAccount(client)
+      : undefined;
+  const lines = buildCustomerPaymentLines(snapshot, map, surchargeAccount);
   const day = getBusinessDateString(payment.received_at);
   const sourceSnapshot = { payment };
   const sourceHash = createHash("sha256")

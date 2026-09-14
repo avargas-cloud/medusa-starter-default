@@ -71,6 +71,16 @@ export const LEDGER_ACCOUNT_MAP_KEYS: LedgerAccountMapKeyDef[] = [
     label: "Retained Earnings",
     allowedTypes: ["Equity"],
   },
+  {
+    key: "credit_card_surcharge",
+    label: "Credit Card Surcharge (income)",
+    allowedTypes: ["Income", "OtherIncome"],
+  },
+  {
+    key: "merchant_fees",
+    label: "Merchant Fees (processor)",
+    allowedTypes: ["Expense", "CostOfGoodsSold"],
+  },
 ];
 
 export const LEDGER_ACCOUNT_MAP_KEY_SET = new Set(

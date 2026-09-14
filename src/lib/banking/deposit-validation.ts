@@ -123,6 +123,9 @@ export async function validateDepositFunding(
     reference,
     amount,
     available_amount: amount,
+    // Pre-cutover manual UF line has no customer_payment behind it, so no
+    // card surcharge to fold in.
+    surcharge_amount: "0.00",
     currency: "USD",
     source_hash: reviewHash({ manual: true, reference, description, amount }),
   };

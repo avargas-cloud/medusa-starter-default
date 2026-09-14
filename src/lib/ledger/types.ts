@@ -163,6 +163,20 @@ export const YEAR_CLOSE_ACCOUNT_MAP_KEYS = ["retained_earnings"] as const;
 export type YearCloseAccountMapKey = (typeof YEAR_CLOSE_ACCOUNT_MAP_KEYS)[number];
 export type YearCloseAccountMap = Record<YearCloseAccountMapKey, LedgerAccount>;
 
+/**
+ * Card surcharge (2026-09-14): the customer-paid fee on card payments,
+ * mirrored into `customer_payment.surcharge_cents`. Deliberately NOT in
+ * `ACCOUNT_MAP_KEYS` — same reasoning as the purchase/opening/year-close
+ * keys above: an environment without these two rows sembradas must keep
+ * posting non-surcharge payments (2 lines, byte-identical to today), not
+ * start failing `GL_ACCOUNT_MAP_MISSING` on every payment.
+ */
+export const SURCHARGE_ACCOUNT_MAP_KEYS = [
+  "credit_card_surcharge",
+  "merchant_fees",
+] as const;
+export type SurchargeAccountMapKey = (typeof SURCHARGE_ACCOUNT_MAP_KEYS)[number];
+
 /** Una línea de invoice ya resuelta contra cuentas — el builder es puro, sin DB. */
 export interface InvoiceLineSnapshot {
   quantity: number;
@@ -217,6 +231,10 @@ export interface CreditMemoSnapshot {
 export interface PaymentSnapshot {
   type: "payment" | "refund";
   amountCents: bigint;
+  /** Customer-paid card surcharge, cents. 0n for non-card payments and for
+   * refunds (the processor's refund of a surcharge is not modelled — see
+   * `lines/customer-payment.ts`). */
+  surchargeCents: bigint;
 }
 
 export type RoundingDirection = "shortage" | "overage";

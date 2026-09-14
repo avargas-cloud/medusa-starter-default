@@ -71,6 +71,8 @@ export type DepositLine = {
   customer_name: string;
   method: string;
   payment_amount: string;
+  /** Customer-paid card surcharge inside `amount`; "0.00" for cash/check and pre-2026-09-14 snapshots. */
+  surcharge_amount: string;
   amount: string;
   source_hash: string;
 };

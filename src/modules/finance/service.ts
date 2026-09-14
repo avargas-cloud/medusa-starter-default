@@ -2,6 +2,7 @@ import type { Context } from "@medusajs/types";
 import { MedusaService } from "@medusajs/utils";
 
 import { computeBatchDay, getBatchCutoff } from "../../lib/finance/batch-day";
+import { surchargeCentsFromMetadata } from "../../lib/finance/payment-surcharge";
 import { CustomerPayment } from "./models/customer-payment";
 import { CustomerPaymentTransfer } from "./models/customer-payment-transfer";
 import { PaymentApplication } from "./models/payment-application";
@@ -10,6 +11,8 @@ import { QbBankAccount } from "./models/qb-bank-account";
 type CustomerPaymentCreateInput = Record<string, unknown> & {
   received_at?: string | Date | null;
   batch_day?: string | null;
+  surcharge_cents?: number | null;
+  metadata?: unknown;
 };
 
 const Base = MedusaService({
@@ -45,9 +48,18 @@ class FinanceModuleService extends Base {
         ? item
         : { ...item, batch_day: computeBatchDay(item.received_at, cutoff) };
 
+    // Surcharge default mirrors the same "explicit input wins" rule as
+    // batch_day above (e.g. QB import paths that already know the figure).
+    const withSurcharge = (
+      item: CustomerPaymentCreateInput
+    ): CustomerPaymentCreateInput =>
+      item.surcharge_cents !== undefined && item.surcharge_cents !== null
+        ? item
+        : { ...item, surcharge_cents: surchargeCentsFromMetadata(item.metadata) };
+
     const enriched = Array.isArray(input)
-      ? input.map(withBatchDay)
-      : withBatchDay(input);
+      ? input.map(withBatchDay).map(withSurcharge)
+      : withSurcharge(withBatchDay(input));
 
     return await super.createCustomerPayments(
       enriched as never,

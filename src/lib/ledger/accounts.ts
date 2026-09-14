@@ -9,6 +9,7 @@ import {
   OpeningAccountMap,
   PURCHASE_ACCOUNT_MAP_KEYS,
   PurchaseAccountMap,
+  SURCHARGE_ACCOUNT_MAP_KEYS,
   YEAR_CLOSE_ACCOUNT_MAP_KEYS,
   YearCloseAccountMap,
 } from "./types";
@@ -102,6 +103,23 @@ export async function loadYearCloseAccountMap(
     client,
     YEAR_CLOSE_ACCOUNT_MAP_KEYS
   )) as YearCloseAccountMap;
+}
+
+/**
+ * Card surcharge (2026-09-14): only `credit_card_surcharge` — the payment
+ * document only needs the income side, `merchant_fees` is for the report
+ * endpoint. Throws `GL_ACCOUNT_MAP_MISSING` (fail closed) when unmapped;
+ * `buildCustomerPaymentLines` only calls this when `surchargeCents > 0n`, so
+ * an unmapped environment never sees the error on a plain payment.
+ */
+export async function loadSurchargeAccount(
+  client: PoolClient
+): Promise<LedgerAccount> {
+  const map = await loadAccountMapByKeys(client, [
+    SURCHARGE_ACCOUNT_MAP_KEYS[0],
+  ]);
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- loadAccountMapByKeys throws GL_ACCOUNT_MAP_MISSING when the key is absent
+  return map.credit_card_surcharge!;
 }
 
 /**

@@ -89,6 +89,9 @@ const CustomerPayment = model.define("customer_payment", {
   // to the NEXT day's batch. Set centrally in FinanceModuleService.create*;
   // editable per-payment via PATCH /admin/customer-payments/:id.
   batch_day: model.text().nullable(),
+  // Customer-paid card surcharge in cents, mirrored from metadata at create
+  // time (dejavoo_surcharge_cents / bams_surcharge_fee_cents); never part of `amount`.
+  surcharge_cents: model.number().default(0),
   notes: model.text().nullable(),
   created_by: model.text().nullable(), // admin user email / "system" for subscribers
   metadata: model.json().nullable(), // Extensibility (QuickBooks exact method, contexts, etc)

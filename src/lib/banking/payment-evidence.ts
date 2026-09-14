@@ -36,10 +36,14 @@ export function matchesPaymentFingerprint(
 export const PAYMENT_ELIGIBLE_SQL = `mp.deleted_at IS NULL AND mp.type='payment'
   AND mp.method IN ('ach','zelle','check') AND mp.status IN ('available','partially_applied','applied')
   AND mp.amount::numeric>0 AND COALESCE(mp.metadata->>'qb_import','false')='false'`;
+/** Card receipts joined the grouped deposit on 2026-09-14: the processor
+ * deposits each day's batch GROSS (amount + customer surcharge), so a Record
+ * deposit of the day's card receipts nets to the bank credit exactly. The
+ * merchant-settlement path stays untouched (never used in production). */
 export const DEPOSIT_PAYMENT_ELIGIBLE_SQL =
   PAYMENT_ELIGIBLE_SQL.replace(
     "('ach','zelle','check')",
-    "('cash','ach','zelle','check')"
+    "('cash','ach','zelle','check','credit_card','debit_card','card')"
   ) + " AND mp.amount::numeric=trunc(mp.amount::numeric)";
 export const NO_DIRECT_RESERVATION_SQL = `NOT EXISTS(SELECT 1 FROM bank_transaction_review dr
   WHERE dr.matched_payment_id=mp.id AND dr.status<>'excluded' AND dr.deleted_at IS NULL)`;
