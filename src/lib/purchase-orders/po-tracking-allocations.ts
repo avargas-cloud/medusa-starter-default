@@ -28,6 +28,23 @@
  * carried it. Subtracting received units would make an allocation evaporate the
  * moment the goods land, and the shipment history would rewrite itself.
  *
+ * WHAT A NEW DELIVERY MAY OFFER IS A DIFFERENT NUMBER: `qty_to_ship`.
+ * The ceiling above protects history; it says nothing about what is still on
+ * its way. PO-1160 (2026-09-14) had six lines received without any box and the
+ * picker offered every one of them for "a new delivery" — units that were
+ * already on the shelf. A unit that landed cannot ride the next truck, whether
+ * or not anyone recorded which truck brought it. So:
+ *
+ *     qty_to_ship = max(0, shippable − max(allocated_elsewhere, received))
+ *
+ * The `max()` assumes received units rode the boxes already recorded (the same
+ * FIFO reading `inbound-by-sku` makes — the data does not know which box
+ * carried what). Received beyond what boxes claim is goods that arrived with no
+ * tracking: gone from the picker, still counted nowhere else. A line with 5
+ * ordered and 4 received off-record still offers 1 — the one that is missing.
+ * The screen reads LEFT, the checkbox and "select all" from this; the input's
+ * `max` and the server's 409 keep using `qty_remaining`.
+ *
  * SCOPE
  * Quantities only. Nothing here writes, touches receipts or inventory, or knows
  * about QuickBooks — inbound tracking has never synced to QB. Which allocation
@@ -57,8 +74,12 @@ export interface AllocatablePoLine {
   qty_ordered: number;
   /** Units of this line already claimed by OTHER by_line trackings. */
   qty_allocated_elsewhere: number;
-  /** `qty_ordered - qty_allocated_elsewhere`, floored at 0. */
+  /** `qty_ordered - qty_allocated_elsewhere`, floored at 0. THE CAP. */
   qty_remaining: number;
+  /** Units already received on this line, whatever box brought them. */
+  qty_received: number;
+  /** What a NEW delivery may still offer — see the header. Never above `qty_remaining`. */
+  qty_to_ship: number;
   /** Tracking number holding the largest share elsewhere, for the message. */
   allocated_on: string | null;
   line_order: number;
@@ -118,6 +139,12 @@ export async function resolveAllocatablePoLines(
                 - COALESCE(allocated.qty_allocated, 0),
               0
             )::int                                          AS qty_remaining,
+            COALESCE(pol.qty_received, 0)::int              AS qty_received,
+            GREATEST(
+              GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0)
+                - GREATEST(COALESCE(allocated.qty_allocated, 0), COALESCE(pol.qty_received, 0)),
+              0
+            )::int                                          AS qty_to_ship,
             allocated.allocated_on,
             COALESCE(pol.line_order, 0)::int                AS line_order
        FROM purchase_order_line pol
@@ -143,6 +170,8 @@ export async function resolveAllocatablePoLines(
     qty_ordered: Number(row.qty_ordered ?? 0),
     qty_allocated_elsewhere: Number(row.qty_allocated_elsewhere ?? 0),
     qty_remaining: Number(row.qty_remaining ?? 0),
+    qty_received: Number(row.qty_received ?? 0),
+    qty_to_ship: Number(row.qty_to_ship ?? 0),
     allocated_on: (row.allocated_on as string | null) ?? null,
     line_order: Number(row.line_order ?? 0),
   }));
