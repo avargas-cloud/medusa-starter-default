@@ -144,6 +144,12 @@ const RETRY_GATE_REL = "src/lib/quickbooks/pipeline/retry-gate.ts";
     "commission_check",
     "commission_payment",
     "vendor_bill_add",
+    // gl-purchases-v2 (2026-09-11): VendorCreditAdd / BillPaymentCheckAdd.
+    "vendor_credit_add",
+    "bill_payment_add",
+    // gl-docs-to-qb-20260914: CheckAdd / CreditCardChargeAdd / DepositAdd /
+    // JournalEntryAdd for the POS bank documents.
+    "gl_document_add",
   ].sort();
   const actual = [...ADD_CAPABLE_STEPS].sort();
   check(

@@ -19,7 +19,14 @@ import { escapeXml } from "./qbxml-escape";
 export type VoidableTxnType =
   | "VendorCredit"
   | "BillPaymentCheck"
-  | "BillPaymentCreditCard";
+  | "BillPaymentCreditCard"
+  // gl-docs-to-qb-20260914: los documentos GL bancarios del POS. Cada valor
+  // es el `TxnVoidType` exacto del tipo que el ADD creó (`qb_txn_type` del
+  // documento) — sondeado read-only con TxnID inexistente el 2026-09-14.
+  | "Check"
+  | "CreditCardCharge"
+  | "Deposit"
+  | "JournalEntry";
 
 export function buildTxnVoidQbxml(
   txnVoidType: VoidableTxnType,

@@ -13,6 +13,8 @@ import {
   runInPostingTransaction,
 } from "../post";
 import { LedgerError } from "../types";
+import { clientInTransactionAsKnex } from "../../quickbooks/gl-documents/db-adapters";
+import { enqueueGlDocumentAdd, enqueueGlDocumentVoid } from "../../quickbooks/gl-documents/enqueue";
 
 import {
   getBankCheck,
@@ -212,7 +214,8 @@ export async function postBankCheck(
       `UPDATE gl_check SET status = 'posted', entry_id = $2, posted_at = now(), updated_at = now() WHERE id = $1`,
       [id, result.entry_id]
     );
-    return { status: result.status, entry_id: result.entry_id };
+    const qb = await enqueueGlDocumentAdd(clientInTransactionAsKnex(client), "gl_check", id);
+    return { status: result.status, entry_id: result.entry_id, qb };
   });
 }
 
@@ -243,6 +246,7 @@ export async function voidBankCheck(
       `UPDATE gl_check SET status = 'voided', voided_at = now(), void_reason = $2, updated_at = now() WHERE id = $1`,
       [id, reason]
     );
+    await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "gl_check", id);
   });
   return (await getBankCheck(client, id))!;
 }

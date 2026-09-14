@@ -63,7 +63,14 @@ export type PipelineStep =
   | "vendor_credit_add"
   | "vendor_credit_void"
   | "bill_payment_add"
-  | "bill_payment_void";
+  | "bill_payment_void"
+  // gl-docs-to-qb-20260914: cheques/gastos (gl_check), transfers
+  // (gl_transfer), asientos manuales (gl_journal_entry) y depósitos
+  // (bank_deposit) del libro del POS. DOS steps genéricos: la tabla va en
+  // `reference_type` y el tipo QB creado en `payload.qb_txn_type`. Ver
+  // lib/quickbooks/gl-documents/.
+  | "gl_document_add"
+  | "gl_document_void";
 
 export type PipelineStatus =
   | "pending"

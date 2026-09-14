@@ -65,6 +65,10 @@ export const ADD_CAPABLE_STEPS = [
   // deliberately NOT here (TxnVoid can't mint a duplicate).
   "vendor_credit_add",
   "bill_payment_add",
+  // gl-docs-to-qb-20260914: CheckAdd / CreditCardChargeAdd / DepositAdd /
+  // JournalEntryAdd — un documento real cada uno. `gl_document_void` queda
+  // fuera a propósito (TxnVoid no duplica).
+  "gl_document_add",
   // Commissions. These two are the reason this gate exists, and the first draft
   // of the list LEFT THEM OUT — because the list was derived from the `switch`
   // in `post-pipeline.ts`, and commission steps have no `case` there (the

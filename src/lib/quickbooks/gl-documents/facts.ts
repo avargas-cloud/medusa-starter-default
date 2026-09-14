@@ -1,0 +1,533 @@
+/**
+ * facts.ts — `loadGlDocumentAddFacts`: el ÚNICO lugar que decide si un
+ * documento GL bancario está listo para QuickBooks y construye su QBXML
+ * (plan gl-docs-to-qb-20260914). Se llama al ENCOLAR y otra vez al
+ * DESPACHAR, sin cambios, así "listo" nunca significa dos cosas distintas
+ * (mismo contrato que `loadBillPaymentAddFacts`).
+ *
+ * Tres desenlaces, y la diferencia importa para el pipeline:
+ *
+ *   ready            → hay QBXML; se despacha.
+ *   not ready, structural (`blockingReferenceIds` vacío)
+ *                    → nada lo va a destrabar solo (cuenta que no existe en QB,
+ *                      vendor sin ListID, A/R sin entidad, documento no
+ *                      posteado). La fila queda `failed` con el motivo a la
+ *                      vista; el Retry manual re-evalúa estos facts.
+ *   not ready, transitorio (`blockingReferenceIds` con ids)
+ *                    → falta el TxnID de QB de un cobro que el pipeline todavía
+ *                      no confirmó (un depósito de hoy con la venta de hoy). El
+ *                      despachador difiere y vuelve a preguntar.
+ *   skip             → el documento NO debe viajar (consume una partida de
+ *                      apertura que ya vive en QB). Fila `skipped`, terminal y
+ *                      sin error.
+ *
+ * Cuentas: los `account_list_id` del POS SON ListIDs del espejo `qb_account`,
+ * salvo las cuentas creadas en el POS (`pos_<ulid>`), que QuickBooks no conoce
+ * → estructural, nunca "se manda igual".
+ *
+ * Payee del cheque (supuesto declarado en el plan): vendor → `qb_vendor.qb_list_id`
+ * (falla cerrado si no hay ListID real: un cheque a un vendor sin enlace pierde
+ * el 1099); customer → `customer.metadata.qb_list_id` si existe, si no el nombre
+ * va en el memo; other → sin `PayeeEntityRef`, nombre en el memo.
+ *
+ * Fechas: `day` es columna `date` y se lee `::text` — nunca pasa por `Date`
+ * (`getBusinessDateString('2026-04-22')` corre un día atrás; los 59 asientos
+ * de `vendor_bill_payment` lo prueban).
+ */
+
+import { toQbRefNumber } from "../qb-ref-number";
+import {
+  buildCheckAddQbxml,
+  buildCreditCardChargeAddQbxml,
+  buildDepositAddQbxml,
+  buildJournalEntryAddQbxml,
+  type DepositLineInput,
+  type ExpenseLineInput,
+  type GlQbTxnType,
+  type JournalLineInput,
+} from "./qbxml-builders";
+import type { GlDocumentKind } from "./types";
+
+/** knex-style `?` placeholders — corre igual con knex real y con `poolAsRawKnex`. */
+export interface GlDocumentDb {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+}
+
+export type GlDocumentAddFacts =
+  | { ready: true; qbxml: string; qbTxnType: GlQbTxnType; blockingReferenceIds: [] }
+  | { ready: false; skip: true; reason: string; blockingReferenceIds: [] }
+  | { ready: false; skip?: false; reason: string; blockingReferenceIds: string[] };
+
+const structural = (reason: string): GlDocumentAddFacts => ({
+  ready: false,
+  reason,
+  blockingReferenceIds: [],
+});
+const transient = (reason: string, ids: string[]): GlDocumentAddFacts => ({
+  ready: false,
+  reason,
+  blockingReferenceIds: ids,
+});
+const skip = (reason: string): GlDocumentAddFacts => ({
+  ready: false,
+  skip: true,
+  reason,
+  blockingReferenceIds: [],
+});
+
+const one = <T>(r: { rows: unknown[] }): T | null => (r.rows[0] as T | undefined) ?? null;
+
+/** "123.45" → 12345n sin pasar por float (los montos de `bank_deposit` son texto). */
+export function majorToCents(text: string): bigint {
+  const m = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(text.trim());
+  if (!m) throw new Error(`amount '${text}' is not a 2-decimal money string`);
+  const cents = BigInt(m[2]!) * 100n + BigInt((m[3] ?? "").padEnd(2, "0"));
+  return m[1] === "-" ? -cents : cents;
+}
+
+// ── cuentas ─────────────────────────────────────────────────────────────────
+
+interface AccountRow {
+  qb_list_id: string;
+  account_type: string;
+}
+
+/**
+ * Todas las cuentas del documento tienen que existir en el espejo de QuickBooks.
+ * `pos_` es la marca de cuenta creada en el POS (gl-reports E2) — no viaja.
+ */
+async function resolveAccounts(
+  db: GlDocumentDb,
+  listIds: string[]
+): Promise<{ ok: true; accounts: Map<string, AccountRow> } | { ok: false; reason: string }> {
+  const unique = [...new Set(listIds.filter((id): id is string => !!id))];
+  const local = unique.filter((id) => id.startsWith("pos_"));
+  if (local.length > 0) {
+    return { ok: false, reason: `account_not_in_quickbooks: ${local.join(", ")} (created in the POS)` };
+  }
+  if (unique.length === 0) return { ok: true, accounts: new Map() };
+  const result = await db.raw(
+    `SELECT qb_list_id, account_type FROM qb_account WHERE qb_list_id = ANY(?::text[])`,
+    [unique]
+  );
+  const accounts = new Map((result.rows as AccountRow[]).map((r) => [r.qb_list_id, r]));
+  const missing = unique.filter((id) => !accounts.has(id));
+  if (missing.length > 0) {
+    return { ok: false, reason: `account_not_in_quickbooks: ${missing.join(", ")}` };
+  }
+  return { ok: true, accounts };
+}
+
+// ── entidades ───────────────────────────────────────────────────────────────
+
+async function vendorListId(db: GlDocumentDb, vendorId: string): Promise<string | null> {
+  const row = one<{ qb_list_id: string | null }>(
+    await db.raw(`SELECT qb_list_id FROM qb_vendor WHERE id = ? AND deleted_at IS NULL LIMIT 1`, [vendorId])
+  );
+  const id = row?.qb_list_id ?? null;
+  return id && !id.startsWith("pending_") ? id : null;
+}
+
+async function customerListId(db: GlDocumentDb, customerId: string): Promise<string | null> {
+  const row = one<{ qb_list_id: string | null }>(
+    await db.raw(
+      `SELECT metadata->>'qb_list_id' AS qb_list_id FROM customer WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      [customerId]
+    )
+  );
+  return row?.qb_list_id || null;
+}
+
+// ── gl_check ────────────────────────────────────────────────────────────────
+
+interface CheckRow {
+  id: string;
+  doc_number: string;
+  number: string | null;
+  kind: "check" | "expense" | "card_charge";
+  day: string;
+  bank_account_list_id: string;
+  payee_type: "vendor" | "customer" | "other";
+  payee_id: string | null;
+  payee_name: string;
+  memo: string | null;
+  to_be_printed: boolean;
+  status: string;
+  qb_txn_id: string | null;
+}
+
+interface CheckLineRow {
+  account_list_id: string;
+  amount_cents: string;
+  memo: string | null;
+  customer_id: string | null;
+  billable: boolean;
+}
+
+async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
+  const doc = one<CheckRow>(
+    await db.raw(
+      `SELECT id, doc_number, number, kind, day::text AS day, bank_account_list_id, payee_type, payee_id,
+              payee_name, memo, to_be_printed, status, qb_txn_id
+         FROM gl_check WHERE id = ? AND deleted_at IS NULL`,
+      [id]
+    )
+  );
+  if (!doc) return structural("gl_check not found");
+  if (doc.qb_txn_id) return structural(`already in QuickBooks as ${doc.qb_txn_id}`);
+  if (doc.status !== "posted") return structural(`gl_check status is '${doc.status}', expected 'posted'`);
+
+  const lines = (
+    await db.raw(
+      `SELECT account_list_id, amount_cents::text AS amount_cents, memo, customer_id, billable
+         FROM gl_check_line WHERE check_id = ? ORDER BY sort_order ASC`,
+      [id]
+    )
+  ).rows as CheckLineRow[];
+  if (lines.length === 0) return structural("gl_check has no lines");
+
+  const accounts = await resolveAccounts(db, [doc.bank_account_list_id, ...lines.map((l) => l.account_list_id)]);
+  if (!accounts.ok) return structural(accounts.reason);
+  const bankType = accounts.accounts.get(doc.bank_account_list_id)!.account_type;
+  const isCard = bankType === "CreditCard";
+  if (!isCard && bankType !== "Bank") return structural(`bank account type '${bankType}' is neither Bank nor CreditCard`);
+
+  let payeeListId: string | null = null;
+  let memo = doc.memo?.trim() || null;
+  if (doc.payee_type === "vendor") {
+    if (!doc.payee_id) return structural("vendor payee without vendor id");
+    payeeListId = await vendorListId(db, doc.payee_id);
+    if (!payeeListId) return structural(`vendor_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})`);
+  } else if (doc.payee_type === "customer" && doc.payee_id) {
+    payeeListId = await customerListId(db, doc.payee_id);
+  }
+  if (!payeeListId) {
+    // Nombre libre (o cliente sin enlace): el payee viaja en el memo para que
+    // el documento siga siendo legible en QuickBooks.
+    memo = memo ? `Payee: ${doc.payee_name} - ${memo}` : `Payee: ${doc.payee_name}`;
+  }
+
+  const expenseLines: ExpenseLineInput[] = [];
+  for (const line of lines) {
+    const customer = line.customer_id ? await customerListId(db, line.customer_id) : null;
+    expenseLines.push({
+      accountListId: line.account_list_id,
+      amountCents: BigInt(line.amount_cents),
+      memo: line.memo,
+      customerListId: customer,
+      billable: customer ? line.billable : undefined,
+    });
+  }
+
+  try {
+    const qbxml = isCard
+      ? buildCreditCardChargeAddQbxml({
+          cardAccountListId: doc.bank_account_list_id,
+          payeeListId,
+          refNumber: toQbRefNumber(doc.number),
+          txnDate: doc.day,
+          memo,
+          lines: expenseLines,
+        })
+      : buildCheckAddQbxml({
+          bankAccountListId: doc.bank_account_list_id,
+          payeeListId,
+          refNumber: toQbRefNumber(doc.number),
+          txnDate: doc.day,
+          memo,
+          isToBePrinted: doc.to_be_printed === true,
+          lines: expenseLines,
+        });
+    return { ready: true, qbxml, qbTxnType: isCard ? "CreditCardCharge" : "Check", blockingReferenceIds: [] };
+  } catch (error) {
+    return structural(error instanceof Error ? error.message : "could not build the check QBXML");
+  }
+}
+
+// ── gl_transfer ─────────────────────────────────────────────────────────────
+
+interface TransferRow {
+  id: string;
+  doc_number: string;
+  day: string;
+  from_account_list_id: string;
+  to_account_list_id: string;
+  amount_cents: string;
+  fee_cents: string | null;
+  fee_account_list_id: string | null;
+  memo: string | null;
+  status: string;
+  qb_txn_id: string | null;
+}
+
+async function transferFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
+  const doc = one<TransferRow>(
+    await db.raw(
+      `SELECT id, doc_number, day::text AS day, from_account_list_id, to_account_list_id,
+              amount_cents::text AS amount_cents, fee_cents::text AS fee_cents, fee_account_list_id,
+              memo, status, qb_txn_id
+         FROM gl_transfer WHERE id = ? AND deleted_at IS NULL`,
+      [id]
+    )
+  );
+  if (!doc) return structural("gl_transfer not found");
+  if (doc.qb_txn_id) return structural(`already in QuickBooks as ${doc.qb_txn_id}`);
+  if (doc.status !== "posted") return structural(`gl_transfer status is '${doc.status}', expected 'posted'`);
+
+  const fee = doc.fee_cents ? BigInt(doc.fee_cents) : 0n;
+  const amount = BigInt(doc.amount_cents);
+  if (fee > 0n && !doc.fee_account_list_id) return structural("transfer has a fee without a fee account");
+
+  const accounts = await resolveAccounts(db, [
+    doc.from_account_list_id,
+    doc.to_account_list_id,
+    ...(fee > 0n ? [doc.fee_account_list_id!] : []),
+  ]);
+  if (!accounts.ok) return structural(accounts.reason);
+
+  const memo = doc.memo?.trim() || `Transfer ${doc.doc_number}`;
+  const lines: JournalLineInput[] = [
+    { side: "debit", accountListId: doc.to_account_list_id, amountCents: amount - fee, memo },
+    ...(fee > 0n
+      ? [{ side: "debit" as const, accountListId: doc.fee_account_list_id!, amountCents: fee, memo: `${memo} - bank fee` }]
+      : []),
+    { side: "credit", accountListId: doc.from_account_list_id, amountCents: amount, memo },
+  ];
+  try {
+    const qbxml = buildJournalEntryAddQbxml({ txnDate: doc.day, refNumber: toQbRefNumber(doc.doc_number), lines });
+    return { ready: true, qbxml, qbTxnType: "JournalEntry", blockingReferenceIds: [] };
+  } catch (error) {
+    return structural(error instanceof Error ? error.message : "could not build the transfer QBXML");
+  }
+}
+
+// ── gl_journal_entry ────────────────────────────────────────────────────────
+
+interface JournalRow {
+  id: string;
+  number: string;
+  day: string;
+  memo: string | null;
+  status: string;
+  qb_txn_id: string | null;
+}
+
+interface JournalLineRow {
+  account_list_id: string;
+  debit_cents: string;
+  credit_cents: string;
+  memo: string | null;
+  entity_type: "customer" | "vendor" | null;
+  entity_id: string | null;
+  entity_name: string | null;
+}
+
+const ENTITY_ACCOUNT_TYPES = new Set(["AccountsReceivable", "AccountsPayable"]);
+
+async function journalFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
+  const doc = one<JournalRow>(
+    await db.raw(
+      `SELECT id, number, day::text AS day, memo, status, qb_txn_id
+         FROM gl_journal_entry WHERE id = ? AND deleted_at IS NULL`,
+      [id]
+    )
+  );
+  if (!doc) return structural("gl_journal_entry not found");
+  if (doc.qb_txn_id) return structural(`already in QuickBooks as ${doc.qb_txn_id}`);
+  if (doc.status !== "posted") return structural(`gl_journal_entry status is '${doc.status}', expected 'posted'`);
+
+  const rows = (
+    await db.raw(
+      `SELECT account_list_id, debit_cents::text AS debit_cents, credit_cents::text AS credit_cents,
+              memo, entity_type, entity_id, entity_name
+         FROM gl_journal_entry_line WHERE journal_entry_id = ? ORDER BY sort_order ASC`,
+      [id]
+    )
+  ).rows as JournalLineRow[];
+  if (rows.length === 0) return structural("gl_journal_entry has no lines");
+
+  const accounts = await resolveAccounts(db, rows.map((r) => r.account_list_id));
+  if (!accounts.ok) return structural(accounts.reason);
+
+  const lines: JournalLineInput[] = [];
+  for (const [i, row] of rows.entries()) {
+    const debit = BigInt(row.debit_cents || "0");
+    const credit = BigInt(row.credit_cents || "0");
+    const side = debit > 0n ? "debit" : "credit";
+    const accountType = accounts.accounts.get(row.account_list_id)!.account_type;
+    let entityListId: string | null = null;
+    if (row.entity_type === "vendor" && row.entity_id) entityListId = await vendorListId(db, row.entity_id);
+    if (row.entity_type === "customer" && row.entity_id) entityListId = await customerListId(db, row.entity_id);
+    if (ENTITY_ACCOUNT_TYPES.has(accountType) && !entityListId) {
+      return structural(
+        `entity_required_for_ar_ap_line: line ${i + 1} (${accountType}) needs a QuickBooks customer/vendor`
+      );
+    }
+    lines.push({
+      side,
+      accountListId: row.account_list_id,
+      amountCents: side === "debit" ? debit : credit,
+      memo: row.memo ?? doc.memo,
+      entityListId,
+    });
+  }
+  try {
+    const qbxml = buildJournalEntryAddQbxml({ txnDate: doc.day, refNumber: toQbRefNumber(doc.number), lines });
+    return { ready: true, qbxml, qbTxnType: "JournalEntry", blockingReferenceIds: [] };
+  } catch (error) {
+    return structural(error instanceof Error ? error.message : "could not build the journal entry QBXML");
+  }
+}
+
+// ── bank_deposit ────────────────────────────────────────────────────────────
+
+interface DepositRow {
+  id: string;
+  status: string;
+  deposit_date: string;
+  reference: string;
+  memo: string;
+  fee_amount: string;
+  fee_account_list_id: string | null;
+  fee_reference: string | null;
+  bank_qb_list_id: string | null;
+  bank_name: string | null;
+  qb_txn_id: string | null;
+  accounting_entry_id: string | null;
+}
+
+interface DepositLineRow {
+  id: string;
+  payment_id: string | null;
+  opening_item_id: string | null;
+  manual_reference: string | null;
+  manual_description: string | null;
+  amount: string;
+  payment_qb_txn_id: string | null;
+  payment_status: string | null;
+}
+
+async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
+  const doc = one<DepositRow>(
+    await db.raw(
+      `SELECT d.id, d.status, d.deposit_date, d.reference, d.memo, d.fee_amount, d.fee_account_list_id,
+              d.fee_reference, d.qb_txn_id, a.qb_list_id AS bank_qb_list_id, a.name AS bank_name,
+              (SELECT e.id FROM bank_journal_entry e
+                WHERE e.deposit_id = d.id AND e.kind = 'deposit' AND e.deleted_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL)
+                ORDER BY e.created_at DESC LIMIT 1) AS accounting_entry_id
+         FROM bank_deposit d
+         LEFT JOIN bank_account a ON a.id = d.account_id
+        WHERE d.id = ? AND d.deleted_at IS NULL`,
+      [id]
+    )
+  );
+  if (!doc) return structural("bank_deposit not found");
+  if (doc.qb_txn_id) return structural(`already in QuickBooks as ${doc.qb_txn_id}`);
+  if (doc.status === "void") return structural("bank_deposit is void");
+
+  const lines = (
+    await db.raw(
+      `SELECT l.id, l.payment_id, l.opening_item_id, l.manual_reference, l.manual_description, l.amount,
+              COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id') AS payment_qb_txn_id,
+              cp.status AS payment_status
+         FROM bank_deposit_line l
+         LEFT JOIN customer_payment cp ON cp.id = l.payment_id
+        WHERE l.deposit_id = ? AND l.deleted_at IS NULL
+        ORDER BY l.created_at ASC, l.id ASC`,
+      [id]
+    )
+  ).rows as DepositLineRow[];
+  if (lines.length === 0) return structural("bank_deposit has no lines");
+  // El skip domina: un depósito que consume una partida de apertura ya vive
+  // en QuickBooks (al 31/12), esté o no posteado acá.
+  if (lines.some((l) => l.opening_item_id)) {
+    return skip("deposit consumes an opening-balance item that already lives in QuickBooks");
+  }
+  if (!doc.accounting_entry_id) return structural("bank_deposit is not posted to the ledger (no active deposit journal entry)");
+  if (!doc.bank_qb_list_id) return structural(`bank_account_not_in_quickbooks: ${doc.bank_name ?? "?"}`);
+
+  const fee = majorToCents(doc.fee_amount || "0.00");
+  if (fee > 0n && !doc.fee_account_list_id) return structural("deposit has a fee without a fee account");
+  const uf = one<{ qb_list_id: string }>(
+    await db.raw(`SELECT qb_list_id FROM gl_account_map WHERE key = 'undeposited_funds' LIMIT 1`)
+  );
+  const needsUf = lines.some((l) => !l.payment_id);
+  if (needsUf && !uf?.qb_list_id) return structural("gl_account_map has no 'undeposited_funds' entry");
+
+  const accounts = await resolveAccounts(db, [
+    doc.bank_qb_list_id,
+    ...(fee > 0n ? [doc.fee_account_list_id!] : []),
+    ...(needsUf ? [uf!.qb_list_id] : []),
+  ]);
+  if (!accounts.ok) return structural(accounts.reason);
+
+  const blocking: string[] = [];
+  const depositLines: DepositLineInput[] = [];
+  for (const line of lines) {
+    if (line.payment_id) {
+      if (!line.payment_qb_txn_id) blocking.push(line.payment_id);
+      else depositLines.push({ paymentTxnId: line.payment_qb_txn_id });
+    } else {
+      depositLines.push({
+        accountListId: uf!.qb_list_id,
+        amountCents: majorToCents(line.amount),
+        memo: line.manual_description || line.manual_reference,
+      });
+    }
+  }
+  if (blocking.length > 0) {
+    return transient(`waiting on QuickBooks TxnID for payments: ${blocking.join(", ")}`, blocking);
+  }
+  if (fee > 0n) {
+    depositLines.push({
+      accountListId: doc.fee_account_list_id!,
+      amountCents: -fee,
+      memo: doc.fee_reference ? `Fee ${doc.fee_reference}` : "Fee",
+    });
+  }
+  const memo = [doc.reference?.trim(), doc.memo?.trim()].filter(Boolean).join(" - ") || null;
+  try {
+    const qbxml = buildDepositAddQbxml({
+      txnDate: doc.deposit_date,
+      depositToAccountListId: doc.bank_qb_list_id,
+      memo,
+      lines: depositLines,
+    });
+    return { ready: true, qbxml, qbTxnType: "Deposit", blockingReferenceIds: [] };
+  } catch (error) {
+    return structural(error instanceof Error ? error.message : "could not build the deposit QBXML");
+  }
+}
+
+// ── entrada ─────────────────────────────────────────────────────────────────
+
+export async function loadGlDocumentAddFacts(
+  db: GlDocumentDb,
+  kind: GlDocumentKind,
+  documentId: string
+): Promise<GlDocumentAddFacts> {
+  switch (kind) {
+    case "gl_check":
+      return checkFacts(db, documentId);
+    case "gl_transfer":
+      return transferFacts(db, documentId);
+    case "gl_journal_entry":
+      return journalFacts(db, documentId);
+    case "bank_deposit":
+      return depositFacts(db, documentId);
+  }
+}
+
+/** El TxnID/tipo vivos del documento (para el void y para el guard anti-doble-ADD). */
+export async function loadGlDocumentQbLink(
+  db: GlDocumentDb,
+  kind: GlDocumentKind,
+  documentId: string
+): Promise<{ exists: boolean; status: string | null; qb_txn_id: string | null; qb_txn_type: GlQbTxnType | null }> {
+  const row = one<{ status: string; qb_txn_id: string | null; qb_txn_type: GlQbTxnType | null }>(
+    await db.raw(`SELECT status, qb_txn_id, qb_txn_type FROM ${kind} WHERE id = ? AND deleted_at IS NULL`, [documentId])
+  );
+  if (!row) return { exists: false, status: null, qb_txn_id: null, qb_txn_type: null };
+  return { exists: true, ...row };
+}

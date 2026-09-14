@@ -47,6 +47,13 @@ export const GL_POSTED_PIPELINE_STEPS = [
   "vendor_bill_add",
   "vendor_bill_mod",
   "vendor_bill_payment_check",
+  // gl-docs-to-qb-20260914: cheques/gastos, transfers, asientos manuales y
+  // depósitos del POS. Un "tipo bancario" (Check, Deposit, General Journal,
+  // Credit Card Charge) que el POS escribió en QuickBooks NO se importa de
+  // vuelta: su TxnID vive en la fila del pipeline (historial, anulados
+  // incluidos) y en la columna espejo de su tabla (vivos).
+  "gl_document_add",
+  "gl_document_void",
 ] as const;
 
 const KNOWN_TXN_ID_SQL = `
@@ -61,6 +68,10 @@ const KNOWN_TXN_ID_SQL = `
     UNION SELECT qb_list_id FROM qb_item_receipt_pipeline
     UNION SELECT qb_txn_id FROM qb_legacy_payment
     UNION SELECT qb_txn_id FROM qb_legacy_so
+    UNION SELECT qb_txn_id FROM gl_check
+    UNION SELECT qb_txn_id FROM gl_transfer
+    UNION SELECT qb_txn_id FROM gl_journal_entry
+    UNION SELECT qb_txn_id FROM bank_deposit
   ) u WHERE t IS NOT NULL AND t <> ''`;
 
 /** TxnIDs de QuickBooks enlazados a documentos del POS que el libro postea. */

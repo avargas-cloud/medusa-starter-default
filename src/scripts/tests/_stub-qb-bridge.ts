@@ -51,6 +51,8 @@ export type StubState = {
   ops: Map<string, Op>;
   journalPath: string;
   seq: number;
+  /** direct-query: force the NEXT request to be rejected by QB, or to die without a verdict. */
+  directQueryMode?: "ok" | "reject" | "unknown_outcome";
 };
 
 /** Monotonic, timestamp-shaped ids so they read like real QB TxnIDs. */
@@ -204,6 +206,58 @@ export function handle(
                     }
                   : {}),
               },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // ── Raw passthrough (gl-docs-to-qb-20260914) ─────────────────────────────
+  // `POST /api/sync/direct-query { qbxml }` — the lane the GL bank documents
+  // (and vendor credits / bill payments) use. The stub answers with the SAME
+  // shape the live bridge stores: attributes under `$` (xml2js), so a reader
+  // that only looks at the flat `statusCode` is caught here, not in prod.
+  //   <XxxAddRq>  → { XxxAddRs: { $: {statusCode:"0"}, XxxRet: {TxnID, EditSequence} } }
+  //   <TxnVoidRq> → { TxnVoidRs: { $: {statusCode:"0"} } }
+  // `state.directQueryMode` (set by a test) forces one rejection or one
+  // unknown-outcome failure for the NEXT request.
+  if (method === "POST" && url.startsWith("/api/sync/direct-query")) {
+    const qbxml = String(body.qbxml ?? "");
+    const rqMatch = qbxml.match(/<([A-Za-z]+)AddRq>/);
+    const rqName = rqMatch?.[1] ?? "Unknown";
+    const isVoid = /<TxnVoidRq>/.test(qbxml);
+    const mode = state.directQueryMode ?? "ok";
+    state.directQueryMode = undefined;
+    journal(state, { event: "direct_query", rqName, isVoid, mode, bytes: Buffer.byteLength(qbxml), qbxml });
+    if (mode === "unknown_outcome") {
+      return mint({ status: "failed", error: "QB HRESULT 0x8004041C: session aborted before submitted state" });
+    }
+    if (isVoid) {
+      return mint({
+        status: "completed",
+        result: { QBXML: { QBXMLMsgsRs: { TxnVoidRs: { $: { statusCode: mode === "reject" ? "3120" : "0", statusSeverity: mode === "reject" ? "Error" : "Info", statusMessage: mode === "reject" ? "Object not found" : "Status OK" } } } } },
+      });
+    }
+    const txnId = mintTxnId(state, "1DGL");
+    const editSequence = nextEditSequence(state);
+    state.editSequences.set(txnId, editSequence);
+    const rsKey = `${rqName}AddRs`;
+    const retKey = `${rqName}Ret`;
+    if (mode === "reject") {
+      return mint({
+        status: "completed",
+        result: { QBXML: { QBXMLMsgsRs: { [rsKey]: { $: { statusCode: "3140", statusSeverity: "Error", statusMessage: "There is an invalid reference to QuickBooks Account in the Check." } } } } },
+      });
+    }
+    return mint({
+      status: "completed",
+      result: {
+        QBXML: {
+          QBXMLMsgsRs: {
+            [rsKey]: {
+              $: { statusCode: "0", statusSeverity: "Info", statusMessage: "Status OK" },
+              [retKey]: { TxnID: txnId, EditSequence: editSequence, TxnNumber: String(150000 + state.seq) },
             },
           },
         },

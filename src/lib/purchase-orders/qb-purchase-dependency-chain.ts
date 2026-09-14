@@ -18,7 +18,11 @@ export type PurchaseQbStep =
   | "vendor_credit_mod"
   | "vendor_credit_void"
   | "bill_payment_add"
-  | "bill_payment_void";
+  | "bill_payment_void"
+  // gl-docs-to-qb-20260914: cada documento GL bancario es raíz de su propia
+  // cadena (add → void en serie). Ver lib/quickbooks/gl-documents/enqueue.ts.
+  | "gl_document_add"
+  | "gl_document_void";
 
 export interface PurchaseDependencyKnex {
   raw: (
@@ -38,7 +42,12 @@ export interface EnqueuePurchaseQbOperationInput {
     | "item_receipt"
     | "vendor_bill"
     | "vendor_credit"
-    | "bill_payment";
+    | "bill_payment"
+    // gl-docs-to-qb-20260914: la TABLA del documento GL bancario.
+    | "gl_check"
+    | "gl_transfer"
+    | "gl_journal_entry"
+    | "bank_deposit";
   step: PurchaseQbStep;
   payload: Record<string, unknown>;
   qbTxnId?: string | null;

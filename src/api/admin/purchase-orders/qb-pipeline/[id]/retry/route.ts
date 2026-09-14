@@ -40,6 +40,7 @@ import {
   type PurchaseOrderModLineLike,
 } from "../../../../../../lib/quickbooks/purchase-order-line-order";
 import { PURCHASE_EXISTENCE_CHECK_KEY } from "../../../../../../lib/quickbooks/consolidator/purchase-operations";
+import { isGlDocumentKind, type GlDocumentKind } from "../../../../../../lib/quickbooks/gl-documents/types";
 
 async function rearmDelegatedOperation(
   knex: any,
@@ -82,6 +83,22 @@ async function rearmDelegatedOperation(
       orderPipelineId,
     ]
   );
+}
+
+
+/**
+ * gl-docs-to-qb-20260914: a `gl_document_*` row names its document table in
+ * `reference_type`. Only the four known tables are ever interpolated.
+ */
+async function resolveGlDocumentTable(
+  knex: any,
+  orderPipelineId: string
+): Promise<GlDocumentKind | null> {
+  const rows = await knex
+    .raw(`SELECT reference_type FROM qb_order_pipeline WHERE id = ?::uuid LIMIT 1`, [orderPipelineId])
+    .then((r: any) => r.rows);
+  const kind = rows[0]?.reference_type;
+  return isGlDocumentKind(kind) ? kind : null;
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -154,13 +171,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       "vendor_credit_void",
       "bill_payment_add",
       "bill_payment_void",
+      // gl-docs-to-qb-20260914: the document table is the row's reference_type.
+      "gl_document_add",
+      "gl_document_void",
     ] as const
   ).find((step) => rawId.endsWith(`__${step}`));
   if (glChainStep) {
     const orderPipelineId = rawId.slice(0, -`__${glChainStep}`.length);
-    const table = glChainStep.startsWith("vendor_credit")
-      ? "vendor_credit"
-      : "vendor_bill_payment";
+    const table = glChainStep.startsWith("gl_document")
+      ? await resolveGlDocumentTable(knex, orderPipelineId)
+      : glChainStep.startsWith("vendor_credit")
+        ? "vendor_credit"
+        : "vendor_bill_payment";
+    if (!table) return res.status(404).json({ error: "Pipeline entry not found" });
     const rows = await knex
       .raw(
         `SELECT qop.id, qop.status, doc.qb_txn_id AS doc_qb_txn_id

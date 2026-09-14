@@ -609,6 +609,61 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
         FROM qb_order_pipeline qop
         JOIN vendor_bill_payment vbp ON vbp.id = qop.reference_id AND vbp.deleted_at IS NULL
         WHERE qop.step IN ('bill_payment_add', 'bill_payment_void')
+
+        UNION ALL
+
+        -- ── GL bank documents ADD / VOID (gl-docs-to-qb-20260914) ────────
+        -- Checks/expenses (gl_check), transfers (gl_transfer), manual journal
+        -- entries (gl_journal_entry) and deposits (bank_deposit). One generic
+        -- step pair; the document table is reference_type. The document's
+        -- own number rides in vendor_bill_number and its payee/description in
+        -- vendor_name, so the row reads like the rest of this tab.
+        SELECT
+          qop.id::text || '__' || qop.step               AS id,
+          NULL::bigint                                   AS seq,
+          ('G' || COALESCE(regexp_replace(doc.number, '\\D', '', 'g'), '?'))
+                                                           AS seq_label,
+          doc.id                                         AS parent_id,
+          NULL::text                                     AS po_number,
+          NULL::text                                     AS draft_number,
+          NULL::text                                     AS receipt_number,
+          doc.number                                     AS vendor_bill_number,
+          CASE
+            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
+            WHEN qop.status = 'skipped' THEN 'skipped'
+            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
+            WHEN qop.status = 'failed' THEN 'error'
+            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            ELSE 'waiting'
+          END                                            AS status,
+          qop.bridge_op_id                               AS qb_operation_id,
+          COALESCE(qop.qb_txn_id, doc.qb_txn_id)         AS qb_list_id,
+          COALESCE(qop.qb_ref_number, doc.number)        AS qb_txn_number,
+          qop.error                                      AS last_error,
+          COALESCE(qop.retry_count, 0)                   AS retries,
+          0                                              AS coalesced_edits,
+          qop.next_retry_at                              AS next_retry_at,
+          qop.confirmed_at                               AS synced_at,
+          qop.created_at                                 AS created_at,
+          COALESCE(qop.updated_at, qop.confirmed_at, qop.failed_at, qop.submitted_at, qop.created_at)
+                                                           AS updated_at,
+          doc.label                                      AS vendor_name,
+          CASE WHEN qop.step = 'gl_document_add' THEN 'add_gl_document'
+               ELSE 'void_gl_document' END               AS step
+        FROM qb_order_pipeline qop
+        JOIN (
+          SELECT c.id, c.doc_number AS number, c.qb_txn_id,
+                 (CASE c.kind WHEN 'card_charge' THEN 'Card charge' WHEN 'check' THEN 'Check' ELSE 'Expense' END)
+                   || ' - ' || c.payee_name AS label
+            FROM gl_check c WHERE c.deleted_at IS NULL
+          UNION ALL
+          SELECT t.id, t.doc_number, t.qb_txn_id, 'Transfer - ' || COALESCE(t.memo, '') FROM gl_transfer t WHERE t.deleted_at IS NULL
+          UNION ALL
+          SELECT j.id, j.number, j.qb_txn_id, 'Journal entry - ' || COALESCE(j.memo, '') FROM gl_journal_entry j WHERE j.deleted_at IS NULL
+          UNION ALL
+          SELECT d.id, d.reference, d.qb_txn_id, 'Deposit - ' || COALESCE(d.memo, '') FROM bank_deposit d WHERE d.deleted_at IS NULL
+        ) doc ON doc.id = qop.reference_id
+        WHERE qop.step IN ('gl_document_add', 'gl_document_void')
       ) feed
       ) numbered
     `;

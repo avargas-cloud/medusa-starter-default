@@ -62,12 +62,20 @@ async function main(): Promise<void> {
       ["vendor_credit_void", "void_vendor_credit"],
       ["bill_payment_add", "add_bill_payment"],
       ["bill_payment_void", "void_bill_payment"],
+      // gl-docs-to-qb-20260914: GL bank documents (four tables behind one step
+      // pair); counted through the same document JOIN the feed uses.
+      ["gl_document_add", "add_gl_document"],
+      ["gl_document_void", "void_gl_document"],
     ] as const) {
       const docJoin = step.startsWith("vendor_credit")
         ? "JOIN vendor_credit doc ON doc.id = qop.reference_id AND doc.deleted_at IS NULL"
         : step.startsWith("bill_payment")
           ? "JOIN vendor_bill_payment doc ON doc.id = qop.reference_id AND doc.deleted_at IS NULL"
-          : "";
+          : step.startsWith("gl_document")
+            ? `JOIN (SELECT id FROM gl_check WHERE deleted_at IS NULL UNION ALL SELECT id FROM gl_transfer WHERE deleted_at IS NULL
+                     UNION ALL SELECT id FROM gl_journal_entry WHERE deleted_at IS NULL UNION ALL SELECT id FROM bank_deposit WHERE deleted_at IS NULL) doc
+                 ON doc.id = qop.reference_id`
+            : "";
       const [source] = await q<{ count: string }>(
         `SELECT COUNT(*) AS count FROM qb_order_pipeline qop ${docJoin} WHERE qop.step = $1`,
         [step]
@@ -131,6 +139,11 @@ async function main(): Promise<void> {
       + (SELECT COUNT(*) FROM qb_order_pipeline qop
           JOIN vendor_bill_payment vbp ON vbp.id = qop.reference_id AND vbp.deleted_at IS NULL
          WHERE qop.step IN ('bill_payment_add', 'bill_payment_void'))
+      + (SELECT COUNT(*) FROM qb_order_pipeline qop
+          JOIN (SELECT id FROM gl_check WHERE deleted_at IS NULL UNION ALL SELECT id FROM gl_transfer WHERE deleted_at IS NULL
+                UNION ALL SELECT id FROM gl_journal_entry WHERE deleted_at IS NULL UNION ALL SELECT id FROM bank_deposit WHERE deleted_at IS NULL) doc
+            ON doc.id = qop.reference_id
+         WHERE qop.step IN ('gl_document_add', 'gl_document_void'))
       ) AS total
     `);
     check(

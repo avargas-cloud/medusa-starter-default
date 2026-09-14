@@ -32,6 +32,8 @@ import {
 import { reviewToday } from "./review-date";
 import { BankingError } from "./security";
 import { bankId } from "./store";
+import { clientInTransactionAsKnex } from "../quickbooks/gl-documents/db-adapters";
+import { enqueueGlDocumentAdd, enqueueGlDocumentVoid } from "../quickbooks/gl-documents/enqueue";
 
 async function buildReceiptPreview(
   client: PoolClient,
@@ -197,6 +199,12 @@ export async function postReceiptAccounting(
         transaction_id: kind === "payment_match" ? id : null,
         details: { entry_id: entryId, preview_hash: preview.preview_hash },
       });
+      // gl-docs-to-qb-20260914: el asiento del depósito es el momento en que
+      // el documento existe en el libro → DepositAdd en QuickBooks, encolado
+      // en ESTA transacción (lib/quickbooks/gl-documents/enqueue.ts).
+      if (kind === "deposit") {
+        await enqueueGlDocumentAdd(clientInTransactionAsKnex(client), "bank_deposit", id);
+      }
       return receiptContext(client, kind, id);
     }
   );
@@ -296,6 +304,12 @@ export async function reverseReceiptAccounting(
           reason: body.reason,
         },
       });
+      // gl-docs-to-qb-20260914: reversar el asiento anula el depósito en el
+      // libro → TxnVoid del Deposit en QuickBooks (si el Add ya confirmó; si
+      // está en vuelo, lo encola su confirmación desde el estado del documento).
+      if (kind === "deposit") {
+        await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "bank_deposit", id);
+      }
       return receiptContext(client, kind, id);
     }
   );

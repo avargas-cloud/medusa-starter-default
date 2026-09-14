@@ -9,6 +9,8 @@ import {
   runInPostingTransaction,
 } from "../post";
 import { LedgerError } from "../types";
+import { clientInTransactionAsKnex } from "../../quickbooks/gl-documents/db-adapters";
+import { enqueueGlDocumentAdd, enqueueGlDocumentVoid } from "../../quickbooks/gl-documents/enqueue";
 
 import type { PostGlDocumentResult } from "./journal-entry";
 import { listDocuments, type ListFilters, type ListPage } from "./manual-list";
@@ -58,6 +60,10 @@ export interface BankTransferDto {
   void_reason: string | null;
   evidence_id: string | null;
   created_by: string;
+  /** gl-docs-to-qb-20260914: espejo de QuickBooks (NULL = no vive en QB). */
+  qb_txn_id: string | null;
+  qb_txn_type: string | null;
+  qb_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -71,7 +77,7 @@ const COLUMNS = `d.id, d.doc_number, d.day::text AS day, d.from_account_list_id,
   d.to_account_list_id, d.to_snapshot, d.amount_cents::text AS amount_cents,
   d.fee_cents::text AS fee_cents, d.fee_account_list_id, d.fee_account_snapshot, d.memo, d.status, d.entry_id,
   d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason, d.evidence_id,
-  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at`;
+  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at`;
 
 const toDto = (row: Row): BankTransferDto => ({
   ...row,
@@ -218,7 +224,8 @@ export async function postBankTransfer(
       `UPDATE gl_transfer SET status = 'posted', entry_id = $2, posted_at = now(), updated_at = now() WHERE id = $1`,
       [id, result.entry_id]
     );
-    return { status: result.status, entry_id: result.entry_id };
+    const qb = await enqueueGlDocumentAdd(clientInTransactionAsKnex(client), "gl_transfer", id);
+    return { status: result.status, entry_id: result.entry_id, qb };
   });
 }
 
@@ -249,6 +256,7 @@ export async function voidBankTransfer(
       `UPDATE gl_transfer SET status = 'voided', voided_at = now(), void_reason = $2, updated_at = now() WHERE id = $1`,
       [id, reason]
     );
+    await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "gl_transfer", id);
   });
   return (await getBankTransfer(client, id))!;
 }

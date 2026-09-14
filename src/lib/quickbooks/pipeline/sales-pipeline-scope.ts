@@ -28,6 +28,10 @@ export const PURCHASE_PIPELINE_STEPS = [
   "vendor_credit_void",
   "bill_payment_add",
   "bill_payment_void",
+  // gl-docs-to-qb-20260914: documentos GL bancarios — se ven en la misma
+  // pestaña de compras (feed-sql.ts), fuera del Sales Pipeline.
+  "gl_document_add",
+  "gl_document_void",
 ] as const;
 
 /** Steps surfaced by the Inventory Adjustments tab. */

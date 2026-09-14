@@ -64,6 +64,10 @@ export interface BankCheckDto {
   voided_at: string | null;
   void_reason: string | null;
   to_be_printed: boolean;
+  /** gl-docs-to-qb-20260914: espejo de QuickBooks (NULL = no vive en QB). */
+  qb_txn_id: string | null;
+  qb_txn_type: string | null;
+  qb_synced_at: string | null;
   evidence_id: string | null;
   created_by: string;
   created_at: string;
@@ -82,7 +86,7 @@ export type LineRow = Omit<BankCheckLineDto, "amount_cents"> & {
 const HEADER_COLUMNS = `d.id, d.number, d.doc_number, d.kind, d.day::text AS day, d.bank_account_list_id,
   d.bank_account_snapshot, d.payee_type, d.payee_id, d.payee_name, d.memo, d.total_cents::text AS total_cents,
   d.status, d.entry_id, d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason,
-  d.to_be_printed, d.evidence_id, d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at`;
+  d.to_be_printed, d.evidence_id, d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at`;
 
 export async function loadLines(
   client: PoolClient,

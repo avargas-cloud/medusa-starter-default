@@ -75,6 +75,9 @@ import {
 } from "../../purchase-orders/qb-vendor-credit-enqueue";
 import { loadBillPaymentAddFacts } from "../../purchase-orders/qb-bill-payment-enqueue";
 import { buildTxnVoidQbxml } from "../txn-void-add";
+import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "../gl-documents/facts";
+import { isGlDocumentKind } from "../gl-documents/types";
+import type { GlQbTxnType } from "../gl-documents/qbxml-builders";
 // Confirmation write-back for these 4 steps (VendorCreditRet/BillPaymentRet/
 // TxnVoidRs parsing → handle-*-add/void.ts) lives in poll-submitted-rows.ts,
 // alongside the vendor_bill_add confirmation it mirrors — not here, which
@@ -1332,6 +1335,113 @@ export async function resubmitByStep(
             row,
             voidErr instanceof Error ? voidErr.message : String(voidErr)
           );
+        }
+        break;
+      }
+
+      // gl-docs-to-qb-20260914: cheques/gastos, transfers, asientos manuales y
+      // depósitos del libro del POS. Un solo case para las cuatro tablas: la
+      // tabla viene en `reference_type`, y los facts (el ÚNICO lugar que
+      // decide "listo" y arma el QBXML) se re-evalúan acá, nunca se confía
+      // en el payload que quedó al encolar.
+      case "gl_document_add": {
+        if (!row.reference_id || !isGlDocumentKind(row.reference_type)) {
+          await failPipelineRow(row.id, "gl_document_add: missing reference_id or unknown reference_type");
+          break;
+        }
+        const facts = await loadGlDocumentAddFacts(poolAsRawKnex(), row.reference_type, row.reference_id);
+        if (!facts.ready) {
+          if (facts.blockingReferenceIds.length > 0) {
+            // Transitorio (un cobro cuyo ADD aún no confirmó): volver a mirar.
+            await deferPipelineRow(row.id, facts.reason, QUIESCENCE_RECHECK_SECONDS);
+            logger.info(`${LOG_PREFIX} ⏳ gl_document_add ${row.id} not ready yet: ${facts.reason}`);
+          } else if (facts.skip) {
+            await getDbPool().query(
+              `UPDATE qb_order_pipeline SET status = 'skipped', error = $2, updated_at = NOW() WHERE id = $1`,
+              [row.id, facts.reason]
+            );
+            logger.info(`${LOG_PREFIX} ⤼ gl_document_add ${row.id} skipped: ${facts.reason}`);
+          } else {
+            // Estructural: nada lo destraba solo. Terminal y visible; el Retry
+            // manual re-evalúa estos mismos facts.
+            await failPipelineRow(row.id, `gl_document_add: ${facts.reason}`);
+          }
+          break;
+        }
+        try {
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml: facts.qbxml },
+            { idempotencyKey: `gl-document-add:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error(`Bridge did not return an operationId for ${facts.qbTxnType}Add`);
+          }
+          // El tipo que se mandó queda en la fila: es lo que el poller usa para
+          // elegir `<Tipo>AddRs` y lo que el void va a tener que nombrar.
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object('qb_txn_type', $3::text, 'ready', true),
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId, facts.qbTxnType]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ gl_document_add ${row.id} (${row.reference_type} ${facts.qbTxnType}) submitted op=${opId}`
+          );
+        } catch (addErr) {
+          const message = addErr instanceof Error ? addErr.message : String(addErr);
+          classifyQbError({ message });
+          await failPipelineRow(row.id, message);
+        }
+        break;
+      }
+
+      case "gl_document_void": {
+        if (!row.reference_id || !isGlDocumentKind(row.reference_type)) {
+          await failPipelineRow(row.id, "gl_document_void: missing reference_id or unknown reference_type");
+          break;
+        }
+        // El TxnID y el tipo se leen del DOCUMENTO (columnas espejo escritas al
+        // confirmar el ADD), no del payload: un void encolado detrás de un ADD
+        // en vuelo nace sin ellos.
+        const link = await loadGlDocumentQbLink(poolAsRawKnex(), row.reference_type, row.reference_id);
+        const qbTxnId = link.qb_txn_id ?? row.qb_txn_id ?? null;
+        const qbTxnType =
+          link.qb_txn_type ??
+          ((row.payload as { qb_txn_type?: string } | null)?.qb_txn_type as GlQbTxnType | undefined) ??
+          null;
+        if (!qbTxnId || !qbTxnType) {
+          await deferPipelineRow(row.id, "gl_document_void: waiting on the add's qb_txn_id", QUIESCENCE_RECHECK_SECONDS);
+          break;
+        }
+        try {
+          const qbxml = buildTxnVoidQbxml(qbTxnType, qbTxnId);
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml },
+            { idempotencyKey: `gl-document-void:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error(`Bridge did not return an operationId for ${qbTxnType} TxnVoid`);
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId, qbTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ gl_document_void ${row.id} (${row.reference_type} ${qbTxnType}) submitted op=${opId} txn=${qbTxnId}`
+          );
+        } catch (voidErr) {
+          await failVoidFamilyRow(row, voidErr instanceof Error ? voidErr.message : String(voidErr));
         }
         break;
       }

@@ -9,6 +9,12 @@ import {
   runInPostingTransaction,
 } from "../post";
 import { LedgerError } from "../types";
+import { clientInTransactionAsKnex } from "../../quickbooks/gl-documents/db-adapters";
+import {
+  enqueueGlDocumentAdd,
+  enqueueGlDocumentVoid,
+  type GlDocumentEnqueueResult,
+} from "../../quickbooks/gl-documents/enqueue";
 
 import {
   getJournalEntry,
@@ -133,6 +139,12 @@ export async function updateJournalEntry(
 export type PostGlDocumentResult = {
   status: "posted" | "already_posted";
   entry_id: string;
+  /**
+   * gl-docs-to-qb-20260914: resultado del enqueue a QuickBooks, hecho en la
+   * MISMA transacción que el posteo (un documento posteado sin su fila de
+   * pipeline no existe). Ausente en `already_posted`.
+   */
+  qb?: GlDocumentEnqueueResult;
 };
 
 /**
@@ -190,7 +202,8 @@ export async function postJournalEntry(
       `UPDATE gl_journal_entry SET status = 'posted', entry_id = $2, posted_at = now(), updated_at = now() WHERE id = $1`,
       [id, result.entry_id]
     );
-    return { status: result.status, entry_id: result.entry_id };
+    const qb = await enqueueGlDocumentAdd(clientInTransactionAsKnex(client), "gl_journal_entry", id);
+    return { status: result.status, entry_id: result.entry_id, qb };
   });
 }
 
@@ -225,6 +238,7 @@ export async function voidJournalEntry(
       `UPDATE gl_journal_entry SET status = 'voided', voided_at = now(), void_reason = $2, updated_at = now() WHERE id = $1`,
       [id, reason]
     );
+    await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "gl_journal_entry", id);
   });
   return (await getJournalEntry(client, id))!;
 }

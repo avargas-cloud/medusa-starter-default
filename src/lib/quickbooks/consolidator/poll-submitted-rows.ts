@@ -29,6 +29,11 @@ import {
 } from "../qb-pipeline";
 import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-deactivate";
 import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
+import { decideAddRetrySafety } from "../pipeline/add-retry-safety";
+import { poolAsKnex } from "../gl-documents/db-adapters";
+import { handleGlDocumentAddConfirmed, handleGlDocumentVoidConfirmed, readDirectQueryStatus } from "../gl-documents/confirm";
+import { glQbResponseTag, glQbRetTag, type GlQbTxnType } from "../gl-documents/qbxml-builders";
+import { isGlDocumentKind } from "../gl-documents/types";
 import {
   isQbObjectNotFound,
   qbStatusMessage,
@@ -207,6 +212,99 @@ export async function pollSubmittedRows(
         }
         const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs;
 
+        // gl-docs-to-qb-20260914: documentos GL bancarios (gl_check /
+        // gl_transfer / gl_journal_entry / bank_deposit). Mismo passthrough raw
+        // que el bloque de vendor credits de abajo; el `<Tipo>AddRs` a leer
+        // sale de `payload.qb_txn_type` (lo escribió el despachador al
+        // enviar), y el void es siempre `TxnVoidRs`. Autocontenido: confirma
+        // o falla, escribe al documento, y `continue`.
+        if (row.step === "gl_document_add" || row.step === "gl_document_void") {
+          const glPayload = (row.payload ?? {}) as {
+            kind?: string;
+            qb_txn_type?: GlQbTxnType | null;
+          };
+          const glKind = isGlDocumentKind(row.reference_type) ? row.reference_type : null;
+          const glTxnType = glPayload.qb_txn_type ?? null;
+          if (!glKind || !row.reference_id || (row.step === "gl_document_add" && !glTxnType)) {
+            await failPipelineRow(
+              row.id,
+              `${row.step}: cannot confirm without reference_type/reference_id/qb_txn_type (kind=${row.reference_type}, type=${glTxnType})`
+            );
+            continue;
+          }
+          const glRsNode: Record<string, unknown> | undefined =
+            row.step === "gl_document_add" ? msgs?.[glQbResponseTag(glTxnType!)] : msgs?.TxnVoidRs;
+          const { statusCode: glStatusCode, statusMessage: glStatusMessage } = readDirectQueryStatus(glRsNode);
+          if (!glRsNode || (glStatusCode !== null && glStatusCode !== "0")) {
+            const message =
+              glStatusCode !== null
+                ? `QuickBooks rejected ${row.step} (${glStatusCode}): ${glStatusMessage}`
+                : `${row.step} completed without a recognizable ${row.step === "gl_document_add" ? glQbResponseTag(glTxnType!) : "TxnVoidRs"} response`;
+            if (row.step === "gl_document_add") {
+              // Un ADD rechazado con código: nada se creó, pero jamás se
+              // auto-reintenta (mismo trato que vendor_credit_add). Sin nodo de
+              // respuesta el resultado es DESCONOCIDO — también terminal.
+              classifyQbError({ message, code: glStatusCode });
+              await failPipelineRow(row.id, message);
+            } else {
+              await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
+            }
+            logger.warn(`${LOG_PREFIX} ⚠️ ${row.step} ${row.id}: ${message}`);
+            continue;
+          }
+          const glRet =
+            row.step === "gl_document_add"
+              ? ((glRsNode as Record<string, unknown>)[glQbRetTag(glTxnType!)] as
+                  | { TxnID?: string; EditSequence?: string }
+                  | undefined)
+              : undefined;
+          if (row.step === "gl_document_add" && !glRet?.TxnID) {
+            // statusCode 0 sin `<Tipo>Ret` = QuickBooks dice OK y no devuelve el
+            // documento. No se confirma a ciegas: terminal, con el nodo entero
+            // en el error para leerlo, y readback por /qb-query antes de tocar.
+            await failPipelineRow(
+              row.id,
+              `${row.step}: ${glQbResponseTag(glTxnType!)} statusCode 0 but no ${glQbRetTag(glTxnType!)}.TxnID — verify in QuickBooks before retrying (${JSON.stringify(glRsNode).slice(0, 300)})`
+            );
+            logger.warn(`${LOG_PREFIX} ⚠️ ${row.step} ${row.id}: OK without TxnID — left failed for manual verification`);
+            continue;
+          }
+          const wonConfirmGlDoc = await confirmPipelineRow(
+            row.id,
+            glRet?.TxnID ?? row.qb_txn_id ?? null,
+            null,
+            (glRsNode as object) ?? null
+          );
+          if (wonConfirmGlDoc) {
+            try {
+              if (row.step === "gl_document_add") {
+                const outcome = await handleGlDocumentAddConfirmed(
+                  poolAsKnex(pool),
+                  glKind,
+                  row.reference_id,
+                  glTxnType!,
+                  glRet!
+                );
+                if (outcome.confirmed && outcome.voidQueued) {
+                  logger.warn(
+                    `${LOG_PREFIX} ↩️ ${glKind} ${row.reference_id} was voided in the POS while its Add was in flight — void ${outcome.voidQueued.queued ? `queued (${outcome.voidQueued.pipelineRowId})` : `NOT queued: ${outcome.voidQueued.reason}`}`
+                  );
+                }
+              } else {
+                await handleGlDocumentVoidConfirmed(poolAsKnex(pool), glKind, row.reference_id);
+              }
+              logger.info(
+                `${LOG_PREFIX} ✅ ${row.step} ${row.id} (${glKind}) confirmed — TxnID=${glRet?.TxnID ?? row.qb_txn_id ?? "(void)"}`
+              );
+            } catch (handlerErr) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ ${row.step} ${row.id} confirmed on the pipeline but its write-back failed: ${handlerErr instanceof Error ? handlerErr.message : String(handlerErr)}`
+              );
+            }
+          }
+          continue;
+        }
+
         // gl-purchases-v2 §4: VendorCreditAdd/BillPaymentCheckAdd/
         // BillPaymentCreditCardAdd/TxnVoid confirmations. Dispatched through
         // the raw `/api/sync/direct-query` passthrough (`resubmit-by-step.ts`
@@ -232,10 +330,9 @@ export async function pollSubmittedRows(
               : row.step === "bill_payment_add"
                 ? (msgs?.BillPaymentCheckAddRs ?? msgs?.BillPaymentCreditCardAddRs)
                 : msgs?.TxnVoidRs; // covers both vendor_credit_void and bill_payment_void
-          const statusCode =
-            rsNode?.statusCode != null ? String(rsNode.statusCode) : null;
-          const statusMessage =
-            typeof rsNode?.statusMessage === "string" ? rsNode.statusMessage : "";
+          // 2026-09-14 (gl-docs-to-qb): los atributos del `*Rs` viven bajo `$`
+          // (xml2js); leerlos planos dejaba pasar un rechazo de QB como éxito.
+          const { statusCode, statusMessage } = readDirectQueryStatus(rsNode);
 
           if (!rsNode || (statusCode !== null && statusCode !== "0")) {
             const message =
@@ -1814,6 +1911,19 @@ export async function pollSubmittedRows(
           );
         }
 
+        // gl-docs-to-qb-20260914: un ADD de documento GL cuyo resultado se
+        // desconoce (sesión abortada, red, bridge ocupado) NO se auto-reintenta:
+        // QuickBooks puede haber creado el documento sin que lo sepamos, y el
+        // reintento lo duplicaría. Queda `failed` terminal con la razón; el
+        // operador verifica por /qb-query y recién ahí Retry (retry-gate).
+        if (row.step === "gl_document_add") {
+          const safety = decideAddRetrySafety(errMsg);
+          if (!safety.safeToAutoRetry) {
+            await failPipelineRow(row.id, `${errMsg} — ${safety.reason}`);
+            logger.error(`${LOG_PREFIX} 🛑 gl_document_add ${row.id}: ${safety.reason}`);
+            continue;
+          }
+        }
         const decision = await failOrRetryPipelineRow(
           row.id,
           errMsg,

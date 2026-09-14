@@ -53,6 +53,10 @@ export interface JournalEntryDto {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** gl-docs-to-qb-20260914: espejo de QuickBooks (NULL = no vive en QB). */
+  qb_txn_id: string | null;
+  qb_txn_type: string | null;
+  qb_synced_at: string | null;
   lines: JournalEntryLineDto[];
 }
 
@@ -68,7 +72,7 @@ export type LineRow = Omit<
 
 const HEADER_COLUMNS = `d.id, d.number, d.day::text AS day, d.memo, d.status, d.entry_id,
   d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason, d.evidence_id,
-  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at`;
+  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at`;
 
 export async function loadLines(
   client: PoolClient,
