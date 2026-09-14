@@ -238,34 +238,48 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
             "This receipt is already inside a bank deposit; remove it from the deposit before changing its method.",
         });
       }
+    }
 
-      // Card-to-card method changes (e.g. credit_card → debit_card) are
-      // audited: they don't change the receipt's economics, but they DO
-      // change what QB's PaymentMethodRef says happened.
-      const CARD_METHODS = new Set(["credit_card", "debit_card", "card"]);
-      if (
-        CARD_METHODS.has((payment as any).method) &&
-        CARD_METHODS.has(method)
-      ) {
-        const existingLog = Array.isArray(meta.card_type_change_log)
-          ? meta.card_type_change_log
-          : [];
-        const actorId =
-          (req as unknown as { auth_context?: { actor_id?: string } })
-            .auth_context?.actor_id ?? "unknown";
-        const changeReason = (req.body as { reason?: string })?.reason
-          ?.slice(0, 200);
-        meta.card_type_change_log = [
-          ...existingLog,
-          {
-            from: (payment as any).method,
-            to: method,
-            at: new Date().toISOString(),
-            by: actorId,
-            reason: changeReason ?? null,
+    // ── Audit: any change of method or card brand ─────────────────────────
+    // Neither changes the receipt's economics, but both change what QB's
+    // PaymentMethodRef and the deposit picker say happened, so the trail
+    // stays on the payment (read-modify-write of the whole array: Medusa's
+    // JSONB merge replaces arrays wholesale).
+    const methodChangedForLog =
+      method !== undefined && method !== (payment as any).method;
+    const brandChangedForLog =
+      card_brand !== undefined &&
+      (card_brand ?? null) !== ((payment as any).card_brand ?? null);
+    if (methodChangedForLog || brandChangedForLog) {
+      const existingLog = Array.isArray(meta.payment_method_change_log)
+        ? meta.payment_method_change_log
+        : [];
+      const actorId =
+        (req as unknown as { auth_context?: { actor_id?: string } })
+          .auth_context?.actor_id ?? "unknown";
+      const changeReason = (req.body as { reason?: string })?.reason?.slice(
+        0,
+        200
+      );
+      meta.payment_method_change_log = [
+        ...existingLog,
+        {
+          from: {
+            method: (payment as any).method,
+            card_brand: (payment as any).card_brand ?? null,
           },
-        ];
-      }
+          to: {
+            method: method ?? (payment as any).method,
+            card_brand:
+              card_brand !== undefined
+                ? (card_brand ?? null)
+                : ((payment as any).card_brand ?? null),
+          },
+          at: new Date().toISOString(),
+          by: actorId,
+          reason: changeReason ?? null,
+        },
+      ];
     }
 
     const fields: Record<string, any> = {};
@@ -277,7 +291,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     if (batchDayChanged) fields.batch_day = batch_day;
     if (pos_payment_method !== undefined) {
       fields.metadata = { ...meta, pos_payment_method };
-    } else if (meta.card_type_change_log !== undefined) {
+    } else if (meta.payment_method_change_log !== undefined) {
       // pos_payment_method wasn't part of this request, but the card-type
       // audit log above added a key to `meta` — persist it (read-modify-write
       // the full metadata object; Medusa's update deep-merges JSONB, but

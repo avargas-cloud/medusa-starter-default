@@ -17,7 +17,7 @@
  *    su asiento tiene exactamente 2 líneas.
  * §5 card type change guard: chequeo ESTÁTICO (read-only, la ruta no se
  *    puede ejercitar sin HTTP desde acá) — la ruta PATCH de customer-payments
- *    contiene el 409 PAYMENT_IN_DEPOSIT y la clave card_type_change_log, y
+ *    contiene el 409 PAYMENT_IN_DEPOSIT y la clave payment_method_change_log, y
  *    DEPOSIT_RECEIPT_SQL expone card_brand.
  *
  * Run: cd backend && yarn medusa exec ./src/scripts/verify/verify-payment-surcharge.ts
@@ -276,8 +276,8 @@ export default async function verifyPaymentSurcharge({ container }: ExecArgs) {
       "route.ts contiene el literal PAYMENT_IN_DEPOSIT"
     );
     check(
-      routeSrc.includes("card_type_change_log"),
-      "route.ts contiene la clave card_type_change_log"
+      routeSrc.includes("payment_method_change_log"),
+      "route.ts contiene la clave payment_method_change_log"
     );
     check(
       DEPOSIT_RECEIPT_SQL.includes("card_brand"),
