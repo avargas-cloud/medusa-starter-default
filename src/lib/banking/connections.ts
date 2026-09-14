@@ -61,6 +61,8 @@ export async function createLinkToken(
   request.account_filters = {
     depository: { account_subtypes: ["checking", "savings", "paypal"] },
     credit: { account_subtypes: ["credit card", "paypal"] },
+    // Líneas de crédito (TD, Chase, Fundation): pasivos en el libro, feed igual que una tarjeta (2026-09-14).
+    loan: { account_subtypes: ["line of credit"] },
   };
   request.transactions = { days_requested: 730 };
   const response = await plaidRequest("/link/token/create", request);

@@ -19,7 +19,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const activeOnly = req.query.active !== "false";
 
   const filters: any = {};
-  if (type) filters.account_type = type;
+  // "A,B" = cualquiera de los dos (Banking mapea una línea de crédito a OtherCurrentLiability o LongTermLiability).
+  if (type) filters.account_type = type.includes(",") ? type.split(",") : type;
   if (activeOnly) filters.is_active = true;
 
   const { data } = await query.graph({

@@ -34,7 +34,7 @@ export async function selectBankAccounts(
       await withReviewLock(client);
       const valid = await client.query(
         `SELECT id FROM bank_account WHERE connection_id=$1 AND id=ANY($2::text[])
-        AND is_active AND deleted_at IS NULL AND type IN ('credit','depository')`,
+        AND is_active AND deleted_at IS NULL AND type IN ('credit','depository','loan')`,
         [connectionId, accountIds]
       );
       if (valid.rowCount !== accountIds.length)
@@ -204,7 +204,8 @@ export async function mapBankAccount(
         const valid = await client.query(
           `SELECT q.qb_list_id FROM qb_account q JOIN bank_account a ON a.id=$2
         WHERE q.qb_list_id=$1 AND q.is_active AND q.deleted_at IS NULL
-        AND q.account_type=CASE WHEN a.type='credit' THEN 'CreditCard' ELSE 'Bank' END`,
+        AND q.account_type=ANY(CASE WHEN a.type='credit' THEN ARRAY['CreditCard']
+          WHEN a.type='loan' THEN ARRAY['OtherCurrentLiability','LongTermLiability'] ELSE ARRAY['Bank'] END)`,
           [qbListId, accountId]
         );
         if (!valid.rowCount)
