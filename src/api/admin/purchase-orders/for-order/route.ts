@@ -20,6 +20,11 @@ import type {
 import { getDbPool } from "../../../utils/db-pool";
 import { loadPosForOrder } from "./_lib/po-for-order-query";
 
+/** knex here is the `__pg_connection__` pool → `?` placeholders, NOT `$1`. */
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
+
 const ORDER_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
 export async function GET(
@@ -37,6 +42,7 @@ export async function GET(
     return;
   }
 
-  const purchase_orders = await loadPosForOrder(getDbPool(), orderId);
+  const knex = req.scope.resolve("__pg_connection__") as Knex;
+  const purchase_orders = await loadPosForOrder(getDbPool(), orderId, knex);
   res.json({ purchase_orders });
 }

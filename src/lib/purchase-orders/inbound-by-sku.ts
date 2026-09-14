@@ -130,7 +130,7 @@ function isoDate(value: unknown): string | null {
  * so its quantity is everything still shippable (`ordered - cancelled`).
  * Received units are NOT subtracted here; that is the FIFO pass below.
  */
-function claimedBy(
+export function claimedBy(
   shipment: PoShipmentView,
   lineId: string,
   shippable: number

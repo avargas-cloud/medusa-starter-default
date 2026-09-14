@@ -27,6 +27,11 @@ import {
 import { deriveSeparationStatus } from "../../_lib/separation-status";
 import { loadSeparationData } from "../_lib/separation-data";
 
+/** knex here is the `__pg_connection__` pool → `?` placeholders, NOT `$1`. */
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
+
 export async function GET(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
@@ -63,7 +68,8 @@ export async function GET(
     data.legacyFullFlag
   );
 
-  const purchase_orders = await loadPosForOrder(pool, orderId);
+  const knex = req.scope.resolve("__pg_connection__") as Knex;
+  const purchase_orders = await loadPosForOrder(pool, orderId, knex);
 
   res.json({
     order: {

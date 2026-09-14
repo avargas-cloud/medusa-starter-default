@@ -12,6 +12,15 @@
 import type { Pool } from "pg";
 
 import type { TrackingEntry } from "../../../../../lib/carrier-tracking/types";
+import {
+  resolveLineShipping,
+  type LineShippingTracking,
+} from "../../../../../lib/purchase-orders/po-line-shipping";
+
+/** The `__pg_connection__` knex pool — `?` placeholders, NOT `$1`. */
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
 
 /** PO lifecycle states that cannot inform a customer about an inbound shipment. */
 export const EXCLUDED_PO_STATUSES = ["cancelled", "voided"];
@@ -34,6 +43,17 @@ export interface PoLineDto {
   qty_received: number;
   qty_cancelled: number;
   status: string;
+  /**
+   * Per-LINE shipping — the fields a screen must read instead of the PO-level
+   * `tracking` when it names a SKU. A `by_line` shipment reaches only the
+   * lines it allocates; the PO-level list cannot say which.
+   */
+  /** Units ever placed on a shipment. */
+  shipped: number;
+  /** shipped − what receipts already consumed (FIFO, delivered first). */
+  in_transit: number;
+  /** Numbers of shipments still carrying units of THIS line. Empty once received. */
+  tracking: LineShippingTracking[];
 }
 
 export interface PoForOrderDto {
@@ -97,17 +117,21 @@ function normalizeTracking(raw: unknown): PoTrackingDto[] {
 
 export async function loadPosForOrder(
   pool: Pool,
-  orderId: string
+  orderId: string,
+  knex: Knex
 ): Promise<PoForOrderDto[]> {
   // `tracking` comes from purchase_order_tracking_number, not the PO's legacy
   // JSON column. That column is frozen and no longer written, so reading it
   // here would quote a customer an arrival date from a shipment list that
   // stopped updating.
   //
-  // FLAT on purpose: this answers "where is my order?" for a customer, who
-  // wants numbers and a date — not the delivery/number hierarchy the buyer
-  // works with. Every number of every delivery is listed, master first within
-  // each.
+  // The PO-level list is FLAT — every number of every delivery, master first
+  // within each — and it is the PO's picture, not a line's. It stays for the
+  // toolbar badge ("this PO has tracking"). Anything that names a SKU reads
+  // `lines[].tracking` instead: a `by_line` shipment carries only the lines it
+  // allocates, and handing its number to every SKU on the PO once told a
+  // customer their fan was "delivered Sep 3" on a box that held a lamp
+  // (S11581 / PO-1160).
   const headers = await pool.query<PoHeaderRow>(
     `SELECT id, number, status, po_status, vendor_name_snapshot,
             ordered_at, expected_at,
@@ -154,9 +178,21 @@ export async function loadPosForOrder(
     [poIds]
   );
 
+  const shipping = await resolveLineShipping(
+    knex,
+    lines.rows.map((r) => ({
+      line_id: r.id,
+      purchase_order_id: r.purchase_order_id,
+      qty_ordered: num(r.qty_ordered),
+      qty_received: num(r.qty_received),
+      qty_cancelled: num(r.qty_cancelled),
+    }))
+  );
+
   const linesByPo = new Map<string, PoLineDto[]>();
   for (const row of lines.rows) {
     const bucket = linesByPo.get(row.purchase_order_id) ?? [];
+    const ship = shipping.get(row.id);
     bucket.push({
       id: row.id,
       sku: row.sku_snapshot ?? "",
@@ -165,6 +201,9 @@ export async function loadPosForOrder(
       qty_received: num(row.qty_received),
       qty_cancelled: num(row.qty_cancelled),
       status: row.status,
+      shipped: ship?.shipped ?? 0,
+      in_transit: ship?.in_transit ?? 0,
+      tracking: ship?.tracking ?? [],
     });
     linesByPo.set(row.purchase_order_id, bucket);
   }
