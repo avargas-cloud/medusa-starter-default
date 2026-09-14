@@ -122,7 +122,7 @@ export async function depositCandidates(input: {
     FROM eligible WHERE available_amount::numeric>0 AND ($4::text='' OR concat_ws(' ',customer_name,reference,display_id::text) ILIKE '%'||$4||'%')),
   matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal)
   SELECT (SELECT COUNT(*)::text FROM matching) AS count,COALESCE((SELECT jsonb_agg(p.candidate ORDER BY p.date,p.id) FROM
-    (SELECT id,date,candidate FROM matching ORDER BY date,id LIMIT 50) p),'[]'::jsonb) AS candidates`,
+    (SELECT id,date,candidate FROM matching ORDER BY date,id LIMIT 100) p),'[]'::jsonb) AS candidates`,
     [
       account.currency,
       input.deposit_id ?? null,
