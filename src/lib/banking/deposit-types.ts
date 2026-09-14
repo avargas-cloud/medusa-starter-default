@@ -13,7 +13,9 @@ export const depositSaveSchema = z
     expected_revision: z.number().int().min(0),
     account_id: id,
     date: reviewDate,
-    reference: z.string().trim().min(1).max(200),
+    // Optional since 2026-09-14: QuickBooks does not ask for a memo/ref on a
+    // deposit either; the POS labels a blank one "Deposit <date>".
+    reference: z.string().trim().max(200).default(""),
     memo: z.string().max(2000).default(""),
     fee_amount: depositMoney.default("0"),
     fee_account_list_id: id.nullable().optional(),
