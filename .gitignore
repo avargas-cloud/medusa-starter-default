@@ -45,3 +45,4 @@ google-chrome-stable_current_amd64.deb
 
 # qb-docs-backfill: caché de consultas QBXML con líneas (PO, ItemReceipt, Bill, VendorCredit, BillPayment)
 .qb-docs-cache/
+.bank-recon/
