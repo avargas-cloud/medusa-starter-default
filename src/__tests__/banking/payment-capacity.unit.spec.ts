@@ -56,7 +56,7 @@ describe("posted deposit and account guards", () => {
   function reader(posted: boolean, closed: boolean) {
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("FROM bank_journal_entry entry")) return { rows: posted ? [{ id: "posted" }] : [], rowCount: posted ? 1 : 0 };
-      if (sql.includes("FROM bank_journal_line l")) return { rows: [], rowCount: 0 };
+      if (sql.includes("FROM bank_statement")) return { rows: [], rowCount: 0 };
       if (sql.includes("bank_day_close")) return { rows: [{ closed }], rowCount: 1 };
       throw new Error(`Unexpected guard query: ${sql}`);
     });
@@ -74,6 +74,17 @@ describe("posted deposit and account guards", () => {
   it("freezes account setup against recorded history; an unposted account stays configurable", async () => {
     await expect(requireUnpostedBankAccount(reader(true, false).client, "account")).rejects.toThrow("BANKING_ACCOUNTING_SETUP_FROZEN");
     await expect(requireUnpostedBankAccount(reader(false, false).client, "account")).resolves.toBeUndefined();
+  });
+  it("2026-09-14: a statement freezes the account; GL lines on the mapped QB account never do", async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("FROM bank_journal_entry entry")) return { rows: [], rowCount: 0 };
+      if (sql.includes("FROM bank_statement")) return { rows: [{ id: "stmt" }], rowCount: 1 };
+      throw new Error(`Unexpected guard query: ${sql}`);
+    });
+    await expect(requireUnpostedBankAccount({ query } as unknown as PoolClient, "account")).rejects.toThrow("BANKING_ACCOUNTING_SETUP_FROZEN");
+    // El libro (qb_import, aperturas) no es un artefacto de Banking: el guard no lo consulta.
+    const calls = query.mock.calls.map(([sql]) => String(sql));
+    expect(calls.some((sql) => sql.includes("bank_journal_line"))).toBe(false);
   });
 });
 

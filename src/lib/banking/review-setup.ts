@@ -16,7 +16,13 @@ export const accountSetupSchema = z
   })
   .strict();
 
-/** Even reversed history fixes the account's original opening/mapping context. */
+/**
+ * Setup y mapeo se congelan por lo que BANKING construyó sobre esta cuenta del banco
+ * (asientos de sus movimientos/depósitos, statements), incluso reversado. NO por lo
+ * que el libro sabe de la cuenta QB mapeada: desde que el GL es el libro (QB importado
+ * + aperturas), toda cuenta real tiene líneas, y mirar eso congelaba cualquier mapeo
+ * al primer Save — hasta uno equivocado (prod 2026-09-14, Chase Saving → Regions 1416).
+ */
 export async function requireUnpostedBankAccount(
   client: PoolClient,
   accountId: string
@@ -28,14 +34,11 @@ export async function requireUnpostedBankAccount(
     WHERE tx.account_id=$1 OR deposit.account_id=$1 LIMIT 1`,
     [accountId]
   );
-  const opening = await client.query(
-    `SELECT l.id FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
-    JOIN bank_account a ON a.qb_list_id=l.account_list_id
-    WHERE a.id=$1 AND l.account_snapshot->>'account_type'='Bank' AND e.deleted_at IS NULL
-      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) LIMIT 1`,
+  const statements = await client.query(
+    `SELECT id FROM bank_statement WHERE bank_account_id=$1 AND deleted_at IS NULL LIMIT 1`,
     [accountId]
   );
-  if (posted.rowCount || opening.rowCount)
+  if (posted.rowCount || statements.rowCount)
     throw new BankingError("BANKING_ACCOUNTING_SETUP_FROZEN", 409);
 }
 
