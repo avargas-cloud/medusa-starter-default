@@ -43,6 +43,12 @@ export async function createLinkToken(
       throw new BankingError("BANKING_INVALID_REDIRECT_URI");
     request.redirect_uri = url.toString();
   }
+  const accountFilters = {
+    depository: { account_subtypes: ["checking", "savings", "paypal"] },
+    credit: { account_subtypes: ["credit card", "paypal"] },
+    // Líneas de crédito (TD, Chase, Fundation): pasivos en el libro, feed igual que una tarjeta (2026-09-14).
+    loan: { account_subtypes: ["line of credit"] },
+  };
   if (connectionId) {
     return withBankLock(connectionId, async (client) => {
       const row = await connectionRow(client, connectionId);
@@ -53,17 +59,16 @@ export async function createLinkToken(
         connectionId,
         key
       );
+      // Sin esto, el modo update sólo renueva el acceso: lo que el operador marque en el
+      // banco no cambia las cuentas del Item (TD 2026-09-14: 3 marcadas, 1 devuelta).
+      request.update = { account_selection_enabled: true };
+      request.account_filters = accountFilters;
       const response = await plaidRequest("/link/token/create", request);
       return { link_token: string(response.link_token) };
     });
   }
   request.products = ["transactions"];
-  request.account_filters = {
-    depository: { account_subtypes: ["checking", "savings", "paypal"] },
-    credit: { account_subtypes: ["credit card", "paypal"] },
-    // Líneas de crédito (TD, Chase, Fundation): pasivos en el libro, feed igual que una tarjeta (2026-09-14).
-    loan: { account_subtypes: ["line of credit"] },
-  };
+  request.account_filters = accountFilters;
   request.transactions = { days_requested: 730 };
   const response = await plaidRequest("/link/token/create", request);
   return { link_token: string(response.link_token) };
