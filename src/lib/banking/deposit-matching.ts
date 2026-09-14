@@ -10,6 +10,7 @@ import {
 import { depositAccount, loadBankDeposit } from "./deposit-read";
 import { depositSourceKey, type BankDeposit } from "./deposit-types";
 import { journalClaimExistsSql } from "./journal-claim";
+import { MATCH_SCOPE_SQL, matchUnsupportedReason } from "./review-matching";
 import {
   validateDepositFee,
   validateDepositFunding,
@@ -82,17 +83,34 @@ export async function validateMatchedDeposit(
     throw new BankingError("BANKING_DEPOSIT_SOURCE_STALE", 409);
   return current;
 }
-export async function transactionDepositCandidates(
-  id: string
-): Promise<{ deposits: BankDeposit[]; count: number }> {
-  if (!bankingConfig().enabled) return { deposits: [], count: 0 };
+export async function transactionDepositCandidates(id: string): Promise<{
+  deposits: BankDeposit[];
+  count: number;
+  supported: boolean;
+  reason?: string;
+}> {
+  if (!bankingConfig().enabled)
+    return {
+      deposits: [],
+      count: 0,
+      supported: false,
+      reason: "BANKING_SANDBOX_ONLY",
+    };
   requireBankingEnabled();
+  const scope = await getDbPool().query<{
+    bank_status: string;
+    supported: boolean;
+  }>(MATCH_SCOPE_SQL, [id]);
+  if (!scope.rows[0])
+    throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
+  const reason = matchUnsupportedReason(scope.rows[0]);
+  if (reason) return { deposits: [], count: 0, supported: false, reason };
   const result = await getDbPool().query<BankDeposit>(
     `SELECT ${DEPOSIT_SELECT_SQL} ${DEPOSIT_MATCH_FROM_SQL}
     WHERE t.id=$1 AND ${DEPOSIT_MATCH_VALID_SQL} ORDER BY abs(d.deposit_date::date-t.transaction_date::date),d.id`,
     [id]
   );
-  return { deposits: result.rows, count: result.rows.length };
+  return { deposits: result.rows, count: result.rows.length, supported: true };
 }
 export type DepositSuggestion = {
   transaction_id: string;

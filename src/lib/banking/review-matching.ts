@@ -102,6 +102,24 @@ type MatchCandidatesResult = {
   reason?: string;
 };
 
+/** Why a movement cannot be matched, or null when it can. A pending/removed
+ * bank credit says so by name: the generic "settled deposits only" reason hid
+ * that the POS receipt was fine and only the bank had not posted yet (2026-09-14). */
+export function matchUnsupportedReason(scope: {
+  bank_status: string;
+  supported: boolean;
+}): string | null {
+  if (scope.supported) return null;
+  if (scope.bank_status === "pending") return "BANKING_MATCH_BANK_PENDING";
+  if (scope.bank_status === "removed") return "BANKING_MATCH_BANK_REMOVED";
+  return "BANKING_MATCH_DIRECT_RECEIPTS_ONLY";
+}
+export const MATCH_SCOPE_SQL = `SELECT t.status AS bank_status,
+    (a.type='depository' AND t.status='posted' AND t.amount::numeric<0 AND t.currency IS NOT NULL) AS supported
+    FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection bc ON bc.id=a.connection_id
+    WHERE t.id=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
+      AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`;
+
 export async function matchCandidates(
   transactionId: string,
   q: string
@@ -115,23 +133,14 @@ export async function matchCandidates(
     };
   requireBankingEnabled();
   const pool = getDbPool();
-  const scope = await pool.query<{ supported: boolean }>(
-    `SELECT
-    (a.type='depository' AND t.status='posted' AND t.amount::numeric<0 AND t.currency IS NOT NULL) AS supported
-    FROM bank_transaction t JOIN bank_account a ON a.id=t.account_id JOIN bank_connection bc ON bc.id=a.connection_id
-    WHERE t.id=$1 AND t.deleted_at IS NULL AND a.deleted_at IS NULL
-      AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`,
+  const scope = await pool.query<{ bank_status: string; supported: boolean }>(
+    MATCH_SCOPE_SQL,
     [transactionId]
   );
   if (!scope.rows[0])
     throw new BankingError("BANKING_TRANSACTION_NOT_FOUND", 404);
-  if (!scope.rows[0].supported)
-    return {
-      candidates: [],
-      count: 0,
-      supported: false,
-      reason: "BANKING_MATCH_DIRECT_RECEIPTS_ONLY",
-    };
+  const reason = matchUnsupportedReason(scope.rows[0]);
+  if (reason) return { candidates: [], count: 0, supported: false, reason };
   const result = await pool.query<{
     candidates: MatchCandidate[];
     count: string;

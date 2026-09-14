@@ -1,5 +1,5 @@
 import { getDbPool } from "../../api/utils/db-pool";
-import { assertMatchSourceHash } from "../../lib/banking/review-matching";
+import { assertMatchSourceHash, matchUnsupportedReason } from "../../lib/banking/review-matching";
 import { matchSuggestions, matchSuggestionsQuery, summarizeMatchSuggestion } from "../../lib/banking/review-match-suggestions";
 
 jest.mock("../../api/utils/db-pool", () => ({ getDbPool: jest.fn() }));
@@ -84,5 +84,15 @@ describe("bank match suggestions", () => {
     }
     expect(() => assertMatchSourceHash("b".repeat(32), sourceHash)).toThrow("BANKING_MATCH_STALE");
     expect(() => assertMatchSourceHash(sourceHash, sourceHash)).not.toThrow();
+  });
+
+  it("names the bank-side reason when a credit cannot be matched yet", () => {
+    // A pending wire with a perfect POS receipt (#5010, 2026-09-14) used to get the generic
+    // "settled deposits only" text, which reads as if the receipt were the problem.
+    expect(matchUnsupportedReason({ bank_status: "pending", supported: false })).toBe("BANKING_MATCH_BANK_PENDING");
+    expect(matchUnsupportedReason({ bank_status: "removed", supported: false })).toBe("BANKING_MATCH_BANK_REMOVED");
+    expect(matchUnsupportedReason({ bank_status: "posted", supported: false })).toBe("BANKING_MATCH_DIRECT_RECEIPTS_ONLY");
+    expect(matchUnsupportedReason({ bank_status: "posted", supported: true })).toBeNull();
+    expect(matchUnsupportedReason({ bank_status: "pending", supported: true })).toBeNull();
   });
 });
