@@ -43,6 +43,8 @@ export interface BankAccountView {
   opening_reference: string | null;
   opening_book_balance: string | null;
   setup_revision: number;
+  /** Movimientos del feed en los últimos 90 días — la prioridad con que se ordenan las cards. */
+  recent_movements: number;
 }
 
 export interface BankTransactionView {
@@ -125,12 +127,21 @@ export async function bankingOverview(
               a.balances->>'current' AS current_balance,
               a.balances->>'available' AS available_balance,
               a.review_start_date,a.opening_bank_balance,a.opening_balance_date,
-              a.opening_reference,a.opening_book_balance,a.setup_revision
+              a.opening_reference,a.opening_book_balance,a.setup_revision,
+              (SELECT count(*)::int FROM bank_transaction t
+                WHERE t.account_id=a.id AND t.deleted_at IS NULL AND t.status<>'removed'
+                  AND t.transaction_date >= (CURRENT_DATE - 90)::text) AS recent_movements
          FROM bank_account a
          JOIN bank_connection c ON c.id = a.connection_id
         WHERE a.deleted_at IS NULL AND c.deleted_at IS NULL
           AND c.environment=${bankingEnvSql()}
-        ORDER BY a.connection_id, a.name, a.id`
+        -- Prioridad = actividad real (movimientos del feed en 90 días); empate → operativas
+        -- (checking) > tarjetas > ahorro > líneas de crédito (que no exponen movimientos). El orden
+        -- por connection_id ponía primera a la última institución conectada (2026-09-14).
+        ORDER BY recent_movements DESC,
+                 CASE a.type WHEN 'depository' THEN 0 WHEN 'credit' THEN 1 ELSE 2 END,
+                 CASE a.subtype WHEN 'checking' THEN 0 WHEN 'savings' THEN 1 ELSE 2 END,
+                 a.name, a.id`
     ),
   ]);
   return { config, connections: connections.rows, accounts: accounts.rows };
