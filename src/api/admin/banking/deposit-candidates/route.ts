@@ -11,6 +11,8 @@ const query = z.object({
   account_id: bankId,
   q: z.string().max(200).optional(),
   deposit_id: bankId.optional(),
+  /** Keyset cursor from the previous page's `next` (see depositCandidates). */
+  after: z.string().max(120).optional(),
 });
 export async function GET(
   req: AuthenticatedMedusaRequest,

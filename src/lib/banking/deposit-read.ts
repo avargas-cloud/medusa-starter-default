@@ -99,19 +99,30 @@ export async function listBankDeposits(input: {
   );
   return { deposits: result.rows, count: result.rows.length };
 }
+/** Page size of the receipt picker. Pages are keyset on (date,id) — the
+ * order the list is shown in — so a receipt deposited between two "Load more"
+ * clicks shifts nothing; `count` is the whole matching set and `next` is the
+ * cursor of the last row, or null when the page reached the end. */
+export const DEPOSIT_CANDIDATES_PAGE = 50;
+const CANDIDATE_CURSOR = /^(\d{4}-\d{2}-\d{2})\|(.+)$/;
 export async function depositCandidates(input: {
   account_id: string;
   q?: string;
   deposit_id?: string;
-}): Promise<{ candidates: DepositCandidate[]; count: number }> {
-  if (!bankingConfig().enabled) return { candidates: [], count: 0 };
+  /** `YYYY-MM-DD|<payment id>` of the last row already shown. */
+  after?: string;
+}): Promise<{ candidates: DepositCandidate[]; count: number; next: string | null }> {
+  if (!bankingConfig().enabled) return { candidates: [], count: 0, next: null };
   requireBankingEnabled();
   const pool = getDbPool();
   const account = await depositAccount(pool, input.account_id);
   if (input.deposit_id) await loadBankDeposit(pool, input.deposit_id);
+  const cursor = input.after ? CANDIDATE_CURSOR.exec(input.after) : null;
+  if (input.after && !cursor) throw new BankingError("BANKING_DEPOSIT_CURSOR_INVALID");
   const result = await pool.query<{
     candidates: DepositCandidate[];
     count: string;
+    remaining: string;
   }>(
     `WITH eligible AS (
     SELECT ${DEPOSIT_RECEIPT_SQL} FROM customer_payment mp JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
@@ -120,20 +131,30 @@ export async function depositCandidates(input: {
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date <= (now() AT TIME ZONE 'America/New_York')::date
   ), normal AS (SELECT id,display_id,customer_id,customer_name,method,date,reference,amount,available_amount,currency,source_hash,fingerprint_version
     FROM eligible WHERE available_amount::numeric>0 AND ($4::text='' OR concat_ws(' ',customer_name,reference,display_id::text) ILIKE '%'||$4||'%')),
-  matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal)
-  SELECT (SELECT COUNT(*)::text FROM matching) AS count,COALESCE((SELECT jsonb_agg(p.candidate ORDER BY p.date,p.id) FROM
-    (SELECT id,date,candidate FROM matching ORDER BY date,id LIMIT 100) p),'[]'::jsonb) AS candidates`,
+  matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal),
+  page AS (SELECT id,date,candidate FROM matching WHERE $5::text IS NULL OR (date,id) > ($5::text,$6::text))
+  SELECT (SELECT COUNT(*)::text FROM matching) AS count,(SELECT COUNT(*)::text FROM page) AS remaining,
+    COALESCE((SELECT jsonb_agg(p.candidate ORDER BY p.date,p.id) FROM
+    (SELECT id,date,candidate FROM page ORDER BY date,id LIMIT $7::int) p),'[]'::jsonb) AS candidates`,
     [
       account.currency,
       input.deposit_id ?? null,
       account.review_start_date,
       input.q ?? "",
+      cursor?.[1] ?? null,
+      cursor?.[2] ?? null,
+      DEPOSIT_CANDIDATES_PAGE,
     ]
   );
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- single-row aggregate query (COUNT/jsonb_agg, no GROUP BY) always returns exactly one row
+  const row = result.rows[0]!;
+  const last = row.candidates[row.candidates.length - 1];
   return {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- single-row aggregate query (COUNT/jsonb_agg, no GROUP BY) always returns exactly one row
-    candidates: result.rows[0]!.candidates,
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- single-row aggregate query (COUNT/jsonb_agg, no GROUP BY) always returns exactly one row
-    count: Number(result.rows[0]!.count),
+    candidates: row.candidates,
+    count: Number(row.count),
+    next:
+      last && Number(row.remaining) > row.candidates.length
+        ? `${last.date}|${last.id}`
+        : null,
   };
 }
