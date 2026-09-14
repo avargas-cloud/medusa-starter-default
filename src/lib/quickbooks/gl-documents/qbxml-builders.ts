@@ -116,12 +116,16 @@ function assertExpenseLines(lines: ExpenseLineInput[], rq: string): void {
   if (total <= 0n) throw new Error(`${rq} total must be positive (got ${total} cents)`);
 }
 
-/** ExpenseLineAdd: AccountRef → Amount → Memo → CustomerRef → BillableStatus. */
+/**
+ * ExpenseLineAdd: AccountRef → Amount → Memo → CustomerRef → BillableStatus.
+ * `BillableStatus` sólo cuando la línea es de verdad facturable (`Billable`): QB rechaza
+ * `NotBillable` en una línea que no puede ser reembolsable — un refund a un cliente contra
+ * Accounts Receivable murió con 3210 "Target is not reimbursable" (CHK-0002, 2026-09-14).
+ * Omitirlo es el default de QB (no facturable) para toda línea con CustomerRef.
+ */
 function expenseLineXml(line: ExpenseLineInput): string {
   const billable =
-    line.customerListId && line.billable !== undefined
-      ? tag("BillableStatus", line.billable ? "Billable" : "NotBillable")
-      : "";
+    line.customerListId && line.billable === true ? tag("BillableStatus", "Billable") : "";
   return (
     `<ExpenseLineAdd>` +
     ref("AccountRef", line.accountListId) +

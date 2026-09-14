@@ -63,13 +63,13 @@ async function main(): Promise<void> {
   const pool = getDbPool();
 
   const acct = (
-    await pool.query<{ id: string; name: string; qb_list_id: string; current: string }>(
-      `SELECT a.id,a.name,a.qb_list_id,a.balances->>'current' AS current FROM bank_account a
-       WHERE a.mask=$1 AND a.type='depository' AND a.is_selected AND a.deleted_at IS NULL AND a.qb_list_id IS NOT NULL`,
+    await pool.query<{ id: string; name: string; qb_list_id: string; current: string; type: string }>(
+      `SELECT a.id,a.name,a.qb_list_id,a.balances->>'current' AS current,a.type FROM bank_account a
+       WHERE a.mask=$1 AND a.type IN ('depository','credit') AND a.is_selected AND a.deleted_at IS NULL AND a.qb_list_id IS NOT NULL`,
       [mask]
     )
   ).rows;
-  if (acct.length !== 1) throw new Error(`cuenta depository *${mask} mapeada: ${acct.length} (esperaba 1)`);
+  if (acct.length !== 1) throw new Error(`cuenta depository/credit *${mask} mapeada: ${acct.length} (esperaba 1)`);
   const a = acct[0]!;
 
   const obe = (
@@ -96,7 +96,8 @@ async function main(): Promise<void> {
        FROM bank_transaction WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL`,
     [a.id, cut]
   );
-  const bankAtCut = cents(a.current) + cents(sums.rows[0]!.since_cut); // saldo al inicio del día de corte
+  // Tarjeta: `current` es deuda (positiva) y en el libro es pasivo → saldo libro = −deuda (ver reconcile-feed-statement).
+  const bankAtCut = (a.type === "credit" ? -1n : 1n) * cents(a.current) + cents(sums.rows[0]!.since_cut); // saldo al inicio del día de corte
 
   const lines = (
     await pool.query<Line>(
@@ -120,7 +121,22 @@ async function main(): Promise<void> {
   const used = new Set<string>();
   const items: OpeningBalanceItem[] = [];
   const explained: Array<{ line: Line; by: string }> = [];
+  // Dos líneas del banco del mismo día = UN asiento (wire + su fee: QB carga $7.906,69 + $25 como
+  // un solo cheque de $7.931,69). Sin esto las dos salían como "partidas" y la apertura no cerraba.
+  const pairExplained = new Set<string>();
+  for (let i = 0; i < lines.length; i++)
+    for (let j = i + 1; j < lines.length; j++) {
+      const a = lines[i]!, b = lines[j]!;
+      if (a.day !== b.day || pairExplained.has(a.id) || pairExplained.has(b.id)) continue;
+      const sum = -cents(a.amount) - cents(b.amount);
+      const hit = book_lines.find((bl) => !used.has(bl.id) && BigInt(bl.amount) === sum && days(bl.day, a.day) <= tolerance);
+      if (!hit) continue;
+      used.add(hit.id);
+      pairExplained.add(a.id).add(b.id);
+      explained.push({ line: a, by: `${hit.day} ${hit.reference} (par)` }, { line: b, by: `${hit.day} ${hit.reference} (par)` });
+    }
   for (const line of lines) {
+    if (pairExplained.has(line.id)) continue;
     const amt = -cents(line.amount); // libro: + entra, − sale
     const candidates = book_lines
       .filter((b) => !used.has(b.id) && BigInt(b.amount) === amt && days(b.day, line.day) <= tolerance)
@@ -139,6 +155,28 @@ async function main(): Promise<void> {
       description: `Banco ${line.day}: ${line.name.slice(0, 200)}`,
     });
   }
+  // Partidas declaradas a mano (`--item kind:día:dólares:referencia`): lo que el feed no puede
+  // derivar — un cheque que nunca va a pasar por el banco, una diferencia histórica que se
+  // ajusta con un asiento del 01/01 porque el año anterior está cerrado (contador, 2026-09-14).
+  // Van PRIMERO en el orden: son del corte por definición.
+  const manual = process.argv.flatMap((a, i, all) => (a === "--item" && all[i + 1] ? [all[i + 1]!] : [])).map((raw, i) => {
+    const [kind, day, dollars, ...ref] = raw.split(":");
+    if ((kind !== "outstanding_check" && kind !== "deposit_in_transit") || !day || !dollars || !/^\d+(\.\d{1,2})?$/.test(dollars))
+      throw new Error(`--item espera outstanding_check|deposit_in_transit:YYYY-MM-DD:dólares:referencia, recibió ${raw}`);
+    const reference = ref.join(":") || `partida manual ${i + 1}`;
+    return {
+      key: `manual-${cut}-${i + 1}-${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`,
+      kind,
+      original_day: day,
+      amount_cents: BigInt(Math.round(Number(dollars) * 100)),
+      reference: reference.slice(0, 160),
+      description: `Partida declarada ${day}: ${reference.slice(0, 200)}`,
+    } satisfies OpeningBalanceItem;
+  });
+  // `--no-derive`: la apertura se explica SÓLO con las partidas declaradas (cuando el feed
+  // posterior no permite derivarlas: procesadora que liquida varios lotes en una línea).
+  if (process.argv.includes("--no-derive")) items.splice(0);
+  items.unshift(...manual);
   // Regla del prefijo: las partidas de corte se amontonan justo después del corte. Se toman en
   // orden de fecha hasta que el residuo llega a cero; lo que sigue después ya es otro asunto
   // (splits, meses siguientes) y no es partida de apertura. Si nunca llega a cero, se listan todas.

@@ -32,11 +32,14 @@ async function bookSourceBlockers(
   row: BankLine
 ): Promise<string[]> {
   if (row.canceled_by_end) return [];
-  // The GL opening_balance document is always a valid, self-contained source —
-  // its `opening` line is already cleared against the cut-date statement, and
-  // its `uncleared_<key>` lines clear via the ordinary statement match.
+  // A posted GL document (`source_kind` set: opening_balance, qb_import, pos_invoice,
+  // bank_check, journal_entry, …) IS the ledger — self-contained, nothing upstream to
+  // drift from. The opening_balance case was the only one spelled out; every other GL
+  // document only passed because the per-origin cache below happened to be primed by
+  // the opening line first (2026-09-14: a journal entry dated at the cut sorted before
+  // the rebuilt opening, poisoned the cache with UNSUPPORTED and Wells matched 0/16).
   // `kind` is the entry FAMILY (document/reversal/…); the document type lives in source_kind (case 18, 2026-09-10).
-  if (row.source_kind === "opening_balance") return [];
+  if (row.source_kind) return [];
   try {
     if (row.effective_kind === "expense" && row.transaction_id) {
       const context = await accountingContext(client, row.transaction_id);
@@ -116,7 +119,7 @@ export async function statementBook(
   const cache = new Map<string, string[]>(),
     items: StatementBookItem[] = [];
   for (const line of lines) {
-    const origin = `${line.effective_kind}:${line.completion_id ?? line.deposit_id ?? line.transaction_id ?? line.receipt_payment_id}:${line.canceled_by_end}`;
+    const origin = `${line.effective_kind}:${line.source_kind ?? ""}:${line.completion_id ?? line.deposit_id ?? line.transaction_id ?? line.receipt_payment_id}:${line.canceled_by_end}`;
     if (!cache.has(origin))
       cache.set(origin, await bookSourceBlockers(client, line));
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- the `if (!cache.has(origin))` above just populated this key, so it is always present

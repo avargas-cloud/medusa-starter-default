@@ -180,14 +180,15 @@ async function main(): Promise<void> {
       review_start_date: string | null;
       setup_revision: number;
       current: string | null;
+      type: string;
     }>(
-      `SELECT a.id,a.name,a.qb_list_id,a.review_start_date,a.setup_revision,a.balances->>'current' AS current
-       FROM bank_account a WHERE a.mask=$1 AND a.type='depository' AND a.is_selected AND a.deleted_at IS NULL`,
+      `SELECT a.id,a.name,a.qb_list_id,a.review_start_date,a.setup_revision,a.balances->>'current' AS current,a.type
+       FROM bank_account a WHERE a.mask=$1 AND a.type IN ('depository','credit') AND a.is_selected AND a.deleted_at IS NULL`,
       [args.mask]
     )
   ).rows;
   if (account.length !== 1)
-    throw new Error(`cuenta depository *${args.mask}: ${account.length} filas (esperaba 1)`);
+    throw new Error(`cuenta depository/credit *${args.mask}: ${account.length} filas (esperaba 1)`);
   const acct = account[0]!;
   if (!acct.qb_list_id) throw new Error(`*${args.mask} no está mapeada a una cuenta QB`);
 
@@ -218,9 +219,13 @@ async function main(): Promise<void> {
        FROM bank_transaction WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL`,
     [acct.id, args.from, args.to]
   );
+  // Depository: `current` = saldo a favor; Plaid + sale, − entra → saldo antes = hoy + Σ posteriores.
+  // Tarjeta (credit): `current` = lo que se DEBE (positivo); un cargo (Plaid +) lo sube → deuda antes =
+  // hoy − Σ posteriores, y en el libro la tarjeta es pasivo (signo negativo): saldo libro = −deuda.
   const current = cents(acct.current ?? "0");
-  const opening = current + cents(sums.rows[0]!.after_from); // Plaid: + sale, − entra → saldo antes = hoy + Σ posteriores
-  const closing = current + cents(sums.rows[0]!.after_to);
+  const sign = acct.type === "credit" ? -1 : 1;
+  const opening = sign * current + cents(sums.rows[0]!.after_from);
+  const closing = sign * current + cents(sums.rows[0]!.after_to);
   const feed = (
     await pool.query<FeedRow>(
       `SELECT id,provider_transaction_id,transaction_date::text,amount::text,name FROM bank_transaction
@@ -403,8 +408,12 @@ async function main(): Promise<void> {
   // Las partidas en tránsito de la apertura están fechadas al corte pero el banco las
   // muestra semanas después: tolerancia amplia sólo para ellas.
   const isOpening = (b: StatementBookItem): boolean => /^Opening balance /.test(b.reference);
+  // Un pago de bill por cheque del POS (BP-####) no lleva el número de cheque (vive en QB) y el
+  // banco lo cobra hasta 2-3 semanas después (BP-1066 15/07 → CHECK #630 30/07): tolerancia de
+  // cheque en tránsito, siempre con candidato ÚNICO.
+  const isPosCheck = (b: StatementBookItem): boolean => /^BP-\d+/.test(b.reference) && b.amount_cents < 0;
   const within = (b: StatementBookItem, l: StatementLine): boolean =>
-    daysBetween(b.day, l.day) <= (isOpening(b) ? 60 : args.toleranceDays);
+    daysBetween(b.day, l.day) <= (isOpening(b) ? 60 : isPosCheck(b) ? 30 : args.toleranceDays);
   const allocate = (line: StatementLine, book: StatementBookItem, amount: number): void => {
     remaining.set(book.id, (remaining.get(book.id) ?? 0) - Math.sign(book.amount_cents) * amount);
     matchedLines.add(line.id);
@@ -417,7 +426,23 @@ async function main(): Promise<void> {
     });
   };
   const open = (): StatementLine[] => context.lines.filter((l) => !matchedLines.has(l.id) && !l.blockers.length);
-  const books = (): StatementBookItem[] => context.book_items.filter((b) => !b.blockers.length && rem(b) !== 0);
+  // Un asiento ANULADO al cierre (reversa, o documento con reversa fechada ≤ to) no se casa: su par
+  // suma cero y contamina al solver de neteos — cualquier solución + el par es otra solución, y
+  // "más de una solución" es "no se casa" (medido 2026-09-14: MER BNKCD $3.183,56 dejó de casar
+  // apenas apareció un par reversa/repost el 07-01). Y el banco pagó el documento VIVO (el bill
+  // payment del POS), no la copia importada de QB que se reversó.
+  const canceled = new Set(
+    (
+      await pool.query<{ id: string }>(
+        `SELECT l.id FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
+          WHERE l.id = ANY($1::text[])
+            AND (e.kind='reversal' OR EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id AND r.day<=$2))`,
+        [context.book_items.map((b) => b.id), args.to]
+      )
+    ).rows.map((r) => r.id)
+  );
+  const books = (): StatementBookItem[] =>
+    context.book_items.filter((b) => !b.blockers.length && rem(b) !== 0 && !canceled.has(b.id));
 
   // 5a. Número de cheque: el banco dice "CHECK # 796" y el libro "QB Check 796" → se casan aunque
   //     haya otros cheques del mismo monto; la fecha puede diferir semanas.
@@ -455,8 +480,8 @@ async function main(): Promise<void> {
     }
     allocate(line, best, Math.abs(line.amount_cents));
   }
-  // 5c. Sumas: varias líneas del banco del MISMO día = un asiento (ATM $20 + $320 = depósito $340),
-  //     o una línea del banco = varios asientos del mismo día del libro. Combinaciones de 2 o 3.
+  // 5c. Sumas: varias líneas del banco del MISMO día = un asiento (ATM $20 + $320 = depósito $340;
+  //     $9.320 + $440 + $20 + $20 = cheque Cash $9.800). Combinaciones de 2 a 4.
   const combos = <T,>(list: T[], size: number): T[][] => {
     const out: T[][] = [];
     const walk = (start: number, acc: T[]): void => {
@@ -469,15 +494,23 @@ async function main(): Promise<void> {
     walk(0, []);
     return out;
   };
+  //     Primero las líneas del MISMO día del asiento, después la tolerancia: tres wires a VEETECH
+  //     con su fee de $25 cada uno daban dos combinaciones válidas (los $25 son intercambiables)
+  //     y "ambiguo" dejaba junio de Wells sin cerrar (2026-09-14).
   for (const book of books()) {
     const target = remaining.get(book.id) ?? 0; // con signo, igual que line.amount_cents
-    const pool_ = open().filter((l) => sameSide(book, l) && daysBetween(l.day, book.day) <= args.toleranceDays);
-    for (const size of [2, 3]) {
-      const hit = combos(pool_, size).filter((set) => set.reduce((s, l) => s + l.amount_cents, 0) === target);
-      if (hit.length === 1) {
-        for (const l of hit[0]!) allocate(l, book, Math.abs(l.amount_cents));
-        break;
+    let done = false;
+    for (const window of [0, args.toleranceDays]) {
+      const pool_ = open().filter((l) => sameSide(book, l) && daysBetween(l.day, book.day) <= window);
+      for (const size of [2, 3, 4]) {
+        const hit = combos(pool_, size).filter((set) => set.reduce((s, l) => s + l.amount_cents, 0) === target);
+        if (hit.length === 1) {
+          for (const l of hit[0]!) allocate(l, book, Math.abs(l.amount_cents));
+          done = true;
+          break;
+        }
       }
+      if (done) break;
     }
   }
   // Una línea del banco = suma NETA de varios asientos cercanos: la procesadora de tarjetas
@@ -563,7 +596,10 @@ async function main(): Promise<void> {
   });
   const matchedNow = new Set(context.matches.map((m) => m.statement_line_id));
   const bankOnly = context.lines.filter((l) => !matchedNow.has(l.id));
-  const bookOnly = context.book_items.filter((b) => b.remaining_cents !== 0 && b.day <= args.to);
+  const bookOnly = context.book_items.filter((b) => b.remaining_cents !== 0 && b.day <= args.to && !canceled.has(b.id));
+  // Pares anulados: se listan aparte, con su neto — ruido conocido (bill payments del POS con la copia
+  // de QB reversada, re-fechados), no partidas pendientes.
+  const noise = context.book_items.filter((b) => b.remaining_cents !== 0 && b.day <= args.to && canceled.has(b.id));
   const signedRem = (b: StatementBookItem): number => Math.sign(b.amount_cents) * b.remaining_cents;
   const report = [
     `# ${acct.name} *${args.mask} — ${args.from}..${args.to}`,
@@ -583,6 +619,11 @@ async function main(): Promise<void> {
     `| Fecha | Monto | Referencia | Descripción |`,
     `|---|---|---|---|`,
     ...bookOnly.map((b) => `| ${b.day} | ${money(signedRem(b))} | ${b.reference.replace(/\|/g, "/")} | ${b.description.replace(/\|/g, "/").slice(0, 70)} |`),
+    ``,
+    `## Asientos anulados con su reversa (ruido, neto ${money(noise.reduce((s, b) => s + signedRem(b), 0))}) (${noise.length})`,
+    `| Fecha | Monto | Referencia |`,
+    `|---|---|---|`,
+    ...noise.map((b) => `| ${b.day} | ${money(signedRem(b))} | ${b.reference.replace(/\|/g, "/").slice(0, 70)} |`),
     ``,
     `## Ambiguas (más de un asiento posible, no se casaron) (${ambiguous.length})`,
     ...ambiguous.map(
