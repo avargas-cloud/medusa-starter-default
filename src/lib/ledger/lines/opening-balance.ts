@@ -64,7 +64,10 @@ export function buildOpeningBalanceLines(input: OpeningBalanceInput): LedgerLine
     });
   if (balance_cents === 0n && items.length === 0)
     throw new LedgerError("GL_SOURCE_INVALID", { reason: "nothing_to_post" });
-  if (items.length > 0 && account.account_type !== "Bank")
+  // Partidas (uncleared_*) sólo en cuentas que se concilian por extracto: Bank y, desde
+  // los extractos de tarjeta (2026-09-14), CreditCard. El saldo de una tarjeta llega en su
+  // dirección NATURAL (adeudado, positivo) y las partidas en signo GL, igual que en un banco.
+  if (items.length > 0 && !["Bank", "CreditCard"].includes(account.account_type))
     throw new LedgerError("GL_SOURCE_INVALID", {
       reason: "items_on_non_bank_account",
       account_type: account.account_type,

@@ -106,6 +106,27 @@ describe("buildOpeningBalanceLines", () => {
     expect(sumDebits(lines)).toBe(sumCredits(lines));
   });
 
+  it("CreditCard (credit-normal) with partidas: owed balance credits `opening`, items keep GL sign (Amex 2025-12-31)", () => {
+    const card = account("AMEX-1", "CreditCard", "credit");
+    const lines = buildOpeningBalanceLines({
+      account: card,
+      balance_cents: 224_946n, // adeudado al corte (natural); GL −2.249,46
+      items: [
+        { key: "je-0003", kind: "deposit_in_transit", original_day: "2025-12-31", amount_cents: 150_271n, reference: "cargos 2025 sin registrar" },
+        { key: "lappost", kind: "outstanding_check", original_day: "2025-12-31", amount_cents: 3_000n, reference: "LAPPOST" },
+      ],
+      equity,
+    });
+    const opening = lines.find((l) => l.role === "opening");
+    expect(opening?.credit_cents).toBe(224_946n);
+    expect(opening?.debit_cents).toBe(0n);
+    // libro de la tarjeta = −224.946 + 150.271 − 3.000 = −77.675 (el saldo de QB al corte)
+    const onCard = lines.filter((l) => l.role !== "equity").reduce((s, l) => s + l.debit_cents - l.credit_cents, 0n);
+    expect(onCard).toBe(-77_675n);
+    expect(lines).toHaveLength(4);
+    expect(sumDebits(lines)).toBe(sumCredits(lines));
+  });
+
   it("rejects items on a non-Bank account", () => {
     const ar = account("AR-1", "AccountsReceivable", "debit");
     expect(() =>

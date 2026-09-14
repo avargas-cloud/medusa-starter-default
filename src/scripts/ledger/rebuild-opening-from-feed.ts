@@ -226,8 +226,11 @@ async function main(): Promise<void> {
       reason: `rebuild from bank feed: balance ${money(bankAtCut)} + ${items.length} items`, actor_id: ACTOR,
     });
     if (rev.status !== "reversed") throw new Error(`reversa: ${rev.status}`);
+    // El builder del OBE espera el saldo en la dirección NATURAL de la cuenta: una tarjeta
+    // (credit-normal) recibe lo adeudado en positivo; `bankAtCut` viene en signo GL (negativo).
     const post = await postOpeningBalance(client, {
-      account_list_id: a.qb_list_id, day: cut, balance_cents: bankAtCut, evidence_ids: [...new Set(evidenceIds)], items, actor_id: ACTOR,
+      account_list_id: a.qb_list_id, day: cut, balance_cents: a.type === "credit" ? -bankAtCut : bankAtCut,
+      evidence_ids: [...new Set(evidenceIds)], items, actor_id: ACTOR,
     });
     if (post.status !== "posted") throw new Error(`post: ${post.status}`);
     const check = await client.query<{ book: string }>(
@@ -249,6 +252,8 @@ async function main(): Promise<void> {
 main()
   .then(() => process.exit(0))
   .catch((error: unknown) => {
-    console.error("rebuild-opening-from-feed:", error instanceof Error ? error.message : error);
+    // Un LedgerError sin sus `details` es un código pelado (GL_SOURCE_INVALID tiene 3 motivos).
+    const details = error instanceof Error && "details" in error ? (error as { details?: unknown }).details : undefined;
+    console.error("rebuild-opening-from-feed:", error instanceof Error ? error.message : error, details ? JSON.stringify(details) : "");
     process.exit(1);
   });
