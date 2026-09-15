@@ -8,6 +8,8 @@
  *   DATABASE_URL=… ECOPOWERTECH_ENV=sandbox ./node_modules/.bin/tsx \
  *     src/scripts/ledger/rebuild-opening-from-feed.ts --mask 7223 [--apply] \
  *     [--cut 2025-12-31] [--horizon-days 60] [--tolerance-days 5] [--evidence chase.pdf]
+ *     [--bank-balance 8855.36]   # saldo del banco al INICIO del corte cuando el feed no llega
+ *                                # tan atrás (TD ·9209 empieza el 2026-07-01): del PDF, DAILY BALANCE del día anterior
  *
  * Derivación (Plaid: positivo = sale, negativo = entra):
  *   - saldo del banco al INICIO del día de corte: hoy − Σ movimientos posteados ≥ corte
@@ -60,6 +62,9 @@ async function main(): Promise<void> {
   const horizon = Number(arg("--horizon-days") ?? "60");
   const tolerance = Number(arg("--tolerance-days") ?? "5");
   const evidencePath = arg("--evidence");
+  const bankBalanceArg = arg("--bank-balance");
+  if (bankBalanceArg !== null && !/^-?\d+(\.\d{1,2})?$/.test(bankBalanceArg))
+    throw new Error(`--bank-balance espera dólares (8855.36), recibió ${bankBalanceArg}`);
   const pool = getDbPool();
 
   const acct = (
@@ -97,7 +102,20 @@ async function main(): Promise<void> {
     [a.id, cut]
   );
   // Tarjeta: `current` es deuda (positiva) y en el libro es pasivo → saldo libro = −deuda (ver reconcile-feed-statement).
-  const bankAtCut = (a.type === "credit" ? -1n : 1n) * cents(a.current) + cents(sums.rows[0]!.since_cut); // saldo al inicio del día de corte
+  // Saldo al inicio del día de corte: derivado del feed, o declarado (`--bank-balance`, en signo
+  // GL) cuando el feed empieza después del corte y no puede derivarlo.
+  const feedReachesCut = (
+    await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM bank_transaction WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL AND transaction_date<=$2`,
+      [a.id, cut]
+    )
+  ).rows[0]!.n !== "0";
+  if (bankBalanceArg === null && !feedReachesCut)
+    throw new Error(`el feed de *${mask} no llega al corte ${cut}: pasá --bank-balance <saldo del PDF al inicio del ${cut}>`);
+  const bankAtCut =
+    bankBalanceArg !== null
+      ? cents(bankBalanceArg)
+      : (a.type === "credit" ? -1n : 1n) * cents(a.current) + cents(sums.rows[0]!.since_cut);
 
   const lines = (
     await pool.query<Line>(
@@ -193,7 +211,7 @@ async function main(): Promise<void> {
   const residual = book - (bankAtCut + itemsNet);
 
   console.log(`${a.name} *${mask} (${a.qb_list_id}) · corte ${cut}`);
-  console.log(`  libro QB al corte ${money(book)} · banco al inicio del ${cut} ${money(bankAtCut)} · partidas ${items.length} (neto ${money(itemsNet)}) · explicadas por el libro ${explained.length}/${lines.length}`);
+  console.log(`  libro QB al corte ${money(book)} · banco al inicio del ${cut} ${money(bankAtCut)}${bankBalanceArg !== null ? " (declarado)" : ""} · partidas ${items.length} (neto ${money(itemsNet)}) · explicadas por el libro ${explained.length}/${lines.length}`);
   for (const i of items)
     console.log(`  ${i.kind === "outstanding_check" ? "CHEQUE PEND." : "DEP. TRÁNSITO"} ${i.original_day} ${money(i.amount_cents).padStart(12)} ${i.reference.slice(0, 70)}`);
   console.log(`  residuo (libro − banco − partidas) = ${money(residual)} ${residual === 0n ? "✓ CIERRA AL CENTAVO" : "✗ NO CIERRA → para el contador; no se postea"}`);

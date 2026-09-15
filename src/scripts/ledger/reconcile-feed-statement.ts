@@ -7,6 +7,7 @@
  *   ECOPOWERTECH_ENV=sandbox DATABASE_URL=… ./node_modules/.bin/tsx \
  *     src/scripts/ledger/reconcile-feed-statement.ts --mask 7223 --from 2026-01-01 --to 2026-01-31 \
  *     [--apply] [--tolerance-days 5] [--evidence path.pdf] [--actor a.vargas@ecopowertech.com] [--close]
+ *     [--td <extracto.txt> ...]   # sin feed: las líneas salen del PDF de TD (pdftotext -layout), ver td-statement-text
  *
  * Qué hace (DRY-RUN por default: sólo calcula y lista; `--apply` escribe):
  *   1. Saldos del período CALCULADOS del feed: saldo de hoy − Σ movimientos posteados
@@ -49,6 +50,7 @@ import type {
   StatementLine,
 } from "../../lib/banking/statement-types";
 import { transaction } from "../../lib/banking/store";
+import { readTdStatement, tdWindow } from "./td-statement-text";
 
 type Args = {
   mask: string;
@@ -60,6 +62,8 @@ type Args = {
   toleranceDays: number;
   evidence: string | null;
   actor: string;
+  /** Extractos de TD en texto (uno o varios, consecutivos): reemplazan al feed como fuente de líneas. */
+  td: string[];
 };
 
 function parseArgs(argv: string[]): Args {
@@ -82,6 +86,7 @@ function parseArgs(argv: string[]): Args {
     toleranceDays: Number(get("--tolerance-days") ?? "5"),
     evidence: get("--evidence"),
     actor: get("--actor") ?? "a.vargas@ecopowertech.com",
+    td: argv.flatMap((a, i, all) => (a === "--td" && all[i + 1] ? [all[i + 1]!] : [])),
   };
 }
 
@@ -212,37 +217,49 @@ async function main(): Promise<void> {
     }
   }
 
-  // 1. Saldos calculados del feed (posted, no removed).
-  const sums = await pool.query<{ after_from: string; after_to: string }>(
-    `SELECT COALESCE(SUM(amount::numeric) FILTER (WHERE transaction_date>=$2),0)::text AS after_from,
-            COALESCE(SUM(amount::numeric) FILTER (WHERE transaction_date>$3),0)::text AS after_to
-       FROM bank_transaction WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL`,
-    [acct.id, args.from, args.to]
-  );
-  // Depository: `current` = saldo a favor; Plaid + sale, − entra → saldo antes = hoy + Σ posteriores.
-  // Tarjeta (credit): `current` = lo que se DEBE (positivo); un cargo (Plaid +) lo sube → deuda antes =
-  // hoy − Σ posteriores, y en el libro la tarjeta es pasivo (signo negativo): saldo libro = −deuda.
-  const current = cents(acct.current ?? "0");
-  const sign = acct.type === "credit" ? -1 : 1;
-  const opening = sign * current + cents(sums.rows[0]!.after_from);
-  const closing = sign * current + cents(sums.rows[0]!.after_to);
-  const feed = (
-    await pool.query<FeedRow>(
-      `SELECT id,provider_transaction_id,transaction_date::text,amount::text,name FROM bank_transaction
-       WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL AND transaction_date BETWEEN $2 AND $3
-       ORDER BY transaction_date,provider_transaction_id`,
+  // 1. Saldos y líneas del período: del feed de Plaid, o de los PDF del banco (`--td`) cuando el
+  //    feed no llega tan atrás (TD ·9209 empieza el 2026-07-01; dic→jun salen de los extractos).
+  type Line = { external_key: string; day: string; amount_cents: number; description: string; transaction_id: string | null };
+  let opening: number, closing: number, lines: Line[];
+  if (args.td.length) {
+    if (!args.evidence) throw new Error("--td exige --evidence <pdf del banco>: el extracto es la evidencia, no se genera");
+    const w = tdWindow(args.td.map(readTdStatement), args.from, args.to);
+    opening = w.opening_cents;
+    closing = w.closing_cents;
+    lines = w.lines.map((l) => ({ ...l, description: l.description.slice(0, 500), transaction_id: null }));
+  } else {
+    const sums = await pool.query<{ after_from: string; after_to: string }>(
+      `SELECT COALESCE(SUM(amount::numeric) FILTER (WHERE transaction_date>=$2),0)::text AS after_from,
+              COALESCE(SUM(amount::numeric) FILTER (WHERE transaction_date>$3),0)::text AS after_to
+         FROM bank_transaction WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL`,
       [acct.id, args.from, args.to]
-    )
-  ).rows;
-  const lines = feed.map((row) => ({
-    // NO el id de Plaid: el extracto compara claves en minúscula y Plaid emitió dos ids que sólo
-    // difieren en mayúsculas (Chase 2026-04, …KqR / …Kqr) → falso BANKING_STATEMENT_DUPLICATE_LINE.
-    external_key: row.id,
-    day: row.transaction_date,
-    amount_cents: -cents(row.amount),
-    description: row.name.slice(0, 500),
-    transaction_id: row.id,
-  }));
+    );
+    // Depository: `current` = saldo a favor; Plaid + sale, − entra → saldo antes = hoy + Σ posteriores.
+    // Tarjeta (credit): `current` = lo que se DEBE (positivo); un cargo (Plaid +) lo sube → deuda antes =
+    // hoy − Σ posteriores, y en el libro la tarjeta es pasivo (signo negativo): saldo libro = −deuda.
+    const current = cents(acct.current ?? "0");
+    const sign = acct.type === "credit" ? -1 : 1;
+    opening = sign * current + cents(sums.rows[0]!.after_from);
+    closing = sign * current + cents(sums.rows[0]!.after_to);
+    const feed = (
+      await pool.query<FeedRow>(
+        `SELECT id,provider_transaction_id,transaction_date::text,amount::text,name FROM bank_transaction
+         WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL AND transaction_date BETWEEN $2 AND $3
+         ORDER BY transaction_date,provider_transaction_id`,
+        [acct.id, args.from, args.to]
+      )
+    ).rows;
+    lines = feed.map((row) => ({
+      // NO el id de Plaid: el extracto compara claves en minúscula y Plaid emitió dos ids que sólo
+      // difieren en mayúsculas (Chase 2026-04, …KqR / …Kqr) → falso BANKING_STATEMENT_DUPLICATE_LINE.
+      external_key: row.id,
+      day: row.transaction_date,
+      amount_cents: -cents(row.amount),
+      description: row.name.slice(0, 500),
+      transaction_id: row.id,
+    }));
+  }
+  const source = args.td.length ? "TD statement" : "Plaid feed";
   const credits = lines.reduce((s, l) => s + Math.max(l.amount_cents, 0), 0);
   const debits = lines.reduce((s, l) => s + Math.max(-l.amount_cents, 0), 0);
   console.log(
@@ -286,7 +303,7 @@ async function main(): Promise<void> {
       expected_revision: acct.setup_revision,
       review_start_date: args.from,
       opening_bank_balance: (opening / 100).toFixed(2),
-      opening_reference: `Feed Plaid — saldo calculado al ${dayBefore(args.from)}`,
+      opening_reference: `${source} — saldo al inicio del ${args.from} (fin del ${dayBefore(args.from)})`,
       opening_book_balance: null,
     });
     console.log(`review setup: empieza ${args.from}, apertura ${money(opening)}`);
@@ -340,7 +357,7 @@ async function main(): Promise<void> {
       bank_account_id: acct.id,
       from: args.from,
       to: args.to,
-      reference: `Plaid feed ${args.mask} ${args.from}..${args.to}`,
+      reference: `${source} ${args.mask} ${args.from}..${args.to}`,
       evidence_id: evidence.evidence.id,
       opening_balance_cents: opening,
       closing_balance_cents: closing,
@@ -372,7 +389,7 @@ async function main(): Promise<void> {
       bank_account_id: acct.id,
       from: args.from,
       to: args.to,
-      reference: `Plaid feed ${args.mask} ${args.from}..${args.to}`,
+      reference: `${source} ${args.mask} ${args.from}..${args.to}`,
       evidence_id: evidence.evidence.id,
       opening_balance_cents: opening,
       closing_balance_cents: closing,
@@ -446,11 +463,27 @@ async function main(): Promise<void> {
 
   // 5a. Número de cheque: el banco dice "CHECK # 796" y el libro "QB Check 796" → se casan aunque
   //     haya otros cheques del mismo monto; la fecha puede diferir semanas.
+  //     Un pago de bill del POS (BP-####) no lleva el número: vive en su copia de QB (reversada por el
+  //     importador porque el POS es el dueño), enlazada por `vendor_bill_payment.qb_txn_id`. Sin este
+  //     puente, dos BP de $1.500 al mismo vendor quincenales se casaban CRUZADOS (TD 2026-06: el cheque
+  //     1072 tomó BP-1062 en vez de BP-1051 por estar un día más cerca) y el error se arrastraba mes a mes.
+  const posCheckNo = new Map(
+    (
+      await pool.query<{ number: string; ref: string | null }>(
+        `SELECT bp.number,e.source_snapshot->>'ref_number' AS ref FROM vendor_bill_payment bp
+           JOIN bank_journal_entry e ON e.source_kind='qb_import' AND e.kind='document' AND e.source_id=bp.qb_txn_id
+          WHERE bp.bank_account_list_id=$1 AND bp.qb_txn_id IS NOT NULL AND bp.deleted_at IS NULL`,
+        [acct.qb_list_id]
+      )
+    ).rows.flatMap((r) => (r.ref && /^\d+$/.test(r.ref) ? [[r.number, r.ref] as const] : []))
+  );
+  const bookCheckNo = (b: StatementBookItem): string | null =>
+    checkNo(b.reference) ?? checkNo(b.description) ?? posCheckNo.get(b.reference) ?? null;
   for (const line of open()) {
     const no = checkNo(line.description);
     if (!no) continue;
     const hit = books().filter(
-      (b) => sameSide(b, line) && rem(b) === Math.abs(line.amount_cents) && (checkNo(b.reference) === no || checkNo(b.description) === no)
+      (b) => sameSide(b, line) && rem(b) === Math.abs(line.amount_cents) && bookCheckNo(b) === no
     );
     if (hit.length === 1) allocate(line, hit[0]!, Math.abs(line.amount_cents));
   }
@@ -473,6 +506,14 @@ async function main(): Promise<void> {
       const twins = open().filter((l) => l.day === line.day && l.amount_cents === line.amount_cents);
       if (twins.length === tie.length) {
         twins.forEach((l, i) => allocate(l, tie[i]!, Math.abs(l.amount_cents)));
+        continue;
+      }
+      // Candidatos INDISTINGUIBLES (mismo día, monto y referencia — dos cheques pendientes de $1.500
+      // en la apertura de TD): elegir cualquiera es la misma conciliación; se toma el primero.
+      const same = (c: StatementBookItem): boolean =>
+        c.day === best.day && c.amount_cents === best.amount_cents && c.reference === best.reference && c.description === best.description;
+      if (tie.every(same)) {
+        allocate(line, best, Math.abs(line.amount_cents));
         continue;
       }
       ambiguous.push({ line, candidates: tie });
@@ -571,6 +612,29 @@ async function main(): Promise<void> {
       if (solutions.length > 1) break; // ambiguo ya en la ventana chica: no ampliar
     }
   }
+  // 5e. Mismo día, misma dirección, MISMA SUMA, distinto reparto: la procesadora descuenta sus fees en
+  //     dos débitos ($158,04 + $730,48) y QB los asentó como otros dos ($281,96 + $606,56). Ningún
+  //     subconjunto casa 1:1, pero el conjunto entero sí: k líneas ↔ m asientos (2..4 cada lado) se
+  //     reparten en orden. Sólo con lo que quedó abierto ese día y asientos a ±tolerancia.
+  for (const day of [...new Set(open().map((l) => l.day))]) {
+    for (const sgn of [1, -1]) {
+      const ls = open().filter((l) => l.day === day && Math.sign(l.amount_cents) === sgn);
+      const bs = books().filter((b) => Math.sign(b.amount_cents) === sgn && daysBetween(b.day, day) <= args.toleranceDays);
+      if (ls.length < 2 || ls.length > 4 || bs.length < 2 || bs.length > 4) continue;
+      if (ls.reduce((s, l) => s + l.amount_cents, 0) !== bs.reduce((s, b) => s + (remaining.get(b.id) ?? 0), 0)) continue;
+      let bi = 0;
+      for (const l of ls) {
+        let need = Math.abs(l.amount_cents);
+        while (need > 0 && bi < bs.length) {
+          const b = bs[bi]!;
+          const take = Math.min(need, rem(b));
+          if (take > 0) allocate(l, b, take);
+          need -= take;
+          if (rem(b) === 0) bi++;
+        }
+      }
+    }
+  }
   // Los asientos de signo opuesto a su línea van primero: el trigger de capacidad suma con signo
   // y una suma parcial que arranque por el depósito excedería la línea neteada.
   const lineSign = new Map(context.lines.map((l) => [l.id, Math.sign(l.amount_cents)]));
@@ -590,8 +654,10 @@ async function main(): Promise<void> {
     revision = context.statement.revision;
   }
 
-  // 6. Preview + reporte.
-  const preview = await previewStatement(context.statement.id, actor.id, key(["preview", context.statement.id, String(revision)]), {
+  // 6. Preview + reporte. La key lleva la hora: un preview es lectura y su hash sella el libro de
+  // ESTE momento — keyeado sólo por revisión, una corrida sin matches nuevos replayaba el receipt
+  // de días atrás y el close moría con BANKING_STATEMENT_PREVIEW_STALE (Amex jul/ago, 2026-09-15).
+  const preview = await previewStatement(context.statement.id, actor.id, key(["preview", context.statement.id, String(revision), new Date().toISOString()]), {
     expected_revision: revision,
   });
   const matchedNow = new Set(context.matches.map((m) => m.statement_line_id));
@@ -604,7 +670,7 @@ async function main(): Promise<void> {
   const report = [
     `# ${acct.name} *${args.mask} — ${args.from}..${args.to}`,
     ``,
-    `- Apertura (feed) ${money(opening)} · Cierre (feed) ${money(closing)} · líneas ${context.lines.length}`,
+    `- Apertura (${source}) ${money(opening)} · Cierre (${source}) ${money(closing)} · líneas ${context.lines.length}`,
     `- Casadas automáticamente: ${context.matches.length} (${allocations.length} en esta corrida) · ambiguas ${ambiguous.length}`,
     `- Saldo del libro al ${args.to}: ${money(context.book_balance_cents)} · diferencia: **${money(context.difference_cents)}**`,
     `- Depósitos en tránsito ${money(context.deposits_in_transit_cents)} · cheques pendientes ${money(context.outstanding_disbursements_cents)}`,
