@@ -172,7 +172,13 @@ export async function GET(
        WHERE a.day >= ? AND a.day <= ?
     ),
     detailed AS (
-      SELECT r.line_id, r.entry_id, r.day, r.source_kind, r.source_id, r.description,
+      SELECT r.line_id, r.entry_id, r.day, r.source_kind, r.source_id,
+             -- adopt-qb-bank-documents-20260915: a check/transfer shows ITS memo, not the entry's
+             -- description ("Check CHK-0001 — payee" is derived text that goes stale when the
+             -- document is renumbered; the entry text is immutable because closed statements hash it).
+             CASE WHEN r.source_kind = 'bank_check' THEN COALESCE((SELECT c.memo FROM gl_check c WHERE c.id = r.source_id), '')
+                  WHEN r.source_kind = 'bank_transfer' THEN COALESCE((SELECT t.memo FROM gl_transfer t WHERE t.id = r.source_id), '')
+                  ELSE r.description END AS description,
              r.reference, r.debit_cents, r.credit_cents, r.reversed, r.raw_balance, r.account_list_id,
              (SELECT qa.name FROM qb_account qa WHERE qa.qb_list_id = r.account_list_id) AS account_name,
              ${RESOLVED_DOC_NUMBER_SQL} AS document_number,
