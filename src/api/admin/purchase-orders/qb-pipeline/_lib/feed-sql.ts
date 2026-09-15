@@ -612,6 +612,51 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
 
         UNION ALL
 
+        -- ── Vendor Credit Apply (vc-apply-qb-20260915) ───────────────────
+        -- A $0 Pay Bills that links a vendor_credit_application to its bill —
+        -- resolved the same way bill_payment resolves ABOVE, but the
+        -- reference table is the application itself, not the credit or the
+        -- bill, so it gets its own JOIN chain. Shows under the credit's
+        -- number; the bill it applied to rides in po_number for context.
+        SELECT
+          qop.id::text || '__' || qop.step               AS id,
+          NULL::bigint                                   AS seq,
+          ('A' || COALESCE(regexp_replace(vc.number, '\\D', '', 'g'), '?'))
+                                                           AS seq_label,
+          vca.id                                          AS parent_id,
+          vb.number                                       AS po_number,
+          NULL::text                                     AS draft_number,
+          NULL::text                                     AS receipt_number,
+          vc.number                                       AS vendor_bill_number,
+          CASE
+            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
+            WHEN qop.status = 'skipped' THEN 'skipped'
+            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
+            WHEN qop.status = 'failed' THEN 'error'
+            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            ELSE 'waiting'
+          END                                            AS status,
+          qop.bridge_op_id                               AS qb_operation_id,
+          COALESCE(qop.qb_txn_id, vca.qb_bill_txn_id)    AS qb_list_id,
+          COALESCE(qop.qb_ref_number, vc.number)         AS qb_txn_number,
+          qop.error                                      AS last_error,
+          COALESCE(qop.retry_count, 0)                   AS retries,
+          0                                              AS coalesced_edits,
+          qop.next_retry_at                              AS next_retry_at,
+          qop.confirmed_at                               AS synced_at,
+          qop.created_at                                 AS created_at,
+          COALESCE(qop.updated_at, qop.confirmed_at, qop.failed_at, qop.submitted_at, qop.created_at)
+                                                           AS updated_at,
+          COALESCE(vc.vendor_name_snapshot, vc.vendor_id) AS vendor_name,
+          'apply_vendor_credit'                          AS step
+        FROM qb_order_pipeline qop
+        JOIN vendor_credit_application vca ON vca.id = qop.reference_id
+        JOIN vendor_credit vc ON vc.id = vca.credit_id AND vc.deleted_at IS NULL
+        LEFT JOIN vendor_bill vb ON vb.id = vca.vendor_bill_id AND vb.deleted_at IS NULL
+        WHERE qop.step = 'vendor_credit_apply'
+
+        UNION ALL
+
         -- ── GL bank documents ADD / VOID (gl-docs-to-qb-20260914) ────────
         -- Checks/expenses (gl_check), transfers (gl_transfer), manual journal
         -- entries (gl_journal_entry) and deposits (bank_deposit). One generic

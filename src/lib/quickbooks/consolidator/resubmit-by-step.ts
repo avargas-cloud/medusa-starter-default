@@ -74,6 +74,7 @@ import {
   loadVendorCreditModFacts,
 } from "../../purchase-orders/qb-vendor-credit-enqueue";
 import { loadBillPaymentAddFacts } from "../../purchase-orders/qb-bill-payment-enqueue";
+import { loadVendorCreditApplyFacts } from "../../purchase-orders/qb-vendor-credit-apply-enqueue";
 import { buildTxnVoidQbxml } from "../txn-void-add";
 import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "../gl-documents/facts";
 import { isGlDocumentKind } from "../gl-documents/types";
@@ -1280,6 +1281,67 @@ export async function resubmitByStep(
           );
           logger.info(
             `${LOG_PREFIX} ✅ bill_payment_add ${row.id} submitted op=${opId}`
+          );
+        } catch (addErr) {
+          const message = addErr instanceof Error ? addErr.message : String(addErr);
+          classifyQbError({ message });
+          await failPipelineRow(row.id, message);
+        }
+        break;
+      }
+
+      case "vendor_credit_apply": {
+        if (!row.reference_id) {
+          await failPipelineRow(row.id, "vendor_credit_apply: missing reference_id");
+          break;
+        }
+        // Re-evaluated on EVERY attempt — readiness (and the quiescence
+        // blockers) can change between enqueue and dispatch, same discipline
+        // as bill_payment_add above.
+        const facts = await loadVendorCreditApplyFacts(poolAsRawKnex(), row.reference_id);
+        if (!facts.ready) {
+          await deferPipelineRow(row.id, facts.reason, QUIESCENCE_RECHECK_SECONDS);
+          logger.info(
+            `${LOG_PREFIX} ⏳ vendor_credit_apply ${row.id} not ready yet: ${facts.reason}`
+          );
+          break;
+        }
+        try {
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml: facts.qbxml },
+            { idempotencyKey: `vendor-credit-apply:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error(
+              "Bridge did not return an operationId for BillPaymentCreditCardAdd (vendor_credit_apply)"
+            );
+          }
+          // A row enqueued `waiting` (bill/credit had no TxnID yet) carries no
+          // qbxml/bill_txn_id/credit_txn_id: stamp the facts that actually
+          // went out, because the poller's readback keys on them (E2E §6).
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2,
+                    payload = COALESCE(payload, '{}'::jsonb) || $3::jsonb,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [
+              row.id,
+              opId,
+              JSON.stringify({
+                ready: true,
+                qbxml: facts.qbxml,
+                bill_txn_id: facts.billTxnId,
+                credit_txn_id: facts.creditTxnId,
+                blocking_reference_ids: [],
+              }),
+            ]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ vendor_credit_apply ${row.id} submitted op=${opId}`
           );
         } catch (addErr) {
           const message = addErr instanceof Error ? addErr.message : String(addErr);

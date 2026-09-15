@@ -28,6 +28,8 @@ export const PURCHASE_PIPELINE_STEPS = [
   "vendor_credit_void",
   "bill_payment_add",
   "bill_payment_void",
+  // vc-apply-qb-20260915: mismo cuadro de compras que vendor_credit_add/void.
+  "vendor_credit_apply",
   // gl-docs-to-qb-20260914: documentos GL bancarios — se ven en la misma
   // pestaña de compras (feed-sql.ts), fuera del Sales Pipeline.
   "gl_document_add",

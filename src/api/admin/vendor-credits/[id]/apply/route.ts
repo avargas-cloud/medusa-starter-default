@@ -9,6 +9,8 @@ import {
   requireFullAdmin,
 } from "../../../../../lib/accounting/month-close-auth";
 import { applyVendorCreditToBill, VendorCreditError } from "../../../../../lib/vendor-credits";
+import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
+import { enqueueVendorCreditApply } from "../../../../../lib/purchase-orders/qb-vendor-credit-apply-enqueue";
 
 /** POST { vendor_bill_id, amount_cents }: apply (part of) this credit to a bill. */
 export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
@@ -32,14 +34,14 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
   }
 
   const client = await getDbPool().connect();
+  let application: { id: string };
   try {
-    const application = await applyVendorCreditToBill(client, {
+    application = await applyVendorCreditToBill(client, {
       creditId: id,
       vendorBillId: body.vendor_bill_id,
       amountCents: body.amount_cents,
       actorId,
     });
-    return res.status(201).json({ application });
   } catch (error) {
     if (error instanceof VendorCreditError) {
       return res.status(error.status).json({ error: error.message, code: error.code });
@@ -48,4 +50,12 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
   } finally {
     client.release();
   }
+
+  const knex = req.scope.resolve("__pg_connection__") as SqlClient;
+  const qb = await enqueueVendorCreditApply(knex, application.id).catch((err: unknown) => ({
+    queued: false as const,
+    reason: err instanceof Error ? err.message : String(err),
+  }));
+
+  return res.status(201).json({ application, qb });
 }

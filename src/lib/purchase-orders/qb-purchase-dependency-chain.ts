@@ -19,6 +19,11 @@ export type PurchaseQbStep =
   | "vendor_credit_void"
   | "bill_payment_add"
   | "bill_payment_void"
+  // vc-apply-qb-20260915: un Pay Bills de $0 (PaymentAmount 0.00 + SetCredit)
+  // que engancha un vendor_credit_application a su bill en QuickBooks. Nunca
+  // se voidea desde acá — desparejar es responsabilidad de QuickBooks Desktop
+  // (Pay Bills → Set Credits), ver void-application.ts.
+  | "vendor_credit_apply"
   // gl-docs-to-qb-20260914: cada documento GL bancario es raíz de su propia
   // cadena (add → void en serie). Ver lib/quickbooks/gl-documents/enqueue.ts.
   | "gl_document_add"
@@ -42,6 +47,7 @@ export interface EnqueuePurchaseQbOperationInput {
     | "item_receipt"
     | "vendor_bill"
     | "vendor_credit"
+    | "vendor_credit_application"
     | "bill_payment"
     // gl-docs-to-qb-20260914: la TABLA del documento GL bancario.
     | "gl_check"

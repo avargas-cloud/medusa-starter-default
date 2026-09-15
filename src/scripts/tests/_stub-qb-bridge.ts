@@ -53,6 +53,15 @@ export type StubState = {
   seq: number;
   /** direct-query: force the NEXT request to be rejected by QB, or to die without a verdict. */
   directQueryMode?: "ok" | "reject" | "unknown_outcome";
+  /**
+   * Bill TxnID → vendor credits linked to it by a $0 BillPayment*Add + SetCredit
+   * (vendor_credit_apply). Mirrors what QuickBooks really does (measured in prod
+   * 2026-09-15, 6×): the Add answers statusCode 0 with NO TxnID — no document is
+   * minted — and the link only shows up on a later BillQuery with LinkedTxns.
+   */
+  billCredits: Map<string, Array<{ creditTxnId: string; amount: string }>>;
+  /** bills/query: force the NEXT BillRet to hide its LinkedTxn (readback negative control). */
+  billQueryMode?: "ok" | "no_links";
 };
 
 /** Monotonic, timestamp-shaped ids so they read like real QB TxnIDs. */
@@ -239,6 +248,20 @@ export function handle(
         result: { QBXML: { QBXMLMsgsRs: { TxnVoidRs: { $: { statusCode: mode === "reject" ? "3120" : "0", statusSeverity: mode === "reject" ? "Error" : "Info", statusMessage: mode === "reject" ? "Object not found" : "Status OK" } } } } },
       });
     }
+    // $0 Pay Bills with credits: QuickBooks links the credit to the bill and
+    // returns NO TxnID (no payment document exists). AppliedToTxnRet only.
+    const zeroPay = /<PaymentAmount>0\.00<\/PaymentAmount>/.test(qbxml) && /^BillPayment(CreditCard|Check)$/.test(rqName);
+    if (zeroPay && mode === "ok") {
+      const billTxnId = qbxml.match(/<AppliedToTxnAdd><TxnID>([^<]+)<\/TxnID>/)?.[1] ?? "";
+      const credits = [...qbxml.matchAll(/<SetCredit><CreditTxnID>([^<]+)<\/CreditTxnID><AppliedAmount>([^<]+)<\/AppliedAmount><\/SetCredit>/g)]
+        .map((m) => ({ creditTxnId: m[1]!, amount: m[2]! }));
+      state.billCredits.set(billTxnId, [...(state.billCredits.get(billTxnId) ?? []), ...credits]);
+      journal(state, { event: "bill_credit_apply", billTxnId, credits });
+      return mint({
+        status: "completed",
+        result: { QBXML: { QBXMLMsgsRs: { [`${rqName}AddRs`]: { $: { statusCode: "0", statusSeverity: "Info", statusMessage: "Status OK" }, [`${rqName}Ret`]: { AppliedToTxnRet: { TxnID: billTxnId, TxnType: "Bill" } } } } } },
+      });
+    }
     const txnId = mintTxnId(state, "1DGL");
     const editSequence = nextEditSequence(state);
     state.editSequences.set(txnId, editSequence);
@@ -262,6 +285,25 @@ export function handle(
           },
         },
       },
+    });
+  }
+
+  // `POST /api/bills/query { txn_id }` — the readback the vendor_credit_apply
+  // lane confirms with. Same shape the live bridge returns for BillQueryRq with
+  // IncludeLinkedTxns: BillRet.LinkedTxn (a dict for one link, a list for many).
+  if (method === "POST" && url.startsWith("/api/bills/query")) {
+    const billTxnId = String(body.txn_id ?? "");
+    const mode = state.billQueryMode ?? "ok";
+    state.billQueryMode = undefined;
+    const credits = mode === "no_links" ? [] : (state.billCredits.get(billTxnId) ?? []);
+    journal(state, { event: "bill_query", billTxnId, mode, links: credits.length });
+    const linked = credits.map((c) => ({ TxnID: c.creditTxnId, TxnType: "VendorCredit", LinkType: "AMTTYPE", Amount: `-${c.amount}` }));
+    const billRet: Record<string, unknown> = { TxnID: billTxnId, IsPaid: credits.length > 0 ? "true" : "false", EditSequence: nextEditSequence(state) };
+    if (linked.length === 1) billRet.LinkedTxn = linked[0];
+    else if (linked.length > 1) billRet.LinkedTxn = linked;
+    return mint({
+      status: "completed",
+      result: { QBXML: { QBXMLMsgsRs: { BillQueryRs: { $: { statusCode: "0", statusSeverity: "Info", statusMessage: "Status OK" }, BillRet: billRet } } } },
     });
   }
 
@@ -323,6 +365,7 @@ export function startStubBridge(
   const state: StubState = {
     editSequences: new Map(),
     applied: new Map(),
+    billCredits: new Map(),
     ops: new Map(),
     journalPath,
     seq: 0,

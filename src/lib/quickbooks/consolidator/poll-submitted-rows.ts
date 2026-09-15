@@ -11,7 +11,7 @@ import {
   CM_SYNTHETIC_LINE_IDS_META_KEY,
   extractQbSyntheticLineIds,
 } from "../credit-memo-synthetic-lines";
-import { bridgeFetch } from "../client/core";
+import { bridgeFetch, pollRawOperationResult } from "../client/core";
 import { voidCreditMemoInQb } from "../client/credit-memos";
 import { voidInvoiceInQb } from "../client/invoices";
 import {
@@ -73,6 +73,7 @@ import {
 import { handleVendorCreditVoidConfirmed } from "../handlers/handle-vendor-credit-void";
 import { handleBillPaymentAddConfirmed } from "../handlers/handle-bill-payment-add";
 import { handleBillPaymentVoidConfirmed } from "../handlers/handle-bill-payment-void";
+import { handleVendorCreditApplyConfirmed } from "../handlers/handle-vendor-credit-apply";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -115,6 +116,31 @@ function compareTxnLineIds(a: string, b: string): number {
   const hexB = parseInt((b ?? "").split("-")[0] ?? b, 16);
   if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
   return String(a).localeCompare(String(b));
+}
+
+/** Same shape purchase-operations.ts's private `extractMessages` reads — duplicated locally on purpose (see that file's doc comment on why each caller keeps its own copy). */
+function extractDirectQueryMessages(rawResult: unknown): Record<string, unknown> {
+  const result = rawResult as Record<string, unknown> | null;
+  const qbxml = result?.QBXML as Record<string, unknown> | undefined;
+  return (
+    (qbxml?.QBXMLMsgsRs as Record<string, unknown> | undefined) ??
+    (result?.QBXMLMsgsRs as Record<string, unknown> | undefined) ??
+    {}
+  );
+}
+
+interface BillLinkedTxn {
+  TxnID?: string;
+  TxnType?: string;
+}
+
+/** Dict→array normalization for `BillRet.LinkedTxn` — same shape `extractCheckLinkedTxns` handles for CheckRet. */
+function normalizeBillLinkedTxns(billRet: Record<string, unknown> | null): BillLinkedTxn[] {
+  if (!billRet) return [];
+  const raw = billRet.LinkedTxn;
+  if (raw == null) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list as BillLinkedTxn[];
 }
 
 function extractVendorBillQueryRet(msgs: any, txnId: string | null): any | null {
@@ -417,6 +443,118 @@ export async function pollSubmittedRows(
             } catch (handlerErr) {
               logger.warn(
                 `${LOG_PREFIX} ⚠️ ${row.step} ${row.id} confirmed on the pipeline but its write-back failed: ${handlerErr instanceof Error ? handlerErr.message : String(handlerErr)}`
+              );
+            }
+          }
+          continue;
+        }
+
+        // vc-apply-qb-20260915: a $0 BillPaymentCreditCardAdd (PaymentAmount
+        // 0.00 + SetCredit). QuickBooks answers statusCode 0 WITHOUT minting
+        // a document (probed 6x against prod 09/15/2026) — so this does NOT
+        // reuse the shared VC/BP branch above, which confirms with
+        // `qb_txn_id=null` the moment there is no Ret: exactly the case that
+        // here is NOT proof of anything landed. Confirmation is a READBACK:
+        // query the bill with IncludeLinkedTxns and look for the credit's
+        // LinkedTxn.
+        if (row.step === "vendor_credit_apply") {
+          const rsNode = msgs?.BillPaymentCreditCardAddRs as
+            | Record<string, unknown>
+            | undefined;
+          const { statusCode, statusMessage } = readDirectQueryStatus(rsNode);
+          if (!rsNode || (statusCode !== null && statusCode !== "0")) {
+            const message =
+              statusCode !== null
+                ? `QuickBooks rejected vendor_credit_apply (${statusCode}): ${statusMessage}`
+                : "vendor_credit_apply completed without a recognizable BillPaymentCreditCardAddRs response";
+            // ADD family — never auto-retries an ambiguous outcome.
+            classifyQbError({ message, code: statusCode });
+            await failPipelineRow(row.id, message);
+            logger.warn(`${LOG_PREFIX} ⚠️ vendor_credit_apply ${row.id}: ${message}`);
+            continue;
+          }
+
+          const addRet = (
+            rsNode as { BillPaymentCreditCardRet?: { TxnID?: string } }
+          ).BillPaymentCreditCardRet;
+          const billTxnId = (row.payload?.bill_txn_id as string | undefined) ?? null;
+          const creditTxnId = (row.payload?.credit_txn_id as string | undefined) ?? null;
+          if (!billTxnId || !creditTxnId) {
+            await failPipelineRow(
+              row.id,
+              "vendor_credit_apply: missing bill_txn_id/credit_txn_id in payload"
+            );
+            continue;
+          }
+
+          let linked: BillLinkedTxn[];
+          try {
+            const query = await bridgeFetch("POST", "/api/bills/query", {
+              txn_id: billTxnId,
+              max_returned: 1,
+            });
+            if (!query?.operationId) {
+              throw new Error("BillQuery returned no operationId");
+            }
+            const raw = await pollRawOperationResult(query.operationId, (message) =>
+              logger.info(`${LOG_PREFIX} ${message}`)
+            );
+            const billMsgs = extractDirectQueryMessages(
+              (raw as Record<string, unknown> | null)?.result ?? raw
+            );
+            const readBill = extractVendorBillQueryRet(billMsgs, billTxnId) as
+              | Record<string, unknown>
+              | null;
+            linked = normalizeBillLinkedTxns(readBill);
+          } catch (readbackErr) {
+            // Bridge/timeout failure — leave the row `submitted` (retried on
+            // the next poll tick). NEVER re-dispatch: the ADD already ran.
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ vendor_credit_apply ${row.id}: readback failed, will retry on the next poll: ${readbackErr instanceof Error ? readbackErr.message : String(readbackErr)}`
+            );
+            continue;
+          }
+
+          const found = linked.find(
+            (l) => l.TxnType === "VendorCredit" && String(l.TxnID ?? "") === String(creditTxnId)
+          );
+          if (!found) {
+            await failPipelineRow(
+              row.id,
+              "statusCode 0 but the bill shows no LinkedTxn for this credit — verify in QuickBooks before retrying"
+            );
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ vendor_credit_apply ${row.id}: no matching LinkedTxn on readback`
+            );
+            continue;
+          }
+
+          const wonConfirmApply = await confirmPipelineRow(
+            row.id,
+            addRet?.TxnID ?? null,
+            null,
+            rsNode ?? null
+          );
+          if (wonConfirmApply && row.reference_id) {
+            if (addRet?.TxnID) {
+              // QuickBooks minting a document here is unobserved behavior —
+              // the 6 probes in prod never saw it. Keep the evidence.
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ vendor_credit_apply ${row.id}: QuickBooks minted a document (TxnID=${addRet.TxnID}) — stored in qb_payment_txn_id`
+              );
+            }
+            try {
+              await handleVendorCreditApplyConfirmed(
+                poolAsRawKnexHandlerShim(pool),
+                row.reference_id,
+                { billTxnId, creditTxnId, paymentTxnId: addRet?.TxnID ?? null }
+              );
+              logger.info(
+                `${LOG_PREFIX} ✅ vendor_credit_apply ${row.id} confirmed by readback`
+              );
+            } catch (handlerErr) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ vendor_credit_apply ${row.id} confirmed on the pipeline but its write-back failed: ${handlerErr instanceof Error ? handlerErr.message : String(handlerErr)}`
               );
             }
           }

@@ -29,6 +29,12 @@ jest.mock("../../../purchase-orders/qb-bill-payment-enqueue", () => ({
     mockLoadBillPaymentAddFacts(...args),
 }));
 
+const mockLoadVendorCreditApplyFacts = jest.fn();
+jest.mock("../../../purchase-orders/qb-vendor-credit-apply-enqueue", () => ({
+  loadVendorCreditApplyFacts: (...args: unknown[]) =>
+    mockLoadVendorCreditApplyFacts(...args),
+}));
+
 const mockDeferPipelineRow = jest.fn();
 const mockFailPipelineRow = jest.fn();
 const mockFailOrRetryPipelineRow = jest.fn();
@@ -194,6 +200,76 @@ describe("resubmitByStep — bill_payment_add", () => {
       step: "bill_payment_add",
       reference_id: "vbp_1",
       reference_type: "bill_payment",
+    });
+
+    await resubmitByStep(row, fakeContainer, logger);
+
+    expect(mockFailPipelineRow).toHaveBeenCalledTimes(1);
+    expect(mockFailOrRetryPipelineRow).not.toHaveBeenCalled();
+  });
+});
+
+describe("resubmitByStep — vendor_credit_apply", () => {
+  it("defers when loadVendorCreditApplyFacts reports blocking references", async () => {
+    mockLoadVendorCreditApplyFacts.mockResolvedValue({
+      ready: false,
+      reason: "waiting for QuickBooks: vb_1",
+      blockingReferenceIds: ["vb_1"],
+    });
+    const row = baseRow({
+      step: "vendor_credit_apply",
+      reference_id: "vcap_1",
+      reference_type: "vendor_credit_application",
+    });
+
+    await resubmitByStep(row, fakeContainer, logger);
+
+    expect(mockDeferPipelineRow).toHaveBeenCalledTimes(1);
+    expect(mockBridgeFetch).not.toHaveBeenCalled();
+  });
+
+  it("submits exactly once when ready, with a dedicated idempotency key", async () => {
+    mockLoadVendorCreditApplyFacts.mockResolvedValue({
+      ready: true,
+      qbxml: "<BillPaymentCreditCardAddRq/>",
+      billTxnId: "bill_txn_1",
+      creditTxnId: "credit_txn_1",
+      amountCents: 5000n,
+      blockingReferenceIds: [],
+    });
+    mockBridgeFetch.mockResolvedValue({ operationId: "op_apply_1" });
+    const row = baseRow({
+      step: "vendor_credit_apply",
+      reference_id: "vcap_1",
+      reference_type: "vendor_credit_application",
+    });
+
+    await resubmitByStep(row, fakeContainer, logger);
+
+    expect(mockBridgeFetch).toHaveBeenCalledTimes(1);
+    expect(mockBridgeFetch).toHaveBeenCalledWith(
+      "POST",
+      "/api/sync/direct-query",
+      { qbxml: "<BillPaymentCreditCardAddRq/>" },
+      { idempotencyKey: "vendor-credit-apply:row_1" }
+    );
+    expect(mockFailPipelineRow).not.toHaveBeenCalled();
+  });
+
+  it("fails terminally (no auto-retry) when the bridge does not return an operation id", async () => {
+    mockLoadVendorCreditApplyFacts.mockResolvedValue({
+      ready: true,
+      qbxml: "<BillPaymentCreditCardAddRq/>",
+      billTxnId: "bill_txn_1",
+      creditTxnId: "credit_txn_1",
+      amountCents: 5000n,
+      blockingReferenceIds: [],
+    });
+    mockBridgeFetch.mockResolvedValue({});
+    const row = baseRow({
+      step: "vendor_credit_apply",
+      reference_id: "vcap_1",
+      reference_type: "vendor_credit_application",
     });
 
     await resubmitByStep(row, fakeContainer, logger);

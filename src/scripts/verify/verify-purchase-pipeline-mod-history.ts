@@ -62,12 +62,20 @@ async function main(): Promise<void> {
       ["vendor_credit_void", "void_vendor_credit"],
       ["bill_payment_add", "add_bill_payment"],
       ["bill_payment_void", "void_bill_payment"],
+      // vc-apply-qb-20260915: keyed by the APPLICATION, not the credit — has
+      // to be checked BEFORE the generic vendor_credit* branch below, which
+      // would otherwise join the wrong table (vendor_credit.id !==
+      // vendor_credit_application.id).
+      ["vendor_credit_apply", "apply_vendor_credit"],
       // gl-docs-to-qb-20260914: GL bank documents (four tables behind one step
       // pair); counted through the same document JOIN the feed uses.
       ["gl_document_add", "add_gl_document"],
       ["gl_document_void", "void_gl_document"],
     ] as const) {
-      const docJoin = step.startsWith("vendor_credit")
+      const docJoin =
+        step === "vendor_credit_apply"
+          ? "JOIN vendor_credit_application doc ON doc.id = qop.reference_id"
+          : step.startsWith("vendor_credit")
         ? "JOIN vendor_credit doc ON doc.id = qop.reference_id AND doc.deleted_at IS NULL"
         : step.startsWith("bill_payment")
           ? "JOIN vendor_bill_payment doc ON doc.id = qop.reference_id AND doc.deleted_at IS NULL"
@@ -139,6 +147,9 @@ async function main(): Promise<void> {
       + (SELECT COUNT(*) FROM qb_order_pipeline qop
           JOIN vendor_bill_payment vbp ON vbp.id = qop.reference_id AND vbp.deleted_at IS NULL
          WHERE qop.step IN ('bill_payment_add', 'bill_payment_void'))
+      + (SELECT COUNT(*) FROM qb_order_pipeline qop
+          JOIN vendor_credit_application vca ON vca.id = qop.reference_id
+         WHERE qop.step = 'vendor_credit_apply')
       + (SELECT COUNT(*) FROM qb_order_pipeline qop
           JOIN (SELECT id FROM gl_check WHERE deleted_at IS NULL UNION ALL SELECT id FROM gl_transfer WHERE deleted_at IS NULL
                 UNION ALL SELECT id FROM gl_journal_entry WHERE deleted_at IS NULL UNION ALL SELECT id FROM bank_deposit WHERE deleted_at IS NULL) doc

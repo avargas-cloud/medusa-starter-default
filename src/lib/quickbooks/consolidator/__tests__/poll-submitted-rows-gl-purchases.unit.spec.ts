@@ -15,6 +15,7 @@ jest.mock("../../../../api/utils/db-pool", () => ({
 const mockBridgeFetch = jest.fn();
 jest.mock("../../client/core", () => ({
   bridgeFetch: (...args: unknown[]) => mockBridgeFetch(...args),
+  pollRawOperationResult: (...args: unknown[]) => mockPollRawOperationResult(...args),
 }));
 
 const mockHandleVendorCreditAddConfirmed = jest.fn();
@@ -37,6 +38,13 @@ jest.mock("../../handlers/handle-bill-payment-void", () => ({
   handleBillPaymentVoidConfirmed: (...args: unknown[]) =>
     mockHandleBillPaymentVoidConfirmed(...args),
 }));
+const mockHandleVendorCreditApplyConfirmed = jest.fn();
+jest.mock("../../handlers/handle-vendor-credit-apply", () => ({
+  handleVendorCreditApplyConfirmed: (...args: unknown[]) =>
+    mockHandleVendorCreditApplyConfirmed(...args),
+}));
+
+const mockPollRawOperationResult = jest.fn();
 
 const mockFailPipelineRow = jest.fn();
 const mockFailOrRetryPipelineRow = jest.fn();
@@ -253,5 +261,128 @@ describe("pollSubmittedRows — bill_payment_void confirmation", () => {
     await pollSubmittedRows([row], fakeContainer, logger);
 
     expect(mockHandleBillPaymentVoidConfirmed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pollSubmittedRows — vendor_credit_apply confirmation (readback, not shared branch)", () => {
+  function applyRow(overrides: Partial<SubmittedRow> = {}): SubmittedRow {
+    return baseRow({
+      step: "vendor_credit_apply",
+      reference_id: "vcap_1",
+      reference_type: "vendor_credit_application",
+      payload: { bill_txn_id: "bill_txn_1", credit_txn_id: "credit_txn_1" },
+      ...overrides,
+    });
+  }
+
+  it("confirms via readback when the bill shows the credit's LinkedTxn — no TxnID needed", async () => {
+    mockBridgeFetch
+      .mockResolvedValueOnce({
+        // GET /api/sync/status/<bridge_op_id> — the original $0 apply dispatch
+        operation: {
+          status: "completed",
+          result: {
+            QBXML: {
+              QBXMLMsgsRs: {
+                BillPaymentCreditCardAddRs: { statusCode: "0", statusMessage: "" },
+              },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ operationId: "op_readback_1" }); // POST /api/bills/query
+    mockPollRawOperationResult.mockResolvedValue({
+      QBXML: {
+        QBXMLMsgsRs: {
+          BillQueryRs: {
+            BillRet: {
+              TxnID: "bill_txn_1",
+              LinkedTxn: { TxnID: "credit_txn_1", TxnType: "VendorCredit" },
+            },
+          },
+        },
+      },
+    });
+
+    await pollSubmittedRows([applyRow()], fakeContainer, logger);
+
+    expect(mockHandleVendorCreditApplyConfirmed).toHaveBeenCalledTimes(1);
+    const [, applicationId, ret] = mockHandleVendorCreditApplyConfirmed.mock.calls[0];
+    expect(applicationId).toBe("vcap_1");
+    expect(ret).toEqual({ billTxnId: "bill_txn_1", creditTxnId: "credit_txn_1", paymentTxnId: null });
+    expect(mockFailPipelineRow).not.toHaveBeenCalled();
+  });
+
+  it("fails terminally (no LinkedTxn found) when statusCode 0 but the credit never shows up on the bill", async () => {
+    mockBridgeFetch
+      .mockResolvedValueOnce({
+        operation: {
+          status: "completed",
+          result: {
+            QBXML: {
+              QBXMLMsgsRs: {
+                BillPaymentCreditCardAddRs: { statusCode: "0", statusMessage: "" },
+              },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ operationId: "op_readback_2" });
+    mockPollRawOperationResult.mockResolvedValue({
+      QBXML: {
+        QBXMLMsgsRs: {
+          BillQueryRs: { BillRet: { TxnID: "bill_txn_1", LinkedTxn: [] } },
+        },
+      },
+    });
+
+    await pollSubmittedRows([applyRow()], fakeContainer, logger);
+
+    expect(mockFailPipelineRow).toHaveBeenCalledTimes(1);
+    expect(mockHandleVendorCreditApplyConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("fails terminally when QuickBooks rejects the $0 apply (statusCode != 0)", async () => {
+    mockBridgeFetch.mockResolvedValueOnce({
+      operation: {
+        status: "completed",
+        result: {
+          QBXML: {
+            QBXMLMsgsRs: {
+              BillPaymentCreditCardAddRs: { statusCode: "3140", statusMessage: "Invalid reference" },
+            },
+          },
+        },
+      },
+    });
+
+    await pollSubmittedRows([applyRow()], fakeContainer, logger);
+
+    expect(mockFailPipelineRow).toHaveBeenCalledTimes(1);
+    expect(mockBridgeFetch).toHaveBeenCalledTimes(1); // never attempted the readback
+    expect(mockHandleVendorCreditApplyConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("leaves the row submitted (never fails, never re-dispatches) when the readback itself errors", async () => {
+    mockBridgeFetch
+      .mockResolvedValueOnce({
+        operation: {
+          status: "completed",
+          result: {
+            QBXML: {
+              QBXMLMsgsRs: {
+                BillPaymentCreditCardAddRs: { statusCode: "0", statusMessage: "" },
+              },
+            },
+          },
+        },
+      })
+      .mockRejectedValueOnce(new Error("bridge unreachable"));
+
+    await pollSubmittedRows([applyRow()], fakeContainer, logger);
+
+    expect(mockFailPipelineRow).not.toHaveBeenCalled();
+    expect(mockFailOrRetryPipelineRow).not.toHaveBeenCalled();
+    expect(mockHandleVendorCreditApplyConfirmed).not.toHaveBeenCalled();
   });
 });

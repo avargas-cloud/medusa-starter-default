@@ -65,6 +65,10 @@ export const ADD_CAPABLE_STEPS = [
   // deliberately NOT here (TxnVoid can't mint a duplicate).
   "vendor_credit_add",
   "bill_payment_add",
+  // vc-apply-qb-20260915: un $0 BillPaymentCreditCardAdd (SetCredit) es un ADD
+  // no-idempotente aunque no mintee documento — un re-despacho aplicaría el
+  // SetCredit dos veces. Misma familia que las dos líneas de arriba.
+  "vendor_credit_apply",
   // gl-docs-to-qb-20260914: CheckAdd / CreditCardChargeAdd / DepositAdd /
   // JournalEntryAdd — un documento real cada uno. `gl_document_void` queda
   // fuera a propósito (TxnVoid no duplica).

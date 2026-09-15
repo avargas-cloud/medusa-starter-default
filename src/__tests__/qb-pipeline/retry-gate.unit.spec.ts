@@ -42,7 +42,7 @@ describe("evaluateRetryGate", () => {
     expect(verdict.allow).toBe(true);
   });
 
-  it("ADD_CAPABLE_STEPS contains exactly the 15 specified steps", () => {
+  it("ADD_CAPABLE_STEPS contains exactly the 16 specified steps", () => {
     expect([...ADD_CAPABLE_STEPS].sort()).toEqual(
       [
         "estimate",
@@ -59,6 +59,8 @@ describe("evaluateRetryGate", () => {
         "vendor_bill_add",
         "vendor_credit_add",
         "bill_payment_add",
+        // vc-apply-qb-20260915: a $0 SetCredit apply — non-idempotent ADD.
+        "vendor_credit_apply",
         // gl-docs-to-qb-20260914: CheckAdd / CreditCardChargeAdd / DepositAdd /
         // JournalEntryAdd for the POS bank documents (gl_document_void is not
         // here: a TxnVoid cannot mint a duplicate).
@@ -274,7 +276,7 @@ describe("evaluateRetryGate", () => {
     }
   );
 
-  it("ADD_CAPABLE_STEPS covers exactly the 15 steps whose Add mints a document", () => {
+  it("ADD_CAPABLE_STEPS covers exactly the 16 steps whose Add mints a document", () => {
     expect([...ADD_CAPABLE_STEPS].sort()).toEqual(
       [
         "apply_payment",
@@ -290,6 +292,8 @@ describe("evaluateRetryGate", () => {
         "vendor_bill_add",
         "vendor_credit_add",
         "bill_payment_add",
+        // vc-apply-qb-20260915: a $0 SetCredit apply — non-idempotent ADD.
+        "vendor_credit_apply",
         // gl-docs-to-qb-20260914: CheckAdd / CreditCardChargeAdd / DepositAdd /
         // JournalEntryAdd for the POS bank documents (gl_document_void is not
         // here: a TxnVoid cannot mint a duplicate).

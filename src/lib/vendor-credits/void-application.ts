@@ -5,6 +5,7 @@ interface AppRow {
   credit_id: string;
   amount_cents: number;
   voided_at: string | null;
+  qb_applied_at: string | null;
 }
 
 /** Releases one application: the credit's cache shrinks, the bill's balance grows back. */
@@ -16,7 +17,7 @@ export async function voidVendorCreditApplication(
   await client.query("BEGIN");
   try {
     const { rows } = await client.query(
-      `SELECT id, credit_id, amount_cents, voided_at FROM vendor_credit_application
+      `SELECT id, credit_id, amount_cents, voided_at, qb_applied_at FROM vendor_credit_application
         WHERE id = $1 FOR UPDATE`,
       [applicationId]
     );
@@ -36,6 +37,31 @@ export async function voidVendorCreditApplication(
       throw new VendorCreditError(
         "referenced_by_payment",
         "This application is used by a posted bill payment's SetCredit — void that payment first.",
+        409
+      );
+    }
+
+    // vc-apply-qb-20260915 (decisión del operador): BLOQUEAR, nunca
+    // desparejar. Un $0 Pay Bills ya viajado sólo se desengancha DESDE
+    // QuickBooks Desktop (Pay Bills → Set Credits) — el POS no tiene forma
+    // de emitir un TxnVoid contra él (no hay documento QB que voidear).
+    if (app.qb_applied_at) {
+      throw new VendorCreditError(
+        "applied_in_quickbooks",
+        "This application is already linked in QuickBooks. Unlink it there first (Pay Bills → Set Credits on the bill) and retry.",
+        409
+      );
+    }
+    const { rows: liveApplyRows } = await client.query(
+      `SELECT id FROM qb_order_pipeline
+        WHERE step = 'vendor_credit_apply' AND reference_id = $1
+          AND status IN ('waiting', 'pending', 'processing', 'submitted')`,
+      [applicationId]
+    );
+    if (liveApplyRows.length > 0) {
+      throw new VendorCreditError(
+        "applying_in_quickbooks",
+        "This application is being sent to QuickBooks. Wait for it to confirm (then unlink in QuickBooks) or fail before voiding.",
         409
       );
     }

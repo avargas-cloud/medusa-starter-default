@@ -64,6 +64,10 @@ export type PipelineStep =
   | "vendor_credit_void"
   | "bill_payment_add"
   | "bill_payment_void"
+  // vc-apply-qb-20260915: un $0 Pay Bills (PaymentAmount 0.00 + SetCredit)
+  // que engancha una vendor_credit_application a su bill. Ver
+  // qb-vendor-credit-apply-enqueue.ts / handlers/handle-vendor-credit-apply.ts.
+  | "vendor_credit_apply"
   // gl-docs-to-qb-20260914: cheques/gastos (gl_check), transfers
   // (gl_transfer), asientos manuales (gl_journal_entry) y depósitos
   // (bank_deposit) del libro del POS. DOS steps genéricos: la tabla va en
