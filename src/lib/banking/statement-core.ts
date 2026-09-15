@@ -61,7 +61,7 @@ export async function statementEditable(
     throw new BankingError("BANKING_STATEMENT_PERIOD_CLOSED", 409);
   return row;
 }
-async function statementPeriods(
+export async function statementPeriods(
   client: PoolClient,
   from: string,
   to: string
@@ -286,6 +286,46 @@ export async function assertNoLaterClosedStatement(
   if (later.rowCount)
     throw new BankingError("BANKING_STATEMENT_LATER_CLOSED", 409);
 }
+/**
+ * The reopen itself, shared by the single reopen below and the chain
+ * (`statement-reopen-chain.ts`, 2026-09-15). Caller has already checked status,
+ * revision, the later-closed guard (or is reopening the chain) and the periods.
+ */
+export async function reopenStatementRow(
+  client: PoolClient,
+  old: StatementDocument,
+  actorId: string,
+  reason: string,
+  details: Record<string, unknown> = {}
+): Promise<void> {
+  const history = [
+    ...old.history,
+    {
+      actor_id: actorId,
+      reason,
+      closed_snapshot: old.closed_snapshot,
+      input_hash: old.input_hash,
+      closed_at: old.closed_at,
+      closed_by: old.closed_by,
+    },
+  ];
+  await client.query(
+    "UPDATE bank_statement SET status='draft',revision=revision+1,history=$2::jsonb,updated_at=now() WHERE id=$1",
+    [old.id, JSON.stringify(history)]
+  );
+  await appendReviewEvent(client, {
+    entity_type: "statement",
+    entity_id: old.id,
+    actor_id: actorId,
+    action: "statement_reopened",
+    details: {
+      reason,
+      previous_snapshot: old.closed_snapshot,
+      zero_gl: true,
+      ...details,
+    },
+  });
+}
 export async function reopenStatement(
   id: string,
   actorId: string,
@@ -301,32 +341,7 @@ export async function reopenStatement(
         throw new BankingError("BANKING_STATEMENT_STALE", 409);
       await assertNoLaterClosedStatement(client, old);
       await statementPeriods(client, old.from, old.to);
-      const history = [
-        ...old.history,
-        {
-          actor_id: actorId,
-          reason: body.reason,
-          closed_snapshot: old.closed_snapshot,
-          input_hash: old.input_hash,
-          closed_at: old.closed_at,
-          closed_by: old.closed_by,
-        },
-      ];
-      await client.query(
-        "UPDATE bank_statement SET status='draft',revision=revision+1,history=$2::jsonb,updated_at=now() WHERE id=$1",
-        [id, JSON.stringify(history)]
-      );
-      await appendReviewEvent(client, {
-        entity_type: "statement",
-        entity_id: id,
-        actor_id: actorId,
-        action: "statement_reopened",
-        details: {
-          reason: body.reason,
-          previous_snapshot: old.closed_snapshot,
-          zero_gl: true,
-        },
-      });
+      await reopenStatementRow(client, old, actorId, body.reason);
       return statementContext(client, id);
     }
   );

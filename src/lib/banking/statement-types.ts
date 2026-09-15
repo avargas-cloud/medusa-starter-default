@@ -79,6 +79,10 @@ export const statementCloseSchema = statementRevisionSchema.extend({
 export const statementReopenSchema = statementRevisionSchema.extend({
   reason: z.string().trim().min(8).max(1000),
 });
+/** Chain reopen (2026-09-15): the operator confirms the exact plan they previewed. */
+export const statementReopenChainSchema = statementReopenSchema.extend({
+  chain_hash: z.string().regex(/^[a-f0-9]{64}$/),
+});
 export type StatementInput = z.infer<typeof statementSaveSchema>;
 export type StatementLine = z.infer<typeof statementLineSchema> & {
   id: string;
