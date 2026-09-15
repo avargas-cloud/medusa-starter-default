@@ -11,6 +11,7 @@ import {
 import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
   NO_DIRECT_RESERVATION_SQL,
+  notInOtherDepositSql,
   matchesPaymentFingerprint,
 } from "./payment-evidence";
 import { appendReviewEvent, reviewHash } from "./review-common";
@@ -53,7 +54,7 @@ export async function validateDepositReceipt(
 ): Promise<DepositCandidate> {
   const result = await client.query<DepositCandidate & { unreserved: boolean }>(
     `SELECT ${DEPOSIT_RECEIPT_SQL},
-    ${NO_DIRECT_RESERVATION_SQL} AS unreserved FROM customer_payment mp
+    (${NO_DIRECT_RESERVATION_SQL} AND ${notInOtherDepositSql("$2::text")}) AS unreserved FROM customer_payment mp
     JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
     WHERE mp.id=$1 AND ${DEPOSIT_PAYMENT_ELIGIBLE_SQL} AND upper(mp.currency)=$3
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date BETWEEN $4::date AND $5::date FOR SHARE OF mp,c`,

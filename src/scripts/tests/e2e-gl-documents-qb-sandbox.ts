@@ -209,7 +209,9 @@ async function cleanup(client: Client): Promise<void> {
     await client.query(`DELETE FROM bank_deposit_line WHERE deposit_id = ANY($1::text[])`, [ids]);
     await client.query(`DELETE FROM bank_deposit WHERE id = ANY($1::text[])`, [ids]);
   }
-  await client.query(`DELETE FROM bank_review_event WHERE idempotency_key LIKE $1 OR entity_id LIKE $2`, [`${PREFIX}%`, `bdep_%`]).catch(() => undefined);
+  // Sólo los eventos de LOS depósitos de este E2E: `entity_id LIKE 'bdep_%'` borraba
+  // los de todos (incluidos los de la adopción de QuickBooks del clon).
+  await client.query(`DELETE FROM bank_review_event WHERE idempotency_key LIKE $1 OR (entity_type='deposit' AND entity_id = ANY($2::text[]))`, [`${PREFIX}%`, ids]).catch(() => undefined);
   await client.query(`DELETE FROM qb_account WHERE qb_list_id = $1`, [`pos_${PREFIX}exp`]);
   await client.query(`DELETE FROM bank_account WHERE id = $1`, [`bacct_${PREFIX}acct`]);
   await client.query(`DELETE FROM bank_connection WHERE id = $1`, [`bconn_${PREFIX}conn`]);

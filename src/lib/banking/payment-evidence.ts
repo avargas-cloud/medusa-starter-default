@@ -50,6 +50,18 @@ export const NO_DIRECT_RESERVATION_SQL = `NOT EXISTS(SELECT 1 FROM bank_transact
 export const NO_DEPOSIT_RESERVATION_SQL = `NOT EXISTS(SELECT 1 FROM bank_deposit_line dl
   JOIN bank_deposit d ON d.id=dl.deposit_id WHERE dl.payment_id=mp.id AND dl.deleted_at IS NULL
   AND d.deleted_at IS NULL AND d.status<>'void')`;
+/** A receipt deposited once is deposited (2026-09-15, record-deposits-gl v2):
+ * a live deposit line on any OTHER deposit removes the receipt from the
+ * picker and from save/ready, whatever the amount residual says. The 2026
+ * history adopted from QuickBooks carries the QB line amount (no surcharge),
+ * so an amount-based reservation left every card receipt "available" for its
+ * surcharge — one receipt, one deposit, like QuickBooks. `exclude` = the
+ * deposit being edited, whose own lines must stay offered. */
+export function notInOtherDepositSql(exclude: "$2::text" | "NULL::text"): string {
+  return `NOT EXISTS(SELECT 1 FROM bank_deposit_line dl JOIN bank_deposit d ON d.id=dl.deposit_id
+  WHERE dl.payment_id=mp.id AND dl.deleted_at IS NULL AND d.deleted_at IS NULL AND d.status<>'void'
+  AND d.id IS DISTINCT FROM ${exclude})`;
+}
 /** mp is the source payment. Exclusions are caller-owned expressions, never request text.
  * Posted claims survive unmatch. An operational reservation and its posting are one intent.
  * All availability writers must hold the existing banking-review transaction lock. */

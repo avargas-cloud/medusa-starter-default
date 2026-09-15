@@ -126,6 +126,18 @@ async function main(): Promise<void> {
     const one = (listed.json.deposits ?? []).find((d: any) => d.qb_txn_id && d.lines.some((l: any) => l.payment_id));
     const detail = await api("GET", `/admin/banking/accounting/deposits/${one?.id}`);
     assert(detail.status === 200 && detail.json.posting && !detail.json.posting.reversed_by && detail.json.posting.kind === "deposit", "the Ledger entry dialog reads the adopted posting (history via source_kind)", JSON.stringify(detail.json.posting ?? detail.json).slice(0, 160));
+    // v2 (2026-09-15): un cobro adoptado NO vuelve al picker, aunque la línea de QB
+    // (sin surcharge) sea menor que lo que el POS reconoce (amount + surcharge).
+    const chaseAcct = (await client.query<{ id: string }>(`SELECT id FROM bank_account WHERE qb_list_id=$1 AND deleted_at IS NULL AND is_selected LIMIT 1`, [CHASE])).rows[0]!;
+    const adoptedCard = (await client.query<{ id: string; display_id: number }>(
+      `SELECT cp.id, cp.display_id FROM customer_payment cp JOIN bank_deposit_line dl ON dl.payment_id=cp.id AND dl.deleted_at IS NULL JOIN bank_deposit d ON d.id=dl.deposit_id AND d.created_by='adopt-qb-deposits'
+        WHERE COALESCE(cp.surcharge_cents,0)>0 AND dl.amount::numeric*100 < cp.amount::numeric+cp.surcharge_cents ORDER BY cp.received_at DESC LIMIT 1`)).rows[0];
+    assert(!!adoptedCard, "an adopted card receipt whose QB line (no surcharge) is below the POS amount+surcharge exists", JSON.stringify(adoptedCard));
+    const pick = await api("GET", `/admin/banking/deposit-candidates?account_id=${chaseAcct.id}&q=${adoptedCard?.display_id}`);
+    assert(pick.status === 200 && !(pick.json.candidates ?? []).some((c: any) => c.id === adoptedCard?.id), "that receipt is NOT offered as a deposit candidate (one receipt, one deposit)", JSON.stringify(pick.json).slice(0, 160));
+    const all = await api("GET", `/admin/banking/deposit-candidates?account_id=${chaseAcct.id}`);
+    const stale = (all.json.candidates ?? []).filter((c: any) => c.date >= "2026-04-14" && c.date < "2026-09-14");
+    assert(all.status === 200 && stale.length < 60 && stale.every((c: any) => Math.round(Number(c.available_amount) * 100) === Math.round(Number(c.amount) * 100) + Math.round(Number(c.surcharge_amount ?? 0) * 100)), `candidates between the POS cutover and yesterday are only receipts QuickBooks never deposited under their TxnID (${stale.length}), each fully available`, stale.slice(0, 3).map((c: any) => c.display_id).join(","));
     const { loadPosKnownTxnIds } = await import("../../lib/ledger/qb-import/pos-links");
     const { classify } = await import("../../lib/ledger/qb-import/classify");
     const known = await loadPosKnownTxnIds(client as never);

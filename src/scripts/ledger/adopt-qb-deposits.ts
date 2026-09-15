@@ -202,15 +202,19 @@ async function adoptOne(client: PoolClient, p: Plan): Promise<string> {
 }
 
 async function revertOne(client: PoolClient, txn: string): Promise<void> {
-  const dep = (await client.query<{ id: string; entry_id: string; previous: { document_number: string | null } }>(
-    `SELECT d.id, e.details->>'entry_id' AS entry_id, e.details->'previous' AS previous FROM bank_deposit d
-       JOIN bank_review_event e ON e.entity_type='deposit' AND e.entity_id=d.id AND e.details->>'origin'='qb_adopted'
-      WHERE d.qb_txn_id=$1 AND d.deleted_at IS NULL LIMIT 1`, [txn]
+  // El asiento y su número original salen del propio asiento (el snapshot de
+  // qb_import sigue intacto), no del bank_review_event: un cleanup ajeno puede
+  // haberlo borrado y el revert tiene que seguir funcionando.
+  const dep = (await client.query<{ id: string; entry_id: string; previous_number: string }>(
+    `SELECT d.id, e.id AS entry_id,
+            left(e.source_snapshot->>'txn_type'||' '||COALESCE(e.source_snapshot->>'ref_number', e.source_snapshot->>'txn_id'), 80) AS previous_number
+       FROM bank_deposit d JOIN bank_journal_entry e ON e.source_kind='bank_deposit' AND e.source_id=d.id AND e.kind='document'
+      WHERE d.qb_txn_id=$1 AND d.created_by=$2 AND d.deleted_at IS NULL AND e.source_snapshot->>'txn_id'=$1 LIMIT 1`, [txn, ACTOR]
   )).rows[0];
   if (!dep) throw new Error(`no hay depósito adoptado con TxnID ${txn}`);
   const upd = await client.query(
     `UPDATE bank_journal_entry SET source_kind='qb_import', source_id=$2, document_number=$3, updated_at=now() WHERE id=$1 AND source_kind='bank_deposit' AND source_id=$4`,
-    [dep.entry_id, txn, dep.previous.document_number, dep.id]
+    [dep.entry_id, txn, dep.previous_number, dep.id]
   );
   if (upd.rowCount !== 1) throw new Error(`revert: el asiento ${dep.entry_id} no está parentado a ${dep.id}`);
   await client.query(`DELETE FROM bank_review_event WHERE entity_type='deposit' AND entity_id=$1`, [dep.id]);

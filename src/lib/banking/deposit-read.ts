@@ -7,6 +7,7 @@ import type { BankDeposit } from "./deposit-types";
 import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
   NO_DIRECT_RESERVATION_SQL,
+  notInOtherDepositSql,
   PAYMENT_FINGERPRINT_SQL,
   LEGACY_PAYMENT_FINGERPRINT_SQL,
   depositReservedSql,
@@ -162,7 +163,7 @@ export async function depositCandidates(input: {
   }>(
     `WITH eligible AS (
     SELECT ${DEPOSIT_RECEIPT_SQL} FROM customer_payment mp JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
-    WHERE ${DEPOSIT_PAYMENT_ELIGIBLE_SQL} AND ${NO_DIRECT_RESERVATION_SQL} AND upper(mp.currency)=$1
+    WHERE ${DEPOSIT_PAYMENT_ELIGIBLE_SQL} AND ${NO_DIRECT_RESERVATION_SQL} AND ${notInOtherDepositSql("$2::text")} AND upper(mp.currency)=$1
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date >= $3::date
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date <= (now() AT TIME ZONE 'America/New_York')::date
   ), normal AS (SELECT id,display_id,customer_id,customer_name,method,card_brand,date,reference,amount,available_amount,surcharge_amount,currency,source_hash,fingerprint_version
