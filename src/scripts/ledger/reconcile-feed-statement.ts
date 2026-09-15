@@ -60,6 +60,9 @@ type Args = {
   close: boolean;
   reset: boolean;
   toleranceDays: number;
+  /** Tolerancia para un BP-#### del POS (cheque en tránsito, sin número): default 30 d. BP-1069 del
+   *  07/26 cobrado el 09/04 (40 d) quedaba fuera y a mano (2026-09-15). */
+  bpToleranceDays: number;
   evidence: string | null;
   actor: string;
   /** Extractos de TD en texto (uno o varios, consecutivos): reemplazan al feed como fuente de líneas. */
@@ -84,6 +87,7 @@ function parseArgs(argv: string[]): Args {
     close: argv.includes("--close"),
     reset: argv.includes("--reset"),
     toleranceDays: Number(get("--tolerance-days") ?? "5"),
+    bpToleranceDays: Number(get("--bp-tolerance-days") ?? "30"),
     evidence: get("--evidence"),
     actor: get("--actor") ?? "a.vargas@ecopowertech.com",
     td: argv.flatMap((a, i, all) => (a === "--td" && all[i + 1] ? [all[i + 1]!] : [])),
@@ -333,10 +337,19 @@ async function main(): Promise<void> {
   });
 
   // 4. Extracto (idempotente por key: re-correr devuelve el mismo).
-  const existing = await pool.query<{ id: string; revision: number; status: string }>(
-    `SELECT id,revision,status FROM bank_statement WHERE bank_account_id=$1 AND from_day=$2 AND to_day=$3 AND deleted_at IS NULL`,
+  // Un borrador se identifica por su `from`: el motor rechaza `to` > hoy, así que un mes en curso se
+  // abre 09/01→hoy y se REESCRIBE con `--reset` a 09/01→09/30 cuando el feed cubre el mes (2026-09-15).
+  // Sin --reset, un borrador del mismo `from` con otro `to` aborta: dos borradores solapados se roban
+  // los casamientos entre sí.
+  const existing = await pool.query<{ id: string; revision: number; status: string; to_day: string }>(
+    `SELECT id,revision,status,to_day::text FROM bank_statement WHERE bank_account_id=$1 AND from_day=$2 AND deleted_at IS NULL
+      AND (to_day=$3 OR status='draft') ORDER BY (to_day=$3) DESC LIMIT 1`,
     [acct.id, args.from, args.to]
   );
+  if (existing.rows[0] && existing.rows[0].to_day !== args.to) {
+    if (!args.reset) throw new Error(`ya hay un borrador ${args.from}..${existing.rows[0].to_day} (${existing.rows[0].id}); para reescribirlo hasta ${args.to} usá --reset`);
+    console.log(`reset: el borrador ${existing.rows[0].id} pasa de ..${existing.rows[0].to_day} a ..${args.to}`);
+  }
   let context: StatementContext;
   if (existing.rows[0] && args.reset) {
     // Rehacer un mes: se descasan las líneas (auditado) y el borrador se retira. Nunca un extracto cerrado.
@@ -434,7 +447,7 @@ async function main(): Promise<void> {
   // cheque en tránsito, siempre con candidato ÚNICO.
   const isPosCheck = (b: StatementBookItem): boolean => /^BP-\d+/.test(b.reference) && b.amount_cents < 0;
   const within = (b: StatementBookItem, l: StatementLine): boolean =>
-    daysBetween(b.day, l.day) <= (isOpening(b) ? 60 : isPosCheck(b) ? 30 : args.toleranceDays);
+    daysBetween(b.day, l.day) <= (isOpening(b) ? 60 : isPosCheck(b) ? args.bpToleranceDays : args.toleranceDays);
   const allocate = (line: StatementLine, book: StatementBookItem, amount: number): void => {
     remaining.set(book.id, (remaining.get(book.id) ?? 0) - Math.sign(book.amount_cents) * amount);
     matchedLines.add(line.id);

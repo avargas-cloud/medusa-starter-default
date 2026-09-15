@@ -1,18 +1,23 @@
 /**
- * bulk-card-charges — carga como Card Charges del POS (`gl_check`, kind `card_charge`) todos los
- * cargos del feed de UNA tarjeta que el libro no tiene, clasificándolos por COMERCIO con un archivo
- * de reglas (regex sobre merchant_name/name → cuenta). Cada cargo postea su asiento y viaja a QB
- * como CreditCardChargeAdd por el pipeline (`842eb0c8`).
+ * bulk-card-charges — carga como Card Charges / Expenses del POS (`gl_check`) todas las SALIDAS del
+ * feed de UNA cuenta (tarjeta `credit` → kind `card_charge`; banco `depository` → kind `expense`,
+ * o `check` si se pasa `--number`) que el libro no tiene, clasificándolas por COMERCIO con un archivo
+ * de reglas (regex sobre merchant_name/name → cuenta). Cada documento postea su asiento y viaja a QB
+ * por el pipeline (`842eb0c8`): CreditCardChargeAdd para la tarjeta, CheckAdd para el banco.
  *
  * Caso que lo motivó (Amex Plum 5009, 2026-09-14): 226 cargos de 2026 en 71 comercios, 5 en QB; el
- * contador mapeó 11 grupos y el operador no quiere cargarlos a mano.
+ * contador mapeó 11 grupos y el operador no quiere cargarlos a mano. Generalizado a cuentas Bank el
+ * 2026-09-15 (plan sep-feed-reconcile): los recurrentes del banco (fees de la procesadora, préstamos,
+ * AT&T) van a nacer en el POS, no en QB.
  *
  *   … ./node_modules/.bin/tsx src/scripts/ledger/bulk-card-charges.ts --mask 5009 --from 2026-01-01 --to 2026-08-31 \
- *       --rules amex-rules.json [--apply]
+ *       --rules amex-rules.json [--number Debit] [--apply]
  *
  * DRY-RUN por default: resume por cuenta, lista lo que ya está en el libro (se saltea: mismo monto a
- * ±3 días) y lo que NINGUNA regla cubre (se aborta si hay). Idempotente: un cargo ya cargado por este
- * script se reconoce por `memo` = "feed:<bank_transaction.id>" y no se repite.
+ * ±3 días, o ya casado en un extracto) y lo que NINGUNA regla cubre (se aborta si hay). Los CRÉDITOS
+ * del feed (devoluciones, pagos) no entran: se listan aparte para que se resuelvan por JE/deposito.
+ * Idempotente: un cargo ya cargado por este script se reconoce por `memo` = "feed:<bank_transaction.id>"
+ * y no se repite.
  */
 import { readFileSync } from "node:fs";
 import { getDbPool } from "../../api/utils/db-pool";
@@ -28,15 +33,21 @@ const money = (c: number): string => (c / 100).toLocaleString("en-US", { style: 
 async function main(): Promise<void> {
   const mask = arg("--mask"), from = arg("--from"), to = arg("--to"), rulesPath = arg("--rules");
   const actorEmail = arg("--actor") ?? "a.vargas@ecopowertech.com", apply = process.argv.includes("--apply");
+  const number = arg("--number");
   if (!mask || !from || !to || !rulesPath) throw new Error("usage: --mask <4> --from YYYY-MM-DD --to YYYY-MM-DD --rules file.json [--apply]");
   const rules = JSON.parse(readFileSync(rulesPath, "utf8")) as Rules;
   const compiled = rules.rules.map(([key, re]) => ({ key, account: rules._accounts[key]!, re: new RegExp(re, "i") }));
   const pool = getDbPool();
   const actor = (await pool.query<{ id: string }>(`SELECT id FROM "user" WHERE lower(email)=lower($1) AND deleted_at IS NULL`, [actorEmail])).rows[0];
   if (!actor) throw new Error(`actor no encontrado: ${actorEmail}`);
-  const card = (await pool.query<{ id: string; qb_list_id: string; name: string; account_type: string }>(
-    `SELECT a.id,a.qb_list_id,q.name,q.account_type FROM bank_account a JOIN qb_account q ON q.qb_list_id=a.qb_list_id WHERE a.mask=$1 AND a.type='credit' AND a.is_selected AND a.deleted_at IS NULL`, [mask])).rows[0];
-  if (!card || card.account_type !== "CreditCard") throw new Error(`*${mask}: tarjeta no mapeada a una cuenta CreditCard`);
+  const card = (await pool.query<{ id: string; qb_list_id: string; name: string; account_type: string; type: string }>(
+    `SELECT a.id,a.qb_list_id,q.name,q.account_type,a.type FROM bank_account a JOIN qb_account q ON q.qb_list_id=a.qb_list_id
+      WHERE a.mask=$1 AND a.type IN ('credit','depository') AND a.is_selected AND a.deleted_at IS NULL`, [mask])).rows[0];
+  // tarjeta ↔ CreditCard, banco ↔ Bank: es el mismo par que decide `kind` en `deriveBankCheckKind` y el
+  // request de QB (CreditCardChargeAdd vs CheckAdd); una cuenta cruzada no llega al libro.
+  if (!card || (card.type === "credit" ? card.account_type !== "CreditCard" : card.account_type !== "Bank"))
+    throw new Error(`*${mask}: cuenta no mapeada (${card?.type ?? "?"} → ${card?.account_type ?? "?"}); se espera credit→CreditCard o depository→Bank`);
+  const isCard = card.type === "credit";
   const names = new Map((await pool.query<{ qb_list_id: string; full_name: string }>(`SELECT qb_list_id,full_name FROM qb_account WHERE qb_list_id = ANY($1::text[])`, [Object.values(rules._accounts)])).rows.map((r) => [r.qb_list_id, r.full_name]));
   for (const [k, id] of Object.entries(rules._accounts)) if (!names.has(id)) throw new Error(`cuenta ${k}=${id} no existe`);
   const charges = (await pool.query<{ id: string; day: string; cents: string; name: string; merchant: string | null }>(
@@ -72,7 +83,10 @@ async function main(): Promise<void> {
   }
   const byAccount = new Map<string, { n: number; cents: number }>();
   for (const t of todo) { const s = byAccount.get(t.account) ?? { n: 0, cents: 0 }; s.n += 1; s.cents += Number(t.c.cents); byAccount.set(t.account, s); }
-  console.log(`${card.name} *${mask} · ${from}..${to} · cargos del feed ${charges.length} · ya en el libro ${skipped.length} · a cargar ${todo.length} · sin regla ${unmatched.length}`);
+  const credits = (await pool.query<{ n: string; cents: string }>(
+    `SELECT count(*)::text AS n, COALESCE(sum(round(amount::numeric*100)),0)::text AS cents FROM bank_transaction
+      WHERE account_id=$1 AND status='posted' AND deleted_at IS NULL AND amount::numeric<0 AND transaction_date BETWEEN $2 AND $3`, [card.id, from, to])).rows[0]!;
+  console.log(`${card.name} *${mask} (${isCard ? "tarjeta → card_charge" : number ? "banco → check" : "banco → expense"}) · ${from}..${to} · salidas del feed ${charges.length} · ya en el libro ${skipped.length} · a cargar ${todo.length} · sin regla ${unmatched.length} · créditos del feed (no entran) ${credits.n} ${money(-Number(credits.cents))}`);
   for (const [acct, s] of [...byAccount.entries()].sort((a, b) => b[1].cents - a[1].cents)) console.log(`  ${(names.get(acct) ?? acct).padEnd(58)} ${String(s.n).padStart(4)}  ${money(s.cents).padStart(12)}`);
   if (unmatched.length) {
     console.log("SIN REGLA (agregar al archivo de reglas):");
@@ -86,7 +100,7 @@ async function main(): Promise<void> {
     for (const t of todo) {
       try {
         const check = await createBankCheck(client, {
-          day: t.c.day, bank_account_list_id: card.qb_list_id, number: null, payee_type: "other", payee_name: (t.c.merchant ?? t.c.name).slice(0, 80),
+          day: t.c.day, bank_account_list_id: card.qb_list_id, number: number ?? null, payee_type: "other", payee_name: (t.c.merchant ?? t.c.name).slice(0, 80),
           memo: `feed:${t.c.id}`, to_be_printed: false,
           lines: [{ account_list_id: t.account, amount_cents: BigInt(t.c.cents), memo: t.c.name.slice(0, 200) }],
         }, actor.id);
