@@ -79,3 +79,19 @@ export async function loadPosKnownTxnIds(client: PoolClient): Promise<ReadonlySe
   const { rows } = await client.query<{ t: string }>(KNOWN_TXN_ID_SQL, [[...GL_POSTED_PIPELINE_STEPS]]);
   return new Set(rows.map((r) => r.t));
 }
+
+/**
+ * adopt-qb-bank-documents-20260915: TxnIDs cuyo asiento del libro YA es de un
+ * documento GL del POS (`gl_check` / `gl_transfer` vivos con `entry_id`):
+ * adoptados desde QuickBooks o nativos. Después de la adopción el asiento deja
+ * de ser `qb_import`, así que `postDocumentJournal` no lo frenaría con
+ * `already_posted`: el importador los omite en CUALQUIER fecha
+ * (`classify(..., postedByPos)`).
+ */
+export async function loadPosPostedTxnIds(client: PoolClient): Promise<ReadonlySet<string>> {
+  const { rows } = await client.query<{ t: string }>(
+    `SELECT qb_txn_id AS t FROM gl_check WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL
+     UNION SELECT qb_txn_id FROM gl_transfer WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL`
+  );
+  return new Set(rows.map((r) => r.t));
+}

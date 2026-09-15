@@ -64,6 +64,8 @@ export interface BankTransferDto {
   qb_txn_id: string | null;
   qb_txn_type: string | null;
   qb_synced_at: string | null;
+  /** adopt-qb-bank-documents-20260915: `'adopted'` = nació en QuickBooks y el POS adoptó su TxnID. */
+  qb_source: "adopted" | null;
   created_at: string;
   updated_at: string;
 }
@@ -77,7 +79,7 @@ const COLUMNS = `d.id, d.doc_number, d.day::text AS day, d.from_account_list_id,
   d.to_account_list_id, d.to_snapshot, d.amount_cents::text AS amount_cents,
   d.fee_cents::text AS fee_cents, d.fee_account_list_id, d.fee_account_snapshot, d.memo, d.status, d.entry_id,
   d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason, d.evidence_id,
-  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at`;
+  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at, d.qb_source`;
 
 const toDto = (row: Row): BankTransferDto => ({
   ...row,

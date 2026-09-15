@@ -67,16 +67,23 @@ export function policyFor(txnType: string): ImportPolicy | null {
  * cheque de un refund; si no está enlazado entra desde QB (`qb_only` cuando es
  * un tipo que el POS normalmente produce). Un tipo del POS sin dato de enlace
  * (`knownToPos` undefined) se omite: no contar dos veces vale más que importar
- * de más. Antes del corte entra todo (el replay arranca 2026-04-14).
+ * de más. Antes del corte entra todo (el replay arranca 2026-04-14) — salvo lo
+ * que el POS ya postea con asiento PROPIO (`postedByPos`: documentos GL con
+ * `entry_id`, adoptados o nativos), que se omite en cualquier fecha.
  */
 export function classify(
   txnType: string,
   date: string,
   cutoffDay: string = POS_CUTOFF_DAY,
-  knownToPos?: boolean
+  knownToPos?: boolean,
+  postedByPos?: boolean
 ): ClassifyDecision {
   const policy = policyFor(txnType);
   if (!policy) return { action: "blocked_unknown_type" };
+  // Un documento del POS que ya ES DUEÑO de un asiento (adoptado desde QB, o
+  // creado acá) no entra nunca desde QB, sea la fecha que sea: no hay
+  // `qb_import` que lo frene con `already_posted` (adopt-qb-bank-documents).
+  if (postedByPos === true) return { action: "skip_posted_by_pos", policy };
   if (date > cutoffDay) {
     if (knownToPos === true) return { action: "skip_pos_owned_after_cutoff", policy };
     if (policy === "pos_owned") {

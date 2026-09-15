@@ -63,6 +63,12 @@ export type ClassifyDecision =
   | { action: "import"; policy: ImportPolicy; qb_only?: boolean }
   /** Después del corte el POS ya lo postea (TxnID enlazado): vale para cualquier política. */
   | { action: "skip_pos_owned_after_cutoff"; policy: ImportPolicy }
+  /**
+   * adopt-qb-bank-documents-20260915: el asiento de este TxnID YA pertenece a
+   * un documento del POS (adoptado): se omite en CUALQUIER fecha — re-importarlo
+   * duplicaría el documento porque ya no existe un `qb_import` que lo frene.
+   */
+  | { action: "skip_posted_by_pos"; policy: ImportPolicy }
   | { action: "blocked_unknown_type" };
 
 /** Un documento de QB reconstruido a partir de sus filas. */

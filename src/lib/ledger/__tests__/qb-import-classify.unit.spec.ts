@@ -41,3 +41,19 @@ describe("qb-import classify (regla de no doble conteo)", () => {
     expect(classify("", "2026-02-01")).toEqual({ action: "blocked_unknown_type" });
   });
 });
+
+describe("qb-import classify — documento ADOPTADO por el POS (adopt-qb-bank-documents-20260915)", () => {
+  it("un TxnID cuyo asiento ya pertenece a un documento del POS se omite en CUALQUIER fecha, incluso antes del corte", () => {
+    // enero: antes del corte, sin `postedByPos` entraría desde QB (already_posted por el qb_import)…
+    expect(classify("Check", "2026-01-15", undefined, true)).toEqual({ action: "import", policy: "bank_side" });
+    // …pero después de la adopción el asiento ya no es `qb_import` → re-importarlo DUPLICARÍA el cheque
+    expect(classify("Check", "2026-01-15", undefined, true, true)).toEqual({ action: "skip_posted_by_pos", policy: "bank_side" });
+    expect(classify("Credit Card Charge", "2026-08-02", undefined, false, true)).toEqual({ action: "skip_posted_by_pos", policy: "bank_side" });
+    // un tipo del POS adoptado por vía propia (bill backfilleado) también
+    expect(classify("Bill", "2026-02-01", undefined, true, true)).toEqual({ action: "skip_posted_by_pos", policy: "pos_owned" });
+  });
+  it("sin la marca, nada cambia para lo que ya funcionaba", () => {
+    expect(classify("Check", "2026-05-01", undefined, true, false)).toEqual({ action: "skip_pos_owned_after_cutoff", policy: "bank_side" });
+    expect(classify("Check", "2026-05-01", undefined, false, false)).toEqual({ action: "import", policy: "bank_side" });
+  });
+});

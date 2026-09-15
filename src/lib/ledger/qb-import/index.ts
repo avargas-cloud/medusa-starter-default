@@ -5,7 +5,7 @@ export type { RawReportRet, TotalsMismatch } from "./parse-report";
 export { classify, policyFor, POS_CUTOFF_DAY, POS_OWNED_TYPES, BANK_SIDE_TYPES } from "./classify";
 export { assembleDocuments, MAX_LINES_PER_DOCUMENT } from "./assemble";
 export { loadQbAccountIndex, missingAccounts } from "./accounts";
-export { loadPosKnownTxnIds } from "./pos-links";
+export { loadPosKnownTxnIds, loadPosPostedTxnIds } from "./pos-links";
 export type { QbAccountIndex } from "./accounts";
 export {
   buildGeneralLedgerQbxml,

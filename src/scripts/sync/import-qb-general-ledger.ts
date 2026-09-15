@@ -41,6 +41,7 @@ import {
   classify,
   fetchGeneralLedgerWindow,
   loadPosKnownTxnIds,
+  loadPosPostedTxnIds,
   loadQbAccountIndex,
   missingAccounts,
   parseGeneralLedgerReport,
@@ -114,9 +115,9 @@ if (APPLY) {
   }
 }
 
-type TypeCounter = Record<string, { import: number; import_qb_only: number; skip_after_cutoff: number; blocked: number }>;
+type TypeCounter = Record<string, { import: number; import_qb_only: number; skip_after_cutoff: number; skip_posted_by_pos: number; blocked: number }>;
 const bump = (c: TypeCounter, t: string, k: keyof TypeCounter[string]) => {
-  c[t] = c[t] ?? { import: 0, import_qb_only: 0, skip_after_cutoff: 0, blocked: 0 };
+  c[t] = c[t] ?? { import: 0, import_qb_only: 0, skip_after_cutoff: 0, skip_posted_by_pos: 0, blocked: 0 };
   c[t][k] += 1;
 };
 
@@ -129,7 +130,9 @@ async function main() {
   // Propiedad por IDENTIDAD (docs/QB_GL_IMPORT.md §2): un tipo del POS después del corte se
   // omite sólo si el POS sincronizó ese TxnID; lo hecho directo en QB entra desde QB.
   const known = await loadPosKnownTxnIds(client);
-  console.log(`TxnIDs enlazados a documentos del POS: ${known.size}`);
+  // adopt-qb-bank-documents: documentos GL del POS dueños de su asiento → se omiten en cualquier fecha.
+  const posted = await loadPosPostedTxnIds(client);
+  console.log(`TxnIDs enlazados a documentos del POS: ${known.size} · con asiento propio (adoptados/nativos): ${posted.size}`);
   const byType: TypeCounter = {};
   const blocked: BlockedDocument[] = [];
   const toImport: Array<{ doc: QbGlDocument; policy: ImportPolicy; window: string }> = [];
@@ -164,15 +167,19 @@ async function main() {
       // bloqueado: p. ej. un Credit Memo del POS y su copia voideada del 2026-04-21.
       for (const b of assembled.blocked) {
         // un bloqueado por clave (sin TxnID propio) sólo se puede omitir si el POS conoce su TxnID
-        const decision = classify(b.txn_type, b.date, CUTOFF, known.has(b.key));
-        if (decision.action === "skip_pos_owned_after_cutoff") bump(byType, b.txn_type, "skip_after_cutoff");
+        const decision = classify(b.txn_type, b.date, CUTOFF, known.has(b.key), posted.has(b.key));
+        if (decision.action === "skip_pos_owned_after_cutoff" || decision.action === "skip_posted_by_pos") bump(byType, b.txn_type, "skip_after_cutoff");
         else blocked.push(b);
       }
       for (const doc of assembled.documents) {
-        const decision = classify(doc.txn_type, doc.date, CUTOFF, known.has(doc.txn_id));
+        const decision = classify(doc.txn_type, doc.date, CUTOFF, known.has(doc.txn_id), posted.has(doc.txn_id));
         if (decision.action === "blocked_unknown_type") {
           bump(byType, doc.txn_type, "blocked");
           blocked.push({ key: doc.txn_id, txn_type: doc.txn_type, date: doc.date, reason: "unknown_type", rows: doc.rows.length });
+          continue;
+        }
+        if (decision.action === "skip_posted_by_pos") {
+          bump(byType, doc.txn_type, "skip_posted_by_pos");
           continue;
         }
         if (decision.action === "skip_pos_owned_after_cutoff") {
@@ -291,8 +298,8 @@ async function main() {
 
     console.log("\n════ resumen ════");
     console.log(`ventanas ${windows} (bridge ${fetched}) · filas cero ${zeroRows} · docs voideados ${zeroDocs}`);
-    console.log("por tipo (import / import sólo-QB post-corte / omitidos = el POS los sincronizó / bloqueados):");
-    for (const [t, c] of Object.entries(byType).sort()) console.log(`  ${t.padEnd(22)} ${String(c.import).padStart(5)} ${String(c.import_qb_only).padStart(6)} ${String(c.skip_after_cutoff).padStart(6)} ${String(c.blocked).padStart(5)}`);
+    console.log("por tipo (import / import sólo-QB post-corte / omitidos = el POS los sincronizó / adoptados = asiento propio del POS / bloqueados):");
+    for (const [t, c] of Object.entries(byType).sort()) console.log(`  ${t.padEnd(22)} ${String(c.import).padStart(5)} ${String(c.import_qb_only).padStart(6)} ${String(c.skip_after_cutoff).padStart(6)} ${String(c.skip_posted_by_pos).padStart(7)} ${String(c.blocked).padStart(5)}`);
     console.log(`a importar ${toImport.length} · listos ${ready.length} · bloqueados ${blocked.length}`);
     if (missing.length) console.log(`cuentas sin espejo (${missing.length}): ${missing.join(" | ")}`);
     const reasons = blocked.reduce<Record<string, number>>((acc, b) => ((acc[b.reason] = (acc[b.reason] ?? 0) + 1), acc), {});
