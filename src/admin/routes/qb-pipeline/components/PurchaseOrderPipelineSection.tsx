@@ -40,7 +40,14 @@ type PoStep =
   | "mod_vendor_credit"
   | "void_vendor_credit"
   | "add_bill_payment"
-  | "void_bill_payment";
+  | "void_bill_payment"
+  // vc-apply-qb-20260915: $0 Pay Bills + SetCredit that links a credit to a bill.
+  | "apply_vendor_credit"
+  // gl-docs-to-qb-20260914: checks/expenses, transfers, journal entries, deposits.
+  | "add_gl_document"
+  | "void_gl_document"
+  // qb-import-void-ui-20260915: TxnVoid of a document imported from QuickBooks.
+  | "void_qb_import";
 
 interface PoRow {
   id: string;
@@ -100,6 +107,10 @@ const STEP_ICON: Record<PoStep, string> = {
   void_vendor_credit: "🚫",
   add_bill_payment: "💵",
   void_bill_payment: "🚫",
+  apply_vendor_credit: "🔗",
+  add_gl_document: "🏦",
+  void_gl_document: "🚫",
+  void_qb_import: "🚫",
 };
 
 const STEP_LABEL: Record<PoStep, string> = {
@@ -119,6 +130,10 @@ const STEP_LABEL: Record<PoStep, string> = {
   void_vendor_credit: "Void Credit",
   add_bill_payment: "Bill Payment",
   void_bill_payment: "Void Payment",
+  apply_vendor_credit: "Apply Credit",
+  add_gl_document: "Bank Document",
+  void_gl_document: "Void Bank Document",
+  void_qb_import: "Void QB Import",
 };
 
 type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
@@ -200,7 +215,10 @@ function PipelinePoRow({
     (step === "add_vendor_bill" ||
       step === "add_item_receipt" ||
       step === "add_vendor_credit" ||
-      step === "add_bill_payment") &&
+      step === "add_bill_payment" ||
+      // CheckAdd / CreditCardChargeAdd / DepositAdd / JournalEntryAdd — a real
+      // document each; the route refuses Mark Fixed without a TxnID (409).
+      step === "add_gl_document") &&
     !row.qb_list_id;
 
   const updatedAt =
