@@ -88,11 +88,15 @@ export async function syncBank(
       const counts = await transaction(client, async () => {
         await saveAccounts(client, connectionId, accountResponse.accounts);
         const result = await applyFeedBatch(client, connectionId, batch);
+        // `provider_last_update_at` = cuándo Plaid bajó datos del BANCO (item.status.transactions).
+        // No es `last_successful_sync_at` (cuándo le preguntamos nosotros): con webhook vivo
+        // difieren por horas, y el hub tiene que mostrar la primera para no prometer frescura.
         await client.query(
           `UPDATE bank_connection SET status='active',consent_expiration_time=$2,
           sync_requested_at=CASE WHEN sync_requested_at IS NOT DISTINCT FROM $3::timestamptz THEN NULL ELSE sync_requested_at END,
           refresh_completed_at=CASE WHEN $4::timestamptz IS NOT NULL AND refresh_requested_at <= $4::timestamptz
-            THEN now() ELSE refresh_completed_at END,updated_at=now() WHERE id=$1`,
+            THEN now() ELSE refresh_completed_at END,
+          provider_last_update_at=COALESCE($4::timestamptz,provider_last_update_at),updated_at=now() WHERE id=$1`,
           [
             connectionId,
             nullableString(item.consent_expiration_time),
@@ -133,6 +137,10 @@ export async function syncBank(
   });
 }
 
+/** Recovery interval: a poll of /transactions/sync is free (Plaid bills per Item, not per call);
+ *  the webhook is the primary trigger and this is the net under it. 6 h → 2 h on 2026-09-15. */
+export const BANK_SYNC_RECOVERY_INTERVAL = "2 hours";
+
 /** Recovery polls existing Plaid data; it does not charge a /transactions/refresh per tick. */
 export async function syncPendingBanks(): Promise<void> {
   requireBankingEnabled();
@@ -145,9 +153,9 @@ export async function syncPendingBanks(): Promise<void> {
       AND (c.sync_requested_at IS NOT NULL OR NOT c.historical_sync_complete
         OR (c.refresh_requested_at IS NOT NULL AND
           (c.refresh_completed_at IS NULL OR c.refresh_requested_at>c.refresh_completed_at))
-        OR c.last_successful_sync_at IS NULL OR c.last_successful_sync_at < now()-interval '6 hours')
+        OR c.last_successful_sync_at IS NULL OR c.last_successful_sync_at < now()-$1::interval)
       AND NOT EXISTS(SELECT 1 FROM bank_sync_run s WHERE s.connection_id=c.id AND s.started_at>now()-interval '1 minute')
-    ORDER BY c.sync_requested_at NULLS LAST,c.id LIMIT 3`);
+    ORDER BY c.sync_requested_at NULLS LAST,c.id LIMIT 3`, [BANK_SYNC_RECOVERY_INTERVAL]);
   for (const candidate of candidates.rows) {
     try {
       await syncBank(candidate.id);

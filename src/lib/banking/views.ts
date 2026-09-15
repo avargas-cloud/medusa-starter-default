@@ -17,6 +17,8 @@ export interface BankConnectionView {
   institution_name: string;
   status: string;
   last_synced_at: Date | null;
+  /** Cuándo Plaid bajó datos del banco (item.status.transactions.last_successful_update); null hasta el primer sync que lo guarde. */
+  provider_last_update_at: Date | null;
   last_error: string | null;
   history_complete: boolean;
   pending_disconnect: boolean;
@@ -109,7 +111,7 @@ export async function bankingOverview(
   const [connections, accounts] = await Promise.all([
     pool.query<BankConnectionView>(
       `SELECT id, COALESCE(institution_name, 'Bank connection') AS institution_name,
-              status, last_successful_sync_at AS last_synced_at,
+              status, last_successful_sync_at AS last_synced_at, provider_last_update_at,
               CASE WHEN last_error_code ~ '^[A-Z0-9_]{1,80}$'
                    THEN last_error_code
                    WHEN last_error_code IS NOT NULL THEN 'BANKING_OPERATION_FAILED'
