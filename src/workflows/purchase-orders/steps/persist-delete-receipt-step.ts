@@ -18,11 +18,12 @@
  *
  *   Path B — receipt is QB-synced (qb_item_receipt_list_id IS NOT NULL):
  *     contra-stock + decrement qty_received + recompute PO status, then mark
- *     receipt status='deleted' (text, not enum — no migration needed) and
+ *     receipt status='deleted' (text, not enum — no migration needed), delete
+ *     its LINES (ON DELETE RESTRICT against the PO line — see below) and
  *     ensure qb_item_receipt_pipeline.void_status='waiting'. The existing
  *     qb-item-receipt-poller fires DELETE /api/item-receipts/:txnId to the
- *     QB Desktop bridge; on success it sees status='deleted' and hard-deletes
- *     the receipt (cascade wipes lines + pipeline).
+ *     QB Desktop bridge; on success it marks the pipeline row voided and
+ *     keeps header + pipeline as the audit trail (no hard delete).
  *
  * "Already voided" branch: when called with was_already_voided=true the
  * stock + qty_received recompute is skipped (those mutations happened at
@@ -48,6 +49,8 @@ export interface PersistDeleteReceiptStepInput {
   deleted_by_user_id: string;
   delete_reason: string;
   reversed: ReceiptReversedDelta[];
+  /** All receipt lines with units (stock-applied or not) → qty_received decrement. */
+  uncount: Array<{ po_line_id: string; qty: number }>;
   was_already_voided: boolean;
   /** Authoritative QB TxnID from the route's receipt fetch. Source of truth. */
   qb_item_receipt_list_id: string | null;
@@ -103,11 +106,15 @@ export const persistDeleteReceiptStep = createStep(
       "submitted";
 
     if (!input.was_already_voided) {
-      // Recompute affected PurchaseOrderLine counters from the reversed deltas
+      // Recompute affected PurchaseOrderLine counters from EVERY receipt line
+      // with units — not from the stock deltas. A receipt that never applied
+      // stock (QB backfill) still counted into qty_received when it was
+      // created, so keying this off `reversed` left the PO line "received"
+      // by a dead receipt (PO-0099, 2026-09-15).
       const voidedByPoLineId = new Map<string, number>();
-      for (const r of input.reversed) {
-        const prev = voidedByPoLineId.get(r.po_line_id) ?? 0;
-        voidedByPoLineId.set(r.po_line_id, prev + Math.abs(r.reversed_qty));
+      for (const u of input.uncount) {
+        const prev = voidedByPoLineId.get(u.po_line_id) ?? 0;
+        voidedByPoLineId.set(u.po_line_id, prev + Math.abs(u.qty));
       }
 
       const poLines = (await service.listPurchaseOrderLines(
@@ -243,9 +250,14 @@ export const persistDeleteReceiptStep = createStep(
       );
     }
 
-    // Path B — QB-synced. Tombstone the receipt + ensure pipeline void is
-    // queued so the poller fires DELETE /api/item-receipts/:txnId. The poller
-    // does the final hard-delete when QB confirms.
+    // Path B — QB-synced. Tombstone the receipt HEADER + ensure pipeline void
+    // is queued so the poller fires DELETE /api/item-receipts/:txnId. The
+    // poller keeps header + pipeline row as the audit trail; it does NOT
+    // hard-delete anything. The LINES go now: `purchase_order_receipt_line.
+    // purchase_order_line_id` is ON DELETE RESTRICT, so a tombstoned line
+    // would block deleting its PO line forever (and the route guard would
+    // keep naming a receipt that is already gone). The QB delete only needs
+    // the pipeline row's qb_list_id, never the lines.
     const now = new Date();
     await service.updatePurchaseOrderReceipts([
       {
@@ -257,15 +269,13 @@ export const persistDeleteReceiptStep = createStep(
       },
     ]);
 
-    if (input.reversed.length > 0 && !input.was_already_voided) {
-      // Mirror persist-void: clear stock_applied flags so audit reflects the
-      // reversal even though the rows are about to vanish.
-      await service.updatePurchaseOrderReceiptLines(
-        input.reversed.map((r) => ({
-          id: r.receipt_line_id,
-          stock_applied: false,
-          stock_applied_at: null,
-        }))
+    const tombstoneLines = (await service.listPurchaseOrderReceiptLines(
+      { purchase_order_receipt_id: input.receipt_id },
+      { take: 1000 }
+    )) as unknown as Array<{ id: string }>;
+    if (tombstoneLines.length > 0) {
+      await service.deletePurchaseOrderReceiptLines(
+        tombstoneLines.map((l) => l.id)
       );
     }
 

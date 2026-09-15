@@ -4,7 +4,10 @@
  * Hard-delete a PurchaseOrderReceipt. The receipt row is removed from the
  * database (FK CASCADE wipes lines + qb_item_receipt_pipeline; bills are
  * detached first, never cascaded) and a DELETE request is sent to QuickBooks
- * Desktop to remove the mirror ItemReceipt.
+ * Desktop to remove the mirror ItemReceipt. A QB-synced receipt keeps a
+ * header tombstone (status='deleted') for the pipeline audit trail, but its
+ * LINES are removed right away — they carry an ON DELETE RESTRICT FK to the
+ * PO line, so a lingering line makes the PO line undeletable forever.
  *
  *   1. contraApplyReceiptStockStep  — -qty on inventory_levels (compensable).
  *                                     No-op if was_already_voided=true.
@@ -39,6 +42,11 @@ export interface DeletePoReceiptWorkflowInputLine {
   qty_applied: number;
 }
 
+export interface DeletePoReceiptUncountLine {
+  po_line_id: string;
+  qty: number;
+}
+
 export interface DeletePoReceiptWorkflowInput {
   receipt_id: string;
   po_id: string;
@@ -46,6 +54,11 @@ export interface DeletePoReceiptWorkflowInput {
   delete_reason: string;
   stock_location_id: string;
   lines_to_reverse: DeletePoReceiptWorkflowInputLine[];
+  /**
+   * Every receipt line with units, stock-applied or not. Drives the PO line
+   * `qty_received` decrement; `lines_to_reverse` drives stock only.
+   */
+  lines_to_uncount: DeletePoReceiptUncountLine[];
   was_already_voided: boolean;
   /**
    * Header-level QB TxnID copied straight from the receipt at route time.
@@ -83,6 +96,7 @@ export const deletePurchaseOrderReceiptWorkflow = createWorkflow(
       deleted_by_user_id: data.input.deleted_by_user_id,
       delete_reason: data.input.delete_reason,
       reversed: data.reversed.reversed,
+      uncount: data.input.lines_to_uncount,
       was_already_voided: data.input.was_already_voided,
       qb_item_receipt_list_id: data.input.qb_item_receipt_list_id,
     }));

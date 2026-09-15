@@ -246,6 +246,14 @@ export async function DELETE(
     product_variant_id: string;
     qty: number;
   }> = [];
+  // Units to subtract from PO line `qty_received`. This is EVERY line of the
+  // receipt with units on it, not only the stock-applied ones: a receipt
+  // imported from QB (`stock_applied=false`, the 2026-09 backfill) still
+  // counted its units into the PO line, so deleting it must un-count them
+  // or the line stays "received" by a receipt that no longer exists and can
+  // never be deleted (PO-0099, 2026-09-15). Stock reversal keeps its own
+  // `stock_applied` filter above — that is the only thing the flag gates.
+  let linesToUncount: Array<{ po_line_id: string; qty: number }> = [];
 
   if (!wasAlreadyVoided) {
     const rawLines = (await service.listPurchaseOrderReceiptLines(
@@ -253,6 +261,12 @@ export async function DELETE(
       { take: 1000 }
     )) as unknown as ReceiptLine[];
     const applied = rawLines.filter((l) => l.stock_applied && l.qty_received_now > 0);
+    linesToUncount = rawLines
+      .filter((l) => l.qty_received_now > 0)
+      .map((l) => ({
+        po_line_id: l.purchase_order_line_id,
+        qty: l.qty_received_now,
+      }));
     linesToReverse = applied.map((l) => ({
       receipt_line_id: l.id,
       po_line_id: l.purchase_order_line_id,
@@ -301,6 +315,7 @@ export async function DELETE(
           delete_reason: body.delete_reason ?? "Hard delete by user",
           stock_location_id: receipt.stock_location_id,
           lines_to_reverse: linesToReverse,
+          lines_to_uncount: linesToUncount,
           was_already_voided: wasAlreadyVoided,
           qb_item_receipt_list_id: receipt.qb_item_receipt_list_id,
         },

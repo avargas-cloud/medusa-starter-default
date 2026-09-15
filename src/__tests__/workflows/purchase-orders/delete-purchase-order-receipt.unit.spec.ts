@@ -67,8 +67,15 @@ function buildLine(
 
 function buildInput(
   lineOverrides: Partial<DeletePoReceiptWorkflowInput["lines_to_reverse"][0]>[] = [{}],
-  options: { qb_item_receipt_list_id?: string | null; was_already_voided?: boolean } = {}
+  options: {
+    qb_item_receipt_list_id?: string | null;
+    was_already_voided?: boolean;
+    lines_to_uncount?: DeletePoReceiptWorkflowInput["lines_to_uncount"];
+  } = {}
 ): DeletePoReceiptWorkflowInput {
+  const linesToReverse = lineOverrides.map((o, i) =>
+    buildLine({ receipt_line_id: `rcl-${i + 1}`, inventory_item_id: `inv-${i + 1}`, ...o })
+  );
   return {
     receipt_id: "rec-po-001",
     po_id: "po-001",
@@ -77,9 +84,10 @@ function buildInput(
     stock_location_id: "loc-main",
     was_already_voided: options.was_already_voided ?? false,
     qb_item_receipt_list_id: options.qb_item_receipt_list_id ?? null,
-    lines_to_reverse: lineOverrides.map((o, i) =>
-      buildLine({ receipt_line_id: `rcl-${i + 1}`, inventory_item_id: `inv-${i + 1}`, ...o })
-    ),
+    lines_to_reverse: linesToReverse,
+    lines_to_uncount:
+      options.lines_to_uncount ??
+      linesToReverse.map((l) => ({ po_line_id: l.po_line_id, qty: l.qty_applied })),
   };
 }
 
@@ -166,5 +174,60 @@ describe("deletePurchaseOrderReceiptWorkflow — MeiliSearch sync step", () => {
     runWorkflow(buildInput([{}, {}]));
     expect(mockContraApply).toHaveBeenCalledTimes(1);
     expect(mockPersistDelete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("deletePurchaseOrderReceiptWorkflow — qty_received uncount", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockContraApply.mockReturnValue({ reversed: [] });
+    mockPersistDelete.mockReturnValue({
+      receipt_id: "rec-po-001",
+      hard_deleted: false,
+      qb_delete_queued: true,
+      po_status_after: "submitted",
+      total_units_received: 0,
+    });
+    mockSyncMeili.mockReturnValue({ synced: 0, failed: 0 });
+  });
+
+  // PO-0099 (2026-09-15): a QB-backfilled receipt has stock_applied=false on
+  // every line, so lines_to_reverse is EMPTY. The PO line decrement must not
+  // depend on it, or the line stays "received" by a receipt that is gone.
+  it("hands persist-delete the uncount lines even when nothing is stock-reversed", () => {
+    runWorkflow(
+      buildInput([], {
+        qb_item_receipt_list_id: "1C002C-1775758026",
+        lines_to_uncount: [{ po_line_id: "pol-backfill", qty: 5 }],
+      })
+    );
+    expect(mockContraApply).toHaveBeenCalledWith({ location_id: "loc-main", lines: [] });
+    expect(mockPersistDelete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reversed: [],
+        uncount: [{ po_line_id: "pol-backfill", qty: 5 }],
+      })
+    );
+  });
+
+  it("uncount is the receipt's own list, not derived from the stock deltas", () => {
+    mockContraApply.mockReturnValue({
+      reversed: [
+        { receipt_line_id: "rcl-1", po_line_id: "pol-1", inventory_item_id: "inv-1", reversed_qty: -3 },
+      ],
+    });
+    runWorkflow(
+      buildInput([{ po_line_id: "pol-1", qty_applied: 3 }], {
+        lines_to_uncount: [
+          { po_line_id: "pol-1", qty: 3 },
+          { po_line_id: "pol-nostock", qty: 2 },
+        ],
+      })
+    );
+    const arg = mockPersistDelete.mock.calls[0][0];
+    expect(arg.uncount).toEqual([
+      { po_line_id: "pol-1", qty: 3 },
+      { po_line_id: "pol-nostock", qty: 2 },
+    ]);
   });
 });
