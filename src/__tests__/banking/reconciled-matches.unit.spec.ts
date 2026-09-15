@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
 
 import {
+  CORRECTIONS_SQL,
+  COUNTER_LINES_SQL,
   RECONCILED_MATCHES_SQL,
   reconciledMatchesProjection,
   type ReconciledMatchRow,
@@ -62,12 +64,25 @@ const dbRows: ReconciledMatchRow[] = [
   }),
 ];
 
+// Contralíneas de los asientos (lo que una reclasificación mueve) y JEs que ya corrigieron un match.
+const counterRows = [
+  { line_id: "bjl_9c", entry_id: "bje_9", account_list_id: "acct_exp", account_name: "Dues and Subscriptions",
+    account_type: "Expense", debit_cents: "253039", credit_cents: "0", reclassified_cents: "10000" },
+  { line_id: "bjl_1c", entry_id: "bje_1", account_list_id: "acct_uf", account_name: "Undeposited Funds",
+    account_type: "OtherCurrentAsset", debit_cents: "0", credit_cents: "888063", reclassified_cents: "0" },
+];
+const correctionRows = [
+  { journal_entry_id: "gje_1", number: "JE-0021", day: "2026-09-15", corrects_match_id: "bsm_9", amount_cents: "10000" },
+];
+
 function fakeClient(rows: ReconciledMatchRow[]) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   const client = {
     query: async (sql: string, params: unknown[]) => {
       calls.push({ sql, params });
       const ids = (params?.[0] as string[]) ?? [];
+      if (sql === COUNTER_LINES_SQL) return { rows: counterRows.filter((r) => ids.includes(r.entry_id)) };
+      if (sql === CORRECTIONS_SQL) return { rows: correctionRows.filter((r) => ids.includes(r.corrects_match_id)) };
       return { rows: rows.filter((r) => ids.includes(r.transaction_id)) };
     },
   } as unknown as Pick<PoolClient, "query">;
@@ -81,8 +96,11 @@ describe("reconciledMatchesProjection", () => {
       { id: "btxn_a", reconciled },
       { id: "btxn_b", reconciled },
     ]);
-    expect(calls).toHaveLength(1);
+    // 3 queries per page: matches, then their counter lines and their corrections
+    expect(calls.map((c) => c.sql)).toEqual([RECONCILED_MATCHES_SQL, COUNTER_LINES_SQL, CORRECTIONS_SQL]);
     expect(calls[0]!.params[0]).toEqual(["btxn_a", "btxn_b"]);
+    expect(calls[1]!.params[0]).toEqual(["bje_1", "bje_2", "bje_3", "bje_4", "bje_9"]);
+    expect(calls[2]!.params[0]).toEqual(["bsm_1", "bsm_2", "bsm_3", "bsm_4", "bsm_9"]);
     const a = out[0]!.reconciled!.matches;
     expect(a.map((m) => m.match_id)).toEqual(["bsm_1", "bsm_2", "bsm_3", "bsm_4"]);
     expect(a.reduce((sum, m) => sum + m.amount_cents, 0)).toBe(863635);
@@ -94,6 +112,15 @@ describe("reconciledMatchesProjection", () => {
     const b = out[1]!.reconciled!.matches;
     expect(b).toHaveLength(1);
     expect(b[0]).toMatchObject({ match_id: "bsm_9", doc_label: "Check CHK-0002", payee_name: "Legrand", amount_cents: -253039 });
+    // counter lines ride on the ENTRY (coerced numbers); corrections on the MATCH
+    expect(b[0]!.counter_lines).toEqual([
+      { line_id: "bjl_9c", account_list_id: "acct_exp", account_name: "Dues and Subscriptions", account_type: "Expense",
+        debit_cents: 253039, credit_cents: 0, reclassified_cents: 10000 },
+    ]);
+    expect(b[0]!.corrections).toEqual([{ journal_entry_id: "gje_1", number: "JE-0021", day: "2026-09-15", amount_cents: 10000 }]);
+    expect(a[0]!.counter_lines.map((l) => l.line_id)).toEqual(["bjl_1c"]);
+    expect(a[1]!.counter_lines).toEqual([]);
+    expect(a[0]!.corrections).toEqual([]);
     // los campos de la página no se pierden
     expect(out[0]!.reconciled).toMatchObject(reconciled);
   });
@@ -120,10 +147,11 @@ describe("reconciledMatchesProjection", () => {
     expect(out[1]!.reconciled!.matches.map((m) => m.match_id)).toEqual(["bsm_9"]);
   });
 
-  it("a reconciled row whose matches were removed keeps an empty list, not undefined", async () => {
-    const { client } = fakeClient([]);
+  it("a reconciled row whose matches were removed keeps an empty list, not undefined — and skips the follow-up queries", async () => {
+    const { client, calls } = fakeClient([]);
     const out = await reconciledMatchesProjection(client, [{ id: "btxn_a", reconciled }]);
     expect(out[0]!.reconciled!.matches).toEqual([]);
+    expect(calls).toHaveLength(1);
   });
 
   it("keeps a reversal and its original as two signed entries with unambiguous flags", async () => {
@@ -158,5 +186,10 @@ describe("RECONCILED_MATCHES_SQL", () => {
     expect(RECONCILED_MATCHES_SQL).toMatch(/LEFT JOIN gl_check gc ON/);
     expect(RECONCILED_MATCHES_SQL).toMatch(/source_snapshot->>'name'/);
     expect(RECONCILED_MATCHES_SQL).toMatch(/ORDER BY e\.day,e\.id,m\.id/);
+  });
+  it("counter lines exclude the bank side and count only POSTED reclassifications; corrections only POSTED JEs", () => {
+    expect(COUNTER_LINES_SQL).toMatch(/NOT IN \('Bank','CreditCard'\)/);
+    expect(COUNTER_LINES_SQL).toMatch(/j\.corrects_line_id=l\.id AND j\.status='posted' AND j\.deleted_at IS NULL/);
+    expect(CORRECTIONS_SQL).toMatch(/j\.corrects_match_id=ANY\(\$1::text\[\]\) AND j\.status='posted' AND j\.deleted_at IS NULL/);
   });
 });

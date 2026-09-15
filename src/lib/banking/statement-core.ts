@@ -265,6 +265,27 @@ export async function closeStatement(
     }
   );
 }
+/**
+ * Only the MOST RECENT closed statement of an account can be reopened: the next
+ * statement's opening is this one's closing balance, so reopening July under a
+ * closed August would let the chain drift with no warning (2026-09-15). Month Close
+ * is checked separately by `statementPeriods`.
+ */
+export const LATER_CLOSED_STATEMENT_SQL = `SELECT id,from_day,to_day FROM bank_statement
+  WHERE account_list_id=$1 AND id<>$2 AND status='closed' AND deleted_at IS NULL AND from_day>$3
+  ORDER BY from_day LIMIT 1`;
+export async function assertNoLaterClosedStatement(
+  client: Pick<PoolClient, "query">,
+  statement: { id: string; account_list_id: string; to: string }
+): Promise<void> {
+  const later = await client.query(LATER_CLOSED_STATEMENT_SQL, [
+    statement.account_list_id,
+    statement.id,
+    statement.to,
+  ]);
+  if (later.rowCount)
+    throw new BankingError("BANKING_STATEMENT_LATER_CLOSED", 409);
+}
 export async function reopenStatement(
   id: string,
   actorId: string,
@@ -278,6 +299,7 @@ export async function reopenStatement(
       const old = await statementRow(client, id);
       if (old.status !== "closed" || old.revision !== body.expected_revision)
         throw new BankingError("BANKING_STATEMENT_STALE", 409);
+      await assertNoLaterClosedStatement(client, old);
       await statementPeriods(client, old.from, old.to);
       const history = [
         ...old.history,

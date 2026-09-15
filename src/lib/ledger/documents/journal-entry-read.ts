@@ -57,6 +57,11 @@ export interface JournalEntryDto {
   qb_txn_id: string | null;
   qb_txn_type: string | null;
   qb_synced_at: string | null;
+  /** bankfeed-correct-20260915: a reclassification JE names the entry/line/match it corrects. */
+  corrects_entry_id: string | null;
+  corrects_line_id: string | null;
+  corrects_match_id: string | null;
+  correction_type: string | null;
   lines: JournalEntryLineDto[];
 }
 
@@ -72,7 +77,8 @@ export type LineRow = Omit<
 
 const HEADER_COLUMNS = `d.id, d.number, d.day::text AS day, d.memo, d.status, d.entry_id,
   d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason, d.evidence_id,
-  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at`;
+  d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at,
+  d.corrects_entry_id, d.corrects_line_id, d.corrects_match_id, d.correction_type`;
 
 export async function loadLines(
   client: PoolClient,
