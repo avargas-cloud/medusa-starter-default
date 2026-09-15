@@ -68,9 +68,16 @@ if (!FROM || !TO || !process.env.DATABASE_URL) {
 const PARITY = process.argv.includes("--parity") || process.argv.includes("--parity-strict");
 const PARITY_STRICT = process.argv.includes("--parity-strict");
 /** Kinds del libro que se comparan contra QB: lo importado + lo que el POS postea (nunca la apertura). */
+// El libro ENTERO: desde la adopción (adopt-qb-bank-documents-20260915) los cheques, cargos,
+// traspasos y depósitos de QB ya no son `qb_import` sino `bank_check` / `bank_transfer` /
+// `bank_deposit`, y los asientos manuales `journal_entry` también viajan a QB. Una lista fija
+// que los omita compara QB entero contra medio libro y reporta Δ que no existen (medido el
+// 09/15/2026: "Consulting Services QB 16,776.88 · libro 0.00" con los cheques de nómina
+// adoptados). `opening_balance` y `year_close` quedan afuera: no son documentos de 2026 en QB.
 const LEDGER_PARITY_KINDS = [
   "qb_import", "pos_invoice", "pos_credit_memo", "customer_payment", "rounding_adjustment",
   "po_receipt", "vendor_bill", "vendor_credit", "vendor_bill_payment",
+  "bank_check", "bank_transfer", "bank_deposit", "journal_entry",
 ];
 
 let failures = 0;

@@ -68,6 +68,11 @@ const KNOWN_TXN_ID_SQL = `
     UNION SELECT qb_list_id FROM qb_item_receipt_pipeline
     UNION SELECT qb_txn_id FROM qb_legacy_payment
     UNION SELECT qb_txn_id FROM qb_legacy_so
+    -- arap-parity-20260915: el backfill de ventas (qbsb-prod-20260912) enlaza cobros e invoices
+    -- por METADATA sin fila de pipeline; sin esto el importador posteó 4 cobros y 1 invoice dos
+    -- veces (qb_import + documento del POS) = +3,718.88 en Accounts Receivable.
+    UNION SELECT metadata->>'qb_txn_id' FROM customer_payment WHERE deleted_at IS NULL
+    UNION SELECT metadata->>'qb_txn_id' FROM pos_invoice WHERE deleted_at IS NULL
     UNION SELECT qb_txn_id FROM gl_check
     UNION SELECT qb_txn_id FROM gl_transfer
     UNION SELECT qb_txn_id FROM gl_journal_entry
