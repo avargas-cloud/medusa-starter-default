@@ -17,8 +17,10 @@
  * ── Qué chequea ───────────────────────────────────────────────────────────────
  *   1. store-pos no compara PINes en el navegador
  *   2. store-pos no lee el VALOR del PIN (sólo pregunta si hay uno configurado)
- *   3. toda ruta del backend que hable de PIN usa el helper compartido, no una
+ *   3. toda ruta del backend que hable de PIN usa el GUARD compartido, no una
  *      comparación a mano
+ *   3b. ninguna ruta llama a `verifySupervisorPin` pelado: sin throttle y sin
+ *      el `confirm` de admin, un gate así rechaza siempre a la pantalla
  *   4. las 9 rutas de edición de orden llaman al guard de orden web
  *   4b. las rutas de escritura de dinero llaman al guard, se nombren o no al PIN
  *   4c. el frontend le MANDA el PIN a esas rutas (la falla inversa de 4b)
@@ -113,13 +115,17 @@ if (!posExists) {
   }
 }
 
-// ── 3 · el backend usa el helper compartido, no comparaciones a mano ─────────
-// `assertWebOrderAuthorized` cuenta como helper: envuelve guardSupervisorPin
+// ── 3 · el backend usa el GUARD compartido, no comparaciones a mano ──────────
+// `assertWebOrderAuthorized` cuenta como guard: envuelve guardSupervisorPin
 // con la resolución de origen web. Un archivo que sólo REENVÍA la credencial
 // (post-edit-sync la pasa a sus self-calls) es legítimo únicamente si él mismo
 // está gateado por uno de estos — si sólo la nombra sin gate, sigue fallando.
-const SHARED =
-  /verifySupervisorPin|guardSupervisorPin|assertWebOrderAuthorized/;
+//
+// `verifySupervisorPin` NO cuenta (2026-09-15): es el sí/no crudo que el guard
+// envuelve. Cinco rutas lo usaban directo y por eso rechazaban el `confirm`
+// literal de un admin —que sólo el guard acepta— y verificaban sin límite de
+// intentos. Ver 3b, que lo prohíbe por LLAMADA en todo el backend.
+const SHARED = /guardSupervisorPin|assertWebOrderAuthorized/;
 /** Una comparación cruda contra la metadata es exactamente lo que no debe pasar. */
 const HAND_ROLLED =
   /metadata(\?)?\.\[?["']?pos_supervisor_pin["']?\]?\s*(===|!==|==)/;
@@ -147,9 +153,9 @@ for (const abs of walk(BACKEND_SRC, [".ts"])) {
   }
   if (!SHARED.test(src)) {
     failures.push(
-      `src/${rel} habla de supervisor_pin pero no usa el helper compartido. ` +
-        `Si es una ruta gateada, tiene que verificar; si sólo reenvía el campo, ` +
-        `no debería nombrarlo.`
+      `src/${rel} habla de supervisor_pin pero no usa guardSupervisorPin() ni ` +
+        `assertWebOrderAuthorized(). Si es una ruta gateada, tiene que ` +
+        `verificar por el guard; si sólo reenvía el campo, no debería nombrarlo.`
     );
   }
   if (/(console\.[a-z]+|logger\.[a-z]+)\([^)]*supervisor_?[Pp]in/.test(src)) {
@@ -159,7 +165,50 @@ for (const abs of walk(BACKEND_SRC, [".ts"])) {
     );
   }
 }
-notes.push(`✓ ${routesWithPin} archivo(s) de backend con PIN, todos por el helper`);
+notes.push(`✓ ${routesWithPin} archivo(s) de backend con PIN, todos por el guard`);
+
+// ── 3b · nadie llama a verifySupervisorPin pelado ────────────────────────────
+/**
+ * `verifySupervisorPin` contesta sí/no y nada más. Todo lo que hace al PIN una
+ * autorización real vive en `guardSupervisorPin`: el límite de intentos (sin
+ * él, 4 dígitos son 10.000 intentos en segundos) y el `confirm` literal que un
+ * admin escribe en vez del PIN. Una ruta que salta el guard pierde las dos
+ * cosas a la vez, y la segunda se nota como función ROTA: SupervisorPinModal
+ * manda `confirm` para un admin, la comparación cruda lo toma como PIN
+ * equivocado, y la pantalla contesta 403 (o reabre el modal en loop) sin que
+ * nada en verde lo diga. Así vivieron el PATCH de un bill con wire confirmado,
+ * el edit de un credit memo de otro día, el revert y el confirm-cleanup de un
+ * refund, y el cambio del PIN mismo.
+ *
+ * Se barre TODO el backend, no sólo los archivos que nombran `supervisor_pin`:
+ * el cambio de PIN pasaba `current_pin`, y un chequeo que dependa de que el
+ * archivo se acuerde de nombrar la clave es el defecto que 4b ya documentó.
+ * Por LLAMADA y sin imports ni comentarios, como los demás.
+ */
+const BARE_VERIFY_CALL = /\bverifySupervisorPin\s*\(/;
+let bareVerifyCalls = 0;
+for (const abs of walk(BACKEND_SRC, [".ts"])) {
+  const rel = path.relative(BACKEND_SRC, abs);
+  if (rel.startsWith("scripts") || rel.startsWith("__tests__")) continue;
+  // Los dos dueños: el que lo define y el guard que lo envuelve.
+  if (rel.startsWith(path.join("lib", "pos"))) continue;
+  const bodyNoImports = stripComments(fs.readFileSync(abs, "utf8"))
+    .split("\n")
+    .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
+    .join("\n");
+  if (BARE_VERIFY_CALL.test(bodyNoImports)) {
+    bareVerifyCalls++;
+    failures.push(
+      `src/${rel} llama a verifySupervisorPin() directo. Usar ` +
+        `guardSupervisorPin(): sin él no hay límite de intentos y el ` +
+        `\`confirm\` de un admin cuenta como PIN equivocado — la pantalla ` +
+        `recibe 403 siempre y quema el throttle del operador.`
+    );
+  }
+}
+if (bareVerifyCalls === 0) {
+  notes.push("✓ ninguna ruta llama a verifySupervisorPin() pelado");
+}
 
 // ── 4 · las 9 rutas de edición de orden llaman al guard de orden web ────────
 const ORDER_EDIT_ROUTES = [
@@ -358,6 +407,20 @@ const MUST_GATE_ROUTES: {
     rel: "api/admin/banking/connections/[id]/disconnect/route.ts",
     what: "desconecta el banco y corta las actualizaciones automáticas",
   },
+  // Revertir un refund devuelve la plata al cliente como crédito usable y
+  // toca QB (TxnDel del $0 apply + TxnVoid del check); confirm-qb-cleanup es
+  // la ATESTACIÓN de que el contador ya limpió QB a mano y completa ese mismo
+  // revert. `assertAccounting` dice QUIÉN; el PIN dice que alguien lo
+  // autorizó. Un solo callsite: `components/pos/RevertRefundModal.tsx`, por
+  // body.
+  {
+    rel: "api/admin/finance/qb-refunds/[id]/revert/route.ts",
+    what: "revierte un refund registrado y devuelve el dinero como crédito",
+  },
+  {
+    rel: "api/admin/finance/qb-refunds/[id]/confirm-qb-cleanup/route.ts",
+    what: "completa un revert atestando que QuickBooks ya se limpió a mano",
+  },
   {
     rel: "api/admin/reports/sales/revenue-baseline/route.ts",
     what:
@@ -384,7 +447,8 @@ for (const { rel, what } of MUST_GATE_ROUTES) {
     .split("\n")
     .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
     .join("\n");
-  if (!/(verifySupervisorPin|guardSupervisorPin|assertWebOrderAuthorized)\s*\(/.test(bodyNoImports)) {
+  // `verifySupervisorPin` no alcanza (ver 3b): el gate es el guard.
+  if (!/(guardSupervisorPin|assertWebOrderAuthorized)\s*\(/.test(bodyNoImports)) {
     failures.push(
       `${rel} ${what} y no llama a guardSupervisorPin(). Como todo cajero es un ` +
         `usuario admin, sin el gate cualquier token válido ejecuta la operación ` +

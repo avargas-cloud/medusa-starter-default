@@ -1,6 +1,11 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../lib/pos/verify-supervisor-pin";
 
 /**
  * El ÚNICO camino legítimo para cambiar el PIN de supervisor.
@@ -28,6 +33,13 @@ import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
  *   y revisable.
  * - Se audita QUIÉN y CUÁNDO en `store.metadata.pos_supervisor_pin_audit`. Eso
  *   no es secreto: es exactamente lo que hacía falta y no había.
+ * - El PIN anterior pasa por `guardSupervisorPin`, no por la comparación
+ *   pelada: es lo único que cuenta intentos (adivinar el PIN actual por ACÁ
+ *   era la única superficie sin throttle) y lo único que acepta el `confirm`
+ *   literal de un admin. Un admin ya autoriza cualquier operación con esa
+ *   palabra, así que poder rotar el PIN con ella no le da nada nuevo — pero
+ *   la auditoría deja `authorized_via` para que un cambio sin PIN anterior sea
+ *   distinguible de uno con él.
  */
 
 /** Mínimo razonable: un PIN de 3 dígitos se adivina a mano. */
@@ -110,15 +122,20 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     existing !== undefined && existing !== null && String(existing).length > 0;
 
   // El corazón del arreglo: el PIN anterior se verifica ACÁ, no en el navegador.
+  let authorizedVia: "pin" | "admin-confirmation" | "bootstrap" = "bootstrap";
   if (hasExisting) {
-    const ok = await verifySupervisorPin(knex, current_pin);
-    if (!ok) {
-      // El mensaje no dice qué se esperaba ni cuántos dígitos tiene.
-      return res.status(403).json({
-        error: "PIN de supervisor inválido",
-        code: "INVALID_SUPERVISOR_PIN",
-      });
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: knex as unknown as PinConn,
+      pin: current_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      // El mensaje del guard no dice qué se esperaba ni cuántos dígitos tiene.
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
     }
+    authorizedVia = guard.via;
     if (String(existing) === nextPin) {
       return res.status(400).json({
         error: "El PIN nuevo es igual al actual",
@@ -138,6 +155,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     changed_at: new Date().toISOString(),
     changed_by: actor,
     was_bootstrap: !hasExisting,
+    authorized_via: authorizedVia,
     previous: previousAudit ?? null,
   };
 

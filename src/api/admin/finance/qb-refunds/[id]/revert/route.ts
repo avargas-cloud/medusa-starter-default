@@ -8,7 +8,13 @@ import {
   skipOpenRefundPipelineRows,
 } from "../../../../../../lib/finance/revert-refund";
 import { isTreasuryDayLocked } from "../../../../../../lib/finance/treasury-lock";
-import { verifySupervisorPin } from "../../../../../../lib/pos/verify-supervisor-pin";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../../lib/pos/verify-supervisor-pin";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import {
   accessFailure,
@@ -43,16 +49,22 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return accessFailure(res, error);
   }
   const id = req.params.id as string;
-  const { supervisor_pin, reason } = (req.body ?? {}) as {
-    supervisor_pin?: string;
-    reason?: string;
-  };
+  const { reason } = (req.body ?? {}) as { reason?: string };
 
-  const knex = req.scope.resolve("__pg_connection__") as any;
-  if (!(await verifySupervisorPin(knex, supervisor_pin))) {
-    return res
-      .status(403)
-      .json({ error: "Invalid supervisor PIN", code: "INVALID_PIN" });
+  // Shared guard, not the bare compare: it is the only thing that throttles
+  // guesses and the only thing that accepts an admin's literal `confirm`
+  // (`via: "admin-confirmation"`), which is what the accountant's modal sends
+  // for an admin. Header `x-supervisor-pin` or body `supervisor_pin`.
+  const knex = req.scope.resolve("__pg_connection__") as PinConn;
+  const guard = await guardSupervisorPin({
+    scope: req.scope as unknown as { resolve: (k: string) => unknown },
+    db: knex,
+    pin: extractSupervisorPin(req),
+    actorId: resolveActorId(req),
+  });
+  if (!guard.ok) {
+    const { status, body } = pinGuardResponse(guard);
+    return res.status(status).json(body);
   }
   if (!reason || !reason.trim()) {
     return res

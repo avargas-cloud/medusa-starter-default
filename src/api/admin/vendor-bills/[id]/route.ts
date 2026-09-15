@@ -29,7 +29,13 @@ import {
   resolveRemainingPoQuantities,
   type RemainingPoLine,
 } from "../../../../lib/purchase-orders/po-billed-quantities";
-import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../lib/pos/verify-supervisor-pin";
 import { isUsableQbListId } from "../../../../lib/purchase-orders/vendor-bill-vendor-identity";
 import {
   deriveClearingDrift,
@@ -1361,14 +1367,35 @@ export async function PATCH(
     // audited (see the adjustment record written after the line writes below).
     onConfirmedWire = confirmedWire.rows.length > 0;
     if (onConfirmedWire) {
-      const pinOk = await verifySupervisorPin(knex, patch.supervisor_pin);
-      if (!pinOk) {
+      // Through the shared guard, not the bare compare: the guard is the only
+      // thing that throttles guesses and the only thing that accepts an
+      // admin's literal `confirm` (`via: "admin-confirmation"`), which is what
+      // SupervisorPinModal sends for an admin. With the bare compare that word
+      // was just a wrong PIN, so the screen re-opened the prompt in a loop.
+      //
+      // The 409 `on_confirmed_wire_pin_required` contract is kept for missing
+      // AND wrong PIN — it is what the page keys on to open the prompt. A
+      // lockout is different: re-prompting a locked user would only burn
+      // more of the window, so it surfaces as the guard's 429.
+      const pin = extractSupervisorPin(req);
+      const guard = await guardSupervisorPin({
+        scope: req.scope as unknown as { resolve: (k: string) => unknown },
+        db: knex as unknown as PinConn,
+        pin,
+        actorId: resolveActorId(req),
+      });
+      if (!guard.ok) {
+        if (guard.reason === "locked") {
+          const { status, body } = pinGuardResponse(guard);
+          return res.status(status).json(body);
+        }
         return res.status(409).json({
-          error: patch.supervisor_pin
+          error: pin
             ? "Invalid supervisor PIN"
             : "This bill is already paid by a confirmed wire. A supervisor PIN is required to adjust it — the difference becomes a credit against the agent.",
           code: "on_confirmed_wire_pin_required",
           requires_supervisor_pin: true,
+          attempts_left: guard.attemptsLeft,
         });
       }
     }

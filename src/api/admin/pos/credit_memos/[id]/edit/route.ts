@@ -4,7 +4,13 @@ import { Modules } from "@medusajs/utils";
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
-import { verifySupervisorPin } from "../../../../../../lib/pos/verify-supervisor-pin";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../../lib/pos/verify-supervisor-pin";
 import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import {
   buildQbOrderDiscountLines,
@@ -111,17 +117,31 @@ export async function PATCH(
     const createdBusinessDay = getBusinessDateString(creditMemo.created_at);
     const todayBusinessDay = getBusinessDateString();
     if (createdBusinessDay !== todayBusinessDay) {
-      const { supervisor_pin } = (req.body ?? {}) as {
-        supervisor_pin?: unknown;
-      };
-      const pinOk = await verifySupervisorPin(pgConnection, supervisor_pin);
-      if (!pinOk) {
+      // Por el guard compartido, no por la comparación pelada: es el único que
+      // cuenta intentos y el único que acepta el `confirm` literal de un admin
+      // (lo que manda SupervisorPinModal). Sin PIN → SUPERVISOR_PIN_REQUIRED
+      // (useReturn abre el modal con ese código); con PIN equivocado o
+      // bloqueado → el contrato del guard (INVALID_SUPERVISOR_PIN / LOCKED),
+      // que la misma pantalla ya distingue.
+      const pin = extractSupervisorPin(req);
+      if (pin === undefined || pin === null || pin === "") {
         res.status(403).json({
           message:
             "Este credit memo se creó un día anterior — requiere PIN de supervisor para editarse.",
           code: "SUPERVISOR_PIN_REQUIRED",
           created_business_day: createdBusinessDay,
         });
+        return;
+      }
+      const guard = await guardSupervisorPin({
+        scope: req.scope as unknown as { resolve: (k: string) => unknown },
+        db: pgConnection as PinConn,
+        pin,
+        actorId: resolveActorId(req),
+      });
+      if (!guard.ok) {
+        const { status, body } = pinGuardResponse(guard);
+        res.status(status).json({ ...body, created_business_day: createdBusinessDay });
         return;
       }
     }
