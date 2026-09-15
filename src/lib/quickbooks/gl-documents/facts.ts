@@ -406,6 +406,13 @@ interface DepositLineRow {
   amount: string;
   payment_qb_txn_id: string | null;
   payment_status: string | null;
+  /** Surcharge frozen in the line's snapshot when the deposit was recorded ("0.00" when none). */
+  surcharge_amount: string | null;
+  /** Live principal of the receipt in cents (what QuickBooks will pull from the ReceivePayment). */
+  payment_amount_cents: string | null;
+  /** Processor-batch refund: cents refunded and the TxnID of its JE in QuickBooks (the deposit line references it). */
+  refund_amount_cents: string | null;
+  refund_je_txn_id: string | null;
 }
 
 async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
@@ -433,7 +440,11 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
     await db.raw(
       `SELECT l.id, l.payment_id, l.opening_item_id, l.manual_reference, l.manual_description, l.manual_account_list_id, l.amount,
               COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id') AS payment_qb_txn_id,
-              cp.status AS payment_status
+              cp.status AS payment_status,
+              l.payment_snapshot->>'surcharge_amount' AS surcharge_amount,
+              cp.amount::text AS payment_amount_cents,
+              cp.metadata->>'refund_amount' AS refund_amount_cents,
+              (SELECT je.qb_txn_id FROM gl_journal_entry je WHERE je.id = cp.qb->>'refund_journal_entry_id') AS refund_je_txn_id
          FROM bank_deposit_line l
          LEFT JOIN customer_payment cp ON cp.id = l.payment_id
         WHERE l.deposit_id = ? AND l.deleted_at IS NULL
@@ -460,11 +471,41 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
   // the pre-cutover Undeposited Funds line.
   const needsUf = lines.some((l) => !l.payment_id && !l.manual_account_list_id);
   if (needsUf && !uf?.qb_list_id) return structural("gl_account_map has no 'undeposited_funds' entry");
+  // deposit-surcharge-qb-20260915: the POS deposits a card receipt GROSS (amount +
+  // customer surcharge) while the ReceivePayment in QuickBooks carries only the
+  // amount. The surcharge comes from the SNAPSHOT frozen on the line (never
+  // recomputed from the live payment) and goes to QuickBooks as one income line
+  // — `Credit Card Surcharge` — so DepositTotal in QB = the POS document = the
+  // bank credit. Fail closed: a card line without its snapshot, or a gross that
+  // does not equal principal + surcharge, never produces a short deposit.
+  let surchargeCents = 0n;
+  for (const line of lines) {
+    if (!line.payment_id) continue;
+    if (majorToCents(line.amount) < 0n) {
+      // Refund netted by the processor: the line must be exactly −refund_amount; QuickBooks pulls it from the JE.
+      if (line.refund_amount_cents === null || majorToCents(line.amount) !== -BigInt(line.refund_amount_cents.split(".")[0]!))
+        return structural(`deposit line ${line.id} (${line.amount}) is not the refund of payment ${line.payment_id}`);
+      continue;
+    }
+    if (line.surcharge_amount === null) return structural(`deposit line ${line.id} has no surcharge snapshot`);
+    const lineSurcharge = majorToCents(line.surcharge_amount);
+    // The line must be exactly what QuickBooks will reconstruct: principal (ReceivePayment) + surcharge (income line).
+    if (line.payment_amount_cents !== null && majorToCents(line.amount) !== BigInt(line.payment_amount_cents.split(".")[0]!) + lineSurcharge) {
+      return structural(`deposit line ${line.id} (${line.amount}) is not principal ${line.payment_amount_cents} + surcharge ${line.surcharge_amount}`);
+    }
+    surchargeCents += lineSurcharge;
+  }
+  const surchargeAccount =
+    surchargeCents > 0n
+      ? one<{ qb_list_id: string }>(await db.raw(`SELECT qb_list_id FROM gl_account_map WHERE key = 'credit_card_surcharge' LIMIT 1`))
+      : null;
+  if (surchargeCents > 0n && !surchargeAccount?.qb_list_id) return structural("gl_account_map has no 'credit_card_surcharge' entry");
 
   const accounts = await resolveAccounts(db, [
     doc.bank_qb_list_id,
     ...(fee > 0n ? [doc.fee_account_list_id!] : []),
     ...(needsUf ? [uf!.qb_list_id] : []),
+    ...(surchargeAccount ? [surchargeAccount.qb_list_id] : []),
     ...lines.flatMap((l) => (l.manual_account_list_id ? [l.manual_account_list_id] : [])),
   ]);
   if (!accounts.ok) return structural(accounts.reason);
@@ -472,7 +513,11 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
   const blocking: string[] = [];
   const depositLines: DepositLineInput[] = [];
   for (const line of lines) {
-    if (line.payment_id) {
+    if (line.payment_id && majorToCents(line.amount) < 0n) {
+      // Processor-batch refund → the JE (Dr AR / Cr UF) is the negative item in QuickBooks.
+      if (!line.refund_je_txn_id) blocking.push(line.payment_id);
+      else depositLines.push({ paymentTxnId: line.refund_je_txn_id });
+    } else if (line.payment_id) {
       if (!line.payment_qb_txn_id) blocking.push(line.payment_id);
       else depositLines.push({ paymentTxnId: line.payment_qb_txn_id });
     } else {
@@ -485,6 +530,13 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
   }
   if (blocking.length > 0) {
     return transient(`waiting on QuickBooks TxnID for payments: ${blocking.join(", ")}`, blocking);
+  }
+  if (surchargeAccount && surchargeCents > 0n) {
+    depositLines.push({
+      accountListId: surchargeAccount.qb_list_id,
+      amountCents: surchargeCents,
+      memo: `Card surcharge ${doc.deposit_date}`,
+    });
   }
   if (fee > 0n) {
     depositLines.push({

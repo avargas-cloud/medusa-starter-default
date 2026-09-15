@@ -21,6 +21,8 @@ import {
   accessFailure,
   assertAccounting,
 } from "../../../../../lib/pos/access-level";
+import { getDbPool } from "../../../../utils/db-pool";
+import { recordCardRefundJournal } from "../../../../../lib/ledger/documents/card-refund";
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -46,13 +48,18 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   } catch (error) {
     return accessFailure(res, error);
   }
-  const { customer_payment_id, qb_bank_account_id, refund_date } = req.body as {
+  const { customer_payment_id, qb_bank_account_id, refund_date, settlement } = req.body as {
     customer_payment_id: string;
-    qb_bank_account_id: string;
+    qb_bank_account_id?: string;
     refund_date?: string;
+    /** deposit-surcharge-qb-20260915: `processor_batch` = refund de tarjeta que BAMS
+     * netea en el lote (JE Dr AR / Cr UF, línea negativa en Record Deposits);
+     * `check` = cheque real desde un banco (el flujo histórico). */
+    settlement?: "processor_batch" | "check";
   };
+  const settlementMode: "processor_batch" | "check" = settlement ?? (qb_bank_account_id ? "check" : "processor_batch");
 
-  if (!customer_payment_id || !qb_bank_account_id) {
+  if (!customer_payment_id || (settlementMode === "check" && !qb_bank_account_id)) {
     return res
       .status(400)
       .json({ error: "Missing customer_payment_id or qb_bank_account_id" });
@@ -96,6 +103,30 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     | undefined;
   if (paymentQb?.status === "yes" && paymentQb.check_txn_id) {
     return res.status(400).json({ error: "Already synced to QuickBooks" });
+  }
+  if ((paymentQb as { refund_journal_entry_id?: string } | null | undefined)?.refund_journal_entry_id) {
+    return res.status(400).json({ error: "Already recorded as a processor-batch refund (journal entry)" });
+  }
+
+  // ── processor_batch: JE Dr AR / Cr UF, sin cheque (deposit-surcharge-qb-20260915) ──
+  if (settlementMode === "processor_batch") {
+    if (isLegacyRefund)
+      return res.status(400).json({ error: "Legacy refund records cannot be settled in a processor batch" });
+    const client = await getDbPool().connect();
+    try {
+      const result = await recordCardRefundJournal(
+        client,
+        customer_payment_id,
+        refundDate,
+        ((req as AuthenticatedMedusaRequest).auth_context?.actor_id as string | undefined) ?? "unknown-actor"
+      );
+      return res.json({ success: true, settlement: "processor_batch", journal_entry_id: result.journal_entry_id, number: result.number, qb: result.post.qb ?? null });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(409).json({ error: message, details: (error as { details?: unknown }).details ?? null });
+    } finally {
+      client.release();
+    }
   }
 
   // 1a. ANTI-DUPLICATE guard (CheckAdd is NOT idempotent): if the latest

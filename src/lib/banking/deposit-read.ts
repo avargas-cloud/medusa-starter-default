@@ -6,6 +6,7 @@ import { DEPOSIT_SELECT_SQL } from "./deposit-projection";
 import type { BankDeposit } from "./deposit-types";
 import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
+  DEPOSIT_REFUND_ELIGIBLE_SQL,
   NO_DIRECT_RESERVATION_SQL,
   notInOtherDepositSql,
   PAYMENT_FINGERPRINT_SQL,
@@ -51,6 +52,21 @@ export const DEPOSIT_RECEIPT_SQL = `mp.id,mp.display_id,mp.customer_id,
   ${PAYMENT_FINGERPRINT_SQL} AS source_hash,2 AS fingerprint_version,${LEGACY_PAYMENT_FINGERPRINT_SQL} AS legacy_source_hash,
   (COALESCE(mp.surcharge_cents,0)::numeric/100)::numeric(30,2)::text AS surcharge_amount,
   ((mp.amount::numeric+COALESCE(mp.surcharge_cents,0))/100-${depositReservedSql("$2::text")})::numeric(30,2)::text AS available_amount`;
+/**
+ * deposit-surcharge-qb-20260915: a processor-batch card refund as a NEGATIVE
+ * candidate — same columns as `DEPOSIT_RECEIPT_SQL`. `amount` and
+ * `available_amount` are −refund (or 0 when a live deposit already holds it);
+ * `date` = the refund date (`metadata.refund_txn_date`), which is when the
+ * processor nets it. Aliases: mp, c. */
+export const DEPOSIT_REFUND_SQL = `mp.id,mp.display_id,mp.customer_id,
+  COALESCE(NULLIF(c.company_name,''),NULLIF(trim(concat_ws(' ',c.first_name,c.last_name)),''),c.email,c.id) AS customer_name,
+  'card_refund'::text AS method,mp.card_brand,
+  COALESCE(mp.metadata->>'refund_txn_date',to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD')) AS date,
+  'Refund '||COALESCE(mp.reference,'PAY-'||mp.display_id::text) AS reference,
+  (-(mp.metadata->>'refund_amount')::numeric/100)::numeric(30,2)::text AS amount,upper(mp.currency) AS currency,
+  ${PAYMENT_FINGERPRINT_SQL} AS source_hash,2 AS fingerprint_version,${LEGACY_PAYMENT_FINGERPRINT_SQL} AS legacy_source_hash,
+  '0.00'::text AS surcharge_amount,
+  (CASE WHEN ${notInOtherDepositSql("$2::text")} THEN -(mp.metadata->>'refund_amount')::numeric/100 ELSE 0 END)::numeric(30,2)::text AS available_amount`;
 export async function depositAccount(
   client: Reader,
   id: string
@@ -166,8 +182,13 @@ export async function depositCandidates(input: {
     WHERE ${DEPOSIT_PAYMENT_ELIGIBLE_SQL} AND ${NO_DIRECT_RESERVATION_SQL} AND ${notInOtherDepositSql("$2::text")} AND upper(mp.currency)=$1
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date >= $3::date
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date <= (now() AT TIME ZONE 'America/New_York')::date
+    UNION ALL
+    SELECT ${DEPOSIT_REFUND_SQL} FROM customer_payment mp JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
+    WHERE ${DEPOSIT_REFUND_ELIGIBLE_SQL} AND ${notInOtherDepositSql("$2::text")} AND upper(mp.currency)=$1
+      AND COALESCE(mp.metadata->>'refund_txn_date',to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD'))::date >= $3::date
+      AND COALESCE(mp.metadata->>'refund_txn_date',to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD'))::date <= (now() AT TIME ZONE 'America/New_York')::date
   ), normal AS (SELECT id,display_id,customer_id,customer_name,method,card_brand,date,reference,amount,available_amount,surcharge_amount,currency,source_hash,fingerprint_version
-    FROM eligible WHERE available_amount::numeric>0 AND ($4::text='' OR concat_ws(' ',customer_name,reference,display_id::text) ILIKE '%'||$4||'%')),
+    FROM eligible WHERE available_amount::numeric<>0 AND ($4::text='' OR concat_ws(' ',customer_name,reference,display_id::text) ILIKE '%'||$4||'%')),
   matching AS (SELECT id,date,to_jsonb(normal) AS candidate FROM normal),
   page AS (SELECT id,date,candidate FROM matching WHERE $5::text IS NULL OR (date,id) > ($5::text,$6::text))
   SELECT (SELECT COUNT(*)::text FROM matching) AS count,(SELECT COUNT(*)::text FROM page) AS remaining,

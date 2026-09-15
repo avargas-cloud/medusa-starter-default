@@ -1,15 +1,17 @@
 import type { PoolClient } from "pg";
 
 import { DEPOSIT_POSTED_SQL } from "./deposit-projection";
-import { DEPOSIT_RECEIPT_SQL, type DepositCandidate } from "./deposit-read";
+import { DEPOSIT_RECEIPT_SQL, DEPOSIT_REFUND_SQL, type DepositCandidate } from "./deposit-read";
 import {
   depositCents,
   depositMajor,
+  depositSignedCents,
   depositSourceKey,
   type BankDeposit,
 } from "./deposit-types";
 import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
+  DEPOSIT_REFUND_ELIGIBLE_SQL,
   NO_DIRECT_RESERVATION_SQL,
   notInOtherDepositSql,
   matchesPaymentFingerprint,
@@ -52,8 +54,18 @@ export async function validateDepositReceipt(
   amount: string,
   expectedHash: string
 ): Promise<DepositCandidate> {
+  // A NEGATIVE line is a processor-batch refund: it must match the refunded
+  // payment's refund amount exactly (no partial refund lines) and its JE must
+  // be posted; the refund date, not the sale date, is what the window checks.
+  const isRefundLine = amount.startsWith("-");
   const result = await client.query<DepositCandidate & { unreserved: boolean }>(
-    `SELECT ${DEPOSIT_RECEIPT_SQL},
+    isRefundLine
+      ? `SELECT ${DEPOSIT_REFUND_SQL},
+    (${NO_DIRECT_RESERVATION_SQL} AND ${notInOtherDepositSql("$2::text")}) AS unreserved FROM customer_payment mp
+    JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
+    WHERE mp.id=$1 AND ${DEPOSIT_REFUND_ELIGIBLE_SQL} AND upper(mp.currency)=$3
+      AND COALESCE(mp.metadata->>'refund_txn_date',to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD'))::date BETWEEN $4::date AND $5::date FOR SHARE OF mp,c`
+      : `SELECT ${DEPOSIT_RECEIPT_SQL},
     (${NO_DIRECT_RESERVATION_SQL} AND ${notInOtherDepositSql("$2::text")}) AS unreserved FROM customer_payment mp
     JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
     WHERE mp.id=$1 AND ${DEPOSIT_PAYMENT_ELIGIBLE_SQL} AND upper(mp.currency)=$3
@@ -63,6 +75,11 @@ export async function validateDepositReceipt(
   const payment = result.rows[0];
   if (!payment || !matchesPaymentFingerprint(expectedHash, payment))
     throw new BankingError("BANKING_DEPOSIT_SOURCE_STALE", 409);
+  if (isRefundLine) {
+    if (!payment.unreserved || depositSignedCents(amount) !== depositSignedCents(payment.amount))
+      throw new BankingError("BANKING_DEPOSIT_OVER_RESERVED", 409);
+    return payment;
+  }
   if (
     !payment.unreserved ||
     depositCents(payment.available_amount) < depositCents(amount)

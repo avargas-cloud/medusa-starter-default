@@ -62,6 +62,16 @@ const facts = code(read("src/lib/quickbooks/gl-documents/facts.ts"));
 check(/e\.source_kind = 'bank_deposit' AND e\.source_id = d\.id AND e\.kind = 'document'/.test(facts), "facts: el asiento activo del depósito se busca como documento del GL");
 check(/COALESCE\(d\.account_list_id, a\.qb_list_id\) AS bank_qb_list_id/.test(facts) && /line\.manual_account_list_id \?\? uf!\.qb_list_id/.test(facts), "facts: DepositToAccountRef por ListID; línea manual a su cuenta (UF por default)");
 check(/if \(doc\.qb_txn_id\) return structural/.test(facts), "facts: un depósito que ya tiene TxnID (adoptado o confirmado) nunca produce otro DepositAdd");
+// ── 2b · surcharge y refunds (deposit-surcharge-qb-20260915) ─────────────────
+check(/credit_card_surcharge/.test(facts) && /accountListId: surchargeAccount\.qb_list_id/.test(facts) && /is not principal/.test(facts), "facts: el DepositAdd lleva la línea Credit Card Surcharge desde los snapshots y falla cerrado si gross ≠ principal + surcharge");
+check(/refund_je_txn_id/.test(facts) && /paymentTxnId: line\.refund_je_txn_id/.test(facts), "facts: una línea negativa (refund) referencia el TxnID del JE del refund");
+const cardRefund = code(read("src/lib/ledger/documents/card-refund.ts"));
+check(/createJournalEntry\(/.test(cardRefund) && /entity_type: "customer"/.test(cardRefund) && /refund_settlement: "processor_batch"/.test(cardRefund) && /refund_already_a_check/.test(cardRefund), "card-refund: JE Dr AR(cliente)/Cr UF, marca processor_batch, rechaza un refund ya mandado como cheque");
+const syncRoute = code(read("src/api/admin/finance/qb-refunds/sync/route.ts"));
+check(/settlementMode === "processor_batch"/.test(syncRoute) && /recordCardRefundJournal\(/.test(syncRoute), "qb-refunds/sync: processor_batch registra el JE y nunca emite CheckAdd");
+const evidence = code(read("src/lib/banking/payment-evidence.ts"));
+check(/DEPOSIT_REFUND_ELIGIBLE_SQL/.test(evidence) && /function notInOtherDepositSql/.test(evidence), "payment-evidence: refund elegible + un cobro en un depósito vivo no vuelve al picker");
+check(/DEPOSIT_REFUND_SQL/.test(code(read("src/lib/banking/deposit-read.ts"))) && /isRefundLine/.test(code(read("src/lib/banking/deposit-validation.ts"))), "picker/validación: refunds como candidatos negativos, monto exacto");
 const labels = read("src/lib/ledger/reports/doc-labels.ts");
 check(/bank_deposit: "Deposit"/.test(labels), "doc-labels: bank_deposit → Deposit");
 const links = read("src/lib/ledger/qb-import/pos-links.ts");

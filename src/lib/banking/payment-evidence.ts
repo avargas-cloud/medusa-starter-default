@@ -45,6 +45,14 @@ export const DEPOSIT_PAYMENT_ELIGIBLE_SQL =
     "('ach','zelle','check')",
     "('cash','ach','zelle','check','credit_card','debit_card','card')"
   ) + " AND mp.amount::numeric=trunc(mp.amount::numeric)";
+/** deposit-surcharge-qb-20260915: a card refund the processor nets in the batch.
+ * Identity = the refunded receipt (or credit-memo payment); evidence = its
+ * posted JE-#### (Dr AR / Cr UF, `qb.refund_journal_entry_id`). Offered as a
+ * NEGATIVE deposit line for `metadata.refund_amount`. Alias: mp. */
+export const DEPOSIT_REFUND_ELIGIBLE_SQL = `mp.deleted_at IS NULL AND mp.type<>'refund'
+  AND mp.status IN ('refunded','partial_refunded') AND mp.qb->>'refund_settlement'='processor_batch'
+  AND COALESCE(mp.metadata->>'refund_amount','0')::numeric>0
+  AND EXISTS(SELECT 1 FROM gl_journal_entry je WHERE je.id=mp.qb->>'refund_journal_entry_id' AND je.status='posted')`;
 export const NO_DIRECT_RESERVATION_SQL = `NOT EXISTS(SELECT 1 FROM bank_transaction_review dr
   WHERE dr.matched_payment_id=mp.id AND dr.status<>'excluded' AND dr.deleted_at IS NULL)`;
 export const NO_DEPOSIT_RESERVATION_SQL = `NOT EXISTS(SELECT 1 FROM bank_deposit_line dl

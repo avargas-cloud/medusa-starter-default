@@ -7,6 +7,10 @@ const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 export const depositMoney = z
   .string()
   .regex(/^(?:0|[1-9]\d{0,12})(?:\.\d{1,2})?$/);
+/** A receipt line may be NEGATIVE: a card refund the processor nets in the batch (2026-09-15). */
+export const depositSignedMoney = z
+  .string()
+  .regex(/^-?(?:0|[1-9]\d{0,12})(?:\.\d{1,2})?$/);
 export const depositSaveSchema = z
   .object({
     id: id.optional(),
@@ -26,7 +30,7 @@ export const depositSaveSchema = z
           z
             .object({
               payment_id: id,
-              amount: depositMoney,
+              amount: depositSignedMoney,
               expected_source_hash: z.string().regex(/^[a-f0-9]{32}$/),
             })
             .strict(),
@@ -165,8 +169,9 @@ export function depositTotals(
   for (const line of lines) {
     const amount = depositSignedCents(line.amount);
     if (amount === 0n) throw new BankingError("BANKING_DEPOSIT_AMOUNT_INVALID");
-    // Only an adopted QuickBooks deposit carries a negative line (refund netted in the batch / JE item).
-    if (amount < 0n && !line.manual) throw new BankingError("BANKING_DEPOSIT_AMOUNT_INVALID");
+    // A negative receipt line is a processor-batch refund (validated against the
+    // refunded payment in validateDepositReceipt); a negative manual line only
+    // exists on an adopted QuickBooks deposit.
     gross += amount;
   }
   const feeCents = depositCents(fee);

@@ -161,6 +161,25 @@ async function allocateFromLedger(
     evidence.blockers.push("BANKING_RECEIPT_SOURCE_MISSING");
     return { id: paymentId, hash: "", posting_hash: null, cents };
   }
+  // A NEGATIVE line is a processor-batch refund: its evidence is the posted
+  // JE-#### (Cr Undeposited Funds by the refund) — not the receipt document.
+  if (cents < 0) {
+    const je = (
+      await client.query<{ entry_id: string; source_hash: string; uf_credit: string }>(
+        `SELECT e.id AS entry_id,e.source_hash,l.credit_cents::text AS uf_credit
+      FROM customer_payment mp JOIN gl_journal_entry je ON je.id=mp.qb->>'refund_journal_entry_id' AND je.status='posted'
+      JOIN bank_journal_entry e ON e.source_kind='journal_entry' AND e.source_id=je.id AND e.kind='document' AND e.deleted_at IS NULL
+        AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)
+      JOIN bank_journal_line l ON l.entry_id=e.id AND l.credit_cents>0
+      WHERE mp.id=$1 AND mp.qb->>'refund_settlement'='processor_batch' LIMIT 1`,
+        [paymentId]
+      )
+    ).rows[0];
+    if (!je) evidence.blockers.push("BANKING_RECEIPT_POSTING_REQUIRED");
+    else if (BigInt(je.uf_credit) !== BigInt(-cents)) evidence.blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
+    else evidence.allocations.push({ payment_id: paymentId, receipt_id: null, amount_cents: cents });
+    return { id: paymentId, hash: payment.hash, posting_hash: je?.source_hash ?? null, cents };
+  }
   if (!payment.ok) evidence.blockers.push("BANKING_RECEIPT_SOURCE_UNSUPPORTED");
   if (payment.day > evidence.source.day)
     evidence.blockers.push("BANKING_RECEIPT_TRANSFER_DATE_INVALID");
@@ -353,9 +372,9 @@ export async function depositReceiptSource(
     depositSourceKey(a).localeCompare(depositSourceKey(b))
   )) {
     const cents = Number(depositSignedCents(line.amount));
-    // A negative line only exists on an adopted QuickBooks deposit (refund
-    // netted in the batch) and is always manual; a payment line must be > 0.
-    if (cents === 0 || (cents < 0 && !line.manual)) blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
+    // A negative line is a processor-batch refund (payment line, validated by
+    // allocateFromLedger against its JE) or an adopted QuickBooks item (manual).
+    if (cents === 0) blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
     payments.push(
       line.manual
         ? allocateManual(

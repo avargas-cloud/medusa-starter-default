@@ -79,6 +79,7 @@ async function freeReceipt(client: Client, methods: string[], extraSql = ""): Pr
         AND COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id') IS NOT NULL AND COALESCE(cp.metadata->>'qb_source','') <> 'sales_receipt'
         AND EXISTS (SELECT 1 FROM bank_journal_entry e WHERE e.source_kind='customer_payment' AND e.source_id=cp.id AND e.kind='document' AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))
         AND NOT EXISTS (SELECT 1 FROM bank_statement s WHERE s.account_list_id=d.account_list_id AND s.status='closed' AND d.deposit_date BETWEEN s.from_day AND s.to_day)
+        AND NOT EXISTS (SELECT 1 FROM bank_deposit_line m WHERE m.deposit_id=d.id AND m.payment_snapshot->>'surcharge_merged'='true')
         ${extraSql}
       ORDER BY d.deposit_date DESC LIMIT 1`, [methods])).rows[0];
   if (!held) return;
@@ -111,7 +112,8 @@ async function main(): Promise<void> {
          AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)`)).rows;
     const statementsBefore = (await client.query<{ h: string }>(`SELECT md5(string_agg(id||':'||status||':'||revision||':'||COALESCE(closed_snapshot::text,''), ',' ORDER BY id)) AS h FROM bank_statement`)).rows[0]!.h;
     const snapBefore = await snapshotEntries(client, before.map((r) => r.id));
-    const alreadyAdopted = Number((await client.query<{ n: string }>(`SELECT count(*)::text AS n FROM bank_deposit WHERE created_by='adopt-qb-deposits' AND deleted_at IS NULL`)).rows[0]!.n);
+    // A merged surcharge deposit (merge-surcharge-deposits) is legitimately void: count the live ones.
+    const alreadyAdopted = Number((await client.query<{ n: string }>(`SELECT count(*)::text AS n FROM bank_deposit WHERE created_by='adopt-qb-deposits' AND deleted_at IS NULL AND status<>'void'`)).rows[0]!.n);
     const dry = adopt(["--from", "2026-01-01", "--to", "2026-12-31"]);
     const planned = Number(/plan: (\d+) depósitos adoptables/.exec(dry)?.[1] ?? -1);
     const skipped = Number(/· (\d+) salteados/.exec(dry)?.[1] ?? -1);
@@ -125,7 +127,7 @@ async function main(): Promise<void> {
          count(*) FILTER (WHERE d.number ~ '^DEP-[0-9]{4}$')::text AS numbered,
          count(*) FILTER (WHERE d.qb_txn_id IS NOT NULL AND d.qb_txn_type='Deposit')::text AS synced,
          count(*) FILTER (WHERE d.status='ready')::text AS ready
-       FROM bank_deposit d WHERE d.created_by='adopt-qb-deposits' AND d.deleted_at IS NULL`)).rows[0]!;
+       FROM bank_deposit d WHERE d.created_by='adopt-qb-deposits' AND d.deleted_at IS NULL AND d.status<>'void'`)).rows[0]!;
     assert(Number(after.n) === adoptedN + alreadyAdopted && after.parented === after.n && after.numbered === after.n && after.synced === after.n && after.ready === after.n, "every adopted deposit is parented, numbered DEP-####, synced (TxnID) and ready", JSON.stringify(after));
     const snapAfter = await snapshotEntries(client, before.map((r) => r.id));
     const changed = [...snapBefore].filter(([id, s]) => { const a = snapAfter.get(id); return !a || a.lines !== s.lines || a.matches !== s.matches; });
@@ -134,8 +136,9 @@ async function main(): Promise<void> {
     assert(statementsBefore === statementsAfter, "bank_statement rows untouched (closed periods intact)");
     const sums = (await client.query<{ ok: boolean; n: string }>(
       `SELECT bool_and(d.gross_amount::numeric = (SELECT SUM(l.amount::numeric) FROM bank_deposit_line l WHERE l.deposit_id=d.id AND l.deleted_at IS NULL)
-              AND d.gross_amount::numeric*100 = (SELECT SUM(jl.debit_cents) FROM bank_journal_entry e JOIN bank_journal_line jl ON jl.entry_id=e.id AND jl.account_list_id=d.account_list_id WHERE e.source_kind='bank_deposit' AND e.source_id=d.id)) AS ok,
-              count(*)::text AS n FROM bank_deposit d WHERE d.created_by='adopt-qb-deposits'`)).rows[0]!;
+              AND d.gross_amount::numeric*100 = (SELECT SUM(jl.debit_cents) FROM bank_journal_entry e JOIN bank_journal_line jl ON jl.entry_id=e.id AND jl.account_list_id=d.account_list_id
+                    WHERE e.source_kind='bank_deposit' AND e.source_id=d.id AND e.kind='document' AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))) AS ok,
+              count(*)::text AS n FROM bank_deposit d WHERE d.created_by='adopt-qb-deposits' AND d.status<>'void'`)).rows[0]!;
     assert(sums.ok === true, `Σ lines = gross = the entry's bank debit for all ${sums.n} adopted deposits`);
     const negative = (await client.query<{ n: string }>(`SELECT count(*)::text AS n FROM bank_deposit_line l JOIN bank_deposit d ON d.id=l.deposit_id WHERE d.created_by='adopt-qb-deposits' AND l.amount::numeric<0 AND l.manual_reference IS NOT NULL AND l.payment_id IS NULL`)).rows[0]!.n;
     assert(Number(negative) > 0, `refund lines netted in QuickBooks batches came through as negative MANUAL lines (${negative})`);
@@ -161,7 +164,7 @@ async function main(): Promise<void> {
     const { loadPosKnownTxnIds } = await import("../../lib/ledger/qb-import/pos-links");
     const { classify } = await import("../../lib/ledger/qb-import/classify");
     const known = await loadPosKnownTxnIds(client as never);
-    const adoptedTxns = (await client.query<{ t: string }>(`SELECT qb_txn_id AS t FROM bank_deposit WHERE created_by='adopt-qb-deposits'`)).rows.map((r) => r.t);
+    const adoptedTxns = (await client.query<{ t: string }>(`SELECT qb_txn_id AS t FROM bank_deposit WHERE created_by='adopt-qb-deposits' AND qb_txn_id IS NOT NULL`)).rows.map((r) => r.t);
     assert(adoptedTxns.every((t) => known.has(t)), "importer knows every adopted TxnID (no re-import)");
     assert(classify("Deposit", "2026-06-01", undefined, true).action === "skip_pos_owned_after_cutoff", "classify skips a known Deposit TxnID after the cutoff");
     // El importador no duplica: un Deposit cuyo TxnID adoptamos NO se vuelve a postear como qb_import.
@@ -230,7 +233,7 @@ async function main(): Promise<void> {
           AND EXISTS (SELECT 1 FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='undeposited_funds' WHERE e.source_kind='customer_payment' AND e.source_id=cp.id AND e.kind='document'
                         AND l.debit_cents = cp.amount::numeric + cp.surcharge_cents AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))
           AND NOT EXISTS (SELECT 1 FROM bank_transaction_review dr WHERE dr.matched_payment_id=cp.id AND dr.status<>'excluded' AND dr.deleted_at IS NULL)
-          AND NOT EXISTS (SELECT 1 FROM bank_deposit_line dl WHERE dl.payment_id=cp.id AND dl.deleted_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM bank_deposit_line dl JOIN bank_deposit d ON d.id=dl.deposit_id WHERE dl.payment_id=cp.id AND dl.deleted_at IS NULL AND d.status<>'void')
           AND (cp.received_at AT TIME ZONE 'America/New_York')::date > $1::date
         ORDER BY cp.received_at DESC LIMIT 1`, [closedDay])).rows[0];
     assert(!!card, "a GL-recognised card payment with surcharge after the last closed statement exists", JSON.stringify(card));
@@ -250,6 +253,14 @@ async function main(): Promise<void> {
       const post = await api("POST", `/admin/banking/accounting/deposits/${depId}/post`, { expected_source_hash: acct.json.source_hash, preview_hash: preview.json.preview_hash }, idem());
       const uf = (await client.query<{ c: string }>(`SELECT l.credit_cents::text AS c FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='item_1' WHERE e.source_kind='bank_deposit' AND e.source_id=$1 AND e.kind='document'`, [depId])).rows[0];
       assert(post.status === 200 && uf?.c === String(Number(card.amount) + Number(card.surcharge)), "posted: UF credited for amount + surcharge (cents)", `HTTP ${post.status} uf=${uf?.c} expected=${Number(card.amount) + Number(card.surcharge)}`);
+      // deposit-surcharge-qb-20260915: QuickBooks gets the surcharge as an income line, so DepositTotal = POS gross = bank credit.
+      const addRow = (await client.query<{ payload: { qbxml?: string } }>(`SELECT payload FROM qb_order_pipeline WHERE reference_id=$1 AND step='gl_document_add' ORDER BY created_at DESC LIMIT 1`, [depId])).rows[0];
+      const surchargeAcct = (await client.query<{ id: string }>(`SELECT qb_list_id AS id FROM gl_account_map WHERE key='credit_card_surcharge'`)).rows[0]?.id;
+      const xml = String(addRow?.payload?.qbxml ?? "");
+      const surchargeMajor = (Number(card.surcharge) / 100).toFixed(2);
+      assert(!!surchargeAcct && xml.includes(`<AccountRef><ListID>${surchargeAcct}</ListID></AccountRef>`) && xml.includes(`<Amount>${surchargeMajor}</Amount>`), `DepositAdd carries the surcharge as a Credit Card Surcharge income line (${surchargeMajor})`, xml.slice(0, 260));
+      const amountTags = (xml.match(/<Amount>/g) ?? []).length;
+      assert(amountTags === 1 && xml.includes("<PaymentTxnID>"), "exactly one Amount line (the surcharge) beside the PaymentTxnID line");
       // limpieza: reversa + void del fixture (el asiento y su reversa quedan en el sandbox)
       await api("POST", `/admin/banking/accounting/deposits/${depId}/reverse`, { posting_id: post.json.posting?.id, day, reason: `${PREFIX}cleanup` }, idem());
       const cur = await api("GET", `/admin/banking/deposits/${depId}`);

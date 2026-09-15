@@ -1,5 +1,6 @@
 import {
   DEPOSIT_PAYMENT_ELIGIBLE_SQL,
+  DEPOSIT_REFUND_ELIGIBLE_SQL,
   paymentFingerprintSql,
 } from "./payment-evidence";
 
@@ -32,7 +33,7 @@ export const DEPOSIT_STALE_SQL = `(NOT EXISTS(SELECT 1 FROM bank_deposit_line dl
       WHEN dl.manual_reference IS NOT NULL THEN false
       WHEN dl.opening_item_id IS NOT NULL THEN false
       ELSE mp.id IS NULL
-        OR NOT COALESCE((${DEPOSIT_PAYMENT_ELIGIBLE_SQL}),false) OR upper(mp.currency)<>d.currency
+        OR NOT COALESCE((CASE WHEN dl.amount::numeric<0 THEN (${DEPOSIT_REFUND_ELIGIBLE_SQL}) ELSE (${DEPOSIT_PAYMENT_ELIGIBLE_SQL}) END),false) OR upper(mp.currency)<>d.currency
         OR dl.source_hash IS DISTINCT FROM ${PAYMENT_FINGERPRINT_SQL} END)))`;
 /**
  * record-deposits-gl-20260915: el depósito posteado es un documento del GL

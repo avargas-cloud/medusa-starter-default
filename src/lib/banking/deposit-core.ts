@@ -7,7 +7,7 @@ import {
 } from "./deposit-read";
 import {
   depositMajor,
-  depositCents,
+  depositSignedCents,
   depositSourceKey,
   depositTotals,
   depositSaveSchema,
@@ -166,7 +166,7 @@ export async function saveBankDeposit(
             existing.rows[0]?.id ?? bankId("bdl"),
             id,
             paymentId,
-            depositMajor(depositCents(line.amount)),
+            depositMajor(depositSignedCents(line.amount)),
             payment.source_hash,
             JSON.stringify(payment),
             manualReference,
