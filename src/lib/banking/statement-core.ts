@@ -11,7 +11,7 @@ import {
   reviewHash,
   runReviewCommand,
 } from "./review-common";
-import { BankingError } from "./security";
+import { BankingError, bankingConfig } from "./security";
 import { statementContext, statementSnapshot } from "./statement-read";
 import {
   statementBank,
@@ -34,6 +34,9 @@ export async function statementCapacity(
   table: "bank_statement" | "bank_statement_line" | "bank_statement_match",
   extra = 1
 ): Promise<void> {
+  // Sandbox fixtures (36 statements = 4 accounts × 9 months): the 5th account hit this in production on
+  // 2026-09-15 (BANKING_SANDBOX_CAP_REACHED while reconciling Visa 7704) — production never counts (H1).
+  if (bankingConfig().environment === "production") return;
   const cap = table === "bank_statement" ? 36 : 5000;
   const count = Number(
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- COUNT(*) always returns exactly one row

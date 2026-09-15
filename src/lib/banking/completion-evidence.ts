@@ -7,7 +7,7 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { completionEvidenceSchema } from "./movement-types";
 import { validateReviewAttachment } from "./review-attachments";
 import { runReviewCommand } from "./review-common";
-import { BankingError, requireBankingEnabled } from "./security";
+import { BankingError, bankingConfig, requireBankingEnabled } from "./security";
 import { bankId } from "./store";
 
 export const COMPLETION_EVIDENCE_COLUMNS =
@@ -40,6 +40,8 @@ export async function completionCapacity(
     ].includes(table)
   )
     throw new BankingError("BANKING_CAPACITY_INVALID", 500);
+  // Sandbox fixtures, never a production quota (H1).
+  if (bankingConfig().environment === "production") return;
   const count = await client.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM ${table}`
   );

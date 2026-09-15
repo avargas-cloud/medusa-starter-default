@@ -3,6 +3,9 @@ import { bankingConfig, bankingEnvSql, bankingTokenKey, decryptBankToken, encryp
   requireBankingEnabled, requireBankingSandbox, manualRefreshAllowed, BankingError } from "../../lib/banking/security";
 import { bankingLimits, limitCode } from "../../lib/banking/limits";
 import { assertBankingControl, readBankingControl } from "../../lib/banking/control";
+import { completionCapacity } from "../../lib/banking/completion-evidence";
+import { reviewCapacity } from "../../lib/banking/review-common";
+import { statementCapacity } from "../../lib/banking/statement-core";
 
 const VARS = ["BANKING_MANUAL_REFRESH", "ECOPOWERTECH_ENV", "DATABASE_URL", "BANKING_ENABLED", "BANKING_ENV", "BANKING_EXPECTED_DB_TARGET",
   "PLAID_CLIENT_ID", "PLAID_PRODUCTION_SECRET", "PLAID_SANDBOX_SECRET", "BANKING_WEBHOOK_URL", "BANKING_OAUTH_REDIRECT_URI",
@@ -154,5 +157,45 @@ describe("sandbox target accepts one-DB-per-session clones", () => {
   it.each(["railway", "medusa-prod", "medusaX", "medusa_"])("rejects %s (BANKING_SANDBOX_DATABASE_REQUIRED)", (db) => {
     production({ ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: `postgresql://postgres:sandbox@localhost:5499/${db}` });
     failure(requireBankingSandbox, "BANKING_SANDBOX_DATABASE_REQUIRED");
+  });
+});
+
+// Los topes por tabla son fixtures del sandbox (62 cierres diarios, 36 extractos = 4 cuentas × 9 meses…).
+// El fix H1 (a20ebe82, 2026-09-10) nunca llegó a master y el 2026-09-15 el tope de 36 extractos frenó la
+// conciliación de la 5ª cuenta en PRODUCCIÓN (BANKING_SANDBOX_CAP_REACHED).
+describe("capacity caps are sandbox test fixtures, not production quotas (H1)", () => {
+  const counting = (count: number) => ({
+    query: jest.fn(async () => ({ rows: [{ count: String(count) }] })),
+  }) as unknown as Parameters<typeof reviewCapacity>[0];
+  const sandbox = () => production({ ECOPOWERTECH_ENV: "sandbox", DATABASE_URL: "postgresql://postgres:sandbox@localhost:5499/medusa" });
+
+  it("reviewCapacity keeps the historical cap and code in sandbox, never counts nor blocks in production", async () => {
+    sandbox();
+    await expect(reviewCapacity(counting(62), "bank_day_close", 62)).rejects.toMatchObject({ code: "BANKING_SANDBOX_CAP_REACHED" });
+    await expect(reviewCapacity(counting(61), "bank_day_close", 62)).resolves.toBeUndefined();
+    production();
+    const client = counting(1_000_000);
+    await expect(reviewCapacity(client, "bank_day_close", 62)).resolves.toBeUndefined();
+    expect(client.query).not.toHaveBeenCalled();
+    await expect(reviewCapacity(client, "customer_payment", 62)).rejects.toMatchObject({ code: "BANKING_CAPACITY_INVALID" });
+  });
+  it("statementCapacity: 36 statements block in sandbox, the 37th account-month posts in production", async () => {
+    sandbox();
+    await expect(statementCapacity(counting(36), "bank_statement")).rejects.toMatchObject({ code: "BANKING_SANDBOX_CAP_REACHED" });
+    await expect(statementCapacity(counting(35), "bank_statement")).resolves.toBeUndefined();
+    production();
+    const client = counting(36);
+    await expect(statementCapacity(client, "bank_statement")).resolves.toBeUndefined();
+    await expect(statementCapacity(client, "bank_statement_line", 5000)).resolves.toBeUndefined();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+  it("completionCapacity: same rule, still rejects an unknown table in production", async () => {
+    sandbox();
+    await expect(completionCapacity(counting(100), "bank_movement", 100)).rejects.toMatchObject({ code: "BANKING_SANDBOX_CAP_REACHED" });
+    production();
+    const client = counting(1_000_000);
+    await expect(completionCapacity(client, "bank_movement", 100)).resolves.toBeUndefined();
+    expect(client.query).not.toHaveBeenCalled();
+    await expect(completionCapacity(client, "customer_payment", 100)).rejects.toMatchObject({ code: "BANKING_CAPACITY_INVALID" });
   });
 });
