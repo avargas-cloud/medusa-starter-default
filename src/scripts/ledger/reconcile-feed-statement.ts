@@ -526,36 +526,53 @@ async function main(): Promise<void> {
     allocate(line, best, Math.abs(line.amount_cents));
   }
   // 5c. Sumas: varias líneas del banco del MISMO día = un asiento (ATM $20 + $320 = depósito $340;
-  //     $9.320 + $440 + $20 + $20 = cheque Cash $9.800). Combinaciones de 2 a 4.
-  const combos = <T,>(list: T[], size: number): T[][] => {
-    const out: T[][] = [];
-    const walk = (start: number, acc: T[]): void => {
-      if (acc.length === size) {
-        out.push(acc);
-        return;
-      }
-      for (let i = start; i < list.length; i++) walk(i + 1, [...acc, list[i]!]);
-    };
-    walk(0, []);
-    return out;
-  };
+  //     $9.320 + $440 + $20 + $20 = cheque Cash $9.800). Combinaciones de 2 a 8: QB agrupa los recibos
+  //     de un día de viaje en UN Credit Card Charge con hasta 7 líneas (Visa 7914, 2026-09-15).
   //     Primero las líneas del MISMO día del asiento, después la tolerancia: tres wires a VEETECH
   //     con su fee de $25 cada uno daban dos combinaciones válidas (los $25 son intercambiables)
   //     y "ambiguo" dejaba junio de Wells sin cerrar (2026-09-14).
+  //     Búsqueda por suma con poda (no combinaciones enumeradas): un doc de QB de un día de viaje
+  //     agrupa hasta 7 recibos, y a ±5 días el pool de fees de centavos pasa de 30 líneas —
+  //     C(30,7) no se enumera, pero una DFS ordenada con corte en la 2ª solución sí termina.
+  const subsetSums = (pool_: StatementLine[], target: number, maxSize: number): StatementLine[][] => {
+    const sorted = [...pool_].sort((a, b) => Math.abs(b.amount_cents) - Math.abs(a.amount_cents));
+    const goal = Math.abs(target);
+    const suffix = new Array<number>(sorted.length + 1).fill(0);
+    for (let i = sorted.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1]! + Math.abs(sorted[i]!.amount_cents);
+    const solutions: StatementLine[][] = [];
+    let visits = 0;
+    const walk = (start: number, acc: StatementLine[], sum: number): void => {
+      if (solutions.length > 1 || visits++ > 200_000) return;
+      if (acc.length >= 2 && sum === goal) {
+        solutions.push(acc);
+        return;
+      }
+      if (acc.length === maxSize || sum + suffix[start]! < goal) return;
+      for (let i = start; i < sorted.length; i++) {
+        const next = sum + Math.abs(sorted[i]!.amount_cents);
+        if (next > goal) continue;
+        walk(i + 1, [...acc, sorted[i]!], next);
+      }
+    };
+    walk(0, [], 0);
+    if (visits > 200_000) return [];
+    // Dos soluciones que sólo difieren en CUÁL de dos fees de $0,20 entra son la misma
+    // conciliación (líneas intercambiables): se comparan por multiconjunto de montos.
+    const signature = (sol: StatementLine[]): string => sol.map((l) => l.amount_cents).sort((a, b) => a - b).join(",");
+    return solutions.length === 2 && signature(solutions[0]!) === signature(solutions[1]!) ? [solutions[0]!] : solutions;
+  };
   for (const book of books()) {
     const target = remaining.get(book.id) ?? 0; // con signo, igual que line.amount_cents
     let done = false;
     for (const window of [0, args.toleranceDays]) {
       const pool_ = open().filter((l) => sameSide(book, l) && daysBetween(l.day, book.day) <= window);
-      for (const size of [2, 3, 4]) {
-        const hit = combos(pool_, size).filter((set) => set.reduce((s, l) => s + l.amount_cents, 0) === target);
-        if (hit.length === 1) {
-          for (const l of hit[0]!) allocate(l, book, Math.abs(l.amount_cents));
-          done = true;
-          break;
-        }
+      if (pool_.length < 2 || pool_.length > 40) continue;
+      const hit = subsetSums(pool_, target, 8);
+      if (hit.length === 1) {
+        for (const l of hit[0]!) allocate(l, book, Math.abs(l.amount_cents));
+        done = true;
       }
-      if (done) break;
+      if (done || hit.length > 1) break; // ambiguo en la ventana chica: no ampliar
     }
   }
   // Una línea del banco = suma NETA de varios asientos cercanos: la procesadora de tarjetas

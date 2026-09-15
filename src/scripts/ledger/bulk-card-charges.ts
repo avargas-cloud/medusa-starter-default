@@ -48,10 +48,19 @@ async function main(): Promise<void> {
        FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
       WHERE l.account_list_id=$1 AND e.kind='document' AND e.deleted_at IS NULL AND l.credit_cents>0 AND e.source_kind<>'opening_balance'
         AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) AND e.day BETWEEN $2 AND $3`, [card.qb_list_id, from, to])).rows;
+  // Ya CONCILIADO: una línea del feed casada en un extracto (draft o cerrado) ya tiene su asiento —
+  // aunque sea uno agrupado por día que el criterio "mismo monto" no ve (Visa 7914: QB cargó el viaje
+  // a China como un doc por día con N líneas; 2026-09-15). Correr reconcile-feed-statement ANTES.
+  const reconciled = new Set(
+    (await pool.query<{ id: string }>(
+      `SELECT DISTINCT sl.transaction_id AS id FROM bank_statement_line sl JOIN bank_statement_match m ON m.statement_line_id=sl.id AND m.deleted_at IS NULL
+        JOIN bank_statement s ON s.id=sl.statement_id AND s.deleted_at IS NULL WHERE s.bank_account_id=$1 AND sl.deleted_at IS NULL AND sl.transaction_id IS NOT NULL`, [card.id])).rows.map((r) => r.id)
+  );
   const usedBook = new Set<string>();
   const dayDiff = (a: string, b: string): number => Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000);
   const todo: Array<{ c: (typeof charges)[number]; account: string; key: string }> = [], skipped: typeof charges = [], unmatched: typeof charges = [];
   for (const c of charges) {
+    if (reconciled.has(c.id)) { skipped.push(c); continue; }
     const byMemo = book.find((b) => b.memo === `feed:${c.id}`);
     const hit = byMemo ?? book.find((b) => !usedBook.has(b.id) && b.cents === c.cents && dayDiff(b.day, c.day) <= 3);
     if (hit) { usedBook.add(hit.id); skipped.push(c); continue; }
