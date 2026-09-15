@@ -247,17 +247,28 @@ export async function loadDailyInputs(
   const blocks: DailyBlock[] = accounts.map((source) => {
     const { history_complete, last_synced_at, connection_status, ...account } =
       source;
-    const applicable =
-      !account.review_start_date || account.review_start_date <= date;
     const transactions = rows
       .filter((row) => row.account_id === account.id)
       .map((row) => ({
         ...row,
         attachments: attachments.filter((att) => att.transaction_id === row.id),
       }));
+    // Only SELECTED accounts take part in the review. One without a review setup takes
+    // part only on days it has something to review: otherwise a savings account or a
+    // line of credit with no movements ever — or an unselected sibling account of the
+    // same Plaid item — held every single day open with "Set the start date" (2026-09-15).
+    const applicable =
+      account.selected &&
+      (account.review_start_date
+        ? account.review_start_date <= date
+        : transactions.length > 0);
+    // A line matched by statement (closed, or draft with a match) is reviewed by the
+    // book itself: it never gets a review and must not hold the day open (2026-09-15 —
+    // no day could ever close because every reconciled line still counted as pending).
     const pending = transactions.filter(
       (row) =>
         row.status === "posted" &&
+        !row.reconciled &&
         (row.stale ||
           !row.review ||
           !["confirmed", "excluded"].includes(row.review.status))

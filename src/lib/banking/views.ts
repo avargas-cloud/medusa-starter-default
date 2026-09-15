@@ -63,8 +63,9 @@ export interface BankTransactionView {
   review_status: "pending" | "confirmed" | "excluded" | "closed" | "reconciled";
   attachment_count: number;
   day_closed: boolean;
-  /** Set when the transaction is a line of a CLOSED statement (`review_status='reconciled'`). */
-  reconciled: { statement_id: string; from_day: string; to_day: string } | null;
+  /** Set when the transaction is a line of a CLOSED statement, or a MATCHED line of a draft one
+   *  (`review_status='reconciled'`); `status` says which. */
+  reconciled: { statement_id: string; from_day: string; to_day: string; status: "closed" | "draft" } | null;
   stale: boolean;
   opening_clear?: { id: string; item_id: string; reference: string };
 }

@@ -27,13 +27,21 @@ export const REVIEW_STALE_SQL = `(r.id IS NOT NULL AND (r.source_version<>t.sour
  * already explains it, so it must never be confirmed again (the DB guard
  * `bank_statement_assert_open` would refuse anyway — this is what the screen shows
  * instead of "To review", 2026-09-14). Wins over the daily close and over any review.
+ *
+ * A line of a DRAFT statement counts too, but only once it is MATCHED (a draft line
+ * without a match is still "the bank has it and the book does not" → pending): the
+ * month in progress was matched on 09/15 and the screen kept saying "To review" for
+ * all of it, because the label waited for the month-end close (2026-09-15).
+ * `reconciled.status` tells the two apart ('closed' | 'draft'); closed wins.
  */
+const RECONCILED_LINE_SQL = `sl.transaction_id=t.id AND sl.deleted_at IS NULL AND st.deleted_at IS NULL
+  AND (st.status='closed' OR (st.status='draft' AND EXISTS(SELECT 1 FROM bank_statement_match m
+    WHERE m.statement_line_id=sl.id AND m.deleted_at IS NULL)))`;
 export const REVIEW_RECONCILED_SQL = `EXISTS(SELECT 1 FROM bank_statement_line sl
-  JOIN bank_statement st ON st.id=sl.statement_id
-  WHERE sl.transaction_id=t.id AND sl.deleted_at IS NULL AND st.status='closed' AND st.deleted_at IS NULL)`;
-export const REVIEW_RECONCILED_JSON_SQL = `(SELECT jsonb_build_object('statement_id',st.id,'from_day',st.from_day,'to_day',st.to_day)
+  JOIN bank_statement st ON st.id=sl.statement_id WHERE ${RECONCILED_LINE_SQL})`;
+export const REVIEW_RECONCILED_JSON_SQL = `(SELECT jsonb_build_object('statement_id',st.id,'from_day',st.from_day,'to_day',st.to_day,'status',st.status)
   FROM bank_statement_line sl JOIN bank_statement st ON st.id=sl.statement_id
-  WHERE sl.transaction_id=t.id AND sl.deleted_at IS NULL AND st.status='closed' AND st.deleted_at IS NULL LIMIT 1)`;
+  WHERE ${RECONCILED_LINE_SQL} ORDER BY (st.status='closed') DESC LIMIT 1)`;
 export const REVIEW_STATUS_SQL = `CASE WHEN ${REVIEW_RECONCILED_SQL} THEN 'reconciled'
   WHEN dc.status='closed' THEN 'closed'
   WHEN ${REVIEW_STALE_SQL} THEN 'pending'
