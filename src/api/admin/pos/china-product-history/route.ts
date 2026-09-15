@@ -19,7 +19,9 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
  */
 
 const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
-const STORE_EPOCH = "2026-04-14T00:00:00.000Z";
+// "All" has no lower bound — see product-history/route.ts: the 2026-04-14
+// floor hid every document the QB backfill brought in before that date.
+const ALL_TIME_START = "1970-01-01T00:00:00.000Z";
 
 type HistoryPeriod = "all" | "this_year" | "last_year";
 type RawConnection = {
@@ -45,7 +47,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   const targetYear = period === "last_year" ? currentYear - 1 : currentYear;
   const periodStart =
     period === "all"
-      ? STORE_EPOCH
+      ? ALL_TIME_START
       : new Date(Date.UTC(targetYear, 0, 1)).toISOString();
   const periodEnd =
     period === "all"

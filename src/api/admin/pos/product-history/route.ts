@@ -6,8 +6,11 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 const MIAMI_LOCATION_ID = "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
 
-// Oldest record in store-pos. "All" history starts here, never before.
-const STORE_EPOCH = "2026-04-14T00:00:00.000Z";
+// "All" has NO lower bound. It used to start at 2026-04-14 (the oldest
+// store-pos record at the time), but the QB sales backfill of 2026-09-12
+// brought invoices from 2025-12, credit memos from 2025-06 and PO receipts
+// from 2026-01-01 — so "All" was showing LESS than "This Year".
+const ALL_TIME_START = "1970-01-01T00:00:00.000Z";
 const FAR_FUTURE = "2999-01-01T00:00:00.000Z";
 
 type HistoryPeriod = "all" | "this_year" | "last_year";
@@ -42,7 +45,7 @@ export async function GET(
   // for "all"/current-year (open-ended → up to now).
   const periodStart =
     period === "all"
-      ? STORE_EPOCH
+      ? ALL_TIME_START
       : new Date(Date.UTC(targetYear, 0, 1)).toISOString();
   const periodEnd =
     period === "all"
