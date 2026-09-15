@@ -321,7 +321,7 @@ export async function depositReceiptSource(
   if (
     gross > 999999999999 ||
     gross !== net + fee ||
-    net <= 0 ||
+    net < 0 ||
     fee < 0 ||
     !deposit.lines.length ||
     deposit.lines.length > 100 ||

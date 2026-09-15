@@ -113,7 +113,7 @@ async function planOne(client: PoolClient, entry: EntryRow, ret: DepositRet | un
   const qbLines = linesOf(ret);
   if (!qbLines.length) return { entry, reason: "no lines" };
   const total = cents(ret.DepositTotal);
-  if (total <= 0n) return { entry, reason: "non_positive_total (reversa hecha como Deposit)" };
+  if (total < 0n) return { entry, reason: "negative_total (reversa hecha como Deposit)" };
   if (qbLines.some((l) => cents(l.Amount) === 0n)) return { entry, reason: "zero_line" };
   // El asiento importado debita la cuenta destino por el DepositTotal (neto de
   // líneas negativas); `amount_cents` del asiento es Σ débitos, que incluye
@@ -122,6 +122,7 @@ async function planOne(client: PoolClient, entry: EntryRow, ret: DepositRet | un
     `SELECT COALESCE(SUM(l.debit_cents),0)::text AS c FROM bank_journal_line l WHERE l.entry_id=$1 AND l.account_list_id=$2`, [entry.id, target]
   )).rows[0]!.c;
   if (BigInt(bank) !== total) return { entry, reason: `ledger_total_mismatch bank_line=${bank} qb=${total}` };
+  if (total === 0n && qbLines.length < 2) return { entry, reason: "zero_total_single_line" };
   const account_id = (await client.query<{ id: string }>(`SELECT id FROM bank_account WHERE qb_list_id=$1 AND deleted_at IS NULL ORDER BY is_selected DESC LIMIT 1`, [target])).rows[0]?.id ?? null;
 
   const lines: PlannedLine[] = [];

@@ -163,12 +163,15 @@ export function depositTotals(
   }
   let gross = 0n;
   for (const line of lines) {
-    const amount = depositCents(line.amount);
-    if (amount <= 0n) throw new BankingError("BANKING_DEPOSIT_AMOUNT_INVALID");
+    const amount = depositSignedCents(line.amount);
+    if (amount === 0n) throw new BankingError("BANKING_DEPOSIT_AMOUNT_INVALID");
+    // Only an adopted QuickBooks deposit carries a negative line (refund netted in the batch / JE item).
+    if (amount < 0n && !line.manual) throw new BankingError("BANKING_DEPOSIT_AMOUNT_INVALID");
     gross += amount;
   }
   const feeCents = depositCents(fee);
-  if (gross <= feeCents) throw new BankingError("BANKING_DEPOSIT_NET_INVALID");
+  // v4: gross 0 (dos líneas que se anulan, como un Make Deposits de $0) es válido; una comisión exige neto > 0.
+  if (gross < 0n || (feeCents > 0n && gross <= feeCents)) throw new BankingError("BANKING_DEPOSIT_NET_INVALID");
   return {
     gross_amount: depositMajor(gross),
     fee_amount: depositMajor(feeCents),

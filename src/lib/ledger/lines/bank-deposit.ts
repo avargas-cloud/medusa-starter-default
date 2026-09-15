@@ -64,9 +64,10 @@ export function buildBankDepositLines(input: BankDepositInput): LedgerLine[] {
   });
 
   const feeCents = fee?.amount_cents ?? 0n;
-  if (gross <= 0n)
-    throw new LedgerError("GL_SOURCE_INVALID", { reason: "gross_not_positive", gross: gross.toString() });
-  if (feeCents < 0n || feeCents >= gross)
+  // v4: gross 0 = un Make Deposits de $0 (dos ítems de UF que se anulan); nunca negativo.
+  if (gross < 0n)
+    throw new LedgerError("GL_SOURCE_INVALID", { reason: "gross_negative", gross: gross.toString() });
+  if (feeCents < 0n || (feeCents > 0n && feeCents >= gross))
     throw new LedgerError("GL_SOURCE_INVALID", {
       reason: "fee_out_of_range",
       fee: feeCents.toString(),
@@ -80,11 +81,14 @@ export function buildBankDepositLines(input: BankDepositInput): LedgerLine[] {
       credit_cents: 0n,
       memo: fee.memo ?? undefined,
     });
-  out.unshift({
-    role: "bank_account",
-    account: bankAccount,
-    debit_cents: gross - feeCents,
-    credit_cents: 0n,
-  });
+  // Sin neto no hay línea de banco (el motor rechaza líneas en cero); las
+  // líneas de origen ya se balancean entre sí.
+  if (gross - feeCents > 0n)
+    out.unshift({
+      role: "bank_account",
+      account: bankAccount,
+      debit_cents: gross - feeCents,
+      credit_cents: 0n,
+    });
   return out;
 }

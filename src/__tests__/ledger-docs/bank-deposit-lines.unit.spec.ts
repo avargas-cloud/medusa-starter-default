@@ -52,6 +52,19 @@ describe("buildBankDepositLines (Make Deposits)", () => {
     expect(sumDebits(lines)).toBe(sumCredits(lines));
   });
 
+  it("a $0 deposit (two UF items that cancel, like a Make Deposits of $0) has no bank line and balances", () => {
+    const lines = buildBankDepositLines({
+      bankAccount: bank,
+      lines: [
+        { account: uf, amount_cents: 31_586n, memo: "Payment 3520 · TIGO" },
+        { account: uf, amount_cents: -31_586n, memo: "QB JournalEntry JE-0006" },
+      ],
+    });
+    expect(lines.map((l) => l.role)).toEqual(["item_1", "item_2"]);
+    expect(sumDebits(lines)).toBe(31_586n);
+    expect(sumDebits(lines)).toBe(sumCredits(lines));
+  });
+
   it("deposits into an OtherCurrentAsset (Cash on Hand) are allowed; other types are not", () => {
     expect(() => buildBankDepositLines({ bankAccount: cashOnHand, lines: [{ account: uf, amount_cents: 100n }] })).not.toThrow();
     expect(() => buildBankDepositLines({ bankAccount: fees, lines: [{ account: uf, amount_cents: 100n }] })).toThrow("GL_SOURCE_INVALID");

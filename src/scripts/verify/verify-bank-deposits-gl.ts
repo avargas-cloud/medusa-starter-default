@@ -40,7 +40,8 @@ const doc = code(read("src/lib/ledger/documents/bank-deposit.ts"));
 check(/source_kind:\s*"bank_deposit"/.test(doc) && /postDocumentJournal\(/.test(doc) && /reverseDocumentJournal\(/.test(doc), "documento: postea/reversa por el motor del GL con source_kind bank_deposit");
 check(/depositSignedCents\(/.test(doc) && !/centsFromNumeric\(/.test(doc), "documento: los montos en dólares del depósito se convierten con depositSignedCents (centsFromNumeric los truncaba)");
 const lines = code(read("src/lib/ledger/lines/bank-deposit.ts"));
-check(/debit_cents: line\.amount_cents < 0n \? -line\.amount_cents : 0n/.test(lines) && /gross <= 0n/.test(lines), "lines: una línea negativa debita; el gross tiene que ser > 0");
+check(/debit_cents: line\.amount_cents < 0n \? -line\.amount_cents : 0n/.test(lines) && /gross < 0n/.test(lines) && /if \(gross - feeCents > 0n\)/.test(lines), "lines: una línea negativa debita; gross ≥ 0 (un $0 es un Make Deposits válido) y sin neto no hay línea de banco");
+check(/gross_amount::numeric >= 0::numeric/.test(read("src/migrations/1789510000000-GlBankDepositsZero.ts")), "migración v4: gross/net >= 0");
 const core = code(read("src/lib/banking/receipts-core.ts"));
 check(/if \(kind === "deposit"\) \{[\s\S]*postBankDepositDocument\(/.test(core), "receipts-core: el kind deposit postea por postBankDepositDocument");
 check(!/kind === "deposit" \? id : null/.test(core), "receipts-core: ya no escribe un asiento Banking-local con deposit_id");
@@ -74,7 +75,7 @@ check(/DISABLE TRIGGER bank_journal_entry_immutable/.test(adopt) && /ENABLE TRIG
 check(/SET LOCAL lock_timeout/.test(adopt) && /await client\.query\("BEGIN"\)/.test(adopt) && /ROLLBACK/.test(adopt), "adopción: lote en UNA transacción con lock_timeout y rollback");
 check(/NOT EXISTS \(SELECT 1 FROM bank_deposit d WHERE d\.qb_txn_id=e\.source_id/.test(adopt), "adopción: idempotente por TxnID");
 check(/argv\.includes\("--apply"\)/.test(adopt) && /dry-run/.test(adopt), "adopción: dry-run por default, --apply explícito");
-check(/if \(total <= 0n\) return \{ entry, reason:/.test(adopt) && /BigInt\(bank\) !== total/.test(adopt), "adopción: salta totales ≤ 0 y asientos cuya línea de banco no coincide con QB");
+check(/if \(total < 0n\) return \{ entry, reason:/.test(adopt) && /BigInt\(bank\) !== total/.test(adopt), "adopción: salta totales negativos y asientos cuya línea de banco no coincide con QB (el $0 se adopta)");
 check(/VALUES \(\$1,1,'ready',/.test(adopt) && /qb_txn_id,qb_txn_type,qb_edit_sequence,qb_synced_at\)/.test(adopt), "adopción: el depósito nace ready con su TxnID/EditSequence estampados");
 check(/async function revertOne\(/.test(adopt), "adopción: --revert existe (compensación)");
 const e2e = read("src/scripts/tests/e2e-gl-documents-qb-sandbox.ts");
