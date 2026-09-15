@@ -46,7 +46,7 @@ function toAccount(row: MapRow): LedgerAccount {
  * `opening_balance`, así que un ambiente sin esa fila sembrada no rompe los
  * documentos existentes — la key es opcional para todo lo demás.
  */
-async function loadAccountMapByKeys(
+export async function loadAccountMapByKeys(
   client: PoolClient,
   keys: readonly string[]
 ): Promise<Record<string, LedgerAccount>> {

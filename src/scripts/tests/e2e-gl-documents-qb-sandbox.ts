@@ -8,7 +8,7 @@
  *   2. gl_check (tarjeta, vendor real)  → CreditCardChargeAddRq → confirmed
  *   3. gl_transfer sin fee / con fee    → JournalEntryAddRq 2 / 3 líneas
  *   4. gl_journal_entry                 → JournalEntryAddRq
- *   5. bank_deposit (cobro + manual + fee) → DepositAddRq con PaymentTxnID; reverse → TxnVoid Deposit
+ *   5. bank_deposit (cobro + manual UF + fee) → documento GL → DepositAddRq con PaymentTxnID; reverse → TxnVoid Deposit
  *   6. void de un cheque confirmado     → TxnVoidRq Check → qb_txn_id limpio
  *   7. carrera void-in-flight: se anula ENTRE el submit y el confirm → el confirm encola el void
  *   8. void antes de despachar          → el ADD queda `skipped`, sin fila de void
@@ -239,7 +239,7 @@ async function main(): Promise<void> {
     // ── 1 · gl_check gasto, payee libre ────────────────────────────────────
     console.log("\n── 1. gl_check (expense, payee 'other') → CheckAddRq");
     const c1 = await api("POST", "/admin/accounting/checks", {
-      day: "2026-06-30", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber",
+      day: "2026-09-10", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber",
       memo: `${PREFIX}uber · viaje`, lines: [{ account_list_id: BANK_FEES, amount_cents: 615, memo: "ride" }], post: true,
     });
     assert(c1.status === 201 && c1.json.check?.status === "posted", "check created + posted", `HTTP ${c1.status}`);
@@ -263,7 +263,7 @@ async function main(): Promise<void> {
       `SELECT id, qb_list_id, full_name FROM qb_vendor WHERE deleted_at IS NULL AND qb_list_id NOT LIKE 'pending_%' AND qb_list_id IS NOT NULL ORDER BY id LIMIT 1`
     )).rows[0]!;
     const c2 = await api("POST", "/admin/accounting/checks", {
-      day: "2026-06-26", bank_account_list_id: VISA_7704, number: "AUTH-9", payee_type: "vendor", payee_id: vendor.id, payee_name: vendor.full_name,
+      day: "2026-09-06", bank_account_list_id: VISA_7704, number: "AUTH-9", payee_type: "vendor", payee_id: vendor.id, payee_name: vendor.full_name,
       memo: `${PREFIX}badudi`, lines: [{ account_list_id: BANK_FEES, amount_cents: 945 }], post: true,
     });
     const check2 = c2.json.check?.id as string;
@@ -307,7 +307,7 @@ async function main(): Promise<void> {
     txnIdsSeen.push(rj.qb_txn_id!);
 
     // ── 5 · deposit ────────────────────────────────────────────────────────
-    console.log("\n── 5. bank_deposit: la lane está cableada; el posteo contable upstream está BLOQUEADO en Banking (hallazgo)");
+    console.log("\n── 5. bank_deposit → GL document → DepositAddRq (PaymentTxnID + manual line + fee) → reverse → TxnVoid");
     const { accountId } = await seedSandboxBank(client);
     // Un cobro que el LIBRO ya reconoce (asiento customer_payment activo), con
     // TxnID en QB y procedencia que Banking admite (no sales receipt, no
@@ -330,60 +330,62 @@ async function main(): Promise<void> {
     const cands = await api("GET", `/admin/banking/deposit-candidates?account_id=${accountId}&q=${pick?.display_id ?? ""}`);
     const candidate = (cands.json.candidates ?? []).find((c: any) => c.display_id === pick?.display_id);
     assert(!!candidate, "Banking offers it as a deposit candidate", JSON.stringify(cands.json).slice(0, 160));
-    let depositId: string | null = null;
     if (candidate) {
-      // Sin línea MANUAL a propósito: el trigger `bank_opening_deposit_guard`
-      // (Migration20260909060000, vivo en prod) trata toda línea sin payment_id
-      // como consumo de partida de apertura → BANKING_OPENING_CONSUMPTION_INVALID.
+      // record-deposits-gl-20260915: la línea MANUAL (pre-cutover, contra
+      // Undeposited Funds) vuelve — el CHECK y el guard de partidas ya la admiten.
       const save = await api("POST", "/admin/banking/deposits", {
         expected_revision: 0, account_id: accountId, date: "2026-09-14", reference: `${PREFIX}dep`, memo: "e2e deposit",
         fee_amount: "1.25", fee_account_list_id: BANK_FEES, fee_reference: "processor",
-        lines: [{ payment_id: candidate.id, amount: candidate.amount, expected_source_hash: candidate.source_hash }],
+        lines: [
+          { payment_id: candidate.id, amount: candidate.amount, expected_source_hash: candidate.source_hash },
+          { payment_id: null, manual: true, reference: `${PREFIX}precut`, description: "pre-cutover check", amount: "40.00" },
+        ],
       }, idem());
-      depositId = save.json.deposit?.id ?? null;
-      assert(save.status === 200 && !!depositId, "deposit saved (draft)", `HTTP ${save.status} ${JSON.stringify(save.json).slice(0, 160)}`);
+      const depositId: string = save.json.deposit?.id ?? "";
+      assert(save.status === 200 && !!depositId, "deposit saved (draft) with a payment line AND a manual UF line", `HTTP ${save.status} ${JSON.stringify(save.json).slice(0, 160)}`);
+      assert(/^DEP-\d{4}$/.test(String(save.json.deposit?.number)) && save.json.deposit?.account_list_id === PETTY, "deposit carries its DEP-#### number and the deposit-to ListID", `${save.json.deposit?.number} ${save.json.deposit?.account_list_id}`);
       const ready = await api("POST", `/admin/banking/deposits/${depositId}/ready`, { expected_revision: save.json.deposit.revision, expected_source_hash: save.json.deposit.source_hash }, idem());
-      assert(ready.status === 200 && ready.json.deposit?.status === "ready", "deposit ready", `HTTP ${ready.status}`);
-      assert((await rowsFor(client, depositId!, "gl_document_add")).length === 0, "READY does not enqueue: only the ledger posting does");
-      // HALLAZGO 2026-09-14 (pre-existente, Banking): "Post to ledger" de un depósito
-      // cuyo cobro reconoció el GL está bloqueado — `receipts-transfer.ts` exige el
-      // posteo de recibo de Banking (BANKING_RECEIPT_POSTING_REQUIRED) y a la vez
-      // marca BANKING_ALREADY_POSTED por el asiento del GL. Es la fase "depósitos
-      // sobre el GL" de docs/BANKING_GL_INTEGRATION_PLAN.md, todavía no hecha. Este
-      // assert DOCUMENTA el bloqueo: cuando Banking lo arregle, se pone rojo y hay
-      // que extender esta sección al posteo real + DepositAdd + reverse/void.
+      assert(ready.status === 200 && ready.json.deposit?.status === "ready", "deposit ready", `HTTP ${ready.status} ${JSON.stringify(ready.json).slice(0, 120)}`);
+      assert((await rowsFor(client, depositId, "gl_document_add")).length === 0, "READY does not enqueue: only the ledger posting does");
       const acct = await api("GET", `/admin/banking/accounting/deposits/${depositId}`);
-      const blockers: string[] = acct.json.blockers ?? [];
-      assert(
-        acct.json.eligible === false && blockers.includes("BANKING_ALREADY_POSTED") && blockers.includes("BANKING_RECEIPT_POSTING_REQUIRED"),
-        "KNOWN UPSTREAM BLOCKER: Banking cannot post a deposit of a GL-recognised payment (fix = Banking-on-GL deposits phase)",
-        JSON.stringify(blockers)
-      );
-      // Lo que SÍ es de esta lane se prueba sobre la misma fila real, simulando el
-      // asiento de depósito activo que Banking todavía no puede escribir: facts →
-      // DepositAddRq con el PaymentTxnID real, la cuenta mapeada y el fee negativo.
-      const stubDb = {
-        raw: async (sql: string, b: unknown[] = []) => {
-          if (sql.includes("AS accounting_entry_id")) {
-            sql = sql.replace(/\(SELECT e\.id FROM bank_journal_entry e[\s\S]*?LIMIT 1\) AS accounting_entry_id/, "'bje_simulated' AS accounting_entry_id");
-          }
-          let i = 0;
-          const r = await client.query(sql.replace(/\?/g, () => `$${++i}`), b);
-          return { rows: r.rows };
-        },
-      };
-      const dfacts = await loadGlDocumentAddFacts(stubDb, "bank_deposit", depositId!);
-      const dx = dfacts.ready ? dfacts.qbxml : "";
-      assert(dfacts.ready && dfacts.qbTxnType === "Deposit" && dx.includes(`<DepositToAccountRef><ListID>${PETTY}</ListID>`), "facts build a DepositAdd into the mapped bank account", JSON.stringify(dfacts).slice(0, 200));
+      assert(acct.json.eligible === true && (acct.json.blockers ?? []).length === 0, "the GL-recognised payment is eligible evidence (no Banking receipt posting required)", JSON.stringify(acct.json.blockers));
+      const preview = await api("POST", `/admin/banking/accounting/deposits/${depositId}/preview`, { expected_source_hash: acct.json.source_hash, fee_attested: true });
+      const roles = (preview.json.lines ?? []).map((l: any) => `${l.role}:${l.debit_cents}/${l.credit_cents}`);
+      assert(preview.status === 200 && (preview.json.lines ?? []).length === 4, "preview shows the GL document: Dr bank net, Dr fee, Cr payment (UF), Cr manual (UF)", roles.join(" "));
+      const post = await api("POST", `/admin/banking/accounting/deposits/${depositId}/post`, { expected_source_hash: acct.json.source_hash, fee_attested: true, preview_hash: preview.json.preview_hash }, idem());
+      assert(post.status === 200 && post.json.posting && !post.json.posting.reversed_by, "Post to ledger succeeds", `HTTP ${post.status} ${JSON.stringify(post.json).slice(0, 200)}`);
+      const glDoc = (await client.query(`SELECT e.id, e.document_number, e.day, e.amount_cents::text, (SELECT count(*)::int FROM bank_journal_line l WHERE l.entry_id=e.id) AS n
+        FROM bank_journal_entry e WHERE e.source_kind='bank_deposit' AND e.source_id=$1 AND e.kind='document'`, [depositId])).rows[0];
+      assert(!!glDoc && glDoc.n === 4 && glDoc.document_number === save.json.deposit.number && glDoc.amount_cents === String(acct.json.source.amount_cents), "ledger holds ONE bank_deposit document (4 lines, amount = gross in CENTS) numbered like the deposit", JSON.stringify(glDoc));
+      assert(roles.join(" ") === "bank:39078/0 expense:125/0 clearing:0/35203 clearing:0/4000" || roles.some((r: string) => r.startsWith("clearing:0/4000")), "preview amounts are cents of the 2-decimal deposit amounts (not truncated dollars)", roles.join(" "));
+      assert((await client.query(`SELECT 1 FROM bank_journal_entry WHERE deposit_id=$1 OR (kind='deposit' AND source_id=$1)`, [depositId])).rowCount === 0, "no Banking-local deposit entry was written");
+      let drows = await rowsFor(client, depositId, "gl_document_add");
+      assert(drows.length === 1 && drows[0]!.status === "pending" && drows[0]!.reference_type === "bank_deposit", "posting enqueued exactly one gl_document_add(bank_deposit)");
+      const dx = String(drows[0]!.payload?.qbxml ?? "");
+      assert(dx.includes(`<DepositToAccountRef><ListID>${PETTY}</ListID>`), "DepositAdd into the deposit-to account", dx.slice(0, 200));
       assert(dx.includes(`<DepositLineAdd><PaymentTxnID>${pick.txn}</PaymentTxnID></DepositLineAdd>`), "payment line references the payment's real QuickBooks TxnID", `txn=${pick.txn}`);
+      assert(dx.includes(`<AccountRef><ListID>${UF}</ListID></AccountRef><Memo>pre-cutover check</Memo><Amount>40.00</Amount>`), "manual line goes to Undeposited Funds with its memo and amount");
       assert(dx.includes(`<AccountRef><ListID>${BANK_FEES}</ListID></AccountRef><Memo>Fee processor</Memo><Amount>-1.25</Amount>`), "fee is a negative line to the fee account");
-      assert(!dx.includes("<Amount>") || (dx.match(/<Amount>/g) ?? []).length === 1, "the payment line carries no Amount (QB takes it from Undeposited Funds)");
-      // Y sin el asiento activo, los facts fallan CERRADO (nunca un DepositAdd de un depósito no posteado).
-      const realFacts = await loadGlDocumentAddFacts({ raw: async (sql: string, b: unknown[] = []) => { let i = 0; const r = await client.query(sql.replace(/\?/g, () => `$${++i}`), b); return { rows: r.rows }; } }, "bank_deposit", depositId!);
-      assert(!realFacts.ready && /not posted to the ledger/.test(realFacts.reason), "without an active deposit journal entry the facts refuse (structural)", JSON.stringify(realFacts).slice(0, 160));
-      // Anular el depósito en el POS con el Add jamás enviado → nada que anular en QB.
-      const dvoid = await api("POST", `/admin/banking/deposits/${depositId}/void`, { expected_revision: ready.json.deposit.revision, reason: `${PREFIX}void` }, idem());
-      assert(dvoid.status === 200 && (await rowsFor(client, depositId!)).length === 0, "voiding an un-posted deposit enqueues nothing", `HTTP ${dvoid.status}`);
+      const rd = await dispatchAndConfirm(client, drows[0]!.id);
+      const dlink = await docLink(client, "bank_deposit", depositId);
+      assert(rd.status === "confirmed" && !!rd.qb_txn_id && dlink.qb_txn_id === rd.qb_txn_id && dlink.qb_txn_type === "Deposit", "DepositAdd confirmed; bank_deposit carries qb_txn_id + qb_txn_type=Deposit", JSON.stringify(dlink));
+      txnIdsSeen.push(rd.qb_txn_id!);
+      const listed = await api("GET", `/admin/banking/deposits?q=${PREFIX}dep`);
+      const row = (listed.json.deposits ?? []).find((d: any) => d.id === depositId);
+      assert(!!row && row.accounting_posted === true && row.qb_txn_id === rd.qb_txn_id && row.account_name === "Petty Cash", "Record Deposits lists it posted, synced, with the deposit-to account name", JSON.stringify(row).slice(0, 200));
+      // Reverse → TxnVoid Deposit, y el documento queda sin TxnID.
+      const rev = await api("POST", `/admin/banking/accounting/deposits/${depositId}/reverse`, { posting_id: post.json.posting.id, day: "2026-09-14", reason: `${PREFIX}reverse` }, idem());
+      assert(rev.status === 200 && rev.json.posting?.reversed_by, "reverse of the deposit posting succeeds", `HTTP ${rev.status} ${JSON.stringify(rev.json).slice(0, 160)}`);
+      const vrows = await rowsFor(client, depositId, "gl_document_void");
+      assert(vrows.length === 1 && vrows[0]!.qb_txn_id === rd.qb_txn_id, "reverse enqueued one gl_document_void with the Deposit's TxnID");
+      const rvd = await dispatchAndConfirm(client, vrows[0]!.id);
+      const dlink2 = await docLink(client, "bank_deposit", depositId);
+      assert(rvd.status === "confirmed" && dlink2.qb_txn_id === null, "TxnVoid confirmed; qb_txn_id cleared on the deposit", JSON.stringify(dlink2));
+      assert(lastJournal("TxnVoid")?.qbxml?.includes("<TxnVoidType>Deposit</TxnVoidType>"), "the bridge received TxnVoidRq with TxnVoidType Deposit");
+      // Void del depósito en el POS (ya reversado) → nada más que anular en QB.
+      const cur = await api("GET", `/admin/banking/deposits/${depositId}`);
+      const dvoid = await api("POST", `/admin/banking/deposits/${depositId}/void`, { expected_revision: cur.json.deposit.revision, reason: `${PREFIX}void` }, idem());
+      assert(dvoid.status === 200 && (await rowsFor(client, depositId)).length === 2, "voiding the reversed deposit enqueues nothing new", `HTTP ${dvoid.status}`);
     }
 
     // ── 6 · void de un cheque confirmado ───────────────────────────────────
@@ -399,7 +401,7 @@ async function main(): Promise<void> {
     // ── 7 · carrera void-in-flight ─────────────────────────────────────────
     console.log("\n── 7. void while the Add is in flight (submitted, not yet confirmed)");
     const c7 = await api("POST", "/admin/accounting/checks", {
-      day: "2026-07-01", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Race", memo: `${PREFIX}race`,
+      day: "2026-09-11", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Race", memo: `${PREFIX}race`,
       lines: [{ account_list_id: BANK_FEES, amount_cents: 100 }], post: true,
     });
     const check7 = c7.json.check.id as string;
@@ -420,7 +422,7 @@ async function main(): Promise<void> {
     // ── 8 · void antes de despachar ────────────────────────────────────────
     console.log("\n── 8. void before the Add is dispatched → Add skipped, no void row");
     const c8 = await api("POST", "/admin/accounting/checks", {
-      day: "2026-07-02", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Never", memo: `${PREFIX}never`,
+      day: "2026-09-12", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Never", memo: `${PREFIX}never`,
       lines: [{ account_list_id: BANK_FEES, amount_cents: 100 }], post: true,
     });
     const check8 = c8.json.check.id as string;
@@ -435,7 +437,7 @@ async function main(): Promise<void> {
       [`qbacct_${PREFIX}exp`, `pos_${PREFIX}exp`, `${PREFIX}POS-only expense`]
     );
     const c9 = await api("POST", "/admin/accounting/checks", {
-      day: "2026-07-03", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Local", memo: `${PREFIX}posacct`,
+      day: "2026-09-13", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Local", memo: `${PREFIX}posacct`,
       lines: [{ account_list_id: `pos_${PREFIX}exp`, amount_cents: 100 }], post: true,
     });
     const check9 = c9.json.check?.id as string;
@@ -467,7 +469,7 @@ async function main(): Promise<void> {
     console.log("\n── 11. controls: dead bridge · unknown outcome · QB rejection");
     const mk = async (memo: string): Promise<string> => {
       const c = await api("POST", "/admin/accounting/checks", {
-        day: "2026-07-04", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Ctl", memo: `${PREFIX}${memo}`,
+        day: "2026-09-14", bank_account_list_id: CHASE, payee_type: "other", payee_name: "Ctl", memo: `${PREFIX}${memo}`,
         lines: [{ account_list_id: BANK_FEES, amount_cents: 100 }], post: true,
       });
       return (await rowsFor(client, c.json.check.id, "gl_document_add"))[0]!.id;

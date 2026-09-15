@@ -66,6 +66,9 @@ export type DepositLine = {
   source_type?: "opening_item" | "manual";
   reference?: string;
   description?: string;
+  /** Manual line only: the QuickBooks account the money comes FROM (null = Undeposited Funds). */
+  account_list_id?: string | null;
+  account_name?: string | null;
   payment_display_id: number | null;
   customer_id: string;
   customer_name: string;
@@ -80,9 +83,18 @@ export type DepositLine = {
 };
 export type BankDeposit = {
   id: string;
+  /** `DEP-####`, allocated when the deposit is recorded (2026-09-15). Null only for rows older than that. */
+  number: string | null;
   revision: number;
   status: "draft" | "ready" | "void";
-  account_id: string;
+  /** Plaid account; null for deposits into a QuickBooks account with no feed (Cash Register, Cash on Hand). */
+  account_id: string | null;
+  /** QuickBooks ListID of the deposit-to account (`DepositToAccountRef`). */
+  account_list_id: string | null;
+  account_name: string;
+  /** Set once QuickBooks holds the Deposit (DepositAdd confirmed, or adopted from QB). */
+  qb_txn_id: string | null;
+  qb_synced_at: string | null;
   currency: string;
   date: string;
   reference: string;
@@ -112,8 +124,18 @@ export function depositCents(amount: string): bigint {
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- split(".") siempre devuelve al menos un elemento, `whole` nunca es undefined
   return BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"));
 }
-export const depositMajor = (cents: bigint): string =>
-  `${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
+export const depositMajor = (cents: bigint): string => {
+  const abs = cents < 0n ? -cents : cents;
+  return `${cents < 0n ? "-" : ""}${abs / 100n}.${(abs % 100n).toString().padStart(2, "0")}`;
+};
+/** Like `depositCents` but accepts a leading minus: an adopted QuickBooks
+ * deposit can carry a negative line (card refund netted in the day's batch).
+ * The UI never writes one (`depositMoney` stays unsigned). */
+export function depositSignedCents(amount: string): bigint {
+  const negative = amount.startsWith("-");
+  const cents = depositCents(negative ? amount.slice(1) : amount);
+  return negative ? -cents : cents;
+}
 export function depositSourceKey(line: {
   payment_id?: string | null;
   manual?: boolean;

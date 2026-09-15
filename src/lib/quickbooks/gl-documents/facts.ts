@@ -402,6 +402,7 @@ interface DepositLineRow {
   opening_item_id: string | null;
   manual_reference: string | null;
   manual_description: string | null;
+  manual_account_list_id: string | null;
   amount: string;
   payment_qb_txn_id: string | null;
   payment_status: string | null;
@@ -411,13 +412,15 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
   const doc = one<DepositRow>(
     await db.raw(
       `SELECT d.id, d.status, d.deposit_date, d.reference, d.memo, d.fee_amount, d.fee_account_list_id,
-              d.fee_reference, d.qb_txn_id, a.qb_list_id AS bank_qb_list_id, a.name AS bank_name,
+              d.fee_reference, d.qb_txn_id,
+              COALESCE(d.account_list_id, a.qb_list_id) AS bank_qb_list_id, COALESCE(qa.full_name, a.name) AS bank_name,
               (SELECT e.id FROM bank_journal_entry e
-                WHERE e.deposit_id = d.id AND e.kind = 'deposit' AND e.deleted_at IS NULL
+                WHERE e.source_kind = 'bank_deposit' AND e.source_id = d.id AND e.kind = 'document' AND e.deleted_at IS NULL
                   AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL)
                 ORDER BY e.created_at DESC LIMIT 1) AS accounting_entry_id
          FROM bank_deposit d
          LEFT JOIN bank_account a ON a.id = d.account_id
+         LEFT JOIN qb_account qa ON qa.qb_list_id = COALESCE(d.account_list_id, a.qb_list_id) AND qa.deleted_at IS NULL
         WHERE d.id = ? AND d.deleted_at IS NULL`,
       [id]
     )
@@ -428,7 +431,7 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
 
   const lines = (
     await db.raw(
-      `SELECT l.id, l.payment_id, l.opening_item_id, l.manual_reference, l.manual_description, l.amount,
+      `SELECT l.id, l.payment_id, l.opening_item_id, l.manual_reference, l.manual_description, l.manual_account_list_id, l.amount,
               COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id') AS payment_qb_txn_id,
               cp.status AS payment_status
          FROM bank_deposit_line l
@@ -452,13 +455,17 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
   const uf = one<{ qb_list_id: string }>(
     await db.raw(`SELECT qb_list_id FROM gl_account_map WHERE key = 'undeposited_funds' LIMIT 1`)
   );
-  const needsUf = lines.some((l) => !l.payment_id);
+  // A manual line names the account the money comes FROM (AP for a vendor
+  // refund, Cash Register for cash moved to the bank…); without one it is
+  // the pre-cutover Undeposited Funds line.
+  const needsUf = lines.some((l) => !l.payment_id && !l.manual_account_list_id);
   if (needsUf && !uf?.qb_list_id) return structural("gl_account_map has no 'undeposited_funds' entry");
 
   const accounts = await resolveAccounts(db, [
     doc.bank_qb_list_id,
     ...(fee > 0n ? [doc.fee_account_list_id!] : []),
     ...(needsUf ? [uf!.qb_list_id] : []),
+    ...lines.flatMap((l) => (l.manual_account_list_id ? [l.manual_account_list_id] : [])),
   ]);
   if (!accounts.ok) return structural(accounts.reason);
 
@@ -470,7 +477,7 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
       else depositLines.push({ paymentTxnId: line.payment_qb_txn_id });
     } else {
       depositLines.push({
-        accountListId: uf!.qb_list_id,
+        accountListId: line.manual_account_list_id ?? uf!.qb_list_id,
         amountCents: majorToCents(line.amount),
         memo: line.manual_description || line.manual_reference,
       });

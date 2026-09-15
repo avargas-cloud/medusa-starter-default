@@ -57,6 +57,7 @@ export type LedgerManualSourceKind =
   | "journal_entry"
   | "bank_check"
   | "bank_transfer"
+  | "bank_deposit"
   | "year_close";
 export type LedgerDocumentSourceKind =
   | LedgerSourceKind

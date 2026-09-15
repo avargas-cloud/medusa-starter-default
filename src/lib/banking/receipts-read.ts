@@ -28,7 +28,7 @@ export async function receiptHistory(
 ): Promise<ReceiptJournal[]> {
   return (
     await client.query<ReceiptJournal>(
-      `SELECT e.id,e.kind,e.day,e.amount_cents::float8 AS amount_cents,e.reference,
+      `SELECT e.id,CASE WHEN e.kind='document' THEN $1 ELSE e.kind END AS kind,e.day,e.amount_cents::float8 AS amount_cents,e.reference,
     e.description,e.source_hash,e.reverses_entry_id,e.reason,e.created_at,
     (SELECT id FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) AS reversed_by,(e.source_hash<>$3) AS stale,
     (SELECT jsonb_agg(jsonb_build_object('role',l.role,'account_list_id',l.account_list_id,'account_snapshot',l.account_snapshot,
@@ -36,7 +36,8 @@ export async function receiptHistory(
       'debit_cents',l.debit_cents,'credit_cents',l.credit_cents) ORDER BY l.role)
       FROM bank_journal_line l WHERE l.entry_id=e.id) AS lines
     FROM bank_journal_entry e LEFT JOIN bank_receipt_accounting a ON a.id=e.receipt_id
-    WHERE ($1='receipt' AND a.payment_id=$2) OR ($1='deposit' AND e.deposit_id=$2)
+    WHERE ($1='receipt' AND a.payment_id=$2)
+      OR ($1='deposit' AND e.source_kind='bank_deposit' AND e.source_id=$2 AND e.deleted_at IS NULL)
       OR ($1='payment_match' AND e.transaction_id=$2 AND (e.kind='payment_match' OR
         EXISTS(SELECT 1 FROM bank_journal_entry o WHERE o.id=e.reverses_entry_id AND o.kind='payment_match')))
     ORDER BY e.created_at,e.id`,
@@ -112,7 +113,8 @@ export const listReceiptAccounting = (
     WHERE a.id IS NOT NULL OR (mp.source='pos' AND mp.type='payment' AND mp.method IN ('cash','check','ach','zelle'))`
         : kind === "deposit"
           ? `SELECT id,deposit_date AS day FROM bank_deposit WHERE deleted_at IS NULL
-      UNION SELECT d.id,d.deposit_date AS day FROM bank_deposit d JOIN bank_journal_entry e ON e.deposit_id=d.id`
+      UNION SELECT d.id,d.deposit_date AS day FROM bank_deposit d
+        JOIN bank_journal_entry e ON e.source_kind='bank_deposit' AND e.source_id=d.id`
           : `SELECT t.id,t.transaction_date AS day FROM bank_transaction t JOIN bank_transaction_review r ON r.transaction_id=t.id
         WHERE r.matched_payment_id IS NOT NULL AND r.deleted_at IS NULL
         UNION SELECT t.id,t.transaction_date AS day FROM bank_journal_entry e JOIN bank_transaction t ON t.id=e.transaction_id WHERE e.kind='payment_match'`;

@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 
+import { DEPOSIT_POSTED_SQL } from "./deposit-projection";
 import { DEPOSIT_RECEIPT_SQL, type DepositCandidate } from "./deposit-read";
 import {
   depositCents,
@@ -136,9 +137,7 @@ export async function guardDepositEdit(
   id: string
 ): Promise<void> {
   const posted = await client.query(
-    `SELECT entry.id FROM bank_journal_entry entry
-    WHERE entry.deposit_id=$1 AND entry.kind='deposit'
-      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry reversal WHERE reversal.reverses_entry_id=entry.id) LIMIT 1`,
+    `SELECT 1 FROM bank_deposit d WHERE d.id=$1 AND ${DEPOSIT_POSTED_SQL}`,
     [id]
   );
   if (posted.rowCount)

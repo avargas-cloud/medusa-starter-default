@@ -53,12 +53,13 @@ export const DEPOSIT_RECEIPT_SQL = `mp.id,mp.display_id,mp.customer_id,
 export async function depositAccount(
   client: Reader,
   id: string
-): Promise<{ currency: string; review_start_date: string | null }> {
+): Promise<{ currency: string; review_start_date: string | null; qb_list_id: string | null }> {
   const result = await client.query<{
     currency: string;
     review_start_date: string | null;
+    qb_list_id: string | null;
   }>(
-    `SELECT upper(a.currency) AS currency,a.review_start_date
+    `SELECT upper(a.currency) AS currency,a.review_start_date,a.qb_list_id
     FROM bank_account a JOIN bank_connection bc ON bc.id=a.connection_id WHERE a.id=$1 AND a.deleted_at IS NULL
     AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()} AND a.type='depository' AND a.currency IS NOT NULL`,
     [id]
@@ -74,8 +75,8 @@ export async function loadBankDeposit(
 ): Promise<BankDeposit> {
   const result = await client.query<BankDeposit>(
     `SELECT ${DEPOSIT_SELECT_SQL} FROM bank_deposit d
-    JOIN bank_account a ON a.id=d.account_id JOIN bank_connection bc ON bc.id=a.connection_id
-    WHERE d.id=$1 AND d.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}`,
+    ${DEPOSIT_FROM_JOINS}
+    WHERE d.id=$1 AND d.deleted_at IS NULL AND ${DEPOSIT_ENV_SQL}`,
     [id]
   );
   if (!result.rows[0]) throw new BankingError("BANKING_DEPOSIT_NOT_FOUND", 404);
@@ -87,22 +88,52 @@ export async function readBankDeposit(
   requireBankingEnabled();
   return { deposit: await loadBankDeposit(getDbPool(), id) };
 }
+/**
+ * Page size of Record Deposits. The list carried no LIMIT while it only held
+ * a handful of rows; with the 2026 QuickBooks history adopted (~670) each row
+ * still costs its projection subqueries, so the page is capped and `count`
+ * is the whole matching set (COUNT(*) OVER()).
+ */
+export const DEPOSIT_LIST_LIMIT = 200;
+/** `account_id` may be a Plaid account id OR a QuickBooks ListID (deposits to
+ * "Cash Register"/"Cash on Hand" have no Plaid account). */
+const DEPOSIT_FROM_JOINS = `LEFT JOIN bank_account ba ON ba.id=d.account_id AND ba.deleted_at IS NULL
+    LEFT JOIN bank_connection bc ON bc.id=ba.connection_id AND bc.deleted_at IS NULL
+    LEFT JOIN qb_account qa ON qa.qb_list_id=COALESCE(d.account_list_id,ba.qb_list_id) AND qa.deleted_at IS NULL`;
+const DEPOSIT_ENV_SQL = `(d.account_id IS NULL OR bc.environment=${bankingEnvSql()})`;
 export async function listBankDeposits(input: {
   account_id?: string;
   q?: string;
   status?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
 }): Promise<{ deposits: BankDeposit[]; count: number }> {
   if (!bankingConfig().enabled) return { deposits: [], count: 0 };
   requireBankingEnabled();
-  const result = await getDbPool().query<BankDeposit>(
-    `SELECT ${DEPOSIT_SELECT_SQL} FROM bank_deposit d
-    JOIN bank_account a ON a.id=d.account_id JOIN bank_connection bc ON bc.id=a.connection_id
-    WHERE d.deleted_at IS NULL AND a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}
-      AND ($1::text IS NULL OR d.account_id=$1) AND ($2::text IS NULL OR d.status=$2)
-      AND ($3::text='' OR concat_ws(' ',d.reference,d.memo) ILIKE '%'||$3||'%') ORDER BY d.deposit_date DESC,d.id`,
-    [input.account_id ?? null, input.status ?? null, input.q ?? ""]
+  const result = await getDbPool().query<BankDeposit & { total: string }>(
+    `SELECT ${DEPOSIT_SELECT_SQL},COUNT(*) OVER() AS total FROM bank_deposit d
+    ${DEPOSIT_FROM_JOINS}
+    WHERE d.deleted_at IS NULL AND ${DEPOSIT_ENV_SQL}
+      AND ($1::text IS NULL OR d.account_id=$1 OR COALESCE(d.account_list_id,ba.qb_list_id)=$1)
+      AND ($2::text IS NULL OR d.status=$2)
+      AND ($3::text='' OR concat_ws(' ',d.number,d.reference,d.memo,d.qb_txn_id,qa.full_name,ba.name) ILIKE '%'||$3||'%')
+      AND ($4::text IS NULL OR d.deposit_date>=$4) AND ($5::text IS NULL OR d.deposit_date<=$5)
+    ORDER BY d.deposit_date DESC,d.number DESC NULLS LAST,d.id LIMIT $6`,
+    [
+      input.account_id ?? null,
+      input.status ?? null,
+      input.q ?? "",
+      input.from ?? null,
+      input.to ?? null,
+      input.limit ?? DEPOSIT_LIST_LIMIT,
+    ]
   );
-  return { deposits: result.rows, count: result.rows.length };
+  const total = Number(result.rows[0]?.total ?? 0);
+  return {
+    deposits: result.rows.map(({ total: _total, ...row }) => row as BankDeposit),
+    count: total,
+  };
 }
 /** Page size of the receipt picker. Pages are keyset on (date,id) — the
  * order the list is shown in — so a receipt deposited between two "Load more"

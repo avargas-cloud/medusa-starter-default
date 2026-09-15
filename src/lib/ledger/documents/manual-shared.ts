@@ -25,7 +25,11 @@ export function newGlId(
   return `${prefix}_${ulid()}`;
 }
 
-export type GlCounterName = "gl_journal_entry" | "gl_check" | "gl_transfer";
+export type GlCounterName =
+  | "gl_journal_entry"
+  | "gl_check"
+  | "gl_transfer"
+  | "bank_deposit";
 
 /**
  * Espejo pg (`$1`) de `allocateNextNumber` (`lib/invoices/document-numbering.ts`,
@@ -35,7 +39,7 @@ export type GlCounterName = "gl_journal_entry" | "gl_check" | "gl_transfer";
 export async function allocateGlNumber(
   client: PoolClient,
   name: GlCounterName,
-  prefix: "JE" | "CHK" | "TR"
+  prefix: "JE" | "CHK" | "TR" | "DEP"
 ): Promise<string> {
   const { rows } = await client.query<{ value: string }>(
     `UPDATE document_number_counter SET value = value + 1, updated_at = now()
@@ -45,7 +49,7 @@ export async function allocateGlNumber(
   const value = rows[0]?.value;
   if (!value)
     throw new Error(
-      `[gl-docs] counter '${name}' is missing — run migration 1789300000000`
+      `[gl-docs] counter '${name}' is missing — run migration 1789300000000 (1789500000000 for bank_deposit)`
     );
   return `${prefix}-${value.padStart(4, "0")}`;
 }

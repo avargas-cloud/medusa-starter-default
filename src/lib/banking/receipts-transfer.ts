@@ -5,8 +5,8 @@ import {
   type AccountingAccount,
 } from "./accounting-types";
 import { loadBankDeposit } from "./deposit-read";
-import { depositCents, depositSourceKey } from "./deposit-types";
-import { paymentReservedCentsSql } from "./payment-evidence";
+import { depositCents, depositSignedCents, depositSourceKey } from "./deposit-types";
+import { PAYMENT_FINGERPRINT_SQL, paymentReservedCentsSql } from "./payment-evidence";
 import {
   receiptAccounts,
   receiptMapping,
@@ -25,6 +25,8 @@ import {
   assertMatchSourceHash,
 } from "./review-matching";
 import { BankingError, bankingEnvSql } from "./security";
+import { resolveBankDeposit } from "../ledger/documents/bank-deposit";
+import { LedgerError } from "../ledger/types";
 
 async function bankMapping(
   client: PoolClient,
@@ -121,6 +123,106 @@ async function allocate(
     posting_hash: row?.source_hash ?? null,
     cents,
   };
+}
+/**
+ * record-deposits-gl-20260915: a deposited receipt is a `customer_payment`
+ * the GL already recognised (Dr Undeposited Funds / Cr AR at payment time,
+ * `payment_recognition` claim). Banking's own receipt posting
+ * (`bank_receipt_accounting`, never used in production) is no longer the
+ * evidence. Capacity = the UF debit of that document (amount + card
+ * surcharge); reservations by other deposits/matches reduce it.
+ */
+async function allocateFromLedger(
+  client: PoolClient,
+  evidence: ReceiptEvidence,
+  paymentId: string,
+  cents: number
+): Promise<{
+  id: string;
+  hash: string;
+  posting_hash: string | null;
+  cents: number;
+}> {
+  // The receipt-posting blockers of `paymentReceiptSource` (method policy,
+  // sales-receipt provenance) belonged to Banking's own receipt entry, which
+  // the GL replaced: a card sale rung as a sales receipt IS a deposit line
+  // (DEPOSIT_PAYMENT_ELIGIBLE_SQL admits cards since 2026-09-14).
+  const payment = (
+    await client.query<{ day: string; hash: string; ok: boolean }>(
+      `SELECT to_char(mp.received_at AT TIME ZONE 'America/New_York','YYYY-MM-DD') AS day,
+        ${PAYMENT_FINGERPRINT_SQL} AS hash,
+        (mp.deleted_at IS NULL AND mp.type='payment' AND upper(mp.currency)='USD'
+          AND mp.status IN ('available','partially_applied','applied') AND mp.amount::numeric>0) AS ok
+      FROM customer_payment mp WHERE mp.id=$1 FOR SHARE OF mp`,
+      [paymentId]
+    )
+  ).rows[0];
+  if (!payment) {
+    evidence.blockers.push("BANKING_RECEIPT_SOURCE_MISSING");
+    return { id: paymentId, hash: "", posting_hash: null, cents };
+  }
+  if (!payment.ok) evidence.blockers.push("BANKING_RECEIPT_SOURCE_UNSUPPORTED");
+  if (payment.day > evidence.source.day)
+    evidence.blockers.push("BANKING_RECEIPT_TRANSFER_DATE_INVALID");
+  const row = (
+    await client.query<{ entry_id: string; source_hash: string; uf_cents: string }>(
+      `SELECT e.id AS entry_id,e.source_hash,l.debit_cents::text AS uf_cents
+    FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='undeposited_funds'
+    WHERE e.source_kind='customer_payment' AND e.source_id=$1 AND e.kind='document' AND e.deleted_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id) LIMIT 1`,
+      [paymentId]
+    )
+  ).rows[0];
+  if (!row) evidence.blockers.push("BANKING_RECEIPT_POSTING_REQUIRED");
+  else {
+    const reserved = (
+      await client.query<{ cents: string }>(
+        `SELECT ${paymentReservedCentsSql({ deposit: "$2::text", transaction: "$3::text" })} AS cents
+      FROM customer_payment mp WHERE mp.id=$1`,
+        [paymentId, evidence.source.id, null]
+      )
+    ).rows[0];
+    if (
+      !reserved ||
+      !/^\d+(?:\.0+)?$/.test(reserved.cents) ||
+      BigInt(row.uf_cents) -
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- the regex test above already guarantees reserved.cents matches \d+ so split('.') has a first element
+        BigInt(reserved.cents.split(".")[0]!) <
+        BigInt(cents)
+    )
+      evidence.blockers.push("BANKING_RECEIPT_OVER_RESERVED");
+    evidence.allocations.push({
+      payment_id: paymentId,
+      receipt_id: null,
+      amount_cents: cents,
+    });
+  }
+  return {
+    id: paymentId,
+    hash: payment.hash,
+    posting_hash: row?.source_hash ?? null,
+    cents,
+  };
+}
+/** Deposit-to account by QuickBooks ListID (Cash Register / Cash on Hand have no Plaid account). */
+async function targetMapping(
+  client: PoolClient,
+  listId: string | null,
+  blockers: string[]
+): Promise<AccountingAccount | null> {
+  const live = listId ? (await receiptAccounts(client, [listId]))[0] : undefined;
+  const target = live
+    ? receiptMapping(live, (await receiptSetup(client))?.attested === true)
+    : undefined;
+  if (
+    !target ||
+    !["Bank", "OtherCurrentAsset"].includes(target.account_type) ||
+    target.currency !== "USD"
+  ) {
+    blockers.push("BANKING_RECEIPT_BANK_MAPPING_INVALID");
+    return null;
+  }
+  return target;
 }
 async function feeAccount(
   client: PoolClient,
@@ -226,7 +328,9 @@ export async function depositReceiptSource(
     new Set(deposit.lines.map(depositSourceKey)).size !== deposit.lines.length
   )
     blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
-  const bank = await bankMapping(client, deposit.account_id, blockers);
+  const bank = deposit.account_id
+    ? await bankMapping(client, deposit.account_id, blockers)
+    : await targetMapping(client, deposit.account_list_id, blockers);
   const expense = fee
     ? await feeAccount(
         client,
@@ -248,8 +352,10 @@ export async function depositReceiptSource(
   for (const line of [...deposit.lines].sort((a, b) =>
     depositSourceKey(a).localeCompare(depositSourceKey(b))
   )) {
-    const cents = Number(depositCents(line.amount));
-    if (cents <= 0) blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
+    const cents = Number(depositSignedCents(line.amount));
+    // A negative line only exists on an adopted QuickBooks deposit (refund
+    // netted in the batch) and is always manual; a payment line must be > 0.
+    if (cents === 0 || (cents < 0 && !line.manual)) blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
     payments.push(
       line.manual
         ? allocateManual(
@@ -262,23 +368,51 @@ export async function depositReceiptSource(
             line.source_hash
           )
         : // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- depositSourceKey (called on every line during the sort above) throws unless exactly one of payment_id/manual is set; payment_id is set here
-          await allocate(client, evidence, line.payment_id!, cents)
+          await allocateFromLedger(client, evidence, line.payment_id!, cents)
     );
   }
   if (payments.reduce((sum, payment) => sum + payment.cents, 0) !== gross)
     blockers.push("BANKING_RECEIPT_AMOUNT_INVALID");
-  if (bank && setup)
-    evidence.lines.push(
-      receiptLine("bank", bank, net, true),
-      receiptLine("clearing", setup.clearing_account, gross, false)
-    );
-  if (expense) evidence.lines.push(receiptLine("expense", expense, fee, true));
+  // The preview shows the GL document exactly as `postBankDepositDocument`
+  // will write it: Dr deposit-to (net), Cr each source line, Dr fee.
+  let ledger: Awaited<ReturnType<typeof resolveBankDeposit>> | null = null;
+  try {
+    ledger = await resolveBankDeposit(client, id);
+  } catch (error) {
+    if (error instanceof LedgerError) blockers.push("BANKING_RECEIPT_BANK_MAPPING_INVALID");
+    else throw error;
+  }
+  if (ledger && bank && setup) {
+    for (const line of ledger.ledgerLines) {
+      const account: AccountingAccount = {
+        id: line.account.id,
+        name: line.account.name,
+        account_type: line.account.account_type,
+        currency: "USD",
+        qb_currency_ref: null,
+      };
+      evidence.lines.push(
+        receiptLine(
+          line.role === "bank_account" ? "bank" : line.role === "fee" ? "expense" : "clearing",
+          account,
+          Number(line.debit_cents > 0n ? line.debit_cents : line.credit_cents),
+          line.debit_cents > 0n
+        )
+      );
+    }
+  }
   evidence.snapshot = {
     source,
     deposit: { ...deposit, accounting_posted: undefined },
     payments,
     bank,
     expense,
+    ledger_lines: ledger?.ledgerLines.map((l) => ({
+      role: l.role,
+      account: l.account.id,
+      debit: l.debit_cents.toString(),
+      credit: l.credit_cents.toString(),
+    })),
     setup: setup ? { ...setup, frozen: undefined } : null,
   };
   evidence.source_hash = reviewHash(evidence.snapshot);

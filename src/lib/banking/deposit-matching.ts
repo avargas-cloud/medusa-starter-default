@@ -56,6 +56,8 @@ export async function validateMatchedDeposit(
   );
   if (!valid.rows[0])
     throw new BankingError("BANKING_DEPOSIT_MATCH_INVALID", 409);
+  if (!deposit.account_id)
+    throw new BankingError("BANKING_DEPOSIT_MATCH_INVALID", 409);
   const account = await depositAccount(client, deposit.account_id);
   await validateDepositFee(
     client,

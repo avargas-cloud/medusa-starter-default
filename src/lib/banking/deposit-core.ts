@@ -29,6 +29,7 @@ import {
 } from "./review-common";
 import { BankingError } from "./security";
 import { bankId } from "./store";
+import { allocateGlNumber } from "../ledger/documents/manual-shared";
 
 export async function saveBankDeposit(
   actorId: string,
@@ -88,13 +89,20 @@ export async function saveBankDeposit(
           )
         );
       }
+      // record-deposits-gl-20260915: the deposit-to account is a QuickBooks
+      // account (`account_list_id`); a Plaid account without a QB mirror cannot
+      // receive a deposit (there is nothing to post it to).
+      if (!account.qb_list_id)
+        throw new BankingError("BANKING_RECEIPT_BANK_MAPPING_INVALID", 409);
       const id = before?.id ?? bankId("bdep");
-      if (!before) await reviewCapacity(client, "bank_deposit", 100);
+      if (!before) await reviewCapacity(client, "bank_deposit", 2000);
+      const number = before ? null : await allocateGlNumber(client, "bank_deposit", "DEP");
       await client.query(
         `INSERT INTO bank_deposit (id,revision,status,account_id,currency,deposit_date,reference,memo,
-      gross_amount,fee_amount,fee_account_list_id,fee_reference,fee_account_snapshot,net_amount,created_by)
-      VALUES($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)
+      gross_amount,fee_amount,fee_account_list_id,fee_reference,fee_account_snapshot,net_amount,created_by,account_list_id,number)
+      VALUES($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16)
       ON CONFLICT(id) DO UPDATE SET revision=EXCLUDED.revision,status='draft',account_id=EXCLUDED.account_id,
+        account_list_id=EXCLUDED.account_list_id,
         currency=EXCLUDED.currency,deposit_date=EXCLUDED.deposit_date,reference=EXCLUDED.reference,memo=EXCLUDED.memo,
         gross_amount=EXCLUDED.gross_amount,fee_amount=EXCLUDED.fee_amount,fee_account_list_id=EXCLUDED.fee_account_list_id,
         fee_reference=EXCLUDED.fee_reference,fee_account_snapshot=EXCLUDED.fee_account_snapshot,
@@ -117,6 +125,8 @@ export async function saveBankDeposit(
           JSON.stringify(fee),
           totals.net_amount,
           actorId,
+          account.qb_list_id,
+          number,
         ]
       );
       await client.query(
@@ -141,7 +151,7 @@ export async function saveBankDeposit(
           [id, paymentId, manualReference]
         );
         if (!existing.rows[0])
-          await reviewCapacity(client, "bank_deposit_line", 2000);
+          await reviewCapacity(client, "bank_deposit_line", 10000);
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- payments was populated by iterating this same body.lines, so every line's key is present
         const payment = payments.get(depositSourceKey(line))!;
         const manualDescription =
@@ -151,7 +161,7 @@ export async function saveBankDeposit(
         VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT(id) DO UPDATE SET amount=EXCLUDED.amount,
           source_hash=EXCLUDED.source_hash,payment_snapshot=EXCLUDED.payment_snapshot,
           manual_reference=EXCLUDED.manual_reference,manual_description=EXCLUDED.manual_description,
-          deleted_at=NULL,updated_at=now()`,
+          manual_account_list_id=NULL,deleted_at=NULL,updated_at=now()`,
           [
             existing.rows[0]?.id ?? bankId("bdl"),
             id,
@@ -197,6 +207,8 @@ export async function readyBankDeposit(
       if (before.stale || before.source_hash !== body.expected_source_hash)
         throw new BankingError("BANKING_DEPOSIT_SOURCE_STALE", 409);
       await guardDepositEdit(client, id);
+      if (!before.account_id)
+        throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
       const account = await depositAccount(client, before.account_id);
       await validateDepositFee(
         client,

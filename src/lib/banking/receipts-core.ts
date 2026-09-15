@@ -34,6 +34,12 @@ import { BankingError } from "./security";
 import { bankId } from "./store";
 import { clientInTransactionAsKnex } from "../quickbooks/gl-documents/db-adapters";
 import { enqueueGlDocumentAdd, enqueueGlDocumentVoid } from "../quickbooks/gl-documents/enqueue";
+import {
+  postBankDepositDocument,
+  resolveBankDeposit,
+  reverseBankDepositDocument,
+} from "../ledger/documents/bank-deposit";
+import { LedgerError } from "../ledger/types";
 
 async function buildReceiptPreview(
   client: PoolClient,
@@ -133,6 +139,43 @@ export async function postReceiptAccounting(
       );
       if (preview.preview_hash !== body.preview_hash)
         throw new BankingError("BANKING_RECEIPT_PREVIEW_STALE", 409);
+      // record-deposits-gl-20260915: a deposit is a GL document
+      // (`source_kind='bank_deposit'`), posted by the ledger engine with the
+      // lines the preview showed; no Banking-local entry, no consumption rows.
+      if (kind === "deposit") {
+        let entryId: string;
+        try {
+          const resolved = await resolveBankDeposit(client, id);
+          const posted = await postBankDepositDocument(client, resolved, actorId);
+          if (posted.status === "skipped")
+            throw new BankingError("BANKING_RECEIPT_SOURCE_STALE", 409);
+          if (posted.status === "already_posted")
+            throw new BankingError("BANKING_ALREADY_POSTED", 409);
+          entryId = posted.entry_id;
+        } catch (error) {
+          if (error instanceof LedgerError)
+            throw new BankingError(
+              error.code === "GL_PERIOD_CLOSED"
+                ? "BANKING_ACCOUNTING_PERIOD_CLOSED"
+                : "BANKING_RECEIPT_BANK_MAPPING_INVALID",
+              409
+            );
+          throw error;
+        }
+        await appendReviewEvent(client, {
+          entity_type: "receipt_accounting",
+          entity_id: id,
+          action: "deposit_posted",
+          actor_id: actorId,
+          transaction_id: null,
+          details: { entry_id: entryId, preview_hash: preview.preview_hash },
+        });
+        // gl-docs-to-qb-20260914: el asiento del depósito es el momento en que
+        // el documento existe en el libro → DepositAdd en QuickBooks, encolado
+        // en ESTA transacción (lib/quickbooks/gl-documents/enqueue.ts).
+        await enqueueGlDocumentAdd(clientInTransactionAsKnex(client), "bank_deposit", id);
+        return receiptContext(client, kind, id);
+      }
       let receiptId: string | null = null;
       if (kind === "receipt") {
         const existing = (
@@ -158,7 +201,7 @@ export async function postReceiptAccounting(
         [
           entryId,
           receiptId,
-          kind === "deposit" ? id : null,
+          null,
           kind === "payment_match" ? id : null,
           kind,
           preview.day,
@@ -199,12 +242,6 @@ export async function postReceiptAccounting(
         transaction_id: kind === "payment_match" ? id : null,
         details: { entry_id: entryId, preview_hash: preview.preview_hash },
       });
-      // gl-docs-to-qb-20260914: el asiento del depósito es el momento en que
-      // el documento existe en el libro → DepositAdd en QuickBooks, encolado
-      // en ESTA transacción (lib/quickbooks/gl-documents/enqueue.ts).
-      if (kind === "deposit") {
-        await enqueueGlDocumentAdd(clientInTransactionAsKnex(client), "bank_deposit", id);
-      }
       return receiptContext(client, kind, id);
     }
   );
@@ -242,6 +279,37 @@ export async function reverseReceiptAccounting(
         throw new BankingError("BANKING_RECEIPT_POSTING_NOT_ACTIVE", 409);
       if (body.day < active.day || body.day > reviewToday())
         throw new BankingError("BANKING_RECEIPT_REVERSAL_DATE_INVALID", 409);
+      if (kind === "deposit") {
+        let entryId: string | null = null;
+        try {
+          const reversed = await reverseBankDepositDocument(client, id, body.day, body.reason, actorId);
+          if (reversed.status === "nothing_to_reverse")
+            throw new BankingError("BANKING_RECEIPT_POSTING_NOT_ACTIVE", 409);
+          entryId = reversed.entry_id ?? null;
+        } catch (error) {
+          if (error instanceof LedgerError)
+            throw new BankingError(
+              error.code === "GL_PERIOD_CLOSED"
+                ? "BANKING_ACCOUNTING_PERIOD_CLOSED"
+                : "BANKING_RECEIPT_POSTING_NOT_ACTIVE",
+              409
+            );
+          throw error;
+        }
+        await appendReviewEvent(client, {
+          entity_type: "receipt_accounting",
+          entity_id: id,
+          action: "deposit_reversed",
+          actor_id: actorId,
+          transaction_id: null,
+          details: { entry_id: entryId, reverses_entry_id: active.id, day: body.day, reason: body.reason },
+        });
+        // gl-docs-to-qb-20260914: reversar el asiento anula el depósito en el
+        // libro → TxnVoid del Deposit en QuickBooks (si el Add ya confirmó; si
+        // está en vuelo, lo encola su confirmación desde el estado del documento).
+        await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "bank_deposit", id);
+        return receiptContext(client, kind, id);
+      }
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- active.id was just read from bank_journal_entry via receiptHistory in the same transaction, and journal entries are append-only (never deleted), so this SELECT always returns exactly one row
       const original = (
         await client.query<Original>(
@@ -304,12 +372,6 @@ export async function reverseReceiptAccounting(
           reason: body.reason,
         },
       });
-      // gl-docs-to-qb-20260914: reversar el asiento anula el depósito en el
-      // libro → TxnVoid del Deposit en QuickBooks (si el Add ya confirmó; si
-      // está en vuelo, lo encola su confirmación desde el estado del documento).
-      if (kind === "deposit") {
-        await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "bank_deposit", id);
-      }
       return receiptContext(client, kind, id);
     }
   );
