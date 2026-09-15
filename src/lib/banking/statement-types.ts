@@ -97,7 +97,7 @@ export type StatementDocument = Omit<
   revision: number;
   status: "draft" | "closed";
   account_list_id: string;
-  opening_id: string;
+  opening_id: string | null;
   predecessor_id: string | null;
   closed_by: string | null;
   closed_at: string | null;
@@ -134,7 +134,7 @@ export type StatementOutstanding = {
   source_hash: string;
 };
 export type StatementSnapshot = {
-  opening_id: string;
+  opening_id: string | null;
   account_list_id: string;
   from: string;
   to: string;

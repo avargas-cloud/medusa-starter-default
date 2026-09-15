@@ -46,15 +46,26 @@ BEGIN
  SELECT * INTO s FROM bank_statement WHERE id=NEW.id;
  IF NOT FOUND OR s.status<>'closed' THEN RETURN NULL; END IF;
  PERFORM pg_advisory_xact_lock(hashtextextended('banking-review',7241));
- SELECT e.id,e.day,l.debit_cents-l.credit_cents INTO opening_entry_id,opening_day,opening_amount
-   FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening'
-   WHERE e.source_kind='opening_balance' AND e.kind='document' AND e.source_id=s.account_list_id AND l.account_list_id=s.account_list_id
+ -- Ancla (espejo de lib/banking/statement-opening.ts): OBE con línea opening → su monto; OBE sin
+ -- ella (saldo $0 con partidas) → 0; SIN OBE → apertura de CERO en el corte del setup, sólo si el
+ -- libro tampoco tiene asientos vivos sobre la cuenta hasta ese día (2026-09-15, Visa 7914).
+ SELECT e.id,e.day,COALESCE(l.debit_cents-l.credit_cents,0) INTO opening_entry_id,opening_day,opening_amount
+   FROM bank_journal_entry e LEFT JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening' AND l.account_list_id=s.account_list_id
+   WHERE e.source_kind='opening_balance' AND e.kind='document' AND e.source_id=s.account_list_id
      AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id);
+ IF opening_entry_id IS NULL THEN
+   SELECT cut_date::text INTO opening_day FROM bank_accounting_setup WHERE id='local-usd' AND deleted_at IS NULL;
+   opening_amount:=0;
+   IF opening_day IS NULL OR EXISTS(SELECT 1 FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
+     WHERE l.account_list_id=s.account_list_id AND l.deleted_at IS NULL AND e.deleted_at IS NULL AND e.kind='document' AND e.day<=opening_day
+       AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))
+   THEN RAISE EXCEPTION 'BANKING_STATEMENT_INCOMPLETE'; END IF;
+ END IF;
  SELECT COUNT(*),COALESCE(SUM(amount_cents) FILTER(WHERE amount_cents>0),0),
    COALESCE(-SUM(amount_cents) FILTER(WHERE amount_cents<0),0) INTO n,credits,debits
    FROM bank_statement_line WHERE statement_id=s.id AND deleted_at IS NULL;
  IF s.payload->>'completeness_attested' IS DISTINCT FROM 'true' OR s.closed_by IS NULL OR s.closed_at IS NULL
-   OR s.input_hash IS NULL OR s.closed_snapshot IS NULL OR opening_entry_id IS NULL
+   OR s.input_hash IS NULL OR s.closed_snapshot IS NULL OR s.opening_id IS DISTINCT FROM opening_entry_id
    OR n IS DISTINCT FROM (s.payload->>'declared_line_count')::bigint
    OR credits IS DISTINCT FROM (s.payload->>'declared_credits_cents')::numeric
    OR debits IS DISTINCT FROM (s.payload->>'declared_debits_cents')::numeric

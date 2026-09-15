@@ -5,6 +5,7 @@ import { receiptAccounts, receiptMapping, receiptSetup } from "./receipts-setup"
 import { reviewHash } from "./review-common";
 import { reviewToday } from "./review-date";
 import { BankingError, bankingEnvSql } from "./security";
+import { resolveStatementOpening, type StatementOpening } from "./statement-opening";
 import {
   STATEMENT_ACCOUNT_TYPES,
   type StatementDocument,
@@ -17,15 +18,16 @@ import {
  * `bank_opening_balance` row. `cut_date` is the entry's own day; the statement
  * balance at cut is the `opening` role line's signed amount on this account.
  * Bank AND CreditCard accounts (Plaid `depository`/`credit`), both in GL sign — see
- * `STATEMENT_ACCOUNT_TYPES`. A card with a $0 balance at the cut has no `opening`
- * line (the builder skips zero) and therefore cannot anchor a statement yet.
+ * `STATEMENT_ACCOUNT_TYPES`. An account with no `opening` line (a $0 balance at the cut:
+ * the builder skips zero, and the GL refuses a $0 entry) anchors at $0 — see
+ * `resolveStatementOpening` for the three cases and the guard.
  */
 export async function statementBank(
   client: PoolClient,
   accountId: string
 ): Promise<{
   account: AccountingAccount;
-  opening: { id: string; cut_date: string; statement_balance_cents: number };
+  opening: StatementOpening;
 }> {
   const setup = await receiptSetup(client);
   if (!setup) throw new BankingError("BANKING_RECEIPT_SETUP_REQUIRED", 409);
@@ -47,27 +49,33 @@ export async function statementBank(
     account.currency !== "USD"
   )
     throw new BankingError("BANKING_OPENING_ACCOUNT_INVALID", 409);
-  const opening = (
-    await client.query<{
-      id: string;
-      cut_date: string;
-      statement_balance_cents: number;
-    }>(
-      `SELECT e.id,e.day AS cut_date,(l.debit_cents-l.credit_cents)::float8 AS statement_balance_cents
-    FROM bank_journal_entry e JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening'
+  const obe = (
+    await client.query<{ id: string; day: string; opening_cents: number | null }>(
+      `SELECT e.id,e.day,(l.debit_cents-l.credit_cents)::float8 AS opening_cents
+    FROM bank_journal_entry e
     -- A reversal copies every line (role included), so only kind='document' is the opening itself.
-    WHERE e.source_kind='opening_balance' AND e.kind='document' AND e.source_id=$1 AND l.account_list_id=$1
+    LEFT JOIN bank_journal_line l ON l.entry_id=e.id AND l.role='opening' AND l.account_list_id=$1
+    WHERE e.source_kind='opening_balance' AND e.kind='document' AND e.source_id=$1
       AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)`,
       [account.id]
     )
   ).rows;
-  if (opening.length !== 1)
+  if (obe.length > 1)
     throw new BankingError("BANKING_STATEMENT_VERIFIED_OPENING_REQUIRED", 409);
-  return {
-    account,
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- opening.length===1 recién chequeado arriba garantiza opening[0]
-    opening: opening[0]!,
-  };
+  const bookAtCut = (
+    await client.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
+    WHERE l.account_list_id=$1 AND l.deleted_at IS NULL AND e.deleted_at IS NULL AND e.kind='document' AND e.day<=$2
+      AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)`,
+      [account.id, setup.cut_date]
+    )
+  ).rows[0];
+  const opening = resolveStatementOpening({
+    obe: obe[0] ?? null,
+    book_lines_at_cut: Number(bookAtCut?.n ?? "0"),
+    setup_cut_date: setup.cut_date,
+  });
+  return { account, opening };
 }
 
 export async function statementLineFacts(
@@ -185,7 +193,7 @@ export async function statementRow(
       revision: number;
       status: "draft" | "closed";
       account_list_id: string;
-      opening_id: string;
+      opening_id: string | null;
       predecessor_id: string | null;
       payload: Omit<StatementInput, "id" | "expected_revision" | "lines">;
       closed_by: string | null;

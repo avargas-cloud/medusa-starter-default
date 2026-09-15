@@ -19,6 +19,10 @@
  *   3. NEGATIVO: un asiento sobre la tarjeta fechado dentro del mes cerrado →
  *      BANKING_STATEMENT_PERIOD_CLOSED (bank_statement_journal_guard); en marzo pasa.
  *   4. Feed: las líneas casadas salen `review_status='reconciled'` y desaparecen de "To review".
+ *   5. Apertura de CERO (2026-09-15, Visa 7914): una tarjeta SIN documento `opening_balance` (no
+ *      existía al corte) ancla su primer extracto en el corte del setup con saldo 0 y
+ *      `opening_id` NULL, y CIERRA vacío. NEGATIVO: otra tarjeta sin OBE pero con un asiento
+ *      vivo fechado ≤ corte → BANKING_STATEMENT_VERIFIED_OPENING_REQUIRED (apertura que falta).
  */
 import assert from "node:assert/strict";
 import type { PoolClient } from "pg";
@@ -76,6 +80,23 @@ async function seed(client: PoolClient) {
   await client.query("COMMIT");
   return { expense: expense.qb_list_id, bank: bank.qb_list_id };
 }
+
+/** Otra tarjeta del mismo set (sin OBE): para los escenarios de apertura de cero. */
+async function seedCard(client: PoolClient, suffix: string, mask: string) {
+  const card = `${PREFIX}${suffix}_qb`, account = `${PREFIX}${suffix}_acct`;
+  await client.query(
+    `INSERT INTO qb_account(id,qb_list_id,full_name,name,account_type,currency,is_active,normal_balance,last_synced_at)
+     VALUES($1,$1,'E2E Visa Card ${suffix}','E2E Visa Card ${suffix}','CreditCard',NULL,true,'credit',now())`, [card]);
+  await client.query(
+    `INSERT INTO bank_account(id,connection_id,provider_account_id,name,mask,type,subtype,currency,is_selected,qb_list_id,setup_revision)
+     VALUES($1,$2,$1,'E2E Visa Card ${suffix}',$3,'credit','credit card','USD',true,$4,1)`, [account, CONNECTION, mask, card]);
+  return { card, account };
+}
+const nextMonthEnd = (day: string): string => {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 2); d.setUTCDate(0);
+  return d.toISOString().slice(0, 10);
+};
 
 async function feedRow(client: PoolClient, suffix: string, plaidAmount: number, day: string, name: string) {
   const id = `${PREFIX}txn_${suffix}`;
@@ -186,6 +207,34 @@ async function main() {
     check(pending.count === 0, "'To review' no longer lists reconciled rows");
     const only = await bankingTransactions({ account_id: ACCOUNT, offset: 0, limit: 50, review_status: "reconciled", history: true });
     check(only.count === 3, "the 'Reconciled' filter lists exactly the matched rows");
+
+    // 6. Zero opening: a card with NO opening_balance document anchors at the setup cut with $0.
+    const setupCut = (await client.query<{ cut_date: string }>(`SELECT cut_date::text FROM bank_accounting_setup WHERE id='local-usd' AND deleted_at IS NULL`)).rows[0]?.cut_date;
+    assert(setupCut, "accounting setup exists");
+    const zero = await seedCard(client, "zero", "9998");
+    const zeroTo = nextMonthEnd(setupCut);
+    const zeroEvidence = await addCompletionEvidence(ACTOR, key("evidence-zero"), { name: "e2e-card-zero.pdf", mime_type: "application/pdf", content_base64: tinyPdf() });
+    const zeroCtx = await saveStatement(ACTOR, key("statement-zero"), {
+      expected_revision: 0, bank_account_id: zero.account, from: setupCut, to: zeroTo, reference: "E2E zero opening", evidence_id: zeroEvidence.evidence.id,
+      opening_balance_cents: 0, closing_balance_cents: 0, declared_line_count: 0, declared_credits_cents: 0, declared_debits_cents: 0, completeness_attested: true, lines: [],
+    });
+    check(zeroCtx.statement.opening_id === null && zeroCtx.blockers.length === 0, `a card without an OBE anchors at the setup cut ${setupCut} with $0 and opening_id NULL (${zeroCtx.blockers.join(",") || "no blockers"})`);
+    const zeroPreview = await previewStatement(zeroCtx.statement.id, ACTOR, key("preview-zero"), { expected_revision: zeroCtx.statement.revision });
+    const zeroClosed = await closeStatement(zeroCtx.statement.id, ACTOR, key("close-zero"), { expected_revision: zeroCtx.statement.revision, preview_hash: zeroPreview.preview_hash });
+    check(zeroClosed.statement.status === "closed" && zeroClosed.difference_cents === 0, "the empty zero-opening statement CLOSES (bank_statement_check_close accepts opening_id NULL)");
+    // Negative: a card without an OBE but with a live entry dated at/before the cut is a MISSING opening, not a zero one.
+    const missing = await seedCard(client, "missing", "9997");
+    const missingLines = [{ account_list_id: expense, debit_cents: 100n, credit_cents: 0n, memo: "E2E pre-cut charge" }, { account_list_id: missing.card, debit_cents: 0n, credit_cents: 100n, memo: "E2E pre-cut charge" }];
+    const preCut = await postJournalEntry(client, (await createJournalEntry(client, { day: setupCut, memo: "E2E pre-cut charge", evidence_id: null, lines: missingLines }, ACTOR)).id, ACTOR);
+    assert(preCut.status === "posted");
+    let refusedZero = "";
+    try {
+      await saveStatement(ACTOR, key("statement-missing"), {
+        expected_revision: 0, bank_account_id: missing.account, from: setupCut, to: zeroTo, reference: "E2E missing opening", evidence_id: zeroEvidence.evidence.id,
+        opening_balance_cents: 0, closing_balance_cents: 0, declared_line_count: 0, declared_credits_cents: 0, declared_debits_cents: 0, completeness_attested: true, lines: [],
+      });
+    } catch (error) { refusedZero = error instanceof Error ? error.message : String(error); }
+    check(refusedZero.includes("BANKING_STATEMENT_VERIFIED_OPENING_REQUIRED"), `a card with book lines at the cut and no OBE is refused (${refusedZero.slice(0, 60)})`);
     console.log(`\ne2e-bank-card-statements: ${checks}/${checks} checks passed`);
   } finally {
     client.release();

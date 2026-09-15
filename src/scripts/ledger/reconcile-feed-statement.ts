@@ -209,8 +209,12 @@ async function main(): Promise<void> {
         AND e.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)`,
       [acct.qb_list_id]
     );
-    const cutDay = cut.rows[0]?.day;
-    if (!cutDay) throw new Error(`*${args.mask}: la cuenta QB no tiene apertura (OBE) vigente`);
+    // Sin OBE: apertura de CERO (la cuenta no existía al corte — Visa 7914). `statementBank`
+    // verifica que el libro tampoco tenga asientos hasta el corte; acá sólo se toma la fecha.
+    const cutDay =
+      cut.rows[0]?.day ??
+      (await pool.query<{ cut_date: string }>(`SELECT cut_date::text FROM bank_accounting_setup WHERE id='local-usd' AND deleted_at IS NULL`)).rows[0]?.cut_date;
+    if (!cutDay) throw new Error(`*${args.mask}: la cuenta QB no tiene apertura (OBE) vigente ni hay setup contable`);
     if (args.from !== cutDay) {
       console.log(`primer extracto de la cuenta: arranca en el corte ${cutDay} (pedido ${args.from})`);
       args.from = cutDay;
