@@ -28,7 +28,13 @@ import { z } from "zod";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../../purchase-orders/_lib/format";
-import { verifySupervisorPin } from "../../../../../lib/pos/verify-supervisor-pin";
+import {
+  extractSupervisorPin,
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import { claimUnlock, type UnlockKnex } from "../../../../../lib/purchase-orders/qb-vendor-bill-unlock";
 
 function resolveKnex(req: AuthenticatedMedusaRequest): UnlockKnex {
@@ -37,8 +43,11 @@ function resolveKnex(req: AuthenticatedMedusaRequest): UnlockKnex {
   ) as UnlockKnex;
 }
 
+// `supervisor_pin` is read by `extractSupervisorPin` (header `x-supervisor-pin`
+// or this body field); it is not validated here so the guard owns every
+// failure mode — missing, wrong, throttled — and its messages.
 const bodySchema = z.object({
-  supervisor_pin: z.string().min(1, "PIN required"),
+  supervisor_pin: z.string().optional(),
   reason: z.string().trim().min(1, "Reason required").max(500),
 });
 
@@ -64,12 +73,24 @@ export async function POST(
   const { id } = req.params as { id: string };
   const knex = resolveKnex(req);
 
-  const pinOk = await verifySupervisorPin(knex, parsed.data.supervisor_pin);
-  if (!pinOk) {
-    return res.status(403).json({
-      error: "Invalid supervisor PIN",
-      code: "invalid_supervisor_pin",
+  // THE GUARD, NOT THE BARE COMPARE (2026-09-15). `verifySupervisorPin` only
+  // knows the numeric PIN; the POS access levels let an admin/owner authorise
+  // by typing the literal word `confirm`, which only `guardSupervisorPin`
+  // accepts (`via: "admin-confirmation"`). With the bare compare this route
+  // answered 403 to every "Prepare QB Rebuild" from the screen and burned the
+  // operator's throttle on each try — the sixth extension of secrets.md, again.
+  // Same wiring as the China Finance wire DELETE.
+  {
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: knex as unknown as PinConn,
+      pin: extractSupervisorPin(req),
+      actorId: resolveActorId(req),
     });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
   }
 
   const result = await claimUnlock(knex, id, {
