@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 
-import { getBusinessDateString } from "../../date/et";
+import { getBusinessDateString, pgDateToIso } from "../../date/et";
 import { loadPurchaseAccountMap } from "../accounts";
 import { buildVendorCreditLines, VendorCreditAccountLine } from "../lines/vendor-credit";
-import { postDocumentJournal, reverseDocumentJournal } from "../post";
+import { activeDocumentEntry, postDocumentJournal, reverseDocumentJournal } from "../post";
 import { LedgerAccount, LedgerError, PostResult, ReverseResult } from "../types";
 
 /**
@@ -107,7 +107,10 @@ export async function postVendorCredit(
   );
   if (lines.length === 0) return { status: "skipped", reason: "zero_amount" };
 
-  const day = getBusinessDateString(header.credit_date);
+  // `credit_date` is a DATE (`::text` → "YYYY-MM-DD"): read it as a calendar day.
+  // Feeding it to `getBusinessDateString` parsed it as UTC midnight and landed the
+  // entry one day EARLIER in ET (VC-1097: credit_date 09/07 → entry 09/06).
+  const day = pgDateToIso(header.credit_date);
   const sourceSnapshot = { header, lineRows };
   const sourceHash = createHash("sha256").update(JSON.stringify(sourceSnapshot)).digest("hex");
 
@@ -133,7 +136,15 @@ export async function reverseVendorCredit(
 ): Promise<ReverseResult> {
   const header = await loadHeader(client, creditId);
   if (!header) return { status: "nothing_to_reverse" };
-  const day = getBusinessDateString(header.voided_at ?? header.credit_date);
+  const requested = header.voided_at ? getBusinessDateString(header.voided_at) : pgDateToIso(header.credit_date);
+  // A revise may move `credit_date` EARLIER than the active entry's day. The
+  // reversal can never precede the entry it reverses (`gl_document_source_unique`
+  // raises GL_SOURCE_INVALID, and `runLedgerHook` would swallow it, leaving the
+  // document re-dated with its ledger entry untouched — Visa 2084, 09/15/2026), so
+  // it is dated at the later of the two; the repost then carries the new date.
+  const active = await activeDocumentEntry(client, "vendor_credit", creditId);
+  const activeDay = active ? pgDateToIso(active.day) : null;
+  const day = activeDay && activeDay > requested ? activeDay : requested;
   return reverseDocumentJournal(client, {
     source_kind: "vendor_credit",
     source_id: creditId,
