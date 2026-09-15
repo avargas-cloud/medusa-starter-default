@@ -290,6 +290,16 @@ export async function confirmTransactionReview(
         throw new BankingError("BANKING_REVIEW_DRAFT_REQUIRED", 409);
       if (context.tx.status !== "posted")
         throw new BankingError("BANKING_POSTED_TRANSACTION_REQUIRED", 409);
+      // Una línea que vive en un extracto (borrador o cerrado) se explica por el LIBRO: el Confirm
+      // del feed es Confirm-match (bank_statement_match) o Confirm-categoría (documento + match),
+      // nunca esta clasificación sin asiento que nadie consume (bank-feed-suggestions-20260915).
+      const inStatement = await client.query(
+        `SELECT 1 FROM bank_statement_line sl JOIN bank_statement st ON st.id=sl.statement_id
+          WHERE sl.transaction_id=$1 AND sl.deleted_at IS NULL AND st.deleted_at IS NULL LIMIT 1`,
+        [id]
+      );
+      if (inStatement.rowCount)
+        throw new BankingError("BANKING_STATEMENT_LINE_CONFIRM_VIA_MATCH", 409);
       if (
         !context.tx.review_start_date ||
         context.tx.opening_bank_balance === null ||

@@ -43,11 +43,12 @@ import {
   closeStatement,
 } from "../../lib/banking/statement-core";
 import { matchStatement, unmatchStatement } from "../../lib/banking/statement-matching";
+import { feedPdf } from "../../lib/banking/feed-evidence-pdf";
 import { statementContext } from "../../lib/banking/statement-read";
+import { loadSuggestParams, suggestStatement } from "../../lib/banking/statement-suggest";
 import type {
   StatementBookItem,
   StatementContext,
-  StatementLine,
 } from "../../lib/banking/statement-types";
 import { transaction } from "../../lib/banking/store";
 import { readTdStatement, tdWindow } from "./td-statement-text";
@@ -103,15 +104,6 @@ const dayBefore = (day: string): string => {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 };
-const daysAgo = (day: string, n: number): string => {
-  const d = new Date(`${day}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - n);
-  return d.toISOString().slice(0, 10);
-};
-const daysBetween = (a: string, b: string): number =>
-  Math.abs(
-    (Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000
-  );
 const key = (parts: string[]): string =>
   createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 40);
 
@@ -122,54 +114,6 @@ type FeedRow = {
   amount: string;
   name: string;
 };
-
-/** PDF mínimo de texto (Courier 9pt, varias páginas) — evidencia generada del feed. */
-function feedPdf(title: string, lines: string[]): Buffer {
-  const esc = (s: string): string =>
-    s.replace(/[^\x20-\x7e]/g, "?").replace(/[\\()]/g, (m) => `\\${m}`);
-  const perPage = 60,
-    pages: string[][] = [];
-  for (let i = 0; i < lines.length; i += perPage)
-    pages.push(lines.slice(i, i + perPage));
-  if (!pages.length) pages.push([]);
-  const objects: string[] = [];
-  const add = (body: string): number => {
-    objects.push(body);
-    return objects.length;
-  };
-  const font = add("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>");
-  const pageIds: number[] = [];
-  const pagesId = objects.length + pages.length * 2 + 1;
-  for (const page of pages) {
-    const text = [
-      "BT /F1 9 Tf 36 770 Td 11 TL",
-      `(${esc(title)}) Tj T*`,
-      ...page.map((l) => `(${esc(l)}) Tj T*`),
-      "ET",
-    ].join("\n");
-    const stream = add(`<< /Length ${Buffer.byteLength(text)} >>\nstream\n${text}\nendstream`);
-    pageIds.push(
-      add(
-        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Contents ${stream} 0 R /Resources << /Font << /F1 ${font} 0 R >> >> >>`
-      )
-    );
-  }
-  const kids = pageIds.map((id) => `${id} 0 R`).join(" ");
-  const pagesObj = add(`<< /Type /Pages /Kids [${kids}] /Count ${pageIds.length} >>`);
-  if (pagesObj !== pagesId) throw new Error("pdf object numbering");
-  const catalog = add(`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`);
-  let out = "%PDF-1.4\n";
-  const offsets: number[] = [];
-  objects.forEach((body, i) => {
-    offsets.push(Buffer.byteLength(out));
-    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
-  });
-  const xref = Buffer.byteLength(out);
-  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const o of offsets) out += `${String(o).padStart(10, "0")} 00000 n \n`;
-  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Buffer.from(out, "latin1");
-}
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -419,265 +363,19 @@ async function main(): Promise<void> {
     console.log(`extracto creado: ${context.statement.id}`);
   }
 
-  // 5. Casamiento automático.
-  const matchedLines = new Set(context.matches.map((m) => m.statement_line_id));
-  // Restante CON SIGNO (el motor lo entrega en valor absoluto): un reembolso es −72,64 y un
-  // depósito +3.704,00, así una línea del banco puede ser la suma neta de ambos.
-  const remaining = new Map<string, number>(
-    context.book_items.map((b) => [b.id, Math.sign(b.amount_cents) * b.remaining_cents])
-  );
-  const rem = (b: StatementBookItem): number => Math.abs(remaining.get(b.id) ?? 0);
-  const allocations: Array<{
-    statement_line_id: string;
-    book_kind: "journal_line";
-    book_id: string;
-    amount_cents: number;
-    expected_book_hash: string;
-  }> = [];
-  const ambiguous: Array<{ line: StatementLine; candidates: StatementBookItem[] }> = [];
-  const checkNo = (text: string): string | null =>
-    /\bCHECK\s*#?\s*(\d{2,7})\b/i.exec(text)?.[1] ?? null;
-  const sameSide = (b: StatementBookItem, l: StatementLine): boolean =>
-    Math.sign(b.amount_cents) === Math.sign(l.amount_cents);
-  // Las partidas en tránsito de la apertura están fechadas al corte pero el banco las
-  // muestra semanas después: tolerancia amplia sólo para ellas.
-  const isOpening = (b: StatementBookItem): boolean => /^Opening balance /.test(b.reference);
-  // Un pago de bill por cheque del POS (BP-####) no lleva el número de cheque (vive en QB) y el
-  // banco lo cobra hasta 2-3 semanas después (BP-1066 15/07 → CHECK #630 30/07): tolerancia de
-  // cheque en tránsito, siempre con candidato ÚNICO.
-  const isPosCheck = (b: StatementBookItem): boolean => /^BP-\d+/.test(b.reference) && b.amount_cents < 0;
-  const within = (b: StatementBookItem, l: StatementLine): boolean =>
-    daysBetween(b.day, l.day) <= (isOpening(b) ? 60 : isPosCheck(b) ? args.bpToleranceDays : args.toleranceDays);
-  const allocate = (line: StatementLine, book: StatementBookItem, amount: number): void => {
-    remaining.set(book.id, (remaining.get(book.id) ?? 0) - Math.sign(book.amount_cents) * amount);
-    matchedLines.add(line.id);
-    allocations.push({
-      statement_line_id: line.id,
-      book_kind: "journal_line",
-      book_id: book.id,
-      amount_cents: amount,
-      expected_book_hash: book.source_hash,
-    });
-  };
-  const open = (): StatementLine[] => context.lines.filter((l) => !matchedLines.has(l.id) && !l.blockers.length);
-  // Un asiento ANULADO al cierre (reversa, o documento con reversa fechada ≤ to) no se casa: su par
-  // suma cero y contamina al solver de neteos — cualquier solución + el par es otra solución, y
-  // "más de una solución" es "no se casa" (medido 2026-09-14: MER BNKCD $3.183,56 dejó de casar
-  // apenas apareció un par reversa/repost el 07-01). Y el banco pagó el documento VIVO (el bill
-  // payment del POS), no la copia importada de QB que se reversó.
-  const canceled = new Set(
-    (
-      await pool.query<{ id: string }>(
-        `SELECT l.id FROM bank_journal_line l JOIN bank_journal_entry e ON e.id=l.entry_id
-          WHERE l.id = ANY($1::text[])
-            AND (e.kind='reversal' OR EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id AND r.day<=$2))`,
-        [context.book_items.map((b) => b.id), args.to]
-      )
-    ).rows.map((r) => r.id)
-  );
-  const books = (): StatementBookItem[] =>
-    context.book_items.filter((b) => !b.blockers.length && rem(b) !== 0 && !canceled.has(b.id));
-
-  // 5a. Número de cheque: el banco dice "CHECK # 796" y el libro "QB Check 796" → se casan aunque
-  //     haya otros cheques del mismo monto; la fecha puede diferir semanas.
-  //     Un pago de bill del POS (BP-####) no lleva el número: vive en su copia de QB (reversada por el
-  //     importador porque el POS es el dueño), enlazada por `vendor_bill_payment.qb_txn_id`. Sin este
-  //     puente, dos BP de $1.500 al mismo vendor quincenales se casaban CRUZADOS (TD 2026-06: el cheque
-  //     1072 tomó BP-1062 en vez de BP-1051 por estar un día más cerca) y el error se arrastraba mes a mes.
-  const posCheckNo = new Map(
-    (
-      await pool.query<{ number: string; ref: string | null }>(
-        `SELECT bp.number,e.source_snapshot->>'ref_number' AS ref FROM vendor_bill_payment bp
-           JOIN bank_journal_entry e ON e.source_kind='qb_import' AND e.kind='document' AND e.source_id=bp.qb_txn_id
-          WHERE bp.bank_account_list_id=$1 AND bp.qb_txn_id IS NOT NULL AND bp.deleted_at IS NULL`,
-        [acct.qb_list_id]
-      )
-    ).rows.flatMap((r) => (r.ref && /^\d+$/.test(r.ref) ? [[r.number, r.ref] as const] : []))
-  );
-  const bookCheckNo = (b: StatementBookItem): string | null =>
-    checkNo(b.reference) ?? checkNo(b.description) ?? posCheckNo.get(b.reference) ?? null;
-  for (const line of open()) {
-    const no = checkNo(line.description);
-    if (!no) continue;
-    const hit = books().filter(
-      (b) => sameSide(b, line) && rem(b) === Math.abs(line.amount_cents) && bookCheckNo(b) === no
-    );
-    if (hit.length === 1) allocate(line, hit[0]!, Math.abs(line.amount_cents));
-  }
-  // 5b. Monto exacto + fecha cercana, candidato único.
-  for (const line of open()) {
-    const candidates = books()
-      .filter(
-        (b) =>
-          sameSide(b, line) &&
-          rem(b) === Math.abs(line.amount_cents) &&
-          within(b, line)
-      )
-      .sort((a, b) => daysBetween(a.day, line.day) - daysBetween(b.day, line.day));
-    if (!candidates.length) continue;
-    const best = candidates[0]!;
-    const tie = candidates.filter((c) => daysBetween(c.day, line.day) === daysBetween(best.day, line.day));
-    if (tie.length > 1) {
-      // k líneas iguales (mismo monto y día) contra k asientos iguales: cualquier emparejamiento es
-      // el mismo; se emparejan en orden. Si los conteos difieren, sí es ambiguo.
-      const twins = open().filter((l) => l.day === line.day && l.amount_cents === line.amount_cents);
-      if (twins.length === tie.length) {
-        twins.forEach((l, i) => allocate(l, tie[i]!, Math.abs(l.amount_cents)));
-        continue;
-      }
-      // Candidatos INDISTINGUIBLES (mismo día, monto y referencia — dos cheques pendientes de $1.500
-      // en la apertura de TD): elegir cualquiera es la misma conciliación; se toma el primero.
-      const same = (c: StatementBookItem): boolean =>
-        c.day === best.day && c.amount_cents === best.amount_cents && c.reference === best.reference && c.description === best.description;
-      if (tie.every(same)) {
-        allocate(line, best, Math.abs(line.amount_cents));
-        continue;
-      }
-      ambiguous.push({ line, candidates: tie });
-      continue;
-    }
-    allocate(line, best, Math.abs(line.amount_cents));
-  }
-  // 5c. Sumas: varias líneas del banco del MISMO día = un asiento (ATM $20 + $320 = depósito $340;
-  //     $9.320 + $440 + $20 + $20 = cheque Cash $9.800). Combinaciones de 2 a 8: QB agrupa los recibos
-  //     de un día de viaje en UN Credit Card Charge con hasta 7 líneas (Visa 7914, 2026-09-15).
-  //     Primero las líneas del MISMO día del asiento, después la tolerancia: tres wires a VEETECH
-  //     con su fee de $25 cada uno daban dos combinaciones válidas (los $25 son intercambiables)
-  //     y "ambiguo" dejaba junio de Wells sin cerrar (2026-09-14).
-  //     Búsqueda por suma con poda (no combinaciones enumeradas): un doc de QB de un día de viaje
-  //     agrupa hasta 7 recibos, y a ±5 días el pool de fees de centavos pasa de 30 líneas —
-  //     C(30,7) no se enumera, pero una DFS ordenada con corte en la 2ª solución sí termina.
-  const subsetSums = (pool_: StatementLine[], target: number, maxSize: number): StatementLine[][] => {
-    const sorted = [...pool_].sort((a, b) => Math.abs(b.amount_cents) - Math.abs(a.amount_cents));
-    const goal = Math.abs(target);
-    const suffix = new Array<number>(sorted.length + 1).fill(0);
-    for (let i = sorted.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1]! + Math.abs(sorted[i]!.amount_cents);
-    const solutions: StatementLine[][] = [];
-    let visits = 0;
-    const walk = (start: number, acc: StatementLine[], sum: number): void => {
-      if (solutions.length > 1 || visits++ > 200_000) return;
-      if (acc.length >= 2 && sum === goal) {
-        solutions.push(acc);
-        return;
-      }
-      if (acc.length === maxSize || sum + suffix[start]! < goal) return;
-      for (let i = start; i < sorted.length; i++) {
-        const next = sum + Math.abs(sorted[i]!.amount_cents);
-        if (next > goal) continue;
-        walk(i + 1, [...acc, sorted[i]!], next);
-      }
-    };
-    walk(0, [], 0);
-    if (visits > 200_000) return [];
-    // Dos soluciones que sólo difieren en CUÁL de dos fees de $0,20 entra son la misma
-    // conciliación (líneas intercambiables): se comparan por multiconjunto de montos.
-    const signature = (sol: StatementLine[]): string => sol.map((l) => l.amount_cents).sort((a, b) => a - b).join(",");
-    return solutions.length === 2 && signature(solutions[0]!) === signature(solutions[1]!) ? [solutions[0]!] : solutions;
-  };
-  for (const book of books()) {
-    const target = remaining.get(book.id) ?? 0; // con signo, igual que line.amount_cents
-    let done = false;
-    for (const window of [0, args.toleranceDays]) {
-      const pool_ = open().filter((l) => sameSide(book, l) && daysBetween(l.day, book.day) <= window);
-      if (pool_.length < 2 || pool_.length > 40) continue;
-      const hit = subsetSums(pool_, target, 8);
-      if (hit.length === 1) {
-        for (const l of hit[0]!) allocate(l, book, Math.abs(l.amount_cents));
-        done = true;
-      }
-      if (done || hit.length > 1) break; // ambiguo en la ventana chica: no ampliar
-    }
-  }
-  // Una línea del banco = suma NETA de varios asientos cercanos: la procesadora de tarjetas
-  // deposita ventas menos reembolsos del día ($3.704 + $22,42 − $72,64 − $97,93 − $111,01 = $3.444,84).
-  // Subconjuntos de hasta 5 asientos (cualquier signo) fechados a ±tolerancia; sólo si hay UNA solución.
-  // Neteo por DÍA de libro: la procesadora liquida las ventas y reembolsos de UN día y el banco lo
-  // muestra 1-3 días después. Para cada línea se prueban los asientos de un mismo día (el más
-  // cercano hacia atrás primero), subconjuntos de 2 a 6, solución única.
-  for (const line of open()) {
-    let done = false;
-    for (let back = 0; back <= args.toleranceDays && !done; back++) {
-      // Cluster de 3 días terminando en d (la liquidación puede juntar el fin de semana).
-      const d = daysAgo(line.day, back);
-      const d2 = daysAgo(d, 2);
-      const pool_ = books().filter((b) => b.day <= d && b.day >= d2);
-      if (pool_.length < 2 || pool_.length > 20) continue;
-      const solutions: StatementBookItem[][] = [];
-      const walk = (start: number, acc: StatementBookItem[], sum: number): void => {
-        if (solutions.length > 1) return;
-        if (acc.length >= 2 && sum === line.amount_cents) {
-          solutions.push(acc);
-          return;
-        }
-        if (acc.length === 8) return;
-        for (let i = start; i < pool_.length; i++) walk(i + 1, [...acc, pool_[i]!], sum + (remaining.get(pool_[i]!.id) ?? 0));
-      };
-      walk(0, [], 0);
-      if (solutions.length === 1) {
-        for (const b of solutions[0]!) allocate(line, b, rem(b));
-        done = true;
-      }
-    }
-  }
-  // Ventanas crecientes (±1, ±2, ±tolerancia): la solución más cercana en fecha gana; en cada
-  // ventana se exige solución ÚNICA. Pool acotado a 40 asientos (C(40,5) ≈ 660k por línea).
-  for (const line of open()) {
-    for (const window of [1, 2, args.toleranceDays]) {
-      const pool_ = books()
-        .filter((b) => daysBetween(b.day, line.day) <= window)
-        .sort((a, b) => a.day.localeCompare(b.day));
-      if (pool_.length > 40) break;
-      const solutions: StatementBookItem[][] = [];
-      const walk = (start: number, acc: StatementBookItem[], sum: number): void => {
-        if (solutions.length > 1) return;
-        if (acc.length >= 2 && sum === line.amount_cents) {
-          solutions.push(acc);
-          return;
-        }
-        if (acc.length === 5) return;
-        for (let i = start; i < pool_.length; i++) walk(i + 1, [...acc, pool_[i]!], sum + (remaining.get(pool_[i]!.id) ?? 0));
-      };
-      walk(0, [], 0);
-      if (solutions.length === 1) {
-        // Cada asiento entra completo; la línea recibe |monto| de cada uno (el signo lo lleva el asiento).
-        for (const b of solutions[0]!) allocate(line, b, rem(b));
-        break;
-      }
-      if (solutions.length > 1) break; // ambiguo ya en la ventana chica: no ampliar
-    }
-  }
-  // 5e. Mismo día, misma dirección, MISMA SUMA, distinto reparto: la procesadora descuenta sus fees en
-  //     dos débitos ($158,04 + $730,48) y QB los asentó como otros dos ($281,96 + $606,56). Ningún
-  //     subconjunto casa 1:1, pero el conjunto entero sí: k líneas ↔ m asientos (2..4 cada lado) se
-  //     reparten en orden. Sólo con lo que quedó abierto ese día y asientos a ±tolerancia.
-  for (const day of [...new Set(open().map((l) => l.day))]) {
-    for (const sgn of [1, -1]) {
-      const ls = open().filter((l) => l.day === day && Math.sign(l.amount_cents) === sgn);
-      const bs = books().filter((b) => Math.sign(b.amount_cents) === sgn && daysBetween(b.day, day) <= args.toleranceDays);
-      if (ls.length < 2 || ls.length > 4 || bs.length < 2 || bs.length > 4) continue;
-      if (ls.reduce((s, l) => s + l.amount_cents, 0) !== bs.reduce((s, b) => s + (remaining.get(b.id) ?? 0), 0)) continue;
-      let bi = 0;
-      for (const l of ls) {
-        let need = Math.abs(l.amount_cents);
-        while (need > 0 && bi < bs.length) {
-          const b = bs[bi]!;
-          const take = Math.min(need, rem(b));
-          if (take > 0) allocate(l, b, take);
-          need -= take;
-          if (rem(b) === 0) bi++;
-        }
-      }
-    }
-  }
-  // Los asientos de signo opuesto a su línea van primero: el trigger de capacidad suma con signo
-  // y una suma parcial que arranque por el depósito excedería la línea neteada.
-  const lineSign = new Map(context.lines.map((l) => [l.id, Math.sign(l.amount_cents)]));
-  const bookSign = new Map(context.book_items.map((b) => [b.id, Math.sign(b.amount_cents)]));
-  allocations.sort((x, y) => {
-    const ox = bookSign.get(x.book_id) === lineSign.get(x.statement_line_id) ? 1 : 0;
-    const oy = bookSign.get(y.book_id) === lineSign.get(y.statement_line_id) ? 1 : 0;
-    return ox - oy;
+  // 5. Casamiento automático — el casador es la librería `statement-suggest` (etapas 5a–5e,
+  //    2026-09-15): el mismo plan que el feed muestra como SUGERENCIA acá se aplica entero
+  //    (puesta al día por script). Paridad probada por hash: e2e-bank-suggest-parity-sandbox.ts.
+  const params = await loadSuggestParams(pool, {
+    account_list_id: acct.qb_list_id,
+    book_item_ids: context.book_items.map((b) => b.id),
+    to: args.to,
+    toleranceDays: args.toleranceDays,
+    bpToleranceDays: args.bpToleranceDays,
   });
+  const plan = suggestStatement(context, params);
+  const { allocations, ambiguous } = plan;
+  const canceled = params.canceled;
   let revision = context.statement.revision;
   for (let i = 0; i < allocations.length; i += 100) {
     const batch = allocations.slice(i, i + 100);
