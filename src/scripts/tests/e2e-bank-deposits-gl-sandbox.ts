@@ -66,6 +66,26 @@ async function expectPgError(client: Client, sql: string, params: unknown[], cod
   assert(seen.includes(code), label, seen.slice(0, 120) || "no error");
 }
 
+
+/** El clon puede no tener ningún cobro sin depositar (la adopción de QuickBooks
+ * los consume todos): se libera UNO revirtiendo el depósito adoptado que lo
+ * contiene (`adopt-qb-deposits --revert`), que es exactamente el estado de
+ * un cobro nuevo antes de su depósito. */
+async function freeReceipt(client: Client, methods: string[], extraSql = ""): Promise<void> {
+  const held = (await client.query<{ txn: string }>(
+    `SELECT d.qb_txn_id AS txn FROM bank_deposit d JOIN bank_deposit_line dl ON dl.deposit_id=d.id AND dl.deleted_at IS NULL
+       JOIN customer_payment cp ON cp.id=dl.payment_id
+      WHERE d.created_by='adopt-qb-deposits' AND d.status='ready' AND cp.method = ANY($1::text[]) AND cp.status IN ('available','partially_applied','applied')
+        AND COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id') IS NOT NULL AND COALESCE(cp.metadata->>'qb_source','') <> 'sales_receipt'
+        AND EXISTS (SELECT 1 FROM bank_journal_entry e WHERE e.source_kind='customer_payment' AND e.source_id=cp.id AND e.kind='document' AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id))
+        AND NOT EXISTS (SELECT 1 FROM bank_statement s WHERE s.account_list_id=d.account_list_id AND s.status='closed' AND d.deposit_date BETWEEN s.from_day AND s.to_day)
+        ${extraSql}
+      ORDER BY d.deposit_date DESC LIMIT 1`, [methods])).rows[0];
+  if (!held) return;
+  const r = (await import("node:child_process")).spawnSync("./node_modules/.bin/tsx", ["src/scripts/ledger/adopt-qb-deposits.ts", "--cache", process.env.E2E_QB_CACHE ?? ".qb-docs-cache", "--revert", "--txn", held.txn, "--apply"], { encoding: "utf8", env: { ...process.env, DISABLE_SCHEDULED_JOBS: "true" } });
+  console.log(`   [fixture] freed a ${methods.join("/")} receipt by reverting adopted deposit ${held.txn} (exit ${r.status})`);
+}
+
 type Snap = { id: string; lines: string; matches: string };
 async function snapshotEntries(client: Client, ids: string[]): Promise<Map<string, Snap>> {
   const { rows } = await client.query<Snap>(
@@ -202,6 +222,7 @@ async function main(): Promise<void> {
 
     // ── 6 · tarjeta con surcharge → línea UF = amount + surcharge ──────────
     console.log("\n── 6. card receipt with surcharge → GL credits UF for amount + surcharge");
+    await freeReceipt(client, ["credit_card", "debit_card", "card"], "AND COALESCE(cp.surcharge_cents,0)>0 AND cp.amount::numeric=trunc(cp.amount::numeric)");
     const card = (await client.query<{ id: string; display_id: number; amount: string; surcharge: string }>(
       `SELECT cp.id, cp.display_id, cp.amount::text, cp.surcharge_cents::text AS surcharge FROM customer_payment cp JOIN customer c ON c.id=cp.customer_id AND c.deleted_at IS NULL
         WHERE cp.deleted_at IS NULL AND cp.type='payment' AND cp.method IN ('credit_card','debit_card','card') AND cp.status IN ('available','partially_applied','applied')
