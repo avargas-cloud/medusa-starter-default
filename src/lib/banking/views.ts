@@ -201,7 +201,9 @@ export async function bankingTransactions(
      ), matching AS NOT MATERIALIZED (
        SELECT id,account_id,date,name,merchant_name,amount,currency,status,source_version,
          review,review_status,stale,day_closed,reconciled,attachment_count FROM projected
-       WHERE $9::text='all' OR review_status=$9::text
+       -- A line the bank took back (status removed) is reference only: it never needs review and never
+       -- blocks the day (review-daily-read ignores it), so "To review" must not list it (09/15/2026).
+       WHERE $9::text='all' OR (review_status=$9::text AND NOT ($9::text='pending' AND status='removed'))
      ), page AS (
        SELECT id,account_id,date,name,merchant_name,amount,currency,status,source_version,
          review,review_status,stale,day_closed,reconciled,attachment_count
