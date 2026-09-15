@@ -1,5 +1,9 @@
 import type { PoolClient } from "pg";
 
+import {
+  reconciledMatchesProjection,
+  type WithReconciledMatches,
+} from "./reconciled-matches";
 import { BankingError } from "./security";
 
 /**
@@ -31,12 +35,23 @@ export async function assertNoJournalClaim(
     throw new BankingError("BANKING_OPENING_TRANSACTION_CLAIMED", 409);
 }
 
-export async function journalClaimProjection<T extends { id: string }>(
+/**
+ * Page post-pass shared by the feed list, the transaction detail and the daily
+ * audit: `opening_clear` for claimed pre-cutover items, and — since 2026-09-15 —
+ * `reconciled.matches`, the ledger entries a Reconciled row was matched against
+ * (`reconciledMatchesProjection`, read-only).
+ */
+export async function journalClaimProjection<
+  T extends {
+    id: string;
+    reconciled?: { statement_id: string; from_day: string; to_day: string } | null;
+  },
+>(
   client: Pick<PoolClient, "query">,
   rows: T[]
 ): Promise<
   Array<
-    T & {
+    WithReconciledMatches<T> & {
       opening_clear?: { id: string; item_id: string; reference: string };
     }
   >
@@ -57,7 +72,8 @@ export async function journalClaimProjection<T extends { id: string }>(
       [rows.map((row) => row.id)]
     )
   ).rows;
-  return rows.map((row) => {
+  const withMatches = await reconciledMatchesProjection(client, rows);
+  return withMatches.map((row) => {
     const claim = claims.find((c) => c.transaction_id === row.id);
     return claim
       ? {
