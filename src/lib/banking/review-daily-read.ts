@@ -265,14 +265,19 @@ export async function loadDailyInputs(
     // A line matched by statement (closed, or draft with a match) is reviewed by the
     // book itself: it never gets a review and must not hold the day open (2026-09-15 —
     // no day could ever close because every reconciled line still counted as pending).
+    // A movement still PENDING at the bank blocks the day too: it cannot be matched or
+    // reviewed yet, and a closed day with unmatched lines is not a closed day (the operator,
+    // 2026-09-15: "no se puede cerrar un día que tenga transacciones sin matchear"). Only
+    // `removed` lines are ignored.
     const pending = transactions.filter(
       (row) =>
-        row.status === "posted" &&
+        (row.status === "posted" || row.status === "pending") &&
         !row.reconciled &&
         (row.stale ||
           !row.review ||
           !["confirmed", "excluded"].includes(row.review.status))
     ).length;
+    const pendingAtBank = transactions.filter((row) => row.status === "pending").length;
     if (applicable) {
       applicableCount++;
       if (
@@ -299,7 +304,7 @@ export async function loadDailyInputs(
         blockers.push(`${account.name}: Resolve the bank connection status.`);
       if (pending)
         blockers.push(
-          `${account.name}: ${pending} settled movement(s) need review.`
+          `${account.name}: ${pending} movement(s) need review${pendingAtBank ? ` (${pendingAtBank} still pending at the bank)` : ""}.`
         );
       if (transactions.some((row) => row.status === "posted" && !row.currency))
         blockers.push(`${account.name}: A movement has no currency.`);
