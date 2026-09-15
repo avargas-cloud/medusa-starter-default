@@ -75,7 +75,7 @@ import {
 } from "../../purchase-orders/qb-vendor-credit-enqueue";
 import { loadBillPaymentAddFacts } from "../../purchase-orders/qb-bill-payment-enqueue";
 import { loadVendorCreditApplyFacts } from "../../purchase-orders/qb-vendor-credit-apply-enqueue";
-import { buildTxnVoidQbxml } from "../txn-void-add";
+import { buildTxnVoidQbxml, type VoidableTxnType } from "../txn-void-add";
 import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "../gl-documents/facts";
 import { isGlDocumentKind } from "../gl-documents/types";
 import type { GlQbTxnType } from "../gl-documents/qbxml-builders";
@@ -1502,6 +1502,44 @@ export async function resubmitByStep(
           logger.info(
             `${LOG_PREFIX} ✅ gl_document_void ${row.id} (${row.reference_type} ${qbTxnType}) submitted op=${opId} txn=${qbTxnId}`
           );
+        } catch (voidErr) {
+          await failVoidFamilyRow(row, voidErr instanceof Error ? voidErr.message : String(voidErr));
+        }
+        break;
+      }
+
+      // qb-import-void-ui-20260915: TxnVoid de un documento IMPORTADO de
+      // QuickBooks. No hay ADD ni columna espejo: el TxnID es `reference_id`
+      // (= `row.qb_txn_id`) y el tipo viaja en `payload.qb_txn_type`, ambos
+      // escritos por `voidQbImportDocument` en la misma transacción que la
+      // reversa contable. Mismo passthrough raw que gl_document_void.
+      case "qb_import_void": {
+        const qbTxnId = row.reference_id ?? row.qb_txn_id ?? null;
+        const qbTxnType = (row.payload as { qb_txn_type?: string } | null)?.qb_txn_type as VoidableTxnType | undefined;
+        if (row.reference_type !== "qb_import" || !qbTxnId || !qbTxnType) {
+          await failPipelineRow(row.id, `qb_import_void: missing TxnID or qb_txn_type (reference_type=${row.reference_type})`);
+          break;
+        }
+        try {
+          const qbxml = buildTxnVoidQbxml(qbTxnType, qbTxnId);
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml },
+            { idempotencyKey: `qb-import-void:${row.id}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) {
+            throw new Error(`Bridge did not return an operationId for ${qbTxnType} TxnVoid`);
+          }
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId, qbTxnId]
+          );
+          logger.info(`${LOG_PREFIX} ✅ qb_import_void ${row.id} (${qbTxnType}) submitted op=${opId} txn=${qbTxnId}`);
         } catch (voidErr) {
           await failVoidFamilyRow(row, voidErr instanceof Error ? voidErr.message : String(voidErr));
         }

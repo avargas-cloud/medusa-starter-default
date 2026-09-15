@@ -238,6 +238,29 @@ export async function pollSubmittedRows(
         }
         const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs;
 
+        // qb-import-void-ui-20260915: TxnVoid de un documento importado de
+        // QuickBooks. Sin write-back: la reversa contable ya se escribió en la
+        // misma transacción que encoló la fila; la fila confirmada ES el
+        // registro de que QB lo anuló. Un rechazo con código (ya anulado a
+        // mano, 3120…) queda `failed` con reintentos, visible en la pestaña.
+        if (row.step === "qb_import_void") {
+          const voidRs = msgs?.TxnVoidRs as Record<string, unknown> | undefined;
+          const { statusCode: voidCode, statusMessage: voidMessage } = readDirectQueryStatus(voidRs);
+          if (!voidRs || (voidCode !== null && voidCode !== "0")) {
+            const message =
+              voidCode !== null
+                ? `QuickBooks rejected qb_import_void (${voidCode}): ${voidMessage}`
+                : "qb_import_void completed without a recognizable TxnVoidRs response";
+            await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
+            logger.warn(`${LOG_PREFIX} ⚠️ qb_import_void ${row.id}: ${message}`);
+            continue;
+          }
+          const wonConfirmImportVoid = await confirmPipelineRow(row.id, row.qb_txn_id ?? row.reference_id ?? null, null, voidRs);
+          if (wonConfirmImportVoid)
+            logger.info(`${LOG_PREFIX} ✅ qb_import_void ${row.id} confirmed — TxnID=${row.qb_txn_id ?? row.reference_id ?? "?"} voided in QuickBooks`);
+          continue;
+        }
+
         // gl-docs-to-qb-20260914: documentos GL bancarios (gl_check /
         // gl_transfer / gl_journal_entry / bank_deposit). Mismo passthrough raw
         // que el bloque de vendor credits de abajo; el `<Tipo>AddRs` a leer

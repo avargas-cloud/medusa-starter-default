@@ -709,6 +709,54 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           SELECT d.id, d.reference, d.qb_txn_id, 'Deposit - ' || COALESCE(d.memo, '') FROM bank_deposit d WHERE d.deleted_at IS NULL
         ) doc ON doc.id = qop.reference_id
         WHERE qop.step IN ('gl_document_add', 'gl_document_void')
+
+        UNION ALL
+
+        -- ── QuickBooks-imported document VOID (qb-import-void-ui-20260915) ──
+        -- TxnVoid of a document the POS never emitted (bank_journal_entry
+        -- source_kind = 'qb_import', reference_id = TxnID). The latest imported
+        -- entry lends its human label ("QB Check 1042 · ACME"); a re-import
+        -- after a failed void is a NEWER entry, so LATERAL … LIMIT 1.
+        SELECT
+          qop.id::text || '__' || qop.step               AS id,
+          NULL::bigint                                   AS seq,
+          ('Q' || COALESCE(regexp_replace(doc.document_number, '\\D', '', 'g'), '?'))
+                                                           AS seq_label,
+          doc.id                                         AS parent_id,
+          NULL::text                                     AS po_number,
+          NULL::text                                     AS draft_number,
+          NULL::text                                     AS receipt_number,
+          doc.document_number                            AS vendor_bill_number,
+          CASE
+            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
+            WHEN qop.status = 'skipped' THEN 'skipped'
+            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
+            WHEN qop.status = 'failed' THEN 'error'
+            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            ELSE 'waiting'
+          END                                            AS status,
+          qop.bridge_op_id                               AS qb_operation_id,
+          COALESCE(qop.qb_txn_id, qop.reference_id)      AS qb_list_id,
+          COALESCE(qop.qb_ref_number, doc.document_number) AS qb_txn_number,
+          qop.error                                      AS last_error,
+          COALESCE(qop.retry_count, 0)                   AS retries,
+          0                                              AS coalesced_edits,
+          qop.next_retry_at                              AS next_retry_at,
+          qop.confirmed_at                               AS synced_at,
+          qop.created_at                                 AS created_at,
+          COALESCE(qop.updated_at, qop.confirmed_at, qop.failed_at, qop.submitted_at, qop.created_at)
+                                                           AS updated_at,
+          doc.reference                                  AS vendor_name,
+          'void_qb_import'                               AS step
+        FROM qb_order_pipeline qop
+        JOIN LATERAL (
+          SELECT e.id, e.document_number, e.reference
+            FROM bank_journal_entry e
+           WHERE e.source_kind = 'qb_import' AND e.source_id = qop.reference_id
+             AND e.kind = 'document' AND e.deleted_at IS NULL
+           ORDER BY e.created_at DESC LIMIT 1
+        ) doc ON true
+        WHERE qop.step = 'qb_import_void'
       ) feed
       ) numbered
     `;

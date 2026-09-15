@@ -74,7 +74,11 @@ export type PipelineStep =
   // `reference_type` y el tipo QB creado en `payload.qb_txn_type`. Ver
   // lib/quickbooks/gl-documents/.
   | "gl_document_add"
-  | "gl_document_void";
+  | "gl_document_void"
+  // qb-import-void-ui-20260915: TxnVoid de un documento IMPORTADO de QuickBooks
+  // (`bank_journal_entry` source_kind='qb_import', reference_id = TxnID).
+  // Sin ADD: el POS nunca lo emitió. Ver lib/ledger/qb-import/void.ts.
+  | "qb_import_void";
 
 export type PipelineStatus =
   | "pending"

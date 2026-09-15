@@ -174,21 +174,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       // gl-docs-to-qb-20260914: the document table is the row's reference_type.
       "gl_document_add",
       "gl_document_void",
+      // qb-import-void-ui-20260915: no document table — the TxnID IS the reference.
+      "qb_import_void",
     ] as const
   ).find((step) => rawId.endsWith(`__${step}`));
   if (glChainStep) {
     const orderPipelineId = rawId.slice(0, -`__${glChainStep}`.length);
-    const table = glChainStep.startsWith("gl_document")
-      ? await resolveGlDocumentTable(knex, orderPipelineId)
-      : glChainStep.startsWith("vendor_credit")
-        ? "vendor_credit"
-        : "vendor_bill_payment";
-    if (!table) return res.status(404).json({ error: "Pipeline entry not found" });
+    const table =
+      glChainStep === "qb_import_void"
+        ? null
+        : glChainStep.startsWith("gl_document")
+          ? await resolveGlDocumentTable(knex, orderPipelineId)
+          : glChainStep.startsWith("vendor_credit")
+            ? "vendor_credit"
+            : "vendor_bill_payment";
+    if (!table && glChainStep !== "qb_import_void")
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    const docJoin = table ? `LEFT JOIN ${table} doc ON doc.id = qop.reference_id` : "";
+    const docTxn = table ? "doc.qb_txn_id" : "qop.reference_id";
     const rows = await knex
       .raw(
-        `SELECT qop.id, qop.status, doc.qb_txn_id AS doc_qb_txn_id
+        `SELECT qop.id, qop.status, ${docTxn} AS doc_qb_txn_id
            FROM qb_order_pipeline qop
-           LEFT JOIN ${table} doc ON doc.id = qop.reference_id
+           ${docJoin}
           WHERE qop.id = ?::uuid AND qop.step = ? LIMIT 1`,
         [orderPipelineId, glChainStep]
       )

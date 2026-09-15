@@ -27,7 +27,9 @@ export type PurchaseQbStep =
   // gl-docs-to-qb-20260914: cada documento GL bancario es raíz de su propia
   // cadena (add → void en serie). Ver lib/quickbooks/gl-documents/enqueue.ts.
   | "gl_document_add"
-  | "gl_document_void";
+  | "gl_document_void"
+  // qb-import-void-ui-20260915: el TxnID importado es raíz de su propia cadena.
+  | "qb_import_void";
 
 export interface PurchaseDependencyKnex {
   raw: (
@@ -53,7 +55,9 @@ export interface EnqueuePurchaseQbOperationInput {
     | "gl_check"
     | "gl_transfer"
     | "gl_journal_entry"
-    | "bank_deposit";
+    | "bank_deposit"
+    // qb-import-void-ui-20260915: documento importado de QuickBooks (no es tabla).
+    | "qb_import";
   step: PurchaseQbStep;
   payload: Record<string, unknown>;
   qbTxnId?: string | null;

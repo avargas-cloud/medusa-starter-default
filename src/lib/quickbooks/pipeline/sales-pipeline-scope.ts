@@ -34,6 +34,8 @@ export const PURCHASE_PIPELINE_STEPS = [
   // pestaña de compras (feed-sql.ts), fuera del Sales Pipeline.
   "gl_document_add",
   "gl_document_void",
+  // qb-import-void-ui-20260915: TxnVoid de un doc importado — misma pestaña.
+  "qb_import_void",
 ] as const;
 
 /** Steps surfaced by the Inventory Adjustments tab. */

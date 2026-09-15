@@ -71,6 +71,9 @@ async function main(): Promise<void> {
       // pair); counted through the same document JOIN the feed uses.
       ["gl_document_add", "add_gl_document"],
       ["gl_document_void", "void_gl_document"],
+      // qb-import-void-ui-20260915: TxnVoid of a QuickBooks-imported document;
+      // the feed joins the latest `qb_import` entry for that TxnID.
+      ["qb_import_void", "void_qb_import"],
     ] as const) {
       const docJoin =
         step === "vendor_credit_apply"
@@ -83,7 +86,11 @@ async function main(): Promise<void> {
             ? `JOIN (SELECT id FROM gl_check WHERE deleted_at IS NULL UNION ALL SELECT id FROM gl_transfer WHERE deleted_at IS NULL
                      UNION ALL SELECT id FROM gl_journal_entry WHERE deleted_at IS NULL UNION ALL SELECT id FROM bank_deposit WHERE deleted_at IS NULL) doc
                  ON doc.id = qop.reference_id`
-            : "";
+            : step === "qb_import_void"
+              ? `JOIN (SELECT DISTINCT source_id AS id FROM bank_journal_entry
+                        WHERE source_kind = 'qb_import' AND kind = 'document' AND deleted_at IS NULL) doc
+                   ON doc.id = qop.reference_id`
+              : "";
       const [source] = await q<{ count: string }>(
         `SELECT COUNT(*) AS count FROM qb_order_pipeline qop ${docJoin} WHERE qop.step = $1`,
         [step]
@@ -155,6 +162,11 @@ async function main(): Promise<void> {
                 UNION ALL SELECT id FROM gl_journal_entry WHERE deleted_at IS NULL UNION ALL SELECT id FROM bank_deposit WHERE deleted_at IS NULL) doc
             ON doc.id = qop.reference_id
          WHERE qop.step IN ('gl_document_add', 'gl_document_void'))
+      + (SELECT COUNT(*) FROM qb_order_pipeline qop
+          JOIN (SELECT DISTINCT source_id AS id FROM bank_journal_entry
+                 WHERE source_kind = 'qb_import' AND kind = 'document' AND deleted_at IS NULL) doc
+            ON doc.id = qop.reference_id
+         WHERE qop.step = 'qb_import_void')
       ) AS total
     `);
     check(

@@ -93,6 +93,9 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     "accounting/ledger/opening-balances/route.ts",
     "accounting/ledger/opening-balances/evidence/route.ts",
     "accounting/ledger/opening-balances/[accountListId]/reverse/route.ts",
+    // card-surcharge (1210dcec, 2026-09-14) llegó sin declararse: el barrido
+    // estructural lo marcaba en rojo desde entonces.
+    "accounting/ledger/card-surcharge/route.ts",
   ].map((file) => ({
     file,
     call: "requireFullAdmin(",
@@ -129,6 +132,10 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     "accounting/transfers/[id]/void/route.ts",
     "accounting/ledger/year-close/route.ts",
     "accounting/ledger/year-close/reverse/route.ts",
+    // Correcciones del Bank Feed (bankfeed-correct-20260915 · qb-import-void-ui-20260915):
+    // reclasificación enlazada al match y void de un documento importado de QB.
+    "accounting/journal-entries/reclassify/route.ts",
+    "accounting/ledger/qb-import/void/route.ts",
   ].map((file) => ({
     file,
     call: "assertAccounting(",

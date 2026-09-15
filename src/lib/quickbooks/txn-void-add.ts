@@ -25,6 +25,9 @@ export type VoidableTxnType =
   // documento) — sondeado read-only con TxnID inexistente el 2026-09-14.
   | "Check"
   | "CreditCardCharge"
+  // qb-import-void-ui-20260915: los docs importados de QB incluyen "Credit
+  // Card Credit" (reembolso en la tarjeta); su TxnVoidType es este.
+  | "CreditCardCredit"
   | "Deposit"
   | "JournalEntry";
 
