@@ -81,6 +81,17 @@ interface PlantOpts {
    * that copies it unchanged.
    */
   regularClearing?: boolean;
+  /** Flag the vendor as a China purchasing agent (`metadata.is_china_agent`). */
+  agentVendor?: boolean;
+  /**
+   * Plant the siblings the way the POS CREATES them: no purchase order, and no
+   * pointer from the regular. That is how every Veetech commission/freight
+   * bill is born — the PO and the pointer arrive together when the regular's
+   * PATCH links them (2026-09-15).
+   */
+  siblingsUnlinked?: boolean;
+  /** Give the service sibling a qb_txn_id. */
+  serviceInQb?: boolean;
 }
 
 async function plant(db: Client, o: PlantOpts): Promise<Fx> {
@@ -100,17 +111,20 @@ async function plant(db: Client, o: PlantOpts): Promise<Fx> {
   await db.query(
     `INSERT INTO qb_vendor (id, qb_list_id, full_name, name, company_name,
         metadata, created_at, updated_at)
-     VALUES ($1, $2, $3, $3, $3, '{}'::jsonb, NOW(), NOW())`,
-    [f.vendorId, `QBV-SD-${n}`, `Sibling Dispatch E2E ${n}`]
+     VALUES ($1, $2, $3, $3, $3, $4::jsonb, NOW(), NOW())`,
+    [
+      f.vendorId, `QBV-SD-${n}`, `Sibling Dispatch E2E ${n}`,
+      JSON.stringify(o.agentVendor ? { is_china_agent: true } : {}),
+    ]
   );
 
   // ── Caso sin purchase order: una comisión de venta suelta ──────────────────
   if (o.standaloneOnly) {
     await db.query(
       `INSERT INTO vendor_bill (id, purchase_order_id, status, bill_type, number,
-          reference_id, vendor_qb_list_id_snapshot, vendor_name_snapshot, document_date)
-       VALUES ($1, NULL, $2, 'service', $3, $4, $5, 'Sibling Dispatch E2E', NOW())`,
-      [f.serviceId, o.siblingStatus, `VB-SD-SOLO-${n}`, `REF-SOLO-${n}`, `QBV-SD-${n}`]
+          reference_id, vendor_qb_list_id_snapshot, vendor_name_snapshot, document_date, vendor_id)
+       VALUES ($1, NULL, $2, 'service', $3, $4, $5, 'Sibling Dispatch E2E', NOW(), $6)`,
+      [f.serviceId, o.siblingStatus, `VB-SD-SOLO-${n}`, `REF-SOLO-${n}`, `QBV-SD-${n}`, f.vendorId]
     );
     await db.query(
       `INSERT INTO vendor_bill_line
@@ -162,18 +176,23 @@ async function plant(db: Client, o: PlantOpts): Promise<Fx> {
   );
 
   const siblings: Array<[string, string, string, string, number, boolean]> = [
-    [f.serviceId as string, "service", `ACC-COMM-SD-${n}`, "Commission for Purchase:Test", 32860, false],
+    [f.serviceId as string, "service", `ACC-COMM-SD-${n}`, "Commission for Purchase:Test", 32860, Boolean(o.serviceInQb)],
     [f.freightId, "freight", `ACC-FRT-SD-${n}`, "Freight and Shipping Costs", 85400, Boolean(o.freightInQb)],
   ];
+  const siblingPoId = o.siblingsUnlinked ? null : f.poId;
   for (const [id, type, account, name, cents, inQb] of siblings) {
     await db.query(
       `INSERT INTO vendor_bill (id, purchase_order_id, status, bill_type, number,
           reference_id, vendor_qb_list_id_snapshot, vendor_name_snapshot,
-          document_date, qb_txn_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Sibling Dispatch E2E', NOW(), $8)`,
+          document_date, qb_txn_id, vendor_id, qb_edit_sequence, qb_source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Sibling Dispatch E2E', NOW(), $8, $9, $10, $11)`,
       [
-        id, f.poId, o.siblingStatus, type, `VB-SD-${type}-${n}`,
+        id, siblingPoId, o.siblingStatus, type, `VB-SD-${type}-${n}`,
         `REF-SD-${type}-${n}`, `QBV-SD-${n}`, inQb ? `TXN-SD-${type}-${n}` : null,
+        // `vendor_id` es lo que el despacho lee para la bandera de agente
+        // (0 bills sin vendor_id en prod, 2026-09-15); un bill en QuickBooks
+        // tiene TxnID *y* EditSequence, si no `buildPayload` lo rechaza.
+        f.vendorId, inQb ? `SEQ-SD-${type}-${n}` : null, inQb ? "owned" : null,
       ]
     );
     await db.query(
@@ -192,13 +211,16 @@ async function plant(db: Client, o: PlantOpts): Promise<Fx> {
       `INSERT INTO vendor_bill
          (id, purchase_order_id, status, bill_type, number, reference_id,
           vendor_qb_list_id_snapshot, vendor_name_snapshot, document_date,
-          service_vendor_bill_id, freight_vendor_bill_id, qb_txn_id)
+          service_vendor_bill_id, freight_vendor_bill_id, qb_txn_id, vendor_id)
        VALUES ($1, $2, $3, 'regular', $4, $5, $6, 'Sibling Dispatch E2E', NOW(),
-               $7, $8, $9)`,
+               $7, $8, $9, $10)`,
       [
         f.regularId, f.poId, o.regularStatus, `VB-SD-REG-${n}`, `REF-SD-REG-${n}`,
-        `QBV-SD-${n}`, f.serviceId, f.freightId,
+        `QBV-SD-${n}`,
+        o.siblingsUnlinked ? null : f.serviceId,
+        o.siblingsUnlinked ? null : f.freightId,
         o.regularInQb ? `TXN-SD-REG-${n}` : null,
+        f.vendorId,
       ]
     );
     // Un regular que vive en QuickBooks tiene TxnID *y* EditSequence: sin la
@@ -615,6 +637,190 @@ async function main(): Promise<void> {
     // hay A/P descuadrado que reportar.
     check("y NO nombra a un regular que todavía no llegó a QuickBooks",
       !driftIds.includes(d.regularId as string), JSON.stringify(driftIds));
+
+    // ── §8 · Un hermano de AGENTE nunca es standalone (2026-09-15) ────────────
+    //
+    // La regla del 08-31 leía "sin purchase order" como "no hay par que
+    // esperar". Pero un hermano de Veetech NACE sin PO: el modal no lo manda, y
+    // el PO le llega junto con el puntero cuando el regular lo vincula. Así que
+    // un hermano confirmado ANTES de vincularlo salía solo a QuickBooks a los 17
+    // segundos de creado, con el regular todavía en draft (VB-1235/1236/1239/
+    // 1240). La bandera del vendor es lo que separa las dos formas.
+    console.log("\n§8 — hermano de agente de China, confirmado ANTES de vincularlo");
+    const j = await plant(db, {
+      agentVendor: true, siblingsUnlinked: true,
+      regularStatus: "draft", siblingStatus: "confirmed",
+    });
+    planted.push(j);
+    const factsJ = await loadSecondaryDispatchFacts(knexLike as never, j.serviceId as string);
+    check("los hechos lo ven como agente, sin PO y sin regular",
+      factsJ?.vendor_is_china_agent === true && factsJ.has_purchase_order === false &&
+        factsJ.parent_regular === null,
+      JSON.stringify(factsJ));
+    const decJ = decideSecondaryDispatch(factsJ!);
+    check("⇒ NO se despacha: espera al regular que lo vincule",
+      decJ.dispatch === false && decJ.deferred === true, decJ.reason);
+    check("CERO filas de pipeline para él",
+      (await pipelineRowCount(db, j.serviceId as string)) === 0);
+
+    // El operador vincula desde el regular (lo que hace el PATCH): puntero en
+    // el regular + PO en los hermanos. Después confirma el regular.
+    await db.query(
+      `UPDATE vendor_bill SET service_vendor_bill_id = $2, freight_vendor_bill_id = $3,
+              status = 'confirmed' WHERE id = $1`,
+      [j.regularId, j.serviceId, j.freightId]
+    );
+    await db.query(
+      `UPDATE vendor_bill SET purchase_order_id = $2 WHERE id = ANY($1)`,
+      [[j.serviceId, j.freightId], j.poId]
+    );
+    const outJ = await dispatchConfirmedSiblings(knexLike as never, j.regularId as string);
+    check("vinculado y regular confirmado ⇒ el confirm del regular despacha los DOS",
+      outJ.filter((o) => o.outcome === "queued").length === 2,
+      JSON.stringify(outJ.map((o) => [o.bill_type, o.outcome, o.reason])));
+    const addJ = await enqueueQbVendorBillAdd(knexLike as never, j.regularId as string);
+    check("y el regular encola después", addJ.queued === true, (addJ as { reason?: string }).reason ?? "");
+    const payloadJ = (await db.query(
+      `SELECT payload FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = $1 AND intent = 'add'`,
+      [j.regularId]
+    )).rows[0]?.payload as { expense_lines?: Array<{ amount_cents: number }> } | undefined;
+    const negJ = (payloadJ?.expense_lines ?? []).map((l) => l.amount_cents).sort((a, b) => a - b);
+    check("con las DOS clearing lines por el total de cada hermano",
+      negJ.join(",") === [-85400, -32860].join(","), JSON.stringify(negJ));
+    const chainJ = await db.query(
+      `SELECT reference_id FROM qb_order_pipeline WHERE order_id = $1 AND step = 'vendor_bill_add'
+        ORDER BY created_at, id`,
+      [j.poId]
+    );
+    check("y los hermanos entran a la cadena ANTES que el regular",
+      chainJ.rows.length === 3 && chainJ.rows[2].reference_id === j.regularId,
+      chainJ.rows.map((r: { reference_id: string }) => (r.reference_id === j.regularId ? "REG" : "sib")).join(" → "));
+
+    // Con PO pero sin regular que lo apunte: mismo veredicto (la fase intermedia
+    // de un hermano creado desde el PO en vez de suelto).
+    const k = await plant(db, { agentVendor: true, regularStatus: null, siblingStatus: "confirmed" });
+    planted.push(k);
+    const decK = decideSecondaryDispatch((await loadSecondaryDispatchFacts(knexLike as never, k.freightId as string))!);
+    check("agente + PO + ningún regular lo apunta ⇒ espera", decK.dispatch === false && decK.deferred === true, decK.reason);
+
+    // La forma de VB-1234/1237, que el dueño decidió dejar así: el hermano YA
+    // está en QuickBooks (fue solo por la regla vieja), el regular llega después.
+    console.log("\n§8b — hermanos de agente que YA están en QuickBooks; el regular confirma después");
+    const m = await plant(db, {
+      agentVendor: true, regularStatus: "confirmed", siblingStatus: "synced",
+      serviceInQb: true, freightInQb: true,
+    });
+    planted.push(m);
+    const outM = await dispatchConfirmedSiblings(knexLike as never, m.regularId as string);
+    check("los dos se SALTAN — ninguno se re-encola",
+      outM.length === 2 && outM.every((o) => o.outcome === "skipped" && o.reason === "already in QuickBooks"),
+      JSON.stringify(outM.map((o) => [o.bill_type, o.outcome, o.reason])));
+    check("y no son fatales: el confirm del regular sigue",
+      fatalSiblingOutcomes(outM).length === 0);
+    check("CERO filas nuevas para los hermanos",
+      (await pipelineRowCount(db, m.serviceId as string)) === 0 &&
+        (await pipelineRowCount(db, m.freightId as string)) === 0);
+    const addM = await enqueueQbVendorBillAdd(knexLike as never, m.regularId as string);
+    check("el regular se encola igual", addM.queued === true, (addM as { reason?: string }).reason ?? "");
+    const payloadM = (await db.query(
+      `SELECT payload FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = $1 AND intent = 'add'`,
+      [m.regularId]
+    )).rows[0]?.payload as { expense_lines?: Array<{ amount_cents: number }> } | undefined;
+    const negM = (payloadM?.expense_lines ?? []).map((l) => l.amount_cents).sort((a, b) => a - b);
+    check("y SÍ lleva las clearing lines que cancelan los cargos ya posteados",
+      negM.join(",") === [-85400, -32860].join(","), JSON.stringify(negM));
+
+    // La forma de VB-1142: el regular YA está en QuickBooks a costo crudo, sin
+    // punteros ni clearing; sus dos cargos también, sueltos. El arreglo es
+    // vincular y reconfirmar: un Mod del regular con las dos negativas, y los
+    // hermanos se saltan (tienen TxnID).
+    console.log("\n§8c — la forma de VB-1142: regular en QB sin clearing + cargos sueltos en QB → vincular + Mod");
+    const q = await plant(db, {
+      agentVendor: true, siblingsUnlinked: true,
+      regularStatus: "draft", regularInQb: true, siblingStatus: "synced",
+      serviceInQb: true, freightInQb: true,
+    });
+    planted.push(q);
+    await db.query(
+      `UPDATE vendor_bill SET service_vendor_bill_id = $2, freight_vendor_bill_id = $3 WHERE id = $1`,
+      [q.regularId, q.serviceId, q.freightId]
+    );
+    await db.query(`UPDATE vendor_bill SET purchase_order_id = $2 WHERE id = ANY($1)`,
+      [[q.serviceId, q.freightId], q.poId]);
+    const outQ = await dispatchConfirmedSiblings(knexLike as never, q.regularId as string);
+    check("los cargos ya en QB se saltan", outQ.every((o) => o.outcome === "skipped"),
+      JSON.stringify(outQ.map((o) => [o.bill_type, o.outcome])));
+    const modQ = await enqueueChinaAgencyVendorBillModGroup(knexLike as never, q.regularId as string);
+    check("el Mod del regular se encola", modQ.queued === true, JSON.stringify(modQ));
+    const modPayloadQ = (await db.query(
+      `SELECT payload FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+      [q.regularId]
+    )).rows[0]?.payload as { clearing_lines?: Array<{ kind: string; amount_cents: number }> } | undefined;
+    const clrQ = (modPayloadQ?.clearing_lines ?? []).map((l) => `${l.kind}:${l.amount_cents}`).sort();
+    // EL LÍMITE, medido acá el 2026-09-15: el Mod CONSERVA la forma que mandó el
+    // Add — refresca clearing lines que ya existen (por TxnLineID), nunca agrega
+    // una. Un regular que llegó a QuickBooks crudo (VB-1142) y después vincula
+    // sus cargos NO se arregla con Reconfirm: es un cambio de forma, o sea un
+    // REBUILD (TxnDel + Add nuevo con landed + negativas). Se afirma el
+    // contrato real para que nadie crea que "link + reconfirm" balancea.
+    check("el Mod NO agrega clearing lines — cambiar de forma es rebuild, no Mod",
+      clrQ.length === 0, JSON.stringify(clrQ));
+    // El grupo modifica a todo miembro con TxnID (regla del 09-03), así que los
+    // cargos reciben un Mod de contenido idéntico — nunca un Add, que es lo que
+    // duplicaría el documento. En prod, VB-1142 = 3 Mods.
+    const intentsQ = await db.query(
+      `SELECT vendor_bill_id, intent FROM qb_vendor_bill_pipeline
+        WHERE vendor_bill_id = ANY($1) AND deleted_at IS NULL`,
+      [[q.serviceId, q.freightId]]
+    );
+    check("los hermanos reciben un Mod de grupo, NUNCA un Add",
+      intentsQ.rows.length === 2 && intentsQ.rows.every((r: { intent: string }) => r.intent === "mod"),
+      JSON.stringify(intentsQ.rows));
+
+    // ── §8d · El carril que SÍ arregla la forma de VB-1142: el rebuild ───────
+    //
+    // El guard del rebuild sólo conocía "línea nueva de PO". Un cambio de forma
+    // (crudo → landed + negativas) lo decide ahora el predicado compartido; el
+    // control negativo es la mitad: un regular que YA tiene sus negativas no se
+    // borra — a ése lo refresca el Mod.
+    console.log("\n§8d — el rebuild acepta el cambio de forma y rechaza al que ya está bien");
+    const { claimUnlock } = await import("../../lib/purchase-orders/qb-vendor-bill-unlock");
+    const { loadRebuildShapeFacts, needsShapeRebuild } = await import(
+      "../../lib/purchase-orders/vendor-bill-rebuild-shape"
+    );
+    // `q` sigue plantado: regular en QB sin clearing, hermanos apuntados y en QB.
+    const shapeQ = needsShapeRebuild((await loadRebuildShapeFacts(knexLike as never, q.regularId as string))!);
+    check("el predicado pide rebuild para la forma de VB-1142", shapeQ.required === true, shapeQ.reason);
+    check("y nombra a los dos hermanos",
+      shapeQ.required && shapeQ.reason.includes("VB-SD-service") && shapeQ.reason.includes("VB-SD-freight"),
+      shapeQ.reason);
+    // Un Mod en vuelo (§8c lo encoló) bloquea el unlock — se limpia para probar el guard.
+    await db.query(`DELETE FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = ANY($1)`,
+      [[q.regularId, q.serviceId, q.freightId]]);
+    await db.query(`DELETE FROM qb_order_pipeline WHERE order_id = $1`, [q.poId]);
+    const unlockQ = await claimUnlock(knexLike as never, q.regularId as string, {
+      reason: "e2e shape change", actorId: "user_sd",
+    });
+    check("claimUnlock ACEPTA el rebuild sin línea nueva de PO", unlockQ.ok === true, JSON.stringify(unlockQ));
+    const stagedQ = await db.query(
+      `SELECT intent FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = $1 AND deleted_at IS NULL`,
+      [q.regularId]
+    );
+    check("y deja la fila en rebuild_prepare (TxnDel primero, el Add lo trae el Reconfirm)",
+      stagedQ.rows[0]?.intent === "rebuild_prepare", JSON.stringify(stagedQ.rows));
+
+    // CONTROL NEGATIVO: `h` está en QB CON clearing lines persistidas y sin
+    // línea nueva — es el caso del Mod, no del rebuild.
+    const shapeH = needsShapeRebuild((await loadRebuildShapeFacts(knexLike as never, h.regularId as string))!);
+    check("un regular que YA tiene sus negativas NO pide rebuild", shapeH.required === false, shapeH.reason);
+    await db.query(`DELETE FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = ANY($1)`,
+      [[h.regularId, h.serviceId, h.freightId]]);
+    await db.query(`DELETE FROM qb_order_pipeline WHERE order_id = $1`, [h.poId]);
+    const unlockH = await claimUnlock(knexLike as never, h.regularId as string, {
+      reason: "e2e must refuse", actorId: "user_sd",
+    });
+    check("y claimUnlock lo RECHAZA con bill_rebuild_not_required",
+      unlockH.ok === false && unlockH.code === "bill_rebuild_not_required", JSON.stringify(unlockH));
 
     // Idempotencia: correrlo dos veces no duplica.
     const outAgain = await dispatchConfirmedSiblings(knexLike as never, a.regularId as string);

@@ -41,6 +41,7 @@ import {
   decideSecondaryDispatch,
   loadSecondaryDispatchFacts,
 } from "../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
+import { loadRebuildShapeFacts, needsShapeRebuild } from "../../../../lib/purchase-orders/vendor-bill-rebuild-shape";
 import {
   decideConfirmReceiptRequirement,
   loadConfirmReceiptFacts,
@@ -937,6 +938,17 @@ export async function GET(
     }
   }
 
+  // Does the QuickBooks Bill have the wrong SHAPE (2026-09-15)? Same shared
+  // predicate as the unlock guard and the reconfirm: the screen shows the
+  // rebuild banner exactly when the guard would accept the rebuild and the
+  // reconfirm would refuse a Mod. Null when it does not apply.
+  let qb_rebuild_required: { reason: string } | null = null;
+  if (header.bill_type === "regular" && header.qb_txn_id) {
+    const shapeFacts = await loadRebuildShapeFacts(knex, id);
+    const shape = shapeFacts ? needsShapeRebuild(shapeFacts) : null;
+    if (shape?.required) qb_rebuild_required = { reason: shape.reason };
+  }
+
   const revisionsResult = await knex.raw(
     `SELECT r.revision_number, r.status, r.input_hash, r.confirmed_at,
             r.confirmed_by_user_id,
@@ -972,6 +984,7 @@ export async function GET(
       qb,
       qb_pipeline,
       qb_dispatch,
+      qb_rebuild_required,
       confirm_gate,
       clearing_drift,
       revisions,

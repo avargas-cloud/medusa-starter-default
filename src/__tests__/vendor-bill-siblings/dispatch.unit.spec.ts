@@ -12,6 +12,7 @@
 
 import {
   decideSecondaryDispatch,
+  dispatchConfirmedSiblings,
   fatalSiblingOutcomes,
   parentDocumentIsLive,
   REGULAR_GREEN_LIGHT_STATUSES,
@@ -27,6 +28,7 @@ const facts = (over: Partial<SecondaryDispatchFacts> = {}): SecondaryDispatchFac
   has_purchase_order: true,
   parent_regular: null,
   already_in_quickbooks: false,
+  vendor_is_china_agent: false,
   ...over,
 });
 
@@ -197,6 +199,132 @@ describe("decideSecondaryDispatch", () => {
       expect(d).toMatchObject({ dispatch: false, deferred: true });
     }
   );
+});
+
+// ── a China-agent sibling is NEVER standalone (2026-09-15) ──────────────────
+//
+// The hole in the 2026-08-31 rule: "no purchase order → nothing to pair with →
+// dispatch" was written for sales commissions. But a Veetech commission or
+// freight bill is BORN without a PO — `NewIndependentBillModal` never sends
+// one; the PO lands on it only when the regular bill's PATCH links it. So an
+// operator who confirmed the sibling before linking it sent it to QuickBooks
+// alone, 17 seconds after creating it, with the regular still a draft.
+// Measured on production 2026-09-15: VB-1235/1236 (→ VB-1234 draft),
+// VB-1239/1240 (→ VB-1237 draft), and VB-1143/1144 never linked at all.
+//
+// The vendor's agent flag is what separates the two shapes — the same flag that
+// gates the regular's "ready = fully received" confirm.
+describe("decideSecondaryDispatch — China-agent vendor", () => {
+  it("defers an agent sibling with NO purchase order — it is not standalone, it is unlinked", () => {
+    const d = decideSecondaryDispatch(
+      facts({ bill_type: "service", has_purchase_order: false, vendor_is_china_agent: true })
+    );
+    expect(d).toMatchObject({ dispatch: false, deferred: true });
+    expect(d.reason).toMatch(/regular/i);
+  });
+
+  it("defers an agent sibling with a PO but no regular pointing at it", () => {
+    const d = decideSecondaryDispatch(
+      facts({ has_purchase_order: true, parent_regular: null, vendor_is_china_agent: true })
+    );
+    expect(d).toMatchObject({ dispatch: false, deferred: true });
+  });
+
+  it("defers an agent sibling while its regular is a draft not yet in QuickBooks", () => {
+    const d = decideSecondaryDispatch(
+      facts({
+        vendor_is_china_agent: true,
+        parent_regular: parent({ number: "VB-1234", status: "draft" }),
+      })
+    );
+    expect(d).toMatchObject({ dispatch: false, deferred: true });
+    expect(d.reason).toContain("VB-1234");
+  });
+
+  it("dispatches an agent sibling once its regular is confirmed — the pair rule is unchanged", () => {
+    const d = decideSecondaryDispatch(
+      facts({
+        vendor_is_china_agent: true,
+        parent_regular: parent({ number: "VB-1150", status: "confirmed" }),
+      })
+    );
+    expect(d.dispatch).toBe(true);
+  });
+
+  it("still dispatches a NON-agent bill with no PO — sales commissions keep going alone", () => {
+    // Control: VB-1146/1148 (Commission for Sale:Referral), VB-1149
+    // (Subcontractor), VB-1156/1157 (Duties:DHL) have no regular and never will.
+    const d = decideSecondaryDispatch(
+      facts({ bill_type: "service", has_purchase_order: false, vendor_is_china_agent: false })
+    );
+    expect(d.dispatch).toBe(true);
+  });
+
+  it("never re-adds an agent sibling already in QuickBooks, whatever the regular says", () => {
+    // VB-1235: went alone by the old rule, stays there by owner decision
+    // (2026-09-15). The regular's confirm must SKIP it and still post the
+    // clearing line that cancels it — see dispatchConfirmedSiblings below.
+    const d = decideSecondaryDispatch(
+      facts({
+        vendor_is_china_agent: true,
+        already_in_quickbooks: true,
+        parent_regular: parent({ number: "VB-1234", status: "draft" }),
+      })
+    );
+    expect(d).toMatchObject({ dispatch: false, deferred: false });
+  });
+});
+
+describe("dispatchConfirmedSiblings — a sibling already in QuickBooks", () => {
+  /**
+   * A knex stand-in that answers the three queries the function makes and
+   * records which ones ran. The pipeline lookup and the enqueue must never be
+   * reached for a sibling that already has a TxnID: a second BillAdd would
+   * mint a duplicate Bill in QuickBooks (ADD steps are not idempotent).
+   */
+  function fakeKnex(state: { in_qb: boolean; status: string }) {
+    const calls: string[] = [];
+    return {
+      calls,
+      raw: async (sql: string) => {
+        calls.push(sql);
+        if (sql.includes("FROM vendor_bill reg")) {
+          return {
+            rows: [
+              {
+                vendor_bill_id: "vb_sib",
+                number: "VB-1235",
+                bill_type: "service",
+                qb_account_list_id: "acct",
+                qb_account_full_name: "Commission for Purchase:Veetech Representative",
+                total_cents: 56283,
+              },
+            ],
+          };
+        }
+        if (sql.includes("WHERE id = ANY")) {
+          return { rows: [{ id: "vb_sib", number: "VB-1235", status: state.status, in_qb: state.in_qb }] };
+        }
+        return { rows: [] };
+      },
+    };
+  }
+
+  it("skips it with 'already in QuickBooks' and never touches the pipeline", async () => {
+    const knex = fakeKnex({ in_qb: true, status: "synced" });
+    const outcomes = await dispatchConfirmedSiblings(knex, "vb_reg");
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        number: "VB-1235",
+        outcome: "skipped",
+        reason: "already in QuickBooks",
+      }),
+    ]);
+    expect(knex.calls.some((sql) => sql.includes("qb_vendor_bill_pipeline"))).toBe(false);
+    // Structural skip, not a failure: the regular's confirm must go on and
+    // post its clearing line — that is what balances the charge already there.
+    expect(fatalSiblingOutcomes(outcomes)).toEqual([]);
+  });
 });
 
 describe("parentDocumentIsLive", () => {

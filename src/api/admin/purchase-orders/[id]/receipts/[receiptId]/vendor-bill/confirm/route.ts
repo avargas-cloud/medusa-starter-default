@@ -48,6 +48,7 @@ import {
   dispatchConfirmedSiblings,
   fatalSiblingOutcomes,
 } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-sibling-dispatch";
+import { loadRebuildShapeFacts, needsShapeRebuild } from "../../../../../../../../lib/purchase-orders/vendor-bill-rebuild-shape";
 import {
   decideConfirmReceiptRequirement,
   loadConfirmReceiptFacts,
@@ -459,6 +460,22 @@ export async function POST(
           id: line.id,
           purchase_order_line_id: line.purchase_order_line_id,
         })),
+      });
+    }
+    // Nor can BillMod CHANGE THE SHAPE of the Bill (2026-09-15): a regular that
+    // reached QuickBooks at raw cost and only then linked its siblings needs
+    // the clearing shape (landed cost + negative lines). The Mod would go out
+    // identical to what is there, the POS would move to landed, and the
+    // clearing drift banner would stay on forever. Same shared predicate as
+    // the unlock guard and the detail — fail closed, offer the rebuild.
+    const shapeFacts = await loadRebuildShapeFacts(knex, bill.id);
+    const shape = shapeFacts ? needsShapeRebuild(shapeFacts) : null;
+    if (shape?.required) {
+      return res.status(409).json({
+        error: `${shape.reason}. Prepare the QB rebuild, wait until the old Bill is removed, then Reconfirm.`,
+        code: "bill_rebuild_required",
+        strategy: "qb_rebuild_prepare",
+        lines: [],
       });
     }
   }

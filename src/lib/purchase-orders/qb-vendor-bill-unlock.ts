@@ -6,6 +6,7 @@ import {
   type PurchaseDependencyKnex,
 } from "./qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { loadRebuildShapeFacts, needsShapeRebuild } from "./vendor-bill-rebuild-shape";
 
 /**
  * Stages the destructive half of a Vendor Bill rebuild.
@@ -45,8 +46,14 @@ export interface ClaimUnlockInput {
    * (error 3060) until that claim is gone. There may be no new line at all,
    * and the guards below are relaxed ONLY for this trigger — the original
    * flow keeps the exact behaviour it was written with.
+   *
+   * `shape_change` (2026-09-15) is decided HERE, not by the caller: a regular
+   * that reached QuickBooks in the local shape and then linked its siblings
+   * needs the clearing shape, which BillMod cannot produce. Any caller may
+   * omit the trigger and still get the rebuild when `needsShapeRebuild` says
+   * so — VB-1142's operator has no "new line" to point at.
    */
-  trigger?: "new_po_line" | "po_contraction_repair";
+  trigger?: "new_po_line" | "po_contraction_repair" | "shape_change";
 }
 
 interface BillRow {
@@ -142,9 +149,19 @@ export async function claimUnlock(
     // A contraction repair has no new line to look for — the Bill is being
     // deleted so the PO can SHRINK below what QuickBooks says is billed. Asking
     // for a new line here would reject exactly the case the repair exists for.
+    //
+    // Neither has a SHAPE change (2026-09-15): the Bill sits in QuickBooks at
+    // raw cost with no clearing lines while the POS now links the siblings it
+    // should cancel. Decided by the shared predicate so the guard, the confirm
+    // and the screen cannot disagree about which documents qualify.
+    const shapeFacts = await loadRebuildShapeFacts(trx, vendorBillId);
+    const shape = shapeFacts
+      ? needsShapeRebuild(shapeFacts)
+      : { required: false as const, reason: "bill not found" };
     if (
       unlinkedPoLineResult.rows.length === 0 &&
-      input.trigger !== "po_contraction_repair"
+      input.trigger !== "po_contraction_repair" &&
+      !shape.required
     ) {
       return {
         ok: false,

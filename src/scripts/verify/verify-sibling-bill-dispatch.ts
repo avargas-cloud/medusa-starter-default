@@ -30,7 +30,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import Knex from "knex";
-import { scanLostSiblingBills } from "../../lib/purchase-orders/vendor-bill-invariant-scans";
+import {
+  scanLostSiblingBills,
+  scanPrematureSiblingDispatch,
+} from "../../lib/purchase-orders/vendor-bill-invariant-scans";
 
 const SRC = path.resolve(__dirname, "../..");
 
@@ -194,6 +197,34 @@ async function main(): Promise<void> {
     "Add → Mod on the same document has to stay serial"
   );
 
+  // A CHINA-AGENT SIBLING IS NEVER STANDALONE (2026-09-15).
+  //
+  // The 08-31 rule read "no purchase order" as "nothing to pair with". An
+  // agent's commission/freight bill is BORN without a PO (the create modal
+  // never sends one; the regular's PATCH attaches it), so a sibling confirmed
+  // before it was linked went to QuickBooks alone, with the regular a draft.
+  // The agent check has to sit ABOVE the no-PO branch or it never runs for the
+  // exact case it exists for. Asserted by POSITION of the two `if`s, not by
+  // the presence of the word: the import alone would satisfy a text search.
+  const dispatchRule = bodyWithoutImports(
+    "lib/purchase-orders/qb-vendor-bill-sibling-dispatch.ts"
+  );
+  const idxAgentGate = dispatchRule.search(
+    /if\s*\(\s*facts\.vendor_is_china_agent\s*&&\s*!facts\.parent_regular\s*\)/
+  );
+  const idxNoPoGate = dispatchRule.search(/if\s*\(\s*!facts\.has_purchase_order\s*\)/);
+  check(
+    idxAgentGate > -1 && idxNoPoGate > -1 && idxAgentGate < idxNoPoGate,
+    "a China-agent sibling is deferred BEFORE the no-PO rule can call it standalone",
+    `agent@${idxAgentGate} < noPO@${idxNoPoGate}`
+  );
+  check(
+    /LEFT JOIN qb_vendor v ON v\.id = vb\.vendor_id/.test(dispatchRule) &&
+      /VENDOR_IS_CHINA_AGENT_SQL/.test(dispatchRule),
+    "the facts loader reads the agent flag from qb_vendor with the shared SQL",
+    "same predicate as the regular's fully-received gate"
+  );
+
   console.log("\n§2 — the invariant, against live data\n");
 
   const knex = Knex({ client: "pg", connection: url, pool: { min: 0, max: 3 } });
@@ -228,6 +259,36 @@ async function main(): Promise<void> {
       `\n         ${waiting.length} secondary bill(s) correctly WAITING on their regular bill:`
     );
     for (const w of waiting) console.log(`         waiting ${w}`);
+
+    console.log("\n§3 — the INVERSE failure: agent siblings in QuickBooks ahead of their regular\n");
+
+    // §2 is structurally blind to this: it only looks at bills WITHOUT a
+    // TxnID. This is the state that lived 09/04→09/15 with everything green.
+    const early = await scanPrematureSiblingDispatch(knex as never);
+    const labelEarly = (f: {
+      number: string | null;
+      vendor_bill_id: string;
+      bill_type: string;
+      total_cents: number;
+      regular_number: string | null;
+      regular_status: string | null;
+    }) =>
+      `${f.number ?? f.vendor_bill_id} (${f.bill_type}, ${money(f.total_cents)}) → ${
+        f.regular_number ? `${f.regular_number} '${f.regular_status}'` : "NO regular links it"
+      }`;
+    check(
+      early.premature.length === 0,
+      "no China-agent sibling lives in QuickBooks while its regular is unconfirmed or missing",
+      early.premature.length === 0
+        ? "none"
+        : `${early.premature.length} bills, ${money(early.premature_cents)}`
+    );
+    for (const f of early.premature) console.log(`         EARLY   ${labelEarly(f)}`);
+    // Owner-accepted (2026-09-15): reported so nobody "fixes" them twice.
+    console.log(
+      `\n         ${early.accepted.length} sibling(s) in QuickBooks ahead of their regular, ACCEPTED by the owner:`
+    );
+    for (const f of early.accepted) console.log(`         accepted ${labelEarly(f)}`);
   } finally {
     await knex.destroy();
   }

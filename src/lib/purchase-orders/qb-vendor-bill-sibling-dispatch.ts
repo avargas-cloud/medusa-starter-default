@@ -43,6 +43,7 @@
 
 import { loadClearingSiblings } from "./load-clearing-siblings";
 import { enqueueQbVendorBillAdd } from "./qb-vendor-bill-enqueue";
+import { VENDOR_IS_CHINA_AGENT_SQL } from "../../api/admin/purchase-orders/_lib/china-transfer";
 
 export interface SiblingDispatchKnex {
   raw: (
@@ -106,6 +107,19 @@ export interface SecondaryDispatchFacts {
   parent_regular: ParentRegularFacts | null;
   /** This bill's own QuickBooks TxnID — present means it already lives there. */
   already_in_quickbooks: boolean;
+  /**
+   * The vendor is a China purchasing agent (`qb_vendor.metadata.is_china_agent`,
+   * the same flag that gates the regular's "ready = fully received" confirm).
+   *
+   * THIS IS WHAT SEPARATES "STANDALONE" FROM "NOT LINKED YET" (2026-09-15).
+   * An agent's commission or freight bill is BORN without a purchase order —
+   * the create modal never sends one; the PO lands on it only when the regular
+   * bill's PATCH links it. So for an agent, "no PO" does not mean "nothing to
+   * pair with": it means the pairing has not happened yet. Under the 08-31 rule
+   * that read as standalone, and VB-1235/1236/1239/1240 went to QuickBooks
+   * 17-28 s after being created, with their regular still a draft.
+   */
+  vendor_is_china_agent: boolean;
 }
 
 export type SecondaryDispatchDecision =
@@ -139,6 +153,24 @@ export function decideSecondaryDispatch(
       dispatch: false,
       deferred: false,
       reason: "already in QuickBooks — a re-confirm goes down the Mod path",
+    };
+  }
+
+  // A CHINA-AGENT SIBLING IS NEVER STANDALONE (owner, 2026-09-15).
+  //
+  // Its commission and freight are folded into the regular bill's landed cost
+  // and cancelled there by a negative clearing line — so a document that goes
+  // to QuickBooks alone is a charge with nothing to balance it, and one that
+  // goes BEFORE the goods are fully received is a charge the owner has not
+  // accepted yet. With or without a PO, the ONLY green light is the regular
+  // that points at it. This check sits above the no-PO rule on purpose: for an
+  // agent, a missing PO is the normal state of a sibling nobody has linked yet.
+  if (facts.vendor_is_china_agent && !facts.parent_regular) {
+    return {
+      dispatch: false,
+      deferred: true,
+      reason:
+        "China-agent bill — waits for the regular bill that links it; its confirm will dispatch this bill",
     };
   }
 
@@ -237,11 +269,13 @@ export async function loadSecondaryDispatchFacts(
     `SELECT vb.bill_type,
             (vb.purchase_order_id IS NOT NULL) AS has_po,
             (vb.qb_txn_id IS NOT NULL)         AS in_qb,
+            COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false) AS vendor_is_agent,
             reg.id     AS parent_id,
             reg.number AS parent_number,
             reg.status AS parent_status,
             (reg.qb_txn_id IS NOT NULL) AS parent_in_qb
        FROM vendor_bill vb
+       LEFT JOIN qb_vendor v ON v.id = vb.vendor_id
        LEFT JOIN vendor_bill reg
               ON reg.deleted_at IS NULL
              AND reg.bill_type = 'regular'
@@ -258,6 +292,7 @@ export async function loadSecondaryDispatchFacts(
         bill_type: string;
         has_po: boolean;
         in_qb: boolean;
+        vendor_is_agent: boolean | null;
         parent_id: string | null;
         parent_number: string | null;
         parent_status: string | null;
@@ -270,6 +305,7 @@ export async function loadSecondaryDispatchFacts(
     bill_type: row.bill_type,
     has_purchase_order: Boolean(row.has_po),
     already_in_quickbooks: Boolean(row.in_qb),
+    vendor_is_china_agent: Boolean(row.vendor_is_agent),
     parent_regular:
       row.parent_id && row.parent_status
         ? {
