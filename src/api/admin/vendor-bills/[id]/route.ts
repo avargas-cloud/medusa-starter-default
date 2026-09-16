@@ -973,7 +973,7 @@ export async function GET(
   // gl-purchases-v2 §3: AP balance + the payments/credits that make it up.
   // A separate pg pool, not `knex` — `computeBillBalance` speaks pg `$1`
   // bindings, never knex `?` (see recompute-bill-finance.ts's split).
-  const { balance, payments, credit_applications } =
+  const { balance, payments, credit_applications, adjustments } =
     await loadVendorBillPayablesDetail(getDbPool(), id);
 
   return res.json({
@@ -1001,6 +1001,8 @@ export async function GET(
       paid_status: balance?.paid_status ?? null,
       payments,
       credit_applications,
+      adjustments,
+      adjusted_cents: balance?.adjusted_cents ?? null,
     },
   });
 }

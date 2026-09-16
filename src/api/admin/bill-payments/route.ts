@@ -18,6 +18,7 @@ import type { SqlClient } from "../../../lib/accounting/month-close-data";
 import { bankingErrorResponse } from "../../../lib/accounting/banking-error-http";
 import { runLedgerHook } from "../../../lib/ledger-hooks/run-ledger-hook";
 import { postBillPayment } from "../../../lib/ledger";
+import { postVendorBillAdjustment } from "../../../lib/ledger/documents/vendor-bill-adjustment";
 import { enqueueBillPaymentAdd } from "../../../lib/purchase-orders/qb-bill-payment-enqueue";
 
 function authError(res: MedusaResponse, error: unknown) {
@@ -96,7 +97,7 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     });
   }
 
-  let created: { id: string; number: string };
+  let created: { id: string; number: string; auto_adjustment_ids: string[] };
   const client = await getDbPool().connect();
   try {
     created = await createBillPayment(client, {
@@ -124,6 +125,14 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     source_kind: "vendor_bill_payment",
     source_id: created.id,
   });
+  // ap-rounding-cleanup-20260916: the cents the payment left within tolerance
+  // were absorbed in the same transaction; post them to the GL the same way.
+  for (const adjustmentId of created.auto_adjustment_ids) {
+    await runLedgerHook((c) => postVendorBillAdjustment(c, adjustmentId, actorId), {
+      source_kind: "vendor_bill_adjustment",
+      source_id: adjustmentId,
+    });
+  }
 
   const knex = req.scope.resolve("__pg_connection__") as SqlClient;
   const qbResult = await enqueueBillPaymentAdd(knex, created.id).catch((err: unknown) => ({

@@ -136,6 +136,8 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     // reclasificación enlazada al match y void de un documento importado de QB.
     "accounting/journal-entries/reclassify/route.ts",
     "accounting/ledger/qb-import/void/route.ts",
+    // ap-rounding-cleanup-20260916: batch write-off de residuos de centavos.
+    "accounting/payables/write-off-rounding/route.ts",
   ].map((file) => ({
     file,
     call: "assertAccounting(",

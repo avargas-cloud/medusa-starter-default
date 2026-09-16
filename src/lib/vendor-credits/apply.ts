@@ -1,4 +1,6 @@
 import { generateEntityId } from "@medusajs/utils";
+import type { PoolClient } from "pg";
+import { maybeAutoWriteOffRounding } from "../vendor-bill-adjustments/auto";
 
 import { computeBillBalance, type PgQueryClient } from "../finance/recompute-bill-finance";
 
@@ -29,7 +31,7 @@ interface BillRow {
 export async function applyVendorCreditToBill(
   client: PgClient,
   params: { creditId: string; vendorBillId: string; amountCents: number; actorId: string }
-): Promise<{ id: string }> {
+): Promise<{ id: string; auto_adjustment_ids: string[] }> {
   const { creditId, vendorBillId, amountCents, actorId } = params;
   if (!(amountCents > 0)) {
     throw new VendorCreditError("invalid_amount", "amount_cents must be > 0.");
@@ -103,8 +105,16 @@ export async function applyVendorCreditToBill(
       `UPDATE vendor_credit SET applied_cents = applied_cents + $2, updated_at = now() WHERE id = $1`,
       [creditId, amountCents]
     );
+    // ap-rounding-cleanup-20260916: a credit applied for the vendor's real
+    // total leaves the integer-cent line sum open by cents — absorb it here.
+    const outcome = await maybeAutoWriteOffRounding(client as unknown as PoolClient, {
+      vendor_bill_id: vendorBillId,
+      trigger: "credit",
+      trigger_id: id,
+      actor_id: actorId,
+    });
     await client.query("COMMIT");
-    return { id };
+    return { id, auto_adjustment_ids: outcome.created ? [outcome.adjustment.id] : [] };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

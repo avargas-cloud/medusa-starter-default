@@ -12,6 +12,7 @@ export type LedgerSourceKind =
   | "vendor_bill"
   | "vendor_credit"
   | "vendor_bill_payment"
+  | "vendor_bill_adjustment"
   | "opening_balance";
 
 export interface LedgerAccount {

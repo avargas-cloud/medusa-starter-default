@@ -1,0 +1,1817 @@
+{
+ "1CBC65-1785436439": {
+  "amount_due_cents": 103493,
+  "is_paid": true,
+  "ref": "6909",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1CB6E4-1785273808",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1D12D9-1789488167",
+    "amount_cents": -103493
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1CC372-1785880774": {
+  "amount_due_cents": 71988,
+  "is_paid": false,
+  "ref": "149743626",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1CAEF2-1784820449",
+    "amount_cents": 0
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C6B6C-1780681698": {
+  "amount_due_cents": 55400,
+  "is_paid": true,
+  "ref": "726069",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C65EC-1780427470",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C6C30-1780689299",
+    "amount_cents": -41600
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CA961-1784639318",
+    "amount_cents": -13800
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1CD194-1786714050": {
+  "amount_due_cents": 41472,
+  "is_paid": true,
+  "ref": "6940",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1CBE9B-1785520003",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1D12D9-1789488167",
+    "amount_cents": -41472
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B2ED1-1767705584": {
+  "amount_due_cents": 1038090,
+  "is_paid": true,
+  "ref": "050819",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AEE6B-1764193746",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B3216-1767824386",
+    "amount_cents": -638090
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1B4ACE-1768862926",
+    "amount_cents": -23160
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BE5D7-1774636126",
+    "amount_cents": -376840
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1AB5FA-1761664551": {
+  "amount_due_cents": 60925,
+  "is_paid": true,
+  "ref": "048379",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AA02D-1760992140",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1A7B50-1759945292",
+    "amount_cents": -20160
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B32AB-1767824835",
+    "amount_cents": -40765
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1CC6C6-1786037760": {
+  "amount_due_cents": 10422,
+  "is_paid": false,
+  "ref": "149616426",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C9FBE-1784140727",
+    "amount_cents": 0
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C3879-1778260721": {
+  "amount_due_cents": 35291,
+  "is_paid": true,
+  "ref": "303357737",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C2EB5-1777909270",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7D8B-1781800691",
+    "amount_cents": -35291
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C058C-1775851398": {
+  "amount_due_cents": 61791,
+  "is_paid": true,
+  "ref": "302638028",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BB712-1772656332",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -61791
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C3836-1778251756": {
+  "amount_due_cents": 38893,
+  "is_paid": true,
+  "ref": "303239121",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C12AD-1776792239",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7D8B-1781800691",
+    "amount_cents": -38893
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C8CD7-1782835387": {
+  "amount_due_cents": 12396,
+  "is_paid": true,
+  "ref": "303904861",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C873C-1782408846",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CDD8C-1787341994",
+    "amount_cents": -12396
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C66C4-1780494686": {
+  "amount_due_cents": 68589,
+  "is_paid": true,
+  "ref": "303540142",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C5646-1779728954",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7D8B-1781800691",
+    "amount_cents": -68589
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C7EAE-1781889229": {
+  "amount_due_cents": 42593,
+  "is_paid": true,
+  "ref": "303734773",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C70F5-1781125124",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CDD8C-1787341994",
+    "amount_cents": -42593
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B8B78-1770848386": {
+  "amount_due_cents": 28094,
+  "is_paid": true,
+  "ref": "302357095",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B80B4-1770325206",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -28094
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C059B-1775851541": {
+  "amount_due_cents": 23597,
+  "is_paid": true,
+  "ref": "302862395",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BDFB0-1774386155",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -23597
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C382A-1778251536": {
+  "amount_due_cents": 46692,
+  "is_paid": true,
+  "ref": "303058874",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C0224-1775767757",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -46692
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C0571-1775851103": {
+  "amount_due_cents": 53194,
+  "is_paid": true,
+  "ref": "302427491",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B8F1F-1770929701",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -53194
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C0563-1775850910": {
+  "amount_due_cents": 42195,
+  "is_paid": true,
+  "ref": "302423501",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B8E63-1770916395",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -42195
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B6D6A-1769715403": {
+  "amount_due_cents": 41794,
+  "is_paid": true,
+  "ref": "302048835",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B3158-1767806201",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -41794
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B6D5F-1769715160": {
+  "amount_due_cents": 45791,
+  "is_paid": true,
+  "ref": "301808617",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B049F-1765393061",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B6D8A-1769716114",
+    "amount_cents": -45791
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C057C-1775851227": {
+  "amount_due_cents": 38794,
+  "is_paid": true,
+  "ref": "302490742",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B9789-1771452578",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -38794
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B0640-1765460873": {
+  "amount_due_cents": 31295,
+  "is_paid": true,
+  "ref": "301542389",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1ADB7F-1763140707",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B6D8A-1769716114",
+    "amount_cents": -31295
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B062F-1765460361": {
+  "amount_due_cents": 20297,
+  "is_paid": true,
+  "ref": "301348210\t",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AA50C-1761075891",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B6D8A-1769716114",
+    "amount_cents": -20297
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B0637-1765460589": {
+  "amount_due_cents": 25196,
+  "is_paid": true,
+  "ref": "301352576",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AB959-1761754057",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B6D8A-1769716114",
+    "amount_cents": -25196
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B6D7D-1769715635": {
+  "amount_due_cents": 33595,
+  "is_paid": true,
+  "ref": "302112419",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B3F86-1768420134",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -33595
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5CA7-1769182383": {
+  "amount_due_cents": 482487,
+  "is_paid": true,
+  "ref": "5295",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B21B9-1766436369",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -482487
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BDF02-1774357756": {
+  "amount_due_cents": 7928,
+  "is_paid": true,
+  "ref": "1JTX-4JKH-CW3J",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B951C-1771276645",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BDF13-1774357861",
+    "amount_cents": -7928
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C26C3-1777645243": {
+  "amount_due_cents": 83161,
+  "is_paid": true,
+  "ref": "6221",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C2291-1777561042",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C653D-1780422616",
+    "amount_cents": -83161
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C78E5-1781627459": {
+  "amount_due_cents": 7757,
+  "is_paid": true,
+  "ref": "19D4-XW1C-31TH",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C3EE0-1778705349",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7908-1781627604",
+    "amount_cents": -7757
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C8719-1782404313": {
+  "amount_due_cents": 90733,
+  "is_paid": true,
+  "ref": "6639",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C85D7-1782323553",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CB3F0-1785169358",
+    "amount_cents": -90733
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C10EE-1776695541": {
+  "amount_due_cents": 55839,
+  "is_paid": true,
+  "ref": "6078",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C0D5C-1776371522",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -55839
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5CF5-1769182998": {
+  "amount_due_cents": 76107,
+  "is_paid": true,
+  "ref": "5297",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B3E8C-1768412094",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -76107
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BFD20-1775679395": {
+  "amount_due_cents": 8989,
+  "is_paid": true,
+  "ref": "1FNW-MPYC-TLWJ",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BAE25-1772231211",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BFD37-1775679630",
+    "amount_cents": -8989
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B3205-1767824190": {
+  "amount_due_cents": 663462,
+  "is_paid": true,
+  "ref": "5151",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B21B9-1766436369",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B5D1D-1769183374",
+    "amount_cents": -663462
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4BDE-1779456607": {
+  "amount_due_cents": 8544,
+  "is_paid": true,
+  "ref": "1V6J-CWTR-GNRT",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C05B9-1775853758",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4C0D-1779458947",
+    "amount_cents": -8544
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4152-1778856482": {
+  "amount_due_cents": 14985,
+  "is_paid": true,
+  "ref": "124254",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C38A5-1778265786",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7D2E-1781791597",
+    "amount_cents": -14985
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C6F20-1781032172": {
+  "amount_due_cents": 171780,
+  "is_paid": true,
+  "ref": "6473",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C6977-1780585777",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C9823-1783611100",
+    "amount_cents": -171780
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C378F-1778185261": {
+  "amount_due_cents": 108012,
+  "is_paid": true,
+  "ref": "6258",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C3216-1778016509",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C653D-1780422616",
+    "amount_cents": -108012
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C78A3-1781627119": {
+  "amount_due_cents": 42288,
+  "is_paid": true,
+  "ref": "1FVT-NKGX-7FLX",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C30CB-1778004704",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7908-1781627604",
+    "amount_cents": -42288
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C9866-1783617652": {
+  "amount_due_cents": 143131,
+  "is_paid": true,
+  "ref": "6736",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C95BA-1783457752",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CCAAB-1786395317",
+    "amount_cents": -143131
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5CBF-1769182765": {
+  "amount_due_cents": 36269,
+  "is_paid": true,
+  "ref": "5240",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B30EF-1767803692",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -36269
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BAA32-1772200857": {
+  "amount_due_cents": 119639,
+  "is_paid": true,
+  "ref": "5663",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BA6A6-1772056561",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BFAB9-1775572296",
+    "amount_cents": -119639
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C77CD-1781556936": {
+  "amount_due_cents": 113691,
+  "is_paid": true,
+  "ref": "6515",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C6F4D-1781035490",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C9C1A-1783960117",
+    "amount_cents": -113691
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C1A3C-1777065453": {
+  "amount_due_cents": 114011,
+  "is_paid": true,
+  "ref": "6108",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C12B6-1776796053",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C653D-1780422616",
+    "amount_cents": -114011
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4BF0-1779456933": {
+  "amount_due_cents": 1710,
+  "is_paid": true,
+  "ref": "1XXX-4VGW-JV3V",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BF87A-1775499194",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4C0D-1779458947",
+    "amount_cents": -1710
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C58D3-1779891614": {
+  "amount_due_cents": 226201,
+  "is_paid": true,
+  "ref": "6338",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C3F50-1778766093",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C7819-1781557742",
+    "amount_cents": -21125
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7970-1781636210",
+    "amount_cents": -205076
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C592E-1779894914": {
+  "amount_due_cents": 91889,
+  "is_paid": true,
+  "ref": "6392",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C5618-1779725503",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C81E3-1782221099",
+    "amount_cents": -91889
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B9CDE-1771873766": {
+  "amount_due_cents": 37722,
+  "is_paid": true,
+  "ref": "5574",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B957E-1771335506",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BCFFB-1773688308",
+    "amount_cents": -37722
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B05CC-1765403612": {
+  "amount_due_cents": 122322,
+  "is_paid": true,
+  "ref": "4993",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AFA46-1764881670",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B326C-1767824773",
+    "amount_cents": -122322
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C7E13-1781814784": {
+  "amount_due_cents": 134364,
+  "is_paid": true,
+  "ref": "6577",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C7BC4-1781729706",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C9C1A-1783960117",
+    "amount_cents": -134364
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1CAED3-1784820320": {
+  "amount_due_cents": 21292,
+  "is_paid": true,
+  "ref": "1MHJ-16TN-PC33",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C6E26-1780947593",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CB4A9-1785181121",
+    "amount_cents": -21292
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B8FB0-1770936598": {
+  "amount_due_cents": 11192,
+  "is_paid": true,
+  "ref": "1T4C-YJY9-KWYF",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B066E-1765466772",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B8FC5-1770937199",
+    "amount_cents": -11192
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BFA98-1775571753": {
+  "amount_due_cents": 113280,
+  "is_paid": true,
+  "ref": "5935",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BED51-1774967096",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -113280
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C26BE-1777645215": {
+  "amount_due_cents": 11393,
+  "is_paid": true,
+  "ref": "6212",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C1F34-1777404143",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C653D-1780422616",
+    "amount_cents": -11393
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B8B67-1770848262": {
+  "amount_due_cents": 51993,
+  "is_paid": true,
+  "ref": "302285292",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B69CC-1769621467",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1C39F7-1778516926",
+    "amount_cents": -51993
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BFA82-1775571637": {
+  "amount_due_cents": 42661,
+  "is_paid": true,
+  "ref": "5761",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BC37B-1773088957",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C11EF-1776721730",
+    "amount_cents": -42661
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BFA8D-1775571692": {
+  "amount_due_cents": 82911,
+  "is_paid": true,
+  "ref": "5829",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BD679-1773861262",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C11EF-1776721730",
+    "amount_cents": -82911
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C33D4-1778089654": {
+  "amount_due_cents": 990,
+  "is_paid": true,
+  "ref": "1G1H-LKPQ-LKJY",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BAE25-1772231211",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C3404-1778090756",
+    "amount_cents": -990
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C33EB-1778090495": {
+  "amount_due_cents": 6101,
+  "is_paid": true,
+  "ref": "16PR-M3GQ-96N9",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BEA92-1774903692",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C3404-1778090756",
+    "amount_cents": -6101
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1A7036-1759500447": {
+  "amount_due_cents": 33570,
+  "is_paid": true,
+  "ref": "IN0250630",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1A54F4-1758740956",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1B4651-1768585354",
+    "amount_cents": -33570
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C787E-1781622323": {
+  "amount_due_cents": 2094,
+  "is_paid": true,
+  "ref": "1VJM-N66L-FXTC",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C398C-1778507094",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7908-1781627604",
+    "amount_cents": -2094
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C26AD-1777645180": {
+  "amount_due_cents": 78968,
+  "is_paid": true,
+  "ref": "6193",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C1C78-1777321705",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C653D-1780422616",
+    "amount_cents": -78968
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4BC3-1779456286": {
+  "amount_due_cents": 4766,
+  "is_paid": true,
+  "ref": "1LYF-VX4Q-9L6J",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BFBC7-1775598442",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4C0D-1779458947",
+    "amount_cents": -4766
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5CD7-1769182824": {
+  "amount_due_cents": 11033,
+  "is_paid": true,
+  "ref": "5243",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B30EF-1767803692",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -11033
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B735B-1770047844": {
+  "amount_due_cents": 142935,
+  "is_paid": true,
+  "ref": "5418",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B6EBE-1769723940",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BCFFB-1773688308",
+    "amount_cents": -142935
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5D08-1769183155": {
+  "amount_due_cents": 65505,
+  "is_paid": true,
+  "ref": "5341",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B4CAC-1769012069",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -65505
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B0592-1765403347": {
+  "amount_due_cents": 145711,
+  "is_paid": true,
+  "ref": "4936",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AEE72-1764194482",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B326C-1767824773",
+    "amount_cents": -145711
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C82D2-1782233920": {
+  "amount_due_cents": 107621,
+  "is_paid": true,
+  "ref": "6617",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C8295-1782228660",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CB3F0-1785169358",
+    "amount_cents": -107621
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C1A31-1777065360": {
+  "amount_due_cents": 25433,
+  "is_paid": true,
+  "ref": "6113",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C125F-1776786482",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -25433
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4BD1-1779456483": {
+  "amount_due_cents": 2704,
+  "is_paid": true,
+  "ref": "1XRT-K4RT-YC7R",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BF87A-1775499194",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4C0D-1779458947",
+    "amount_cents": -2704
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B1B43-1766078683": {
+  "amount_due_cents": 55916,
+  "is_paid": true,
+  "ref": "5089",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B1545-1765811057",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B5D1D-1769183374",
+    "amount_cents": -55916
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5CAC-1769182520": {
+  "amount_due_cents": 47424,
+  "is_paid": true,
+  "ref": "5227",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B30EF-1767803692",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -47424
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4BBE-1779456229": {
+  "amount_due_cents": 3596,
+  "is_paid": true,
+  "ref": "1QKT-YK1N-LLHW",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BF51D-1775162094",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4C0D-1779458947",
+    "amount_cents": -3596
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5D03-1769183033": {
+  "amount_due_cents": 48736,
+  "is_paid": true,
+  "ref": "5313",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B45D8-1768581808",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -48736
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B05B2-1765403411": {
+  "amount_due_cents": 83139,
+  "is_paid": true,
+  "ref": "4961",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AF456-1764686865",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B326C-1767824773",
+    "amount_cents": -83139
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C943D-1783372972": {
+  "amount_due_cents": 138456,
+  "is_paid": true,
+  "ref": "6697",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C8EB7-1782915934",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CCAAB-1786395317",
+    "amount_cents": -138456
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C10DD-1776695513": {
+  "amount_due_cents": 81599,
+  "is_paid": true,
+  "ref": "6071",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C0C7F-1776286112",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -81599
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C789D-1781626102": {
+  "amount_due_cents": 1596,
+  "is_paid": true,
+  "ref": "16KN-WDF6-FLFJ",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C399E-1778509375",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7908-1781627604",
+    "amount_cents": -1596
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C33B5-1778089448": {
+  "amount_due_cents": 18103,
+  "is_paid": true,
+  "ref": "1G1H-LKPQ-FV9M",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BC38B-1773091077",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C3404-1778090756",
+    "amount_cents": -18103
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B064C-1765460955": {
+  "amount_due_cents": 13996,
+  "is_paid": true,
+  "ref": "301669023",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AED08-1764177593",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B6D8A-1769716114",
+    "amount_cents": -13996
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B8F97-1770936124": {
+  "amount_due_cents": 4617,
+  "is_paid": true,
+  "ref": "19JC-YHQG-4T93",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AE970-1764016182",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B8FC5-1770937199",
+    "amount_cents": -4617
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C8CCE-1782835347": {
+  "amount_due_cents": 37496,
+  "is_paid": true,
+  "ref": "303855958",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C813F-1782150015",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CDD8C-1787341994",
+    "amount_cents": -37496
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C5C56-1780060173": {
+  "amount_due_cents": 55618,
+  "is_paid": true,
+  "ref": "6417",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C5A4C-1779916373",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C81E3-1782221099",
+    "amount_cents": -55618
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1AD8F5-1763072349": {
+  "amount_due_cents": 47019,
+  "is_paid": true,
+  "ref": "4775",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AD822-1763061323",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B326C-1767824773",
+    "amount_cents": -47019
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B9CC5-1771873615": {
+  "amount_due_cents": 24368,
+  "is_paid": true,
+  "ref": "5540",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B8CC5-1770910143",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BCFFB-1773688308",
+    "amount_cents": -24368
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B8FAB-1770936537": {
+  "amount_due_cents": 1758,
+  "is_paid": true,
+  "ref": "19C6-WCQL-GPC9",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B0181-1765296356",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B8FC5-1770937199",
+    "amount_cents": -1758
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1CAE9D-1784819090": {
+  "amount_due_cents": 47639,
+  "is_paid": true,
+  "ref": "14P1-3VYG-47PM",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C5971-1779904671",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1CB4A9-1785181121",
+    "amount_cents": -47639
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BFAA6-1775571795": {
+  "amount_due_cents": 1188,
+  "is_paid": true,
+  "ref": "5945",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BF474-1775145576",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -1188
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C77EE-1781557004": {
+  "amount_due_cents": 23153,
+  "is_paid": true,
+  "ref": "6539",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C737C-1781281982",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C9C1A-1783960117",
+    "amount_cents": -23153
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C4BD8-1779456564": {
+  "amount_due_cents": 798,
+  "is_paid": true,
+  "ref": "1WDF-HPHN-HVKL",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C0556-1775850038",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4C0D-1779458947",
+    "amount_cents": -798
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B5CE8-1769182923": {
+  "amount_due_cents": 17966,
+  "is_paid": true,
+  "ref": "5246",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B30EF-1767803692",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B9EAD-1771876639",
+    "amount_cents": -17966
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1AD8A6-1763068587": {
+  "amount_due_cents": 44734,
+  "is_paid": true,
+  "ref": "IN0255070",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AD5FA-1762986416",
+    "amount_cents": 0
+   },
+   {
+    "type": "VendorCredit",
+    "txn_id": "1B4651-1768585354",
+    "amount_cents": -44734
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B8FA6-1770936453": {
+  "amount_due_cents": 16303,
+  "is_paid": true,
+  "ref": "16GG-TYCQ-4VJ3",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1AE978-1764017301",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1B8FC5-1770937199",
+    "amount_cents": -16303
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C1A59-1777065494": {
+  "amount_due_cents": 68207,
+  "is_paid": true,
+  "ref": "6132",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C1471-1776886827",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C653D-1780422616",
+    "amount_cents": -68207
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C037F-1775836057": {
+  "amount_due_cents": 42948,
+  "is_paid": true,
+  "ref": "5993",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BFBCC-1775598584",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -42948
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C10D2-1776695314": {
+  "amount_due_cents": 69887,
+  "is_paid": true,
+  "ref": "6022",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C04A7-1775838487",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C4B07-1779374125",
+    "amount_cents": -69887
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C58F6-1779892277": {
+  "amount_due_cents": 50116,
+  "is_paid": true,
+  "ref": "6383",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C4B46-1779375923",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C81E3-1782221099",
+    "amount_cents": -50116
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1C413F-1778856287": {
+  "amount_due_cents": 65359,
+  "is_paid": true,
+  "ref": "6298",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1C3C8F-1778598776",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1C7970-1781636210",
+    "amount_cents": -65359
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1BA462-1771964190": {
+  "amount_due_cents": 219354,
+  "is_paid": true,
+  "ref": "5638",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1BA004-1771942181",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BFAB9-1775572296",
+    "amount_cents": -219354
+   }
+  ],
+  "checked_at": "2026-09-16"
+ },
+ "1B9CCD-1771873713": {
+  "amount_due_cents": 48833,
+  "is_paid": true,
+  "ref": "5522",
+  "linked": [
+   {
+    "type": "PurchaseOrder",
+    "txn_id": "1B7E6D-1770238891",
+    "amount_cents": 0
+   },
+   {
+    "type": "BillPaymentCheck",
+    "txn_id": "1BCFFB-1773688308",
+    "amount_cents": -48833
+   }
+  ],
+  "checked_at": "2026-09-16"
+ }
+}

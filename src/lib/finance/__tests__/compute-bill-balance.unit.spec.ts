@@ -16,6 +16,7 @@ describe("computeBillBalance", () => {
       { match: "FROM vendor_bill vb", rows: [] },
       { match: "FROM vendor_bill_payment_allocation a", rows: [] },
       { match: "FROM vendor_credit_application ca", rows: [] },
+      { match: "FROM vendor_bill_adjustment", rows: [] },
     ]);
     const result = await computeBillBalance(client as never, "vb_missing");
     expect(result).toBeNull();
@@ -29,6 +30,7 @@ describe("computeBillBalance", () => {
       },
       { match: "FROM vendor_bill_payment_allocation a", rows: [{ vendor_bill_id: "vb_1", paid: 5_000 }] },
       { match: "FROM vendor_credit_application ca", rows: [{ vendor_bill_id: "vb_1", credited: 1_000 }] },
+      { match: "FROM vendor_bill_adjustment", rows: [] },
     ]);
     const result = await computeBillBalance(client as never, "vb_1");
     expect(result).toEqual({
@@ -36,6 +38,7 @@ describe("computeBillBalance", () => {
       payable_cents: 15_000,
       paid_cents: 5_000,
       credited_cents: 1_000,
+      adjusted_cents: 0,
       balance_cents: 9_000,
       paid_status: "partial",
     });
@@ -49,6 +52,7 @@ describe("computeBillBalance", () => {
       },
       { match: "FROM vendor_bill_payment_allocation a", rows: [] },
       { match: "FROM vendor_credit_application ca", rows: [] },
+      { match: "FROM vendor_bill_adjustment", rows: [] },
     ]);
     const result = await computeBillBalance(client as never, "vb_adopted");
     expect(result?.payable_cents).toBe(4200);
@@ -63,6 +67,7 @@ describe("computeBillBalance", () => {
       },
       { match: "FROM vendor_bill_payment_allocation a", rows: [{ vendor_bill_id: "vb_2", paid: 10_000 }] },
       { match: "FROM vendor_credit_application ca", rows: [] },
+      { match: "FROM vendor_bill_adjustment", rows: [] },
     ]);
     const result = await computeBillBalance(client as never, "vb_2");
     expect(result?.balance_cents).toBe(0);
@@ -80,6 +85,7 @@ describe("computeBillBalance", () => {
       },
       { match: "FROM vendor_bill_payment_allocation a", rows: [] },
       { match: "FROM vendor_credit_application ca", rows: [] },
+      { match: "FROM vendor_bill_adjustment", rows: [] },
     ]);
     const result = await computeBillBalancesBatch(client as never, ["vb_a", "vb_b"]);
     expect(result.size).toBe(2);
@@ -92,5 +98,35 @@ describe("computeBillBalance", () => {
     const result = await computeBillBalancesBatch(client as never, []);
     expect(result.size).toBe(0);
     expect(client.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("computeBillBalance — vendor_bill_adjustment (ap-rounding-cleanup-20260916)", () => {
+  it("a decrease_ap adjustment closes the cents the payment left behind", async () => {
+    const client = fakeClient([
+      {
+        match: "FROM vendor_bill vb",
+        rows: [{ id: "vb_1", status: "synced", qb_source: "owned", qb_amount_due_cents: null, line_count: "3", line_total: 205_034 }],
+      },
+      { match: "FROM vendor_bill_payment_allocation a", rows: [] },
+      { match: "FROM vendor_credit_application ca", rows: [{ vendor_bill_id: "vb_1", credited: 205_020 }] },
+      { match: "FROM vendor_bill_adjustment", rows: [{ vendor_bill_id: "vb_1", adjusted: 14 }] },
+    ]);
+    const result = await computeBillBalance(client as never, "vb_1");
+    expect(result).toMatchObject({ adjusted_cents: 14, balance_cents: 0, paid_status: "paid" });
+  });
+
+  it("an increase_ap adjustment (overpaid by cents) comes back signed negative and closes the bill", async () => {
+    const client = fakeClient([
+      {
+        match: "FROM vendor_bill vb",
+        rows: [{ id: "vb_2", status: "synced", qb_source: "owned", qb_amount_due_cents: null, line_count: "2", line_total: 11_185 }],
+      },
+      { match: "FROM vendor_bill_payment_allocation a", rows: [{ vendor_bill_id: "vb_2", paid: 11_192 }] },
+      { match: "FROM vendor_credit_application ca", rows: [] },
+      { match: "FROM vendor_bill_adjustment", rows: [{ vendor_bill_id: "vb_2", adjusted: "-7" }] },
+    ]);
+    const result = await computeBillBalance(client as never, "vb_2");
+    expect(result).toMatchObject({ adjusted_cents: -7, balance_cents: 0, paid_status: "paid" });
   });
 });

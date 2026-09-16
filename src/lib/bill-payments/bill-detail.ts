@@ -23,6 +23,16 @@ export interface BillCreditApplicationSummary {
  * Only active rows (`p.status = 'posted'`, `voided_at IS NULL`) — the same
  * filters `computeBillBalance` sums.
  */
+export interface BillAdjustmentSummary {
+  id: string;
+  kind: "rounding" | "price_variance";
+  direction: "decrease_ap" | "increase_ap";
+  amount_cents: number;
+  adjustment_date: string;
+  memo: string | null;
+  voided_at: string | null;
+}
+
 export async function loadVendorBillPayablesDetail(
   client: PgQueryClient,
   vendorBillId: string
@@ -30,8 +40,10 @@ export async function loadVendorBillPayablesDetail(
   balance: Awaited<ReturnType<typeof computeBillBalance>>;
   payments: BillPaymentSummary[];
   credit_applications: BillCreditApplicationSummary[];
+  /** ap-rounding-cleanup-20260916: rounding / price-variance adjustments. */
+  adjustments: BillAdjustmentSummary[];
 }> {
-  const [balance, paymentsResult, applicationsResult] = await Promise.all([
+  const [balance, paymentsResult, applicationsResult, adjustmentsResult] = await Promise.all([
     computeBillBalance(client, vendorBillId),
     client.query(
       `SELECT p.id, p.number, p.payment_date, p.method, p.reference, a.amount_cents, p.bank_account_list_id
@@ -49,11 +61,20 @@ export async function loadVendorBillPayablesDetail(
         ORDER BY ca.applied_at DESC`,
       [vendorBillId]
     ),
+    client.query(
+      `SELECT id, kind, direction, amount_cents::int AS amount_cents, adjustment_date::text AS adjustment_date,
+              memo, voided_at::text AS voided_at
+         FROM vendor_bill_adjustment
+        WHERE vendor_bill_id = $1 AND deleted_at IS NULL
+        ORDER BY created_at DESC`,
+      [vendorBillId]
+    ),
   ]);
 
   return {
     balance,
     payments: paymentsResult.rows as BillPaymentSummary[],
     credit_applications: applicationsResult.rows as BillCreditApplicationSummary[],
+    adjustments: adjustmentsResult.rows as BillAdjustmentSummary[],
   };
 }

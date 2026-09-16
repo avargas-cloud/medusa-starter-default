@@ -11,6 +11,10 @@ import { postReceipt, reverseReceipt } from "./documents/receipt";
 import { postVendorBill, reverseVendorBill } from "./documents/vendor-bill";
 import { postVendorCredit, reverseVendorCredit } from "./documents/vendor-credit";
 import { postBillPayment, reverseBillPayment } from "./documents/bill-payment";
+import {
+  postVendorBillAdjustment,
+  reverseVendorBillAdjustment,
+} from "./documents/vendor-bill-adjustment";
 import { activeEntryPredicate } from "./reports/active-entries";
 import { LedgerError, LedgerSourceKind } from "./types";
 
@@ -58,6 +62,7 @@ const ALL_KINDS: LedgerSourceKind[] = [
   "vendor_bill",
   "vendor_credit",
   "vendor_bill_payment",
+  "vendor_bill_adjustment",
 ];
 
 /** §6: mismas reglas de terminalidad que el reconciler. */
@@ -144,6 +149,16 @@ async function candidates(
     );
     return rows;
   }
+  if (kind === "vendor_bill_adjustment") {
+    const { rows } = await client.query<Candidate>(
+      pending(kind, `SELECT id, CASE WHEN voided_at IS NOT NULL THEN 'reverse' ELSE 'post' END AS terminal
+       FROM vendor_bill_adjustment
+       WHERE deleted_at IS NULL
+         AND COALESCE(voided_at::date, adjustment_date) BETWEEN $1::date AND $2::date`),
+      [from, to, limitParam(limit)]
+    );
+    return rows;
+  }
   if (kind === "po_receipt") {
     // gl-purchases-v2 §5: SIN filtro `deleted_at IS NULL` — un receipt
     // borrado (soft-delete) tiene que seguir candidateándose para su reversa.
@@ -216,6 +231,10 @@ const HANDLERS: Record<LedgerSourceKind, Handler> = {
   vendor_bill: { post: postVendorBill, reverse: reverseVendorBill },
   vendor_credit: { post: postVendorCredit, reverse: reverseVendorCredit },
   vendor_bill_payment: { post: postBillPayment, reverse: reverseBillPayment },
+  vendor_bill_adjustment: {
+    post: postVendorBillAdjustment,
+    reverse: reverseVendorBillAdjustment,
+  },
   opening_balance: { post: neverReplayed, reverse: neverReplayed },
 };
 

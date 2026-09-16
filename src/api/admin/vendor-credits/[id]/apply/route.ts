@@ -8,6 +8,8 @@ import {
   FullAdminRequiredError,
   requireFullAdmin,
 } from "../../../../../lib/accounting/month-close-auth";
+import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
+import { postVendorBillAdjustment } from "../../../../../lib/ledger/documents/vendor-bill-adjustment";
 import { applyVendorCreditToBill, VendorCreditError } from "../../../../../lib/vendor-credits";
 import type { SqlClient } from "../../../../../lib/accounting/month-close-data";
 import { enqueueVendorCreditApply } from "../../../../../lib/purchase-orders/qb-vendor-credit-apply-enqueue";
@@ -34,7 +36,7 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
   }
 
   const client = await getDbPool().connect();
-  let application: { id: string };
+  let application: { id: string; auto_adjustment_ids: string[] };
   try {
     application = await applyVendorCreditToBill(client, {
       creditId: id,
@@ -49,6 +51,15 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     throw error;
   } finally {
     client.release();
+  }
+
+  // ap-rounding-cleanup-20260916: post the rounding adjustment the apply may
+  // have created (same transaction as the application) to the GL.
+  for (const adjustmentId of application.auto_adjustment_ids) {
+    await runLedgerHook((c) => postVendorBillAdjustment(c, adjustmentId, actorId), {
+      source_kind: "vendor_bill_adjustment",
+      source_id: adjustmentId,
+    });
   }
 
   const knex = req.scope.resolve("__pg_connection__") as SqlClient;

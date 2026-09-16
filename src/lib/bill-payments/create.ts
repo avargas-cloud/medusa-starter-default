@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { generateEntityId } from "@medusajs/utils";
+import { maybeAutoWriteOffRounding } from "../vendor-bill-adjustments/auto";
 
 import { assertBankAccountingPeriodOpen } from "../accounting/banking-period-lock";
 import { computeBillBalancesBatch, type PgQueryClient } from "../finance/recompute-bill-finance";
@@ -55,7 +56,7 @@ interface CreditApplicationRow {
 export async function createBillPayment(
   client: PgClient,
   input: CreateBillPaymentInput
-): Promise<{ id: string; number: string }> {
+): Promise<{ id: string; number: string; auto_adjustment_ids: string[] }> {
   if (!BILL_PAYMENT_METHODS.includes(input.method)) {
     throw new BillPaymentError("invalid_method", `Unknown method: ${input.method}`);
   }
@@ -222,8 +223,23 @@ export async function createBillPayment(
       );
     }
 
+    // ap-rounding-cleanup-20260916: whatever the payment leaves open within
+    // the rounding tolerance is absorbed now, in the same transaction. The
+    // caller posts the rows to the GL after commit (ids returned).
+    const autoAdjustmentIds: string[] = [];
+    for (const a of input.allocations) {
+      const outcome = await maybeAutoWriteOffRounding(client as unknown as PoolClient, {
+        vendor_bill_id: a.vendor_bill_id,
+        trigger: "payment",
+        trigger_id: id,
+        actor_id: input.actor_id,
+        day: input.payment_date,
+      });
+      if (outcome.created) autoAdjustmentIds.push(outcome.adjustment.id);
+    }
+
     await client.query("COMMIT");
-    return { id, number };
+    return { id, number, auto_adjustment_ids: autoAdjustmentIds };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

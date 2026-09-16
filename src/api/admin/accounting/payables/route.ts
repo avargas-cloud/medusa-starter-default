@@ -17,6 +17,7 @@ interface OpenBillRow {
   vendor_name_snapshot: string | null;
   number: string | null;
   reference_id: string | null;
+  qb_is_paid: boolean | null;
   age_date: string; // YYYY-MM-DD, ET
 }
 
@@ -59,7 +60,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   const pool = getDbPool();
 
   const { rows: billRows } = await pool.query(
-    `SELECT vb.id, vb.vendor_id, vb.vendor_name_snapshot, vb.number, vb.reference_id,
+    `SELECT vb.id, vb.vendor_id, vb.vendor_name_snapshot, vb.number, vb.reference_id, vb.qb_is_paid,
             (COALESCE(vb.due_date, vb.document_date, vb.confirmed_at) AT TIME ZONE 'America/New_York')::date::text AS age_date
        FROM vendor_bill vb
       WHERE vb.deleted_at IS NULL AND vb.status IN ('confirmed','synced')`,
@@ -82,6 +83,9 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
         age_date: string;
         bucket: AgingBucket;
         balance_cents: number;
+        /** QuickBooks has this bill settled — the POS residual is noise
+         * (rounding / price variance), not debt. ap-rounding-cleanup-20260916. */
+        qb_is_paid: boolean;
       }>;
     }
   >();
@@ -107,6 +111,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
       id: bill.id,
       number: bill.number,
       reference_id: bill.reference_id,
+      qb_is_paid: bill.qb_is_paid === true,
       age_date: bill.age_date,
       bucket,
       balance_cents: balance.balance_cents,

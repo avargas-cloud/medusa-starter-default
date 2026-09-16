@@ -8,6 +8,12 @@ function fakeClient(handlers: Array<{ match: string; rows: unknown[] }>) {
     query: jest.fn(async (sql: string) => {
       calls.push(sql.trim().split("\n")[0]!.trim());
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] };
+      // ap-rounding-cleanup-20260916: the auto write-off runs inside a savepoint
+      // and reads its config from `store`; a spec that does not care about it
+      // answers "no config" so the lane stays silent.
+      if (/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT)/.test(sql)) return { rows: [] };
+      if (sql.includes("FROM store LIMIT 1")) return { rows: [{ rounding: null, variance: null, tolerance: null }] };
+      if (sql.includes("FROM vendor_bill_adjustment")) return { rows: [] };
       const handler = handlers.find((h) => sql.includes(h.match));
       if (!handler) throw new Error(`No fake handler for SQL: ${sql}`);
       return { rows: handler.rows };

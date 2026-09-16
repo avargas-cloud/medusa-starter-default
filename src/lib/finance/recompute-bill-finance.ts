@@ -50,6 +50,10 @@ export interface BillBalance {
   payable_cents: number;
   paid_cents: number;
   credited_cents: number;
+  /** Σ `vendor_bill_adjustment` (rounding / price variance), signed: a
+   * `decrease_ap` adjustment lowers the balance like a credit, an
+   * `increase_ap` one raises it. ap-rounding-cleanup-20260916. */
+  adjusted_cents: number;
   balance_cents: number;
   paid_status: BillPaidStatus;
 }
@@ -143,6 +147,18 @@ export async function computeBillBalancesBatch(
     creditRows.map((r) => [r.vendor_bill_id, toIntCents(r.credited)])
   );
 
+  const { rows: adjustmentRows } = (await client.query(
+    `SELECT vendor_bill_id,
+            COALESCE(SUM(CASE WHEN direction = 'decrease_ap' THEN amount_cents ELSE -amount_cents END), 0)::bigint AS adjusted
+       FROM vendor_bill_adjustment
+      WHERE vendor_bill_id = ANY($1::text[]) AND voided_at IS NULL AND deleted_at IS NULL
+      GROUP BY vendor_bill_id`,
+    [billIds]
+  )) as { rows: Array<{ vendor_bill_id: string; adjusted: number | string }> };
+  const adjustedByBill = new Map(
+    adjustmentRows.map((r) => [r.vendor_bill_id, toIntCents(r.adjusted)])
+  );
+
   for (const id of billIds) {
     const row = payableRows.get(id) as
       | (PayableRow & { line_count: number | string })
@@ -158,12 +174,14 @@ export async function computeBillBalancesBatch(
         : toIntCents(row.line_total);
     const paidCents = paidByBill.get(id) ?? 0;
     const creditedCents = creditedByBill.get(id) ?? 0;
-    const balanceCents = payableCents - paidCents - creditedCents;
+    const adjustedCents = adjustedByBill.get(id) ?? 0;
+    const balanceCents = payableCents - paidCents - creditedCents - adjustedCents;
     result.set(id, {
       vendor_bill_id: id,
       payable_cents: payableCents,
       paid_cents: paidCents,
       credited_cents: creditedCents,
+      adjusted_cents: adjustedCents,
       balance_cents: balanceCents,
       paid_status: deriveStatus(payableCents, balanceCents),
     });

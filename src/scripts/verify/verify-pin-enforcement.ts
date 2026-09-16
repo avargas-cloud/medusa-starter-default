@@ -338,6 +338,25 @@ const MUST_GATE_ROUTES: {
       "página de vendor bill, que NO piden PIN. Exigirle el PIN a todo callsite " +
       "rompería esos tres flujos",
   },
+  // ap-rounding-cleanup-20260916: las tres rutas del carril de ajuste AP
+  // escriben lo que el POS dice que se le debe a un proveedor.
+  {
+    rel: "api/admin/accounting/payables/write-off-rounding/route.ts",
+    what: "salda en lote los residuos de centavos de bills que QuickBooks tiene pagados (Dr AP)",
+  },
+  {
+    rel: "api/admin/vendor-bills/[id]/adjustments/route.ts",
+    what: "crea un ajuste de redondeo o de variación de precio sobre un bill (mueve AP)",
+    noFrontendCaller:
+      "lo llaman los scripts de limpieza y el POST manual con PIN; la pantalla " +
+      "de bill sólo LISTA los ajustes (GET) — crear uno a mano desde la UI es " +
+      "deuda declarada del plan ap-rounding-cleanup-20260916",
+  },
+  {
+    rel: "api/admin/vendor-bills/[id]/adjustments/[adjustmentId]/void/route.ts",
+    what: "voidea un ajuste (devuelve el residuo al bill, reversa el GL)",
+    noFrontendCaller: "misma deuda que la ruta de creación: sin pantalla todavía",
+  },
   // `api/admin/pos/prices/bulk/route.ts` se BORRÓ el 2026-08-19. Estaba gateada
   // igual que las demás, pero no la llamaba ninguna pantalla desde que el editor
   // masivo pasó al flujo de price-batches, y era una segunda forma de repreciar
