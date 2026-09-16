@@ -419,7 +419,28 @@ function PipelinePoRow({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export const PurchaseOrderPipelineSection = () => {
+/** One feed, two tabs (09/16/2026): purchases (PO / receipts / bills) or the
+ * ledger documents on their way to QuickBooks (bank documents, bill payments,
+ * vendor-credit applications, voids of imported documents). */
+export type PipelineFamily = "purchase" | "ledger";
+
+const FAMILY_COPY: Record<PipelineFamily, { title: string; subtitle: string; docColumn: string; whoColumn: string }> = {
+  purchase: {
+    title: "🏭 QB Purchases Pipeline",
+    subtitle: "Purchase orders, item receipts, and vendor bills, including add, modify, void, and delete operations.",
+    docColumn: "PO / Receipt / Bill",
+    whoColumn: "Vendor",
+  },
+  ledger: {
+    title: "🏦 Ledger → QuickBooks",
+    subtitle: "Every document the POS ledger sends to QuickBooks: deposits, checks & expenses, transfers, journal entries, bill payments, vendor-credit applications and voids of imported documents.",
+    docColumn: "Document",
+    whoColumn: "Description",
+  },
+};
+
+export const PurchaseOrderPipelineSection = ({ family = "purchase" }: { family?: PipelineFamily }) => {
+  const copy = FAMILY_COPY[family];
   const [rows, setRows] = useState<PoRow[]>([]);
   const [counts, setCounts] = useState<Counts>({
     waiting: 0,
@@ -445,6 +466,7 @@ export const PurchaseOrderPipelineSection = () => {
       if (!silent) setLoading(true);
       try {
         const params = new URLSearchParams();
+        params.set("family", family);
         if (statusFilter !== "all") params.set("status", statusFilter);
         if (searchQuery.trim()) params.set("search", searchQuery.trim());
         params.set("limit", String(PAGE_SIZE));
@@ -474,7 +496,7 @@ export const PurchaseOrderPipelineSection = () => {
         if (!silent) setLoading(false);
       }
     },
-    [page, statusFilter, searchQuery]
+    [page, statusFilter, searchQuery, family]
   );
 
   useEffect(() => {
@@ -535,7 +557,7 @@ export const PurchaseOrderPipelineSection = () => {
               level="h3"
               className="text-sm font-medium flex items-center gap-2"
             >
-              🏭 QB Purchases Pipeline
+              {copy.title}
               {hasPending && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
@@ -544,8 +566,7 @@ export const PurchaseOrderPipelineSection = () => {
               )}
             </Heading>
             <Text className="text-xs text-ui-fg-subtle mt-0.5">
-              Purchase orders, item receipts, and vendor bills, including add,
-              modify, void, and delete operations.
+              {copy.subtitle}
             </Text>
           </div>
           <Button
@@ -646,13 +667,13 @@ export const PurchaseOrderPipelineSection = () => {
                     Step
                   </th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
-                    PO / Receipt / Bill
+                    {copy.docColumn}
                   </th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
                     QB Ref #
                   </th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
-                    Vendor
+                    {copy.whoColumn}
                   </th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
                     Status

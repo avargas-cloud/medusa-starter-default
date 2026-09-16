@@ -3,6 +3,7 @@ import { Client } from "pg";
 
 import {
   BILL_PAYMENT_STEPS,
+  LEDGER_PIPELINE_STEPS,
   COMMISSION_PIPELINE_STEPS,
   PURCHASE_PIPELINE_STEPS,
 } from "../../../../lib/quickbooks/pipeline/sales-pipeline-scope";
@@ -123,15 +124,21 @@ export async function GET(
       [NON_SALES_STEPS]
     );
 
-    // 1b) Bill Payments = the hourly read-only BillQuery per linked unpaid bill.
-    //     Its own tab since 2026-07-30: at 761 rows it is the largest step in this
-    //     shared table and it was drowning the sales documents next to it.
-    const billPayments = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count
+    // 1b) Ledger → QuickBooks (09/16/2026) = the documents the POS ledger sends
+    //     to QuickBooks. Replaces the Bill Payments tab, whose hourly BillQuery
+    //     monitor was retired once bills started being paid in the POS.
+    const ledger = await client.query<StatusRow>(
+      `SELECT CASE
+                WHEN status IN ('confirmed','fixed','skipped') THEN 'synced'
+                WHEN status = 'failed' AND next_retry_at IS NULL THEN 'failed_permanent'
+                WHEN status = 'failed' THEN 'error'
+                WHEN status IN ('submitted','processing') THEN 'submitted'
+                ELSE 'waiting'
+              END AS status, COUNT(*) AS count
          FROM qb_order_pipeline
         WHERE step = ANY($1::text[])
-        GROUP BY status`,
-      [[...BILL_PAYMENT_STEPS]]
+        GROUP BY 1`,
+      [[...LEDGER_PIPELINE_STEPS]]
     );
 
     // 1c) Commissions Pipeline = el par check/payment del caso store_credit de
@@ -231,7 +238,7 @@ export async function GET(
       build("purchase_orders", "Purchases", "po-pipeline", purchases.rows),
       // `tab` must match the Tabs.Trigger value in qb-pipeline/page.tsx — clicking
       // the row jumps to that tab, and a wrong value jumps nowhere.
-      build("bill_payments", "Bill Payments", "bill-payments", billPayments.rows),
+      build("ledger", "Ledger → QuickBooks", "ledger", ledger.rows),
       build("commissions", "Commissions", "commissions", commissions.rows),
       build("vendors", "Vendors", "vendors", vendors.rows),
       build("customers", "Customer Sync", "customer-sync", customers.rows),

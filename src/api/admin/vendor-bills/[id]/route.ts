@@ -999,6 +999,9 @@ export async function GET(
       credited_cents: balance?.credited_cents ?? null,
       balance_cents: balance?.balance_cents ?? null,
       paid_status: balance?.paid_status ?? null,
+      // qb-pipeline-ledger-tab-retire-bill-monitor-20260916: "Paid" is the POS
+      // balance, never `qb_is_paid` (the retired hourly BillQuery mirror).
+      is_paid: balance?.paid_status === "paid",
       payments,
       credit_applications,
       adjustments,

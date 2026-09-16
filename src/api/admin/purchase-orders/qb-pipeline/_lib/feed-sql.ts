@@ -38,6 +38,17 @@
  * SQL comment closes the string and breaks the parse.
  */
 
+/** Feed `step` values of the "Ledger → QuickBooks" family (09/16/2026); the
+ * Purchase tab shows everything else. Same feed SQL, split by `?family=`. */
+export const LEDGER_FEED_STEPS = [
+  "add_gl_document",
+  "void_gl_document",
+  "add_bill_payment",
+  "void_bill_payment",
+  "apply_vendor_credit",
+  "void_qb_import",
+] as const;
+
 export const PURCHASE_PIPELINE_FEED_SQL = `
       SELECT numbered.*, numbered.seq::text AS seq_label FROM (
       SELECT
@@ -706,7 +717,13 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           UNION ALL
           SELECT j.id, j.number, j.qb_txn_id, 'Journal entry - ' || COALESCE(j.memo, '') FROM gl_journal_entry j WHERE j.deleted_at IS NULL
           UNION ALL
-          SELECT d.id, d.reference, d.qb_txn_id, 'Deposit - ' || COALESCE(d.memo, '') FROM bank_deposit d WHERE d.deleted_at IS NULL
+          SELECT d.id, COALESCE(d.number, d.reference), d.qb_txn_id,
+                 'Deposit → ' || COALESCE(a.name, qa.full_name, d.account_list_id, '?') || ' · $' || d.net_amount::text
+                 || CASE WHEN COALESCE(d.reference, '') <> '' THEN ' · ' || d.reference ELSE '' END
+            FROM bank_deposit d
+            LEFT JOIN bank_account a ON a.id = d.account_id
+            LEFT JOIN qb_account qa ON qa.qb_list_id = d.account_list_id AND qa.deleted_at IS NULL
+           WHERE d.deleted_at IS NULL
         ) doc ON doc.id = qop.reference_id
         WHERE qop.step IN ('gl_document_add', 'gl_document_void')
 

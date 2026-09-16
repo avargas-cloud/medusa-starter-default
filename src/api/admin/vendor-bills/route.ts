@@ -23,6 +23,8 @@ import type {
 } from "@medusajs/framework/http";
 import { randomUUID } from "crypto";
 import { z } from "zod";
+import { getDbPool } from "../../utils/db-pool";
+import { computeBillBalancesBatch } from "../../../lib/finance/recompute-bill-finance";
 
 import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
@@ -328,8 +330,18 @@ export async function GET(
     bindings
   );
 
+  // qb-pipeline-ledger-tab-retire-bill-monitor-20260916: the list's "Paid" and
+  // due badges read the POS balance (payable − payments − credits − adjustments),
+  // not `qb_is_paid` — the hourly QuickBooks BillQuery that fed it is gone.
+  const balances = await computeBillBalancesBatch(
+    getDbPool(),
+    (dataResult.rows as VendorBillListRow[]).map((r) => r.id)
+  );
   const rows = (dataResult.rows as VendorBillListRow[]).map((r) => ({
     ...r,
+    balance_cents: balances.get(r.id)?.balance_cents ?? null,
+    paid_status: balances.get(r.id)?.paid_status ?? null,
+    is_paid: balances.get(r.id)?.paid_status === "paid",
     line_count: Number(r.line_count),
     product_qty: Number(r.product_qty ?? 0),
     item_subtotal_cents: Number(r.item_subtotal_cents ?? 0),

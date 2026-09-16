@@ -6,7 +6,6 @@ import { useCallback, useRef, useState } from "react";
 import { BridgeStatus } from "../qb-sync/components/BridgeStatus";
 import { PipelineTable } from "../qb-sync/components/PipelineTable";
 
-import { BillPaymentsPipelineSection } from "./components/BillPaymentsPipelineSection";
 import { CommissionsPipelineSection } from "./components/CommissionsPipelineSection";
 import { CustomerSyncPipelineSection } from "./components/CustomerSyncPipelineSection";
 import { InventoryAdjustmentPipelineSection } from "./components/InventoryAdjustmentPipelineSection";
@@ -97,10 +96,10 @@ const QbPipelinePage = () => {
             Purchase Pipeline
           </Tabs.Trigger>
           <Tabs.Trigger
-            value="bill-payments"
+            value="ledger"
             className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
           >
-            Bill Payments
+            Ledger → QuickBooks
           </Tabs.Trigger>
           <Tabs.Trigger
             value="commissions"
@@ -133,8 +132,8 @@ const QbPipelinePage = () => {
         <Tabs.Content value="po-pipeline" className="pt-4">
           <PurchaseOrderPipelineSection />
         </Tabs.Content>
-        <Tabs.Content value="bill-payments" className="pt-4">
-          <BillPaymentsPipelineSection />
+        <Tabs.Content value="ledger" className="pt-4">
+          <PurchaseOrderPipelineSection family="ledger" />
         </Tabs.Content>
         <Tabs.Content value="commissions" className="pt-4">
           <CommissionsPipelineSection />

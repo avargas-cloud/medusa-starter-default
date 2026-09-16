@@ -7,7 +7,7 @@
  *
  *   · sólo `method = 'vendor_bill'` — la liquidación por store credit ya emitió
  *     Check + ReceivePayment y su vuelta es el void del beneficiario;
- *   · el bill NO puede estar pagado (`qb_is_paid`) — un bill con Bill Payment
+ *   · el bill NO puede tener pagos aplicados (balance del POS; antes `qb_is_paid`) — un bill con Bill Payment
  *     Check encima se resuelve en QuickBooks a mano, no desde acá;
  *   · el bill no puede haber movido COSTO (`vendor_bill_cost_log` vivo): un
  *     bill de comisión es `service` contra cuenta y no tiene, pero si alguien
@@ -27,6 +27,7 @@ import type { PoolClient } from "pg";
 import { canUnsettle } from "./transitions";
 import { CommissionError, type RecipientRow } from "./writer";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { computeBillBalance } from "../finance/recompute-bill-finance";
 
 interface SettlementRow {
   id: string;
@@ -41,7 +42,6 @@ interface BillRow {
   number: string | null;
   qb_txn_id: string | null;
   qb_edit_sequence: string | null;
-  qb_is_paid: boolean;
 }
 
 export interface UnsettleResult {
@@ -97,7 +97,7 @@ export async function unsettleRecipient(
   let billOutcome: UnsettleResult["billOutcome"] = "none";
   if (settlement.vendor_bill_id) {
     const { rows: bills } = await client.query<BillRow>(
-      `SELECT id, status, number, qb_txn_id, qb_edit_sequence, qb_is_paid
+      `SELECT id, status, number, qb_txn_id, qb_edit_sequence
          FROM vendor_bill
         WHERE id = $1 AND deleted_at IS NULL
         FOR UPDATE`,
@@ -105,10 +105,13 @@ export async function unsettleRecipient(
     );
     const bill = bills[0];
     if (bill) {
-      if (bill.qb_is_paid) {
+      // qb-pipeline-ledger-tab-retire-bill-monitor-20260916: "paid" is the POS
+      // balance (Pay Bills), not the retired QuickBooks BillQuery mirror.
+      const balance = await computeBillBalance(client, bill.id);
+      if (balance && balance.paid_status !== "open") {
         throw new CommissionError(
           "invalid_state",
-          `Bill ${bill.number ?? bill.id} is already paid in QuickBooks — reverse the payment there first.`,
+          `Bill ${bill.number ?? bill.id} already has payments applied — void them in Pay Bills first.`,
           { reason: "bill_already_paid", vendor_bill_id: bill.id }
         );
       }

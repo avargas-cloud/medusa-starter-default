@@ -27,13 +27,13 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
-import { PURCHASE_PIPELINE_FEED_SQL } from "./_lib/feed-sql";
+import { LEDGER_FEED_STEPS, PURCHASE_PIPELINE_FEED_SQL } from "./_lib/feed-sql";
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {
-    const { status, search } = req.query as Record<string, string | undefined>;
+    const { status, search, family } = req.query as Record<string, string | undefined>;
     const limitParam = Number(req.query.limit ?? 50);
     const offsetParam = Number(req.query.offset ?? 0);
     const limit = Number.isFinite(limitParam)
@@ -46,6 +46,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const values: unknown[] = [];
     const conditions: string[] = [];
     let p = 1;
+    // Two tabs share this feed (09/16/2026): the ledger documents, or everything else.
+    conditions.push(family === "ledger" ? `step = ANY($${p++}::text[])` : `step <> ALL($${p++}::text[])`);
+    values.push([...LEDGER_FEED_STEPS]);
     if (status && status !== "__all__") {
       conditions.push(`status = $${p++}`);
       values.push(status);
@@ -79,9 +82,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         `SELECT COUNT(*) AS count FROM (${feedSql}) scoped ${where}`,
         values
       ),
+      // Status pills count the FAMILY, not the search/status slice.
       client.query(
-        `SELECT status, COUNT(*) AS count FROM (${feedSql}) scoped GROUP BY status`,
-        []
+        `SELECT status, COUNT(*) AS count FROM (${feedSql}) scoped WHERE ${conditions[0]} GROUP BY status`,
+        [values[0]]
       ),
     ]);
 

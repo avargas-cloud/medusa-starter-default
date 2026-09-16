@@ -59,6 +59,23 @@ export const CUSTOMER_SYNC_STEPS = ["customer_data_ext"] as const;
 export const BILL_PAYMENT_STEPS = ["vendor_bill_payment_check"] as const;
 
 /**
+ * Steps surfaced by the "Ledger → QuickBooks" tab (09/16/2026): every document
+ * that leaves the POS ledger for QuickBooks — bank documents (checks/expenses,
+ * transfers, journal entries, deposits), bill payments, vendor-credit
+ * applications and voids of imported documents. They used to be buried in the
+ * Purchase tab; the Bill Payments tab they replace was the retired hourly
+ * BillQuery monitor.
+ */
+export const LEDGER_PIPELINE_STEPS = [
+  "gl_document_add",
+  "gl_document_void",
+  "bill_payment_add",
+  "bill_payment_void",
+  "vendor_credit_apply",
+  "qb_import_void",
+] as const;
+
+/**
  * Steps surfaced by the Commissions Pipeline tab (delta v2 del plan de
  * comisiones): el check contable desde la clearing y el ReceivePayment sin
  * aplicar que materializa el crédito del beneficiario.

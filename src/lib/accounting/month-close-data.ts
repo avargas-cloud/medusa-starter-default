@@ -1,6 +1,8 @@
 import { avgCostDollars } from "../cost/cost-sql";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 import { etMidnightUtc } from "../date/et";
+import { getDbPool } from "../../api/utils/db-pool";
+import { computeBillBalancesBatch } from "../finance/recompute-bill-finance";
 import {
   COGS_JOIN,
   COST_DOLLARS,
@@ -291,7 +293,7 @@ export async function loadOpenDocuments(
          WHERE vb.deleted_at IS NULL
            AND COALESCE(vb.document_date, vb.created_at) >= ?
            AND COALESCE(vb.document_date, vb.created_at) < ?
-           AND (vb.status = 'draft' OR COALESCE(vb.qb_is_paid, false) = false))::int AS vendor_bills,
+           AND vb.status = 'draft')::int AS vendor_bills,
        (SELECT COUNT(*) FROM pos_credit_memo cm
          WHERE cm.deleted_at IS NULL AND cm.created_at >= ? AND cm.created_at < ?
            AND cm.status NOT IN ('completed','voided'))::int AS credit_memos,
@@ -312,11 +314,25 @@ export async function loadOpenDocuments(
     ]
   );
   const row = result.rows[0] ?? {};
+  // qb-pipeline-ledger-tab-retire-bill-monitor-20260916: an open vendor bill is
+  // a draft OR a posted bill with a POS balance — never `qb_is_paid`, which was
+  // the retired hourly BillQuery mirror. Balances come from the shared batch
+  // (payable − payments − credits − adjustments), the same figure Payables shows.
+  const posted = (await db.raw(
+    `SELECT vb.id FROM vendor_bill vb
+      WHERE vb.deleted_at IS NULL
+        AND COALESCE(vb.document_date, vb.created_at) >= ?
+        AND COALESCE(vb.document_date, vb.created_at) < ?
+        AND vb.status <> 'draft'`,
+    [range.from, range.to]
+  )) as { rows: Array<{ id: string }> };
+  const balances = await computeBillBalancesBatch(getDbPool(), posted.rows.map((r) => r.id));
+  const openPosted = [...balances.values()].filter((b) => b.paid_status !== "paid").length;
   return {
     orders: Number(row.orders ?? 0),
     invoices: Number(row.invoices ?? 0),
     purchase_orders: Number(row.purchase_orders ?? 0),
-    vendor_bills: Number(row.vendor_bills ?? 0),
+    vendor_bills: Number(row.vendor_bills ?? 0) + openPosted,
     credit_memos: Number(row.credit_memos ?? 0),
     inventory_adjustments: Number(row.inventory_adjustments ?? 0),
     qb_unsynced: Number(row.qb_unsynced ?? 0),

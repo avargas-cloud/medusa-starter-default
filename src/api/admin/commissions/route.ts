@@ -12,6 +12,7 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../utils/db-pool";
+import { computeBillBalancesBatch } from "../../../lib/finance/recompute-bill-finance";
 import { readOrderMoneySnapshot } from "../../../lib/commissions/order-money";
 import { refreshCommission, withOrderCommissionLock, asInt } from "../../../lib/commissions/writer";
 import {
@@ -163,7 +164,7 @@ export async function GET(
               s.customer_payment_id, s.qb_check_txn_id, s.qb_payment_txn_id,
               s.failure_reason,
               svb.number AS vendor_bill_number,
-              svb.qb_is_paid AS vendor_bill_paid
+              NULL::boolean AS vendor_bill_paid
          FROM order_commission_recipient r
          JOIN order_commission c
            ON c.id = r.order_commission_id AND c.deleted_at IS NULL
@@ -207,6 +208,13 @@ export async function GET(
     // Por eso se trae TODOS los recipients no-void de cada comisión referida,
     // sin filtro de tab, y se calcula UNA VEZ por comisión con la MISMA
     // función que usa el resto del feature (nunca SQL que replique la fórmula).
+    // qb-pipeline-ledger-tab-retire-bill-monitor-20260916: a settlement bill is
+    // "paid" by its POS balance (Pay Bills), not by the retired QuickBooks
+    // BillQuery mirror `qb_is_paid`.
+    const settlementBillIds = Array.from(
+      new Set(rows.flatMap((r) => (r.vendor_bill_id ? [r.vendor_bill_id] : [])))
+    );
+    const settlementBalances = await computeBillBalancesBatch(pool, settlementBillIds);
     const commissionIds = Array.from(new Set(rows.map((r) => r.commission_id)));
     const capByCommission = new Map<string, CapCheckResult>();
     if (commissionIds.length > 0) {
@@ -320,7 +328,9 @@ export async function GET(
                 vendor_bill_number: r.vendor_bill_number,
                 // Revert settlement sólo si NADIE pagó el bill (unsettle.ts lo
                 // re-verifica en la ruta; acá es para que el botón no invite).
-                vendor_bill_paid: r.vendor_bill_paid,
+                vendor_bill_paid: r.vendor_bill_id
+                  ? (settlementBalances.get(r.vendor_bill_id)?.paid_status ?? null) === "paid"
+                  : r.vendor_bill_paid,
                 customer_payment_id: r.customer_payment_id,
                 qb_check_txn_id: r.qb_check_txn_id,
                 qb_payment_txn_id: r.qb_payment_txn_id,
