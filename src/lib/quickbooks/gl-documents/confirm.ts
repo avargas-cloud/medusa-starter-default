@@ -95,7 +95,15 @@ export async function isDocumentVoidedInPos(
     const result = await db.raw(
       `SELECT d.status,
               EXISTS (SELECT 1 FROM bank_journal_entry e
-                       WHERE e.deposit_id = d.id AND e.kind = 'deposit' AND e.deleted_at IS NULL
+                       WHERE e.deleted_at IS NULL
+                         -- record-deposits-gl (09/15): the posted deposit is a GL document
+                         -- (source_kind/source_id, kind='document'); the legacy Banking
+                         -- shape (deposit_id + kind='deposit') never existed in production.
+                         -- Checking only the legacy shape read every real deposit as
+                         -- "not posted" and TxnVoid'ed DEP-0685 one minute after its
+                         -- DepositAdd confirmed (09/16/2026).
+                         AND ((e.source_kind = 'bank_deposit' AND e.source_id = d.id AND e.kind = 'document')
+                           OR (e.deposit_id = d.id AND e.kind = 'deposit'))
                          AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = e.id AND r.deleted_at IS NULL)) AS posted
          FROM bank_deposit d WHERE d.id = ? AND d.deleted_at IS NULL`,
       [documentId]
