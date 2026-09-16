@@ -58,7 +58,6 @@ export async function refreshBank(
 ): Promise<{ status: "refresh_requested" }> {
   if (!manualRefreshAllowed())
     throw new BankingError("BANKING_MANUAL_REFRESH_DISABLED", 403);
-  const key = bankingTokenKey();
   await withBankLock(connectionId, async (client) => {
     const row = await connectionRow(client, connectionId);
     if (!row.access_token_encrypted || row.status === "disconnected")
@@ -68,6 +67,13 @@ export async function refreshBank(
       Date.now() - row.refresh_requested_at.getTime() < 60_000
     )
       throw new BankingError("BANKING_REFRESH_COOLDOWN", 429);
+    // Operator rule 2026-09-16: a bank whose data Plaid already pulled TODAY (ET) cannot be
+    // refreshed again — each call is billed. Enforced here, not only in the modal: a disabled
+    // checkbox is decoration; the route is what refuses.
+    if (await providerUpdatedToday(client, connectionId))
+      throw new BankingError("BANKING_REFRESH_UP_TO_DATE", 409);
+    // The key is needed only to decrypt: the cheap refusals above must not depend on it.
+    const key = bankingTokenKey();
     // Plaid can complete the refresh before its HTTP response reaches us. Anchor
     // the request before sending it; stamping afterwards leaves it pending forever.
     const requestedAt = new Date();
@@ -85,6 +91,61 @@ export async function refreshBank(
   });
   // Accepted is not the same as extracted; a subsequent webhook/recovery sync proves completion.
   return { status: "refresh_requested" };
+}
+
+async function providerUpdatedToday(
+  client: { query: (text: string, values: unknown[]) => Promise<{ rows: Array<{ today: boolean }> }> },
+  connectionId: string
+): Promise<boolean> {
+  const result = await client.query(
+    `SELECT (provider_last_update_at AT TIME ZONE 'America/New_York')::date
+        >= (now() AT TIME ZONE 'America/New_York')::date AS today
+     FROM bank_connection WHERE id=$1`,
+    [connectionId]
+  );
+  return result.rows[0]?.today === true;
+}
+
+export type BankRefreshOutcome = {
+  connection_id: string;
+  status: "requested" | "up_to_date" | "cooldown" | "error";
+  error_code: string | null;
+};
+
+/**
+ * "Request update" (2026-09-16): N banks, ONE supervisor PIN (checked by the route), one
+ * billed /transactions/refresh per bank. Each bank takes its own lock and its own outcome —
+ * a cooldown or a Plaid error on one never stops the others, and the caller sees per bank
+ * what happened. Anything that is not a BankingError is a real fault and still throws.
+ */
+export async function refreshBanks(
+  connectionIds: string[]
+): Promise<{ results: BankRefreshOutcome[] }> {
+  if (!manualRefreshAllowed())
+    throw new BankingError("BANKING_MANUAL_REFRESH_DISABLED", 403);
+  if (
+    !connectionIds.length ||
+    connectionIds.length > 10 ||
+    new Set(connectionIds).size !== connectionIds.length
+  )
+    throw new BankingError("BANKING_INVALID_SELECTION");
+  const results: BankRefreshOutcome[] = [];
+  for (const connectionId of connectionIds) {
+    try {
+      await refreshBank(connectionId);
+      results.push({ connection_id: connectionId, status: "requested", error_code: null });
+    } catch (error) {
+      if (!(error instanceof BankingError)) throw error;
+      const status =
+        error.code === "BANKING_REFRESH_UP_TO_DATE"
+          ? "up_to_date"
+          : error.code === "BANKING_REFRESH_COOLDOWN"
+            ? "cooldown"
+            : "error";
+      results.push({ connection_id: connectionId, status, error_code: error.code });
+    }
+  }
+  return { results };
 }
 
 export async function reconnectBank(connectionId: string): Promise<{

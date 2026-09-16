@@ -407,6 +407,15 @@ const MUST_GATE_ROUTES: {
     rel: "api/admin/banking/connections/[id]/disconnect/route.ts",
     what: "desconecta el banco y corta las actualizaciones automáticas",
   },
+  // "Request update" (2026-09-16): cada banco seleccionado es un
+  // /transactions/refresh FACTURADO por Plaid ($0.12). El permiso de manage
+  // dice quién ve el botón; el PIN es el control del GASTO — y la ruta además
+  // rechaza el banco cuyo dato ya es de hoy, para que un checkbox deshabilitado
+  // no sea la única barrera. Un callsite: `RequestUpdateModal.tsx`, por header.
+  {
+    rel: "api/admin/banking/connections/refresh/route.ts",
+    what: "dispara refreshes pagos de Plaid para los bancos seleccionados",
+  },
   // Revertir un refund devuelve la plata al cliente como crédito usable y
   // toca QB (TxnDel del $0 apply + TxnVoid del check); confirm-qb-cleanup es
   // la ATESTACIÓN de que el contador ya limpió QB a mano y completa ese mismo
