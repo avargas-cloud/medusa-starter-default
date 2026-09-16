@@ -67,11 +67,23 @@ export const DEPOSIT_REFUND_SQL = `mp.id,mp.display_id,mp.customer_id,
   ${PAYMENT_FINGERPRINT_SQL} AS source_hash,2 AS fingerprint_version,${LEGACY_PAYMENT_FINGERPRINT_SQL} AS legacy_source_hash,
   '0.00'::text AS surcharge_amount,
   (CASE WHEN ${notInOtherDepositSql("$2::text")} THEN -(mp.metadata->>'refund_amount')::numeric/100 ELSE 0 END)::numeric(30,2)::text AS available_amount`;
+export type DepositAccount = {
+  currency: string;
+  review_start_date: string | null;
+  qb_list_id: string | null;
+  /** Plaid row (`bank_account.id`), or null for a QuickBooks bank account with
+   * no feed (Cash Register, Petty Cash): those deposits never match in Banks. */
+  plaid_account_id: string | null;
+};
+/** Resolves a deposit-to account by Plaid id OR by the QuickBooks ListID of an
+ * active `Bank` account that has no Plaid mirror (deposit-cash-accounts-20260916).
+ * A ListID that DOES have a feed is refused: the Plaid row is the only handle
+ * for it, otherwise the same bank would carry deposits under two identities. */
 export async function depositAccount(
   client: Reader,
   id: string
-): Promise<{ currency: string; review_start_date: string | null; qb_list_id: string | null }> {
-  const result = await client.query<{
+): Promise<DepositAccount> {
+  const plaid = await client.query<{
     currency: string;
     review_start_date: string | null;
     qb_list_id: string | null;
@@ -81,10 +93,68 @@ export async function depositAccount(
     AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()} AND a.type='depository' AND a.currency IS NOT NULL`,
     [id]
   );
-  if (!result.rows[0]) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
-  if (!result.rows[0].review_start_date)
+  if (plaid.rows[0]) {
+    if (!plaid.rows[0].review_start_date)
+      throw new BankingError("BANKING_ACCOUNT_SETUP_REQUIRED", 409);
+    return { ...plaid.rows[0], plaid_account_id: id };
+  }
+  const cash = await client.query<{ qb_list_id: string; cut_date: string | null }>(
+    `SELECT qa.qb_list_id,s.cut_date FROM qb_account qa
+    LEFT JOIN bank_accounting_setup s ON s.id='local-usd' AND s.deleted_at IS NULL AND s.attested
+    WHERE qa.qb_list_id=$1 AND ${CASH_ACCOUNT_WHERE_SQL}`,
+    [id]
+  );
+  if (!cash.rows[0]) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
+  if (!cash.rows[0].cut_date)
     throw new BankingError("BANKING_ACCOUNT_SETUP_REQUIRED", 409);
-  return result.rows[0];
+  return {
+    currency: "USD",
+    review_start_date: cash.rows[0].cut_date,
+    qb_list_id: cash.rows[0].qb_list_id,
+    plaid_account_id: null,
+  };
+}
+/** Active QuickBooks `Bank` accounts with no Plaid mirror. Currency follows
+ * `receiptMapping()`: an explicit USD ref, or NO ref under the attested
+ * single-currency setup (QuickBooks without multicurrency reports none). */
+const CASH_ACCOUNT_WHERE_SQL = `qa.deleted_at IS NULL AND qa.is_active AND qa.account_type='Bank'
+    AND (qa.currency IN ('USD','US Dollar') OR (qa.currency IS NULL AND s.attested))
+    AND NOT EXISTS(SELECT 1 FROM bank_account ba JOIN bank_connection bc ON bc.id=ba.connection_id
+      WHERE ba.qb_list_id=qa.qb_list_id AND ba.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()})`;
+/** Deposit-to choices of the Record deposit editor: the shape of the Banks
+ * overview `accounts` (Plaid depository rows) plus the no-feed QuickBooks bank
+ * accounts, keyed by ListID with `connection_id` null and `subtype` 'cash'. */
+export type DepositAccountChoice = {
+  id: string;
+  connection_id: string | null;
+  name: string;
+  mask: string | null;
+  type: "depository";
+  subtype: string | null;
+  currency: string;
+  is_active: boolean;
+  review_start_date: string | null;
+  qb_list_id: string | null;
+};
+export async function listDepositAccounts(): Promise<{ accounts: DepositAccountChoice[] }> {
+  if (!bankingConfig().enabled) return { accounts: [] };
+  requireBankingEnabled();
+  const result = await getDbPool().query<DepositAccountChoice & { sort: number }>(
+    `SELECT a.id,a.connection_id,a.name,a.mask,'depository'::text AS type,a.subtype,upper(a.currency) AS currency,
+      a.is_active,a.review_start_date,a.qb_list_id,0 AS sort
+    FROM bank_account a JOIN bank_connection bc ON bc.id=a.connection_id
+    WHERE a.deleted_at IS NULL AND bc.deleted_at IS NULL AND bc.environment=${bankingEnvSql()}
+      AND a.type='depository' AND a.currency IS NOT NULL
+    UNION ALL
+    SELECT qa.qb_list_id,NULL,qa.full_name,NULL,'depository',
+      'cash','USD',true,s.cut_date,qa.qb_list_id,1
+    FROM qb_account qa LEFT JOIN bank_accounting_setup s ON s.id='local-usd' AND s.deleted_at IS NULL AND s.attested
+    WHERE ${CASH_ACCOUNT_WHERE_SQL}
+    ORDER BY sort,name,id`
+  );
+  return {
+    accounts: result.rows.map(({ sort: _sort, ...row }) => row as DepositAccountChoice),
+  };
 }
 export async function loadBankDeposit(
   client: Reader,

@@ -110,7 +110,8 @@ export async function saveBankDeposit(
         [
           id,
           (before?.revision ?? 0) + 1,
-          body.account_id,
+          // Null for a no-feed QuickBooks account: `account_list_id` below is its only handle.
+          account.plaid_account_id,
           account.currency,
           body.date,
           body.reference,
@@ -207,9 +208,9 @@ export async function readyBankDeposit(
       if (before.stale || before.source_hash !== body.expected_source_hash)
         throw new BankingError("BANKING_DEPOSIT_SOURCE_STALE", 409);
       await guardDepositEdit(client, id);
-      if (!before.account_id)
-        throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
-      const account = await depositAccount(client, before.account_id);
+      const accountId = before.account_id ?? before.account_list_id;
+      if (!accountId) throw new BankingError("BANKING_ACCOUNT_NOT_FOUND", 404);
+      const account = await depositAccount(client, accountId);
       await validateDepositFee(
         client,
         before.fee_amount,
