@@ -413,6 +413,7 @@ interface DepositLineRow {
   /** Processor-batch refund: cents refunded and the TxnID of its JE in QuickBooks (the deposit line references it). */
   refund_amount_cents: string | null;
   refund_je_txn_id: string | null;
+  refund_je_result: unknown;
 }
 
 async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
@@ -453,7 +454,12 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
               l.payment_snapshot->>'surcharge_amount' AS surcharge_amount,
               cp.amount::text AS payment_amount_cents,
               cp.metadata->>'refund_amount' AS refund_amount_cents,
-              (SELECT je.qb_txn_id FROM gl_journal_entry je WHERE je.id = cp.qb->>'refund_journal_entry_id') AS refund_je_txn_id
+              (SELECT je.qb_txn_id FROM gl_journal_entry je WHERE je.id = cp.qb->>'refund_journal_entry_id') AS refund_je_txn_id,
+              -- The JE's confirmed AddRs (kept on its pipeline row): the UF credit line's TxnLineID
+              -- is what DepositLineAdd must name for a journal entry (PaymentTxnLineID).
+              (SELECT pj.qb_result FROM gl_journal_entry je JOIN qb_order_pipeline pj ON pj.reference_id = je.id
+                  AND pj.step = 'gl_document_add' AND pj.status = 'confirmed'
+                WHERE je.id = cp.qb->>'refund_journal_entry_id' ORDER BY pj.confirmed_at DESC LIMIT 1) AS refund_je_result
          FROM bank_deposit_line l
          LEFT JOIN customer_payment cp ON cp.id = l.payment_id
         WHERE l.deposit_id = ? AND l.deleted_at IS NULL
@@ -525,7 +531,11 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
     if (line.payment_id && majorToCents(line.amount) < 0n) {
       // Processor-batch refund → the JE (Dr AR / Cr UF) is the negative item in QuickBooks.
       if (!line.refund_je_txn_id) blocking.push(line.payment_id);
-      else depositLines.push({ paymentTxnId: line.refund_je_txn_id });
+      else {
+        const ufLine = journalUfCreditLineId(line.refund_je_result, uf?.qb_list_id ?? null);
+        if (!ufLine) return structural(`deposit line ${line.id}: journal entry ${line.refund_je_txn_id} has no Undeposited Funds credit line on record`);
+        depositLines.push({ paymentTxnId: line.refund_je_txn_id, paymentTxnLineId: ufLine });
+      }
     } else if (line.payment_id) {
       if (!line.payment_qb_txn_id) blocking.push(line.payment_id);
       else depositLines.push({ paymentTxnId: line.payment_qb_txn_id });
@@ -569,6 +579,18 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
 }
 
 // ── entrada ─────────────────────────────────────────────────────────────────
+
+/** TxnLineID of the JournalCreditLine that credits Undeposited Funds, from the JE's stored AddRs. */
+function journalUfCreditLineId(result: unknown, ufListId: string | null): string | null {
+  if (!ufListId || !result || typeof result !== "object") return null;
+  const ret = (result as { JournalEntryRet?: { JournalCreditLine?: unknown } }).JournalEntryRet;
+  const credits = ret?.JournalCreditLine;
+  const list = Array.isArray(credits) ? credits : credits ? [credits] : [];
+  for (const credit of list as Array<{ TxnLineID?: string; AccountRef?: { ListID?: string } }>) {
+    if (credit?.AccountRef?.ListID === ufListId && credit.TxnLineID) return credit.TxnLineID;
+  }
+  return null;
+}
 
 export async function loadGlDocumentAddFacts(
   db: GlDocumentDb,

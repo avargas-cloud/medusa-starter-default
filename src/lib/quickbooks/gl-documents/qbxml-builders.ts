@@ -183,6 +183,10 @@ export function buildCreditCardChargeAddQbxml(input: CreditCardChargeAddInput): 
 /** Un cobro que YA vive en Undeposited Funds de QuickBooks (SalesReceipt o ReceivePayment). */
 export interface DepositPaymentLineInput {
   paymentTxnId: string;
+  /** Un JournalEntry en "Payments to Deposit" se nombra por su LÍNEA de UF, no por el
+   * TxnID solo: sin `PaymentTxnLineID` QB contesta 3180 "The given record number is not
+   * in the Payments to Deposit list" (09/16/2026, DEP-0685 con JE-0026/0027). */
+  paymentTxnLineId?: string | null;
 }
 
 /** Una línea directa: efectivo/otro sin cobro del POS, o la comisión (negativa) a su cuenta de gasto. */
@@ -214,7 +218,11 @@ const isPaymentLine = (l: DepositLineInput): l is DepositPaymentLineInput =>
 function depositLineXml(line: DepositLineInput, index: number): string {
   if (isPaymentLine(line)) {
     if (!line.paymentTxnId) throw new Error(`DepositLineAdd ${index + 1} has no PaymentTxnID`);
-    return `<DepositLineAdd>${tag("PaymentTxnID", line.paymentTxnId)}</DepositLineAdd>`;
+    return (
+      `<DepositLineAdd>${tag("PaymentTxnID", line.paymentTxnId)}` +
+      (line.paymentTxnLineId ? tag("PaymentTxnLineID", line.paymentTxnLineId) : "") +
+      `</DepositLineAdd>`
+    );
   }
   if (!line.accountListId) throw new Error(`DepositLineAdd ${index + 1} has no AccountRef ListID`);
   if (toBigInt(line.amountCents) === 0n) throw new Error(`DepositLineAdd ${index + 1} has a zero amount`);
