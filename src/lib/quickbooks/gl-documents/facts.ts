@@ -439,7 +439,16 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
   const lines = (
     await db.raw(
       `SELECT l.id, l.payment_id, l.opening_item_id, l.manual_reference, l.manual_description, l.manual_account_list_id, l.amount,
-              COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id') AS payment_qb_txn_id,
+              COALESCE(cp.qb->>'txn_id', cp.metadata->>'qb_txn_id',
+                -- A payment embedded in a Sales Receipt has no ReceivePayment of its own:
+                -- its pipeline row is skipped ("Superseded by Sales Receipt") and the SR —
+                -- deposited to Undeposited Funds — is what the DepositLineAdd points at
+                -- (09/16/2026: DEP-0685 waited forever on receipt 5023 / SR 29094).
+                (SELECT sr.qb_txn_id FROM qb_order_pipeline pp
+                   JOIN qb_order_pipeline sr ON sr.order_id = pp.order_id AND sr.step = 'sales_receipt' AND sr.status = 'confirmed'
+                  WHERE pp.reference_id = cp.id AND pp.step = 'payment' AND pp.status = 'skipped'
+                    AND pp.error ILIKE 'Superseded by Sales Receipt%'
+                  ORDER BY sr.confirmed_at DESC LIMIT 1)) AS payment_qb_txn_id,
               cp.status AS payment_status,
               l.payment_snapshot->>'surcharge_amount' AS surcharge_amount,
               cp.amount::text AS payment_amount_cents,
