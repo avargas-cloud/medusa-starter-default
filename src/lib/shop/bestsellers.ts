@@ -14,6 +14,8 @@ export interface Orders12mCounts {
   orders: number;
   own: number;
   viaAlt: number;
+  /** Gross revenue in the window (unit_price × quantity, before discounts), USD. */
+  revenue: number;
 }
 
 export interface WriteOrders12mResult {
@@ -46,6 +48,7 @@ export async function computeOrders12m(
     orders_total: string;
     orders_own: string;
     orders_via_alt: string;
+    revenue_total: string;
   }>(
     `
     WITH alt AS (
@@ -55,7 +58,8 @@ export async function computeOrders12m(
       WHERE pa.deleted_at IS NULL AND pa.is_active
     ),
     sales AS (
-      SELECT pv.product_id AS own_pid, alt.primary_product AS alt_pid, o.id AS oid
+      SELECT pv.product_id AS own_pid, alt.primary_product AS alt_pid, o.id AS oid,
+             (oli.unit_price * oi.quantity) AS rev
       FROM order_item oi
       JOIN order_line_item oli ON oli.id = oi.item_id
       JOIN "order" o ON o.id = oi.order_id
@@ -91,16 +95,29 @@ export async function computeOrders12m(
         SELECT product_id, oid FROM alt_orders
       ) u
       GROUP BY product_id
+    ),
+    -- Revenue rolls up the same way (a sale of an alternative counts for its
+    -- primary); a line is counted once per product it credits.
+    revenue AS (
+      SELECT product_id, SUM(rev) AS revenue
+      FROM (
+        SELECT own_pid AS product_id, rev FROM sales
+        UNION ALL
+        SELECT alt_pid AS product_id, rev FROM sales WHERE alt_pid IS NOT NULL AND alt_pid <> own_pid
+      ) r
+      GROUP BY product_id
     )
     SELECT
       p.id AS product_id,
       COALESCE(t.total, 0) AS orders_total,
       COALESCE(o.own, 0) AS orders_own,
-      COALESCE(a.via_alt, 0) AS orders_via_alt
+      COALESCE(a.via_alt, 0) AS orders_via_alt,
+      COALESCE(r.revenue, 0) AS revenue_total
     FROM product p
     LEFT JOIN total_counts t ON t.product_id = p.id
     LEFT JOIN own_counts o ON o.product_id = p.id
     LEFT JOIN alt_counts a ON a.product_id = p.id
+    LEFT JOIN revenue r ON r.product_id = p.id
     WHERE p.status = 'published' AND p.deleted_at IS NULL
     `,
     [months]
@@ -112,6 +129,7 @@ export async function computeOrders12m(
       orders: Number(row.orders_total),
       own: Number(row.orders_own),
       viaAlt: Number(row.orders_via_alt),
+      revenue: Math.round(Number(row.revenue_total) * 100) / 100,
     });
   }
   return out;
@@ -126,14 +144,15 @@ export async function computeOrders12m(
  * `IS DISTINCT FROM` contra el `orders_12m` previo), no cuántas se tocaron.
  */
 /**
- * Posición de venta pública: 1 = más vendido, 0 = sin ventas en la ventana.
+ * Posición de venta pública: 1 = más vendido POR REVENUE (decisión del operador
+ * 09/16/2026: "prefiero que sea por revenue"), órdenes como desempate; 0 = sin ventas.
  * Es lo ÚNICO que sale por el Store API (allowlist en product-metadata/public-keys):
  * el orden sirve para el shop, el volumen (`orders_12m`) queda interno.
  */
 export function salesRanks(rows: Map<string, Orders12mCounts>): Map<string, number> {
   const sold = [...rows.entries()]
     .filter(([, c]) => c.orders > 0)
-    .sort((a, b) => b[1].orders - a[1].orders || a[0].localeCompare(b[0]));
+    .sort((a, b) => b[1].revenue - a[1].revenue || b[1].orders - a[1].orders || a[0].localeCompare(b[0]));
   return new Map(sold.map(([id], i) => [id, i + 1]));
 }
 
@@ -156,7 +175,8 @@ export async function writeOrders12m(
              || jsonb_build_object(
                   'orders_12m', $2::int,
                   'orders_12m_at', $3::text,
-                  'shop_sales_rank', $4::int
+                  'shop_sales_rank', $4::int,
+                  'revenue_12m', $5::numeric
                 )
          WHERE id = $1
            AND status = 'published'
@@ -164,9 +184,10 @@ export async function writeOrders12m(
            AND (
              (metadata ->> 'orders_12m') IS DISTINCT FROM $2::text
              OR (metadata ->> 'shop_sales_rank') IS DISTINCT FROM $4::text
+             OR (metadata ->> 'revenue_12m') IS DISTINCT FROM $5::text
            )
         `,
-        [productId, counts.orders, writtenAt, salesRank]
+        [productId, counts.orders, writtenAt, salesRank, counts.revenue]
       );
       updated += result.rowCount ?? 0;
     }

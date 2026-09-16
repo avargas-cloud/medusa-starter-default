@@ -257,8 +257,8 @@ async function main(): Promise<void> {
     const publicKeys = new Set<string>(PUBLIC_PRODUCT_METADATA_KEYS);
     check("allowlist expone shop_sales_rank y shop_title", publicKeys.has("shop_sales_rank") && publicKeys.has("shop_title"));
     check(
-      "allowlist NO expone orders_12m ni orders_12m_at (volumen = interno)",
-      !publicKeys.has("orders_12m") && !publicKeys.has("orders_12m_at")
+      "allowlist NO expone orders_12m, orders_12m_at ni revenue_12m (volumen = interno)",
+      !publicKeys.has("orders_12m") && !publicKeys.has("orders_12m_at") && !publicKeys.has("revenue_12m")
     );
 
     // Chequeo puramente informativo: recomputa en memoria (sin escribir) para
