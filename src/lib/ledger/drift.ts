@@ -41,12 +41,27 @@ export async function reconcilePurchaseDrift(
   const limit = options.limit ?? 200;
   const today = getBusinessDateString();
 
+  // 2026-09-16 (VB-1149): la selección de candidatos era `ORDER BY e.created_at
+  // LIMIT 200` — con 282 asientos activos en prod, los 82 más nuevos jamás se
+  // revisaban (VB-1149, editado el 09/15, seguía con el asiento del confirm
+  // viejo). Ahora los candidatos son los asientos cuyo BILL cambió DESPUÉS de
+  // postearse — por `updated_at` del bill o por una `vendor_bill_revision`
+  // creada más tarde (reconfirm) — y se ordenan por lo más recién cambiado
+  // primero, con `limit` como tope de SEGURIDAD (ya no de corte ciego).
   const { rows } = await client.query<{ source_id: string; source_hash: string }>(
     `SELECT e.source_id, e.source_hash
      FROM bank_journal_entry e
+     JOIN vendor_bill b ON b.id = e.source_id AND b.deleted_at IS NULL
      WHERE e.kind = 'document' AND e.source_kind = 'vendor_bill'
        AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = e.id)
-     ORDER BY e.created_at
+       AND (
+         b.updated_at > e.created_at
+         OR EXISTS (
+           SELECT 1 FROM vendor_bill_revision vr
+            WHERE vr.vendor_bill_id = e.source_id AND vr.created_at > e.created_at
+         )
+       )
+     ORDER BY b.updated_at DESC
      LIMIT $1`,
     [limit]
   );

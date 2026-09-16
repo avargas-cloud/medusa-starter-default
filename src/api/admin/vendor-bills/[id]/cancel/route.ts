@@ -129,18 +129,37 @@ export async function POST(
     });
   }
 
+  // 2026-09-16 (VB-1140/1141): un service/freight bill CONFIRMADO sin
+  // receipt nunca escribe `vendor_bill_cost_log` (no hay AVCO que tocar —
+  // sólo lo mueve el pool de landed cost del hermano regular). `previewVendorBillRemoval`
+  // asume que ese log existe y tira "No active cost facts exist for this
+  // vendor bill" para cualquier bill sin filas, así que cancelar uno de estos
+  // devolvía 422 `cost_replay_failed` para siempre. Si no hay cost facts
+  // activos, no hay nada que reversar: se saltea preview + replay y se sigue
+  // con status/revisiones/pipeline/GL como cualquier otro cancel.
+  const { rows: activeCostFactRows } = await knex.raw(
+    `SELECT 1
+       FROM vendor_bill_cost_log
+      WHERE vendor_bill_id = ? AND reversed_at IS NULL
+      LIMIT 1`,
+    [bill.id]
+  );
+  const hasActiveCostFacts = activeCostFactRows.length > 0;
+
   // Build the exact projection first. Apply re-runs it under locks and rejects
   // moved inputs, so removing middle event B correctly rebuilds C and every
   // affected sale instead of attempting an algebraic rollback.
-  let preview;
-  try {
-    preview = await previewVendorBillRemoval(knex, bill.id, actorUserId);
-  } catch (error) {
-    return res.status(422).json({
-      error:
-        error instanceof Error ? error.message : "Unable to build cost replay",
-      code: "cost_replay_failed",
-    });
+  let preview: Awaited<ReturnType<typeof previewVendorBillRemoval>> | null = null;
+  if (hasActiveCostFacts) {
+    try {
+      preview = await previewVendorBillRemoval(knex, bill.id, actorUserId);
+    } catch (error) {
+      return res.status(422).json({
+        error:
+          error instanceof Error ? error.message : "Unable to build cost replay",
+        code: "cost_replay_failed",
+      });
+    }
   }
 
   const trx = await knex.transaction();
@@ -164,7 +183,9 @@ export async function POST(
       throw new Error("Vendor bill changed while cancellation was prepared");
     }
 
-    await applyVendorBillRemovalReplay(trx, preview);
+    if (preview) {
+      await applyVendorBillRemovalReplay(trx, preview);
+    }
     await trx.raw(
       `UPDATE vendor_bill_cost_log
           SET reversed_at = NOW(), updated_at = NOW()
