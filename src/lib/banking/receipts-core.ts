@@ -56,7 +56,7 @@ async function buildReceiptPreview(
     throw new BankingError("BANKING_RECEIPT_SOURCE_STALE", 409);
   if (evidence.source.fee_cents > 0 && feeAttested !== true)
     throw new BankingError("BANKING_RECEIPT_FEE_ATTESTATION_REQUIRED", 409);
-  const history = await receiptHistory(client, kind, id, evidence.source_hash);
+  const history = await receiptHistory(client, kind, id, evidence.history_hash ?? evidence.source_hash);
   if (history.some((e) => e.kind === kind && !e.reversed_by))
     throw new BankingError("BANKING_ALREADY_POSTED", 409);
   await acquireBankAccountingPeriodLock(client, evidence.source.day);

@@ -39,6 +39,10 @@ export type PaymentRow = {
 export type ReceiptEvidence = {
   source: ReceiptSource;
   source_hash: string;
+  /** Hash the POSTED entry was stamped with, when the document posts through the GL
+   * (`postBankDepositDocument` hashes `{header, lines}`, not this evidence snapshot).
+   * History compares against it; absent → `source_hash`. record-deposits: 09/16/2026. */
+  history_hash?: string;
   snapshot: Record<string, unknown>;
   blockers: string[];
   lines: ReceiptLine[];

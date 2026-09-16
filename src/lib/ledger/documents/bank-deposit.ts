@@ -116,6 +116,16 @@ function lineMemo(line: DepositLineRow): string {
  * Falla cerrado (`GL_SOURCE_INVALID`) si el destino no resuelve, si una línea
  * manual apunta a una cuenta inactiva, o si el depósito no tiene líneas.
  */
+/** The hash a posted deposit entry is stamped with — what Banking's history must
+ * compare against (its own evidence snapshot has another shape, so comparing that
+ * flagged EVERY posted deposit as "Source changed"). */
+export function bankDepositSourceHash(sourceSnapshot: {
+  header: ResolvedBankDeposit["header"];
+  lines: ResolvedBankDeposit["lines"];
+}): string {
+  return createHash("sha256").update(JSON.stringify(sourceSnapshot)).digest("hex");
+}
+
 export async function resolveBankDeposit(
   client: PoolClient,
   id: string
@@ -185,9 +195,7 @@ export async function postBankDepositDocument(
   const { header, lines, ledgerLines } = resolved;
   const number = header.number ?? (await ensureDepositNumber(client, header.id));
   const sourceSnapshot = { header: { ...header, number }, lines };
-  const sourceHash = createHash("sha256")
-    .update(JSON.stringify(sourceSnapshot))
-    .digest("hex");
+  const sourceHash = bankDepositSourceHash(sourceSnapshot);
   const label = header.reference?.trim() ? `Deposit ${header.reference.trim()}` : `Deposit ${header.deposit_date}`;
   return postDocumentJournal(client, {
     source_kind: "bank_deposit",

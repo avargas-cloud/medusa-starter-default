@@ -25,7 +25,7 @@ import {
   assertMatchSourceHash,
 } from "./review-matching";
 import { BankingError, bankingEnvSql } from "./security";
-import { resolveBankDeposit } from "../ledger/documents/bank-deposit";
+import { bankDepositSourceHash, resolveBankDeposit } from "../ledger/documents/bank-deposit";
 import { LedgerError } from "../ledger/types";
 
 async function bankMapping(
@@ -435,6 +435,10 @@ export async function depositReceiptSource(
     setup: setup ? { ...setup, frozen: undefined } : null,
   };
   evidence.source_hash = reviewHash(evidence.snapshot);
+  // A posted deposit's entry carries the GL document hash; a draft has no number yet
+  // (allocated at post time), so only a numbered deposit can be compared.
+  if (ledger && ledger.header.number)
+    evidence.history_hash = bankDepositSourceHash({ header: ledger.header, lines: ledger.lines });
   return evidence;
 }
 type MatchRow = {

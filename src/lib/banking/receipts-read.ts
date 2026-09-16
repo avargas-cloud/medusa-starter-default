@@ -51,7 +51,7 @@ export async function receiptContext(
   id: string
 ): Promise<ReceiptContext> {
   const evidence = await receiptEvidence(client, kind, id);
-  const history = await receiptHistory(client, kind, id, evidence.source_hash);
+  const history = await receiptHistory(client, kind, id, evidence.history_hash ?? evidence.source_hash);
   const posting = history.filter((e) => e.kind === kind).at(-1) ?? null;
   let consumed = 0,
     available = 0;
