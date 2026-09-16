@@ -26,7 +26,7 @@ import { bankId, transaction } from "./store";
 export const feedDocumentSchema = z
   .object({
     category_list_id: z.string().min(1).max(128),
-    payee_type: z.enum(["vendor", "customer", "other"]).default("other"),
+    payee_type: z.enum(["vendor", "customer", "other", "other_name"]).default("other"),
     payee_id: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).nullable().optional(),
     payee_name: z.string().trim().min(1).max(500),
     number: z.string().trim().max(50).nullable().optional(),
@@ -50,7 +50,7 @@ export type FeedDocumentPreview = {
   direction: "out" | "in";
   bank_account: { list_id: string; name: string; account_type: string };
   category: { list_id: string; name: string; account_type: string };
-  payee: { type: "vendor" | "customer" | "other"; id: string | null; name: string };
+  payee: { type: "vendor" | "customer" | "other" | "other_name"; id: string | null; name: string };
   number: string | null;
   memo: string;
   lines: Array<{ account: string; debit_cents: number; credit_cents: number }>;
@@ -105,6 +105,19 @@ export async function previewFeedDocument(transactionId: string, input: unknown)
     const vendor = (await getDbPool().query(`SELECT 1 FROM qb_vendor WHERE id=$1 AND deleted_at IS NULL`, [body.payee_id ?? ""])).rowCount;
     if (!vendor) throw new BankingError("BANKING_COUNTERPARTY_INVALID", 409);
   }
+  // Other Name de QB (qb-other-names-picker-20260916): el nombre del preview es el
+  // de la tabla, así el hash cubre lo que de verdad se va a escribir.
+  let payeeName = body.payee_name;
+  if (body.payee_type === "other_name") {
+    const other = (
+      await getDbPool().query<{ name: string }>(
+        `SELECT name FROM qb_other_name WHERE id=$1 AND is_active = true AND deleted_at IS NULL`,
+        [body.payee_id ?? ""]
+      )
+    ).rows[0];
+    if (!other) throw new BankingError("BANKING_COUNTERPARTY_INVALID", 409);
+    payeeName = other.name;
+  }
   // Plaid: positivo = sale. |monto| en centavos.
   const plaid = Math.round(Number(tx.amount) * 100);
   const amount = Math.abs(plaid);
@@ -127,7 +140,7 @@ export async function previewFeedDocument(transactionId: string, input: unknown)
     direction,
     bank_account: { list_id: tx.qb_list_id!, name: tx.bank_name ?? tx.qb_list_id!, account_type: tx.bank_type! },
     category: { list_id: category.qb_list_id, name: category.full_name, account_type: category.account_type },
-    payee: { type: body.payee_type, id: body.payee_id ?? null, name: body.payee_name },
+    payee: { type: body.payee_type, id: body.payee_id ?? null, name: payeeName },
     number: document === "gl_check" && !isCard ? number : null,
     memo,
     lines:

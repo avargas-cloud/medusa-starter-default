@@ -28,6 +28,7 @@ import {
   allocateGlNumber,
   assertStatus,
   loadActiveAccounts,
+  loadActiveOtherNames,
   newGlId,
   reversalDay,
   toAccountSnapshot,
@@ -63,10 +64,19 @@ async function resolve(client: PoolClient, input: BankCheckWriteInput) {
     account: accounts.get(l.account_list_id)!,
   }));
   const ledgerLines = buildBankCheckLines({ bankAccount, lines });
+  // Payee `other_name`: el nombre es el de `qb_other_name` (snapshot), no el del cliente.
+  const otherNames = await loadActiveOtherNames(client, [
+    input.payee_type === "other_name" ? input.payee_id : null,
+  ]);
+  const payeeName =
+    input.payee_type === "other_name" && input.payee_id
+      ? otherNames.get(input.payee_id)!.name
+      : input.payee_name;
   return {
     bankAccount,
     lines,
     ledgerLines,
+    payeeName,
     kind: deriveBankCheckKind(bankAccount.account_type, input.number),
     total: bankCheckTotal(lines),
   };
@@ -89,7 +99,7 @@ async function writeHeaderAndLines(
     JSON.stringify(toAccountSnapshot(r.bankAccount)),
     input.payee_type,
     input.payee_id ?? null,
-    input.payee_name,
+    r.payeeName,
     input.memo ?? null,
     r.total,
     input.to_be_printed ?? false,

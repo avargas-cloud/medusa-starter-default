@@ -102,6 +102,39 @@ export async function loadActiveAccounts(
   return map;
 }
 
+/**
+ * Other Names de QuickBooks (`qb_other_name`, plan qb-other-names-picker-20260916)
+ * ACTIVOS por id. Falla cerrado igual que `loadActiveAccounts`: un id apagado o
+ * inexistente rechaza el documento (`other_name_not_active`) — el nombre que se
+ * persiste es el de la tabla, nunca el que mandó el cliente.
+ */
+export interface OtherNameRef {
+  id: string;
+  qb_list_id: string;
+  name: string;
+}
+
+export async function loadActiveOtherNames(
+  client: PoolClient,
+  ids: Array<string | null | undefined>
+): Promise<Map<string, OtherNameRef>> {
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  if (unique.length === 0) return new Map();
+  const { rows } = await client.query<OtherNameRef>(
+    `SELECT id, qb_list_id, name FROM qb_other_name
+      WHERE id = ANY($1::text[]) AND is_active = true AND deleted_at IS NULL`,
+    [unique]
+  );
+  const map = new Map(rows.map((r) => [r.id, r]));
+  const missing = unique.filter((id) => !map.has(id));
+  if (missing.length)
+    throw new LedgerError("GL_SOURCE_INVALID", {
+      reason: "other_name_not_active",
+      other_name_ids: missing,
+    });
+  return map;
+}
+
 export function toAccountSnapshot(account: LedgerAccount): AccountSnapshot {
   return {
     id: account.id,

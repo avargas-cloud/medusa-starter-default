@@ -27,6 +27,7 @@ import {
   allocateGlNumber,
   assertStatus,
   loadActiveAccounts,
+  loadActiveOtherNames,
   newGlId,
   reversalDay,
   toAccountSnapshot,
@@ -46,14 +47,26 @@ export {
   type JournalEntryWriteInput,
 } from "./journal-entry-read";
 
-/** Valida contra cuentas ACTIVAS y el builder puro; devuelve las líneas listas para insertar. */
+/**
+ * Valida contra cuentas ACTIVAS y el builder puro; devuelve las líneas listas
+ * para insertar. Una línea `other_name` toma su nombre de `qb_other_name`
+ * (snapshot), no del cliente.
+ */
 async function resolveLines(client: PoolClient, input: JournalEntryWriteInput) {
   const accounts = await loadActiveAccounts(
     client,
     input.lines.map((l) => l.account_list_id)
   );
+  const otherNames = await loadActiveOtherNames(
+    client,
+    input.lines.map((l) => (l.entity_type === "other_name" ? l.entity_id : null))
+  );
   const resolved = input.lines.map((l) => ({
     ...l,
+    entity_name:
+      l.entity_type === "other_name" && l.entity_id
+        ? otherNames.get(l.entity_id)!.name
+        : l.entity_name,
     account: accounts.get(l.account_list_id)!,
   }));
   const ledgerLines = buildJournalEntryLines(resolved);

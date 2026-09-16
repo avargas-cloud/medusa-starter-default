@@ -8,12 +8,19 @@ import { AccountSnapshot, GlDocumentStatus } from "./manual-shared";
  * tipos del documento, DTO que viaja al POS, `get` y `list`. La escritura
  * (create/update/post/void) vive en `journal-entry.ts`.
  */
+/**
+ * `other_name` (qb-other-names-picker-20260916): la línea enlaza un Other Name
+ * de QuickBooks (`qb_other_name.id`); viaja a QB como EntityRef. `null` +
+ * `entity_name` = texto libre, sólo para leer en el POS.
+ */
+export type JournalLineEntityType = "customer" | "vendor" | "other_name";
+
 export interface JournalEntryLineInput {
   account_list_id: string;
   debit_cents: bigint;
   credit_cents: bigint;
   memo?: string | null;
-  entity_type?: "customer" | "vendor" | null;
+  entity_type?: JournalLineEntityType | null;
   entity_id?: string | null;
   entity_name?: string | null;
 }
@@ -33,7 +40,7 @@ export interface JournalEntryLineDto {
   debit_cents: number;
   credit_cents: number;
   memo: string | null;
-  entity_type: "customer" | "vendor" | null;
+  entity_type: JournalLineEntityType | null;
   entity_id: string | null;
   entity_name: string | null;
 }

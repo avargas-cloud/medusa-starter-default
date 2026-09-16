@@ -18,11 +18,21 @@ const journalLineSchema = z
     debit_cents: CENTS_SCHEMA.min(0).default(0),
     credit_cents: CENTS_SCHEMA.min(0).default(0),
     memo: MEMO_SCHEMA,
-    entity_type: z.enum(["customer", "vendor"]).nullable().optional(),
+    entity_type: z.enum(["customer", "vendor", "other_name"]).nullable().optional(),
     entity_id: OPTIONAL_ID_SCHEMA,
     entity_name: z.string().trim().max(500).nullable().optional(),
   })
-  .strict();
+  .strict()
+  // Un enlace a un Other Name de QB es por id (`qb_other_name.id`); el nombre lo
+  // pone el servidor desde la tabla. Sin id no es un enlace, es texto libre.
+  .superRefine((line, ctx) => {
+    if (line.entity_type === "other_name" && !line.entity_id)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entity_id"],
+        message: "entity_id is required when entity_type is other_name",
+      });
+  });
 
 export const journalEntryBodySchema = z
   .object({
@@ -67,7 +77,7 @@ export const bankCheckBodySchema = z
     day: DAY_SCHEMA,
     bank_account_list_id: z.string().trim().min(1),
     number: z.string().trim().max(50).nullable().optional(),
-    payee_type: z.enum(["vendor", "customer", "other"]),
+    payee_type: z.enum(["vendor", "customer", "other", "other_name"]),
     payee_id: OPTIONAL_ID_SCHEMA,
     payee_name: z.string().trim().min(1).max(500),
     memo: MEMO_SCHEMA,
@@ -76,7 +86,15 @@ export const bankCheckBodySchema = z
     lines: z.array(checkLineSchema).min(1).max(199),
     post: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.payee_type === "other_name" && !body.payee_id)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payee_id"],
+        message: "payee_id is required when payee_type is other_name",
+      });
+  });
 
 export function toBankCheckInput(
   body: z.infer<typeof bankCheckBodySchema>

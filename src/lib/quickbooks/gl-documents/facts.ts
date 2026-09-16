@@ -28,7 +28,11 @@
  * Payee del cheque (supuesto declarado en el plan): vendor → `qb_vendor.qb_list_id`
  * (falla cerrado si no hay ListID real: un cheque a un vendor sin enlace pierde
  * el 1099); customer → `customer.metadata.qb_list_id` si existe, si no el nombre
- * va en el memo; other → sin `PayeeEntityRef`, nombre en el memo.
+ * va en el memo; other → sin `PayeeEntityRef`, nombre en el memo;
+ * other_name (qb-other-names-picker-20260916) → `qb_other_name.qb_list_id`, un
+ * Other Name real de QB (falla cerrado si el enlace no existe — el documento
+ * dijo que era ESE nombre, no uno parecido). Mismo mapeo para el `EntityRef`
+ * de una línea de asiento.
  *
  * Fechas: `day` es columna `date` y se lee `::text` — nunca pasa por `Date`
  * (`getBusinessDateString('2026-04-22')` corre un día atrás; los 59 asientos
@@ -128,6 +132,13 @@ async function vendorListId(db: GlDocumentDb, vendorId: string): Promise<string 
   return id && !id.startsWith("pending_") ? id : null;
 }
 
+async function otherNameListId(db: GlDocumentDb, otherNameId: string): Promise<string | null> {
+  const row = one<{ qb_list_id: string | null }>(
+    await db.raw(`SELECT qb_list_id FROM qb_other_name WHERE id = ? AND deleted_at IS NULL LIMIT 1`, [otherNameId])
+  );
+  return row?.qb_list_id || null;
+}
+
 async function customerListId(db: GlDocumentDb, customerId: string): Promise<string | null> {
   const row = one<{ qb_list_id: string | null }>(
     await db.raw(
@@ -147,7 +158,7 @@ interface CheckRow {
   kind: "check" | "expense" | "card_charge";
   day: string;
   bank_account_list_id: string;
-  payee_type: "vendor" | "customer" | "other";
+  payee_type: "vendor" | "customer" | "other" | "other_name";
   payee_id: string | null;
   payee_name: string;
   memo: string | null;
@@ -200,6 +211,10 @@ async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFa
     if (!payeeListId) return structural(`vendor_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})`);
   } else if (doc.payee_type === "customer" && doc.payee_id) {
     payeeListId = await customerListId(db, doc.payee_id);
+  } else if (doc.payee_type === "other_name") {
+    if (!doc.payee_id) return structural("other_name payee without qb_other_name id");
+    payeeListId = await otherNameListId(db, doc.payee_id);
+    if (!payeeListId) return structural(`other_name_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})`);
   }
   if (!payeeListId) {
     // Nombre libre (o cliente sin enlace): el payee viaja en el memo para que
@@ -317,7 +332,7 @@ interface JournalLineRow {
   debit_cents: string;
   credit_cents: string;
   memo: string | null;
-  entity_type: "customer" | "vendor" | null;
+  entity_type: "customer" | "vendor" | "other_name" | null;
   entity_id: string | null;
   entity_name: string | null;
 }
@@ -358,6 +373,15 @@ async function journalFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
     let entityListId: string | null = null;
     if (row.entity_type === "vendor" && row.entity_id) entityListId = await vendorListId(db, row.entity_id);
     if (row.entity_type === "customer" && row.entity_id) entityListId = await customerListId(db, row.entity_id);
+    if (row.entity_type === "other_name") {
+      // Un Other Name NO puede ir en una línea de A/R ni A/P (QB lo rechaza: 3140);
+      // en cualquier otra cuenta es exactamente el Name del asiento de QB.
+      entityListId = row.entity_id ? await otherNameListId(db, row.entity_id) : null;
+      if (!entityListId)
+        return structural(`other_name_not_in_quickbooks: line ${i + 1} (${row.entity_name ?? row.entity_id ?? "?"})`);
+      if (ENTITY_ACCOUNT_TYPES.has(accountType))
+        return structural(`other_name_on_ar_ap_line: line ${i + 1} (${accountType}) needs a customer/vendor, not an Other Name`);
+    }
     if (ENTITY_ACCOUNT_TYPES.has(accountType) && !entityListId) {
       return structural(
         `entity_required_for_ar_ap_line: line ${i + 1} (${accountType}) needs a QuickBooks customer/vendor`

@@ -18,6 +18,9 @@
  *      (sin next_retry_at) · rechazo de QB (3140) → failed terminal
  *  12. importador: loadPosKnownTxnIds ve los TxnIDs vivos Y los anulados; classify → skip
  *  13. negativas: ninguna fila gl_document_* para documentos qb_import/opening
+ *  14. other_name (qb-other-names-picker-20260916): línea de JE → EntityRef con el
+ *      ListID de qb_other_name · cheque → PayeeEntityRef · nombre desde la tabla ·
+ *      negativas (A/R estructural, sin id 400, id desconocido 400)
  *
  * Los pasos de dispatch/confirm llaman a las funciones REALES del
  * consolidator (`resubmitByStep`, `pollSubmittedRows`) contra el stub bridge
@@ -233,6 +236,7 @@ async function cleanup(client: Client): Promise<void> {
   // los de todos (incluidos los de la adopción de QuickBooks del clon).
   await client.query(`DELETE FROM bank_review_event WHERE idempotency_key LIKE $1 OR (entity_type='deposit' AND entity_id = ANY($2::text[]))`, [`${PREFIX}%`, ids]).catch(() => undefined);
   await client.query(`DELETE FROM qb_account WHERE qb_list_id = $1`, [`pos_${PREFIX}exp`]);
+  await client.query(`DELETE FROM qb_other_name WHERE id = $1`, [`qbon_${PREFIX}on`]).catch(() => undefined);
   await client.query(`DELETE FROM bank_account WHERE id = $1`, [`bacct_${PREFIX}acct`]);
   await client.query(`DELETE FROM bank_connection WHERE id = $1`, [`bconn_${PREFIX}conn`]);
 }
@@ -511,6 +515,70 @@ async function main(): Promise<void> {
     const rRej = await dispatchAndConfirm(client, rejected);
     assert(rRej.status === "failed" && rRej.next_retry_at === null && /rejected gl_document_add \(3140\)/.test(rRej.error ?? ""), "QB rejection (3140, under `$`) → failed terminal with the code", `${rRej.status} ${rRej.error?.slice(0, 100)}`);
     assert((await docLink(client, "gl_check", (await rowById(client, rejected)).reference_id!)).qb_txn_id === null, "a rejected Add leaves the document without TxnID");
+
+    // ── 14 · Other Name de QB enlazado (qb-other-names-picker-20260916) ────
+    console.log("\n── 14. other_name: JE line → EntityRef · check payee → PayeeEntityRef · A/R line rejected");
+    const OTHER_LIST_ID = `E2E-${PREFIX}ON`;
+    await client.query(
+      `INSERT INTO qb_other_name (id, qb_list_id, name, is_active) VALUES ($1, $2, $3, true)
+       ON CONFLICT (qb_list_id) DO UPDATE SET name = EXCLUDED.name, is_active = true, deleted_at = NULL`,
+      [`qbon_${PREFIX}on`, OTHER_LIST_ID, "Amerant Bank (e2e)"]
+    );
+    const jeOn = await api("POST", "/admin/accounting/journal-entries", {
+      day: "2026-09-15", memo: `${PREFIX}interest ACH`,
+      lines: [
+        { account_list_id: CHASE, credit_cents: 72202, memo: "Account 140109363 ACH", entity_type: "other_name", entity_id: `qbon_${PREFIX}on`, entity_name: "whatever the client typed" },
+        { account_list_id: BANK_FEES, debit_cents: 72202 },
+      ],
+      post: true,
+    });
+    assert(jeOn.status === 201, "JE with an other_name line created + posted", `HTTP ${jeOn.status} ${JSON.stringify(jeOn.json).slice(0, 160)}`);
+    const jeOnLine = (jeOn.json.journal_entry?.lines ?? []).find((l: { entity_type: string | null }) => l.entity_type === "other_name");
+    assert(jeOnLine?.entity_name === "Amerant Bank (e2e)", "the line's entity_name is the table's name, not what the client sent", JSON.stringify(jeOnLine).slice(0, 160));
+    const jeOnId = jeOn.json.journal_entry?.id ?? jeOn.json.id;
+    const jeOnRows = await rowsFor(client, jeOnId, "gl_document_add");
+    const xjOn = String(jeOnRows[0]?.payload?.qbxml ?? "");
+    const creditOn = xjOn.slice(xjOn.indexOf("<JournalCreditLine>"));
+    assert(jeOnRows[0]?.status === "pending" && creditOn.includes(`<EntityRef><ListID>${OTHER_LIST_ID}</ListID></EntityRef>`), "JournalEntryAdd carries EntityRef = the Other Name's ListID on the bank line", creditOn.slice(0, 200));
+    assert(!xjOn.slice(0, xjOn.indexOf("<JournalCreditLine>")).includes("<EntityRef>"), "the expense line (no entity) carries no EntityRef");
+    const rjOn = await dispatchAndConfirm(client, jeOnRows[0]!.id);
+    assert(rjOn.status === "confirmed" && !!rjOn.qb_txn_id, "other_name JE confirmed with TxnID", `${rjOn.status}`);
+    txnIdsSeen.push(rjOn.qb_txn_id!);
+
+    const chkOn = await api("POST", "/admin/accounting/checks", {
+      day: "2026-09-15", bank_account_list_id: CHASE, number: null, payee_type: "other_name", payee_id: `qbon_${PREFIX}on`, payee_name: "ignored",
+      memo: `${PREFIX}interest check`, lines: [{ account_list_id: BANK_FEES, amount_cents: 72202, memo: "Account 140109363 ACH" }], post: true,
+    });
+    assert(chkOn.status === 201 && chkOn.json.check?.payee_name === "Amerant Bank (e2e)", "check paid to an Other Name: created, payee_name from the table", `HTTP ${chkOn.status} ${chkOn.json.check?.payee_name}`);
+    const xcOn = String((await rowsFor(client, chkOn.json.check?.id, "gl_document_add"))[0]?.payload?.qbxml ?? "");
+    assert(xcOn.includes(`<PayeeEntityRef><ListID>${OTHER_LIST_ID}</ListID></PayeeEntityRef>`) && !xcOn.includes("Payee: Amerant"), "CheckAdd carries PayeeEntityRef (no 'Payee:' memo fallback)", xcOn.slice(0, 200));
+    const rcOn = await dispatchAndConfirm(client, (await rowsFor(client, chkOn.json.check?.id, "gl_document_add"))[0]!.id);
+    assert(rcOn.status === "confirmed", "other_name check confirmed", rcOn.status);
+    txnIdsSeen.push(rcOn.qb_txn_id!);
+
+    // Negativas: A/R con Other Name → estructural; sin id → 400; id inexistente → 400.
+    const AR_ACCT = (await client.query<{ qb_list_id: string }>(`SELECT qb_list_id FROM qb_account WHERE account_type = 'AccountsReceivable' AND is_active AND deleted_at IS NULL ORDER BY qb_list_id LIMIT 1`)).rows[0]?.qb_list_id;
+    if (AR_ACCT) {
+      const jeAr = await api("POST", "/admin/accounting/journal-entries", {
+        day: "2026-09-15", memo: `${PREFIX}other on AR`,
+        lines: [{ account_list_id: AR_ACCT, debit_cents: 100, entity_type: "other_name", entity_id: `qbon_${PREFIX}on` }, { account_list_id: BANK_FEES, credit_cents: 100 }],
+        post: true,
+      });
+      const arRow = (await rowsFor(client, jeAr.json.journal_entry?.id ?? "", "gl_document_add"))[0];
+      assert(jeAr.status === 201 && arRow?.status === "failed" && /other_name_on_ar_ap_line/.test(arRow?.error ?? ""), "Other Name on an A/R line: GL posts, QB row failed structural", `${jeAr.status} ${arRow?.status} ${arRow?.error?.slice(0, 80)}`);
+    } else {
+      assert(false, "no AccountsReceivable account in the sandbox mirror (cannot run the A/R negative)");
+    }
+    const noId = await api("POST", "/admin/accounting/journal-entries", {
+      day: "2026-09-15", memo: `${PREFIX}other no id`,
+      lines: [{ account_list_id: CHASE, credit_cents: 100, entity_type: "other_name" }, { account_list_id: BANK_FEES, debit_cents: 100 }],
+    });
+    assert(noId.status === 400 && /entity_id is required/.test(JSON.stringify(noId.json)), "other_name without entity_id → 400", `${noId.status}`);
+    const badId = await api("POST", "/admin/accounting/checks", {
+      day: "2026-09-15", bank_account_list_id: CHASE, payee_type: "other_name", payee_id: "qbon_nope", payee_name: "x",
+      memo: `${PREFIX}bad other id`, lines: [{ account_list_id: BANK_FEES, amount_cents: 100 }],
+    });
+    assert(badId.status === 400 && /other_name_not_active/.test(JSON.stringify(badId.json)), "other_name with an unknown id → 400 other_name_not_active", `${badId.status}`);
 
     // ── 12 · importador ────────────────────────────────────────────────────
     console.log("\n── 12. importer recognises every TxnID this lane wrote (live and voided)");

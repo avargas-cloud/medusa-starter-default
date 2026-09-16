@@ -278,7 +278,62 @@ async function factsFailClosed(): Promise<void> {
     "facts (control positivo): el mismo documento con cuentas reales construye un CheckAdd");
 }
 
+
+// ── 6 · Other Names de QB (qb-other-names-picker-20260916) ─────────────────
+// Un nombre enlazado (`other_name`) se afirma por NOMBRE en cada capa que lo
+// tiene que conocer: si una lo olvida, el POS acepta el enlace y QB nunca ve el
+// EntityRef — o el CHECK de la base lo rechaza en producción con todo en verde.
+{
+  const schemas = read("lib/ledger/documents/manual-schemas.ts");
+  check(/entity_type:\s*z\.enum\(\["customer",\s*"vendor",\s*"other_name"\]\)/.test(schemas), "manual-schemas: la línea del asiento acepta other_name");
+  check(/payee_type:\s*z\.enum\(\["vendor",\s*"customer",\s*"other",\s*"other_name"\]\)/.test(schemas), "manual-schemas: el cheque acepta other_name");
+  check(/entity_type === "other_name" && !line\.entity_id/.test(schemas) && /payee_type === "other_name" && !body\.payee_id/.test(schemas),
+    "manual-schemas: other_name sin id se rechaza en el body (no es un enlace)");
+  const je = codeLines(read("lib/ledger/documents/journal-entry.ts"));
+  const chk = codeLines(read("lib/ledger/documents/bank-check.ts"));
+  check(je.includes("loadActiveOtherNames(") && chk.includes("loadActiveOtherNames("),
+    "journal-entry/bank-check: el nombre viene de qb_other_name (snapshot), nunca del cliente");
+  const feed = read("lib/banking/feed-confirm-document.ts");
+  check(feed.includes('"other_name"') && feed.includes("FROM qb_other_name"), "feed-confirm-document: Confirm del feed acepta y valida other_name");
+  const facts = codeLines(read("lib/quickbooks/gl-documents/facts.ts"));
+  check(facts.includes("FROM qb_other_name") && /other_name_on_ar_ap_line/.test(facts), "facts: resuelve qb_other_name → ListID y rechaza Other Name en A/R–A/P");
+  const migration = read("migrations/Migration20260916150000-QbOtherNames.ts");
+  check(/'customer','vendor','other_name'/.test(migration) && /'vendor','customer','other','other_name'/.test(migration),
+    "migración: los dos CHECK (gl_journal_entry_line.entity_type, gl_check.payee_type) incluyen other_name");
+  const otherNamesSync = read("api/admin/qb-catalog/other-names/sync/route.ts");
+  check(otherNamesSync.includes("OtherNameQueryRq") && !/OtherNameAdd|OtherNameMod|VendorAdd|CustomerAdd/.test(otherNamesSync),
+    "other-names/sync: sólo OtherNameQueryRq — el POS nunca crea nombres en QB");
+}
+
+async function factsOtherName(): Promise<void> {
+  // Comportamiento, no texto: un asiento con la línea del banco enlazada a un
+  // Other Name construye el JournalEntryAdd con EntityRef = ListID de la tabla.
+  const stub = {
+    raw: async (sql: string): Promise<{ rows: unknown[] }> => {
+      if (sql.includes("FROM gl_journal_entry_line")) {
+        return { rows: [
+          { account_list_id: "80000006-1", debit_cents: "0", credit_cents: "72202", memo: "Account 140109363 ACH", entity_type: "other_name", entity_id: "qbon_x", entity_name: "Amerant Bank" },
+          { account_list_id: "80000015-1", debit_cents: "72202", credit_cents: "0", memo: null, entity_type: null, entity_id: null, entity_name: null },
+        ] };
+      }
+      if (sql.includes("FROM gl_journal_entry ")) {
+        return { rows: [{ id: "gje_stub", number: "JE-0001", day: "2026-09-15", memo: null, status: "posted", qb_txn_id: null }] };
+      }
+      if (sql.includes("FROM qb_account")) {
+        return { rows: [{ qb_list_id: "80000006-1", account_type: "Bank" }, { qb_list_id: "80000015-1", account_type: "Expense" }] };
+      }
+      if (sql.includes("FROM qb_other_name")) return { rows: [{ qb_list_id: "800000BB-1359671733" }] };
+      return { rows: [] };
+    },
+  };
+  const facts = await loadGlDocumentAddFacts(stub, "gl_journal_entry", "gje_stub");
+  check(facts.ready && facts.qbxml.includes("<EntityRef><ListID>800000BB-1359671733</ListID></EntityRef>"),
+    "facts: la línea other_name del asiento viaja con EntityRef = ListID de qb_other_name",
+    JSON.stringify(facts).slice(0, 200));
+}
+
 factsFailClosed()
+  .then(factsOtherName)
   .then(() => {
     for (const n of notes) console.log(n);
     if (failures.length) {

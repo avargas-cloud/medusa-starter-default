@@ -10,7 +10,8 @@ import { AccountSnapshot, GlDocumentStatus } from "./manual-shared";
  * `1789300000000-GlManualDocuments.ts`): tipos, DTO, `get` y `list`. La
  * escritura (create/update/post/void) vive en `bank-check.ts`.
  */
-export type CheckPayeeType = "vendor" | "customer" | "other";
+/** `other_name` = Other Name de QuickBooks enlazado por `payee_id` (`qb_other_name.id`); `other` = texto libre. */
+export type CheckPayeeType = "vendor" | "customer" | "other" | "other_name";
 
 export interface BankCheckLineInput {
   account_list_id: string;
