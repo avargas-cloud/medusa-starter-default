@@ -51,6 +51,14 @@ export const PUBLIC_PRODUCT_METADATA_KEYS = [
   "variant_attributes",
   "is_service",
   "shipping_type",
+  // Shop (2026-09-16, plan shop-products-redesign): merchandising del catálogo.
+  // `shop_sales_rank` es una POSICIÓN (1 = más vendido, 0 = sin ventas), no un
+  // volumen: `orders_12m` / `orders_12m_at` quedan deliberadamente afuera —
+  // cuántas órdenes vende cada SKU es inteligencia de negocio.
+  "shop_sales_rank", // lib/shop/catalog.ts (popularityOf)
+  "shop_title", // lib/shop/catalog.ts (displayTitle)
+  "shop_role", // lib/shop/categories.ts (isAccessory)
+  "shop_rank", // lib/shop/catalog.ts (override manual, fase 2)
 ] as const;
 
 const PUBLIC_KEY_SET: ReadonlySet<string> = new Set(
