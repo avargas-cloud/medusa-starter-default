@@ -59,7 +59,8 @@ export type QbDeposit = { TxnID: string; EditSequence: string; TxnDate: string; 
 export async function readDeposit(txnId: string): Promise<QbDeposit | null> {
   const rs = (await qbDirect(`<DepositQueryRq><TxnID>${txnId}</TxnID><IncludeLineItems>true</IncludeLineItems></DepositQueryRq>`)).DepositQueryRs;
   const st = rsStatus(rs);
-  if (st.code === "1" || st.code === "3120") return null;
+  // QB contesta 500 "required element … could not be found" para un TxnID borrado (medido 09/15/2026).
+  if (st.code === "1" || st.code === "3120" || (st.code === "500" && /could not be found/i.test(st.message))) return null;
   if (st.code !== "0") throw new Error(`DepositQuery ${txnId}: ${st.code} ${st.message}`);
   const ret = asList<any>(rs.DepositRet)[0];
   if (!ret) return null;
@@ -69,7 +70,7 @@ export async function readDeposit(txnId: string): Promise<QbDeposit | null> {
 export async function readJournalEntry(txnId: string): Promise<{ TxnID: string; TxnDate: string; debits: Array<{ account: string; amount: bigint; entity: string | null }>; credits: Array<{ account: string; amount: bigint }> } | null> {
   const rs = (await qbDirect(`<JournalEntryQueryRq><TxnID>${txnId}</TxnID><IncludeLineItems>true</IncludeLineItems></JournalEntryQueryRq>`)).JournalEntryQueryRs;
   const st = rsStatus(rs);
-  if (st.code === "1" || st.code === "3120") return null;
+  if (st.code === "1" || st.code === "3120" || (st.code === "500" && /could not be found/i.test(st.message))) return null;
   if (st.code !== "0") throw new Error(`JournalEntryQuery ${txnId}: ${st.code} ${st.message}`);
   const ret = asList<any>(rs.JournalEntryRet)[0];
   if (!ret) return null;
@@ -84,7 +85,7 @@ export async function readJournalEntry(txnId: string): Promise<{ TxnID: string; 
 export async function readCheck(txnId: string): Promise<{ TxnID: string; Amount: bigint; IsVoid: boolean; Memo?: string } | null> {
   const rs = (await qbDirect(`<CheckQueryRq><TxnID>${txnId}</TxnID></CheckQueryRq>`)).CheckQueryRs;
   const st = rsStatus(rs);
-  if (st.code === "1" || st.code === "3120") return null;
+  if (st.code === "1" || st.code === "3120" || (st.code === "500" && /could not be found/i.test(st.message))) return null;
   if (st.code !== "0") throw new Error(`CheckQuery ${txnId}: ${st.code} ${st.message}`);
   const ret = asList<any>(rs.CheckRet)[0];
   if (!ret) return null;

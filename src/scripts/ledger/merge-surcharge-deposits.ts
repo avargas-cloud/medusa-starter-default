@@ -107,7 +107,10 @@ async function loadPairs(client: PoolClient, from: string, to: string, only: str
 
 function depositModXml(qb: QbDeposit, surchargeAccount: string, surchargeCents: bigint, memo: string): string {
   const lines = qb.lines.map((l) => {
-    if (l.TxnID) return `<DepositLineMod><TxnLineID>${l.TxnLineID}</TxnLineID><PaymentTxnID>${l.TxnID}</PaymentTxnID></DepositLineMod>`;
+    // Una línea de cobro ya depositada se conserva SOLO por TxnLineID: re-mandar su
+    // PaymentTxnID hace que QB la busque en "Payments to Deposit" y rechace con 3210
+    // (probado en prod 09/15/2026 sobre 1CEEA0; nada cambió, readback intacto).
+    if (l.TxnID) return `<DepositLineMod><TxnLineID>${l.TxnLineID}</TxnLineID></DepositLineMod>`;
     return `<DepositLineMod><TxnLineID>${l.TxnLineID}</TxnLineID>${l.EntityRef?.ListID ? `<EntityRef><ListID>${l.EntityRef.ListID}</ListID></EntityRef>` : ""}<AccountRef><ListID>${l.AccountRef?.ListID}</ListID></AccountRef>${l.Memo ? `<Memo>${escapeXml(l.Memo)}</Memo>` : ""}<Amount>${l.Amount}</Amount></DepositLineMod>`;
   });
   lines.push(`<DepositLineMod><TxnLineID>-1</TxnLineID><AccountRef><ListID>${surchargeAccount}</ListID></AccountRef><Memo>${escapeXml(memo)}</Memo><Amount>${major(surchargeCents)}</Amount></DepositLineMod>`);
