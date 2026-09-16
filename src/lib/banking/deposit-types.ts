@@ -74,6 +74,8 @@ export type DepositLine = {
   account_list_id?: string | null;
   account_name?: string | null;
   payment_display_id: number | null;
+  /** Receipt date (YYYY-MM-DD, ET) from the payment snapshot; null on manual lines and on lines saved before the snapshot carried it. */
+  date?: string | null;
   customer_id: string;
   customer_name: string;
   method: string;

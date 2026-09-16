@@ -59,6 +59,7 @@ export const DEPOSIT_SELECT_SQL = `d.id,d.number,d.revision,d.status,d.account_i
   COALESCE((SELECT jsonb_agg(jsonb_build_object('id',dl.id,'payment_id',dl.payment_id,
     'payment_display_id',dl.payment_snapshot->'display_id','customer_id',dl.payment_snapshot->>'customer_id',
     'customer_name',dl.payment_snapshot->>'customer_name','method',dl.payment_snapshot->>'method',
+    'date',dl.payment_snapshot->>'date',
     'payment_amount',dl.payment_snapshot->>'amount','amount',dl.amount,'source_hash',dl.source_hash,
     'surcharge_amount',COALESCE(dl.payment_snapshot->>'surcharge_amount','0.00'),
     'card_brand',dl.payment_snapshot->>'card_brand')
