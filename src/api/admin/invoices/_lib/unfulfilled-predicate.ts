@@ -22,6 +22,15 @@
  * could see the other. A fulfillment the ORDER cannot see is not a fulfillment
  * this invoice can claim.
  *
+ * ── The goods clause (2026-09-16) ───────────────────────────────────────────
+ * `hasGoods` came from ten $0 invoices the QB backfills created for documents
+ * that carry NO line items (test invoices in QB, $0 sales receipts). Their
+ * orders are `completed`, nothing was ever sold, and yet they were the ENTIRE
+ * [Unfulfilled] tab: no fulfillment row, so "still unfulfilled" by the clauses
+ * above. `fulfill-backfilled-qb-orders` cannot heal them either — there is no
+ * item to register a fulfillment against. An invoice whose order has nothing
+ * to deliver is not pending delivery; it is empty.
+ *
  * NO QUESTION MARKS anywhere below: knex's `raw` treats every `?` as a
  * positional binding, comments included.
  */
@@ -39,6 +48,8 @@ export interface UnfulfilledColumns {
   hasTracking: string;
   /** Boolean SQL expression: order_fulfillment links it to THIS invoice's order. */
   linkedToOrder: string;
+  /** Boolean SQL expression: the order has at least one live line with quantity > 0. */
+  hasGoods: string;
 }
 
 /**
@@ -57,16 +68,39 @@ export function linkedToOrderSql(invoiceAlias: string): string {
   )`;
 }
 
+/**
+ * The EXISTS that proves there is something to deliver: a live line of the
+ * order's CURRENT version with quantity > 0. `invoiceAlias` must expose
+ * `order_id`. Reads `order_item` (per-version quantities), not the line item
+ * table, because an edited-away line keeps its `order_line_item` row.
+ */
+export function hasGoodsSql(invoiceAlias: string): string {
+  return `EXISTS (
+    SELECT 1
+      FROM "order" og
+      JOIN order_item oig
+        ON oig.order_id = og.id
+       AND oig.version = og.version
+       AND oig.deleted_at IS NULL
+     WHERE og.id = ${invoiceAlias}.order_id
+       AND og.deleted_at IS NULL
+       AND oig.quantity > 0
+  )`;
+}
+
 /** The predicate itself, as a boolean SQL expression. */
 export function unfulfilledSql(c: UnfulfilledColumns): string {
   return `(
-    ${c.fulfillmentId} IS NULL
-    OR ${c.canceledAt} IS NOT NULL
-    OR NOT ${c.linkedToOrder}
-    OR (
-      ${c.shippedAt} IS NULL
-      AND ${c.deliveredAt} IS NULL
-      AND NOT ${c.hasTracking}
+    ${c.hasGoods}
+    AND (
+      ${c.fulfillmentId} IS NULL
+      OR ${c.canceledAt} IS NOT NULL
+      OR NOT ${c.linkedToOrder}
+      OR (
+        ${c.shippedAt} IS NULL
+        AND ${c.deliveredAt} IS NULL
+        AND NOT ${c.hasTracking}
+      )
     )
   )`;
 }

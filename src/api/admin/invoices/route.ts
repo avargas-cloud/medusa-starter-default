@@ -54,6 +54,7 @@ import { reconcileOrderReservations } from "../../../lib/finance/reconcile-order
 import {
   linkedToOrderSql,
   unfulfilledSql,
+  hasGoodsSql,
 } from "./_lib/unfulfilled-predicate";
 import { getFiniteMoney, getNum } from "./payment-balance";
 import { registerMedusaPayment } from "./register-medusa-payment";
@@ -162,6 +163,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                 AND l.deleted_at IS NULL
            )`,
            linkedToOrder: linkedToOrderSql("i"),
+           hasGoods: hasGoodsSql("i"),
          })}
        ORDER BY i.created_at DESC
     `);

@@ -5,6 +5,7 @@ import {
   repSqlPredicate,
 } from "../../../../lib/sales-rep/sql-filter";
 import {
+  hasGoodsSql,
   linkedToOrderSql,
   unfulfilledSql,
 } from "../_lib/unfulfilled-predicate";
@@ -97,6 +98,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           f.delivered_at,
           f.canceled_at,
           ${linkedToOrderSql("i")}                                AS linked_to_order,
+          ${hasGoodsSql("i")}                                     AS has_goods,
           EXISTS (
             SELECT 1 FROM fulfillment_label l
             WHERE l.fulfillment_id = i.fulfillment_id
@@ -128,6 +130,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             deliveredAt: "delivered_at",
             hasTracking: "has_tracking",
             linkedToOrder: "linked_to_order",
+            hasGoods: "has_goods",
           })}
         )                                                                     AS unfulfilled,
         COUNT(*) FILTER (
