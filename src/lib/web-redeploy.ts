@@ -117,3 +117,71 @@ export async function callDeployHook(
     clearTimeout(timer);
   }
 }
+
+// ── Estado real del build (opcional: exige VERCEL_TOKEN en Railway) ─────────
+//
+// El Deploy Hook contesta "aceptado", no "terminado". Con un token de Vercel
+// de sólo lectura se consulta el último deploy de PRODUCCIÓN del proyecto web y
+// la página puede decir Building… / Live / Failed en vez de "disparado".
+// Sin token la función devuelve null y el botón sigue como antes.
+
+export const VERCEL_WEB_PROJECT_ID_DEFAULT = "prj_z9VRbYPi1b5AYVjFgfNhs6h2ewnn";
+export const VERCEL_TEAM_ID_DEFAULT = "team_0tqXvdUdtMRYple8mg0ibPQn";
+
+export interface DeploymentStatus {
+  state: string;
+  sha: string | null;
+  created_at: string;
+  ready_at: string | null;
+  /** Lo disparó un Deploy Hook (el botón) o un push a git. */
+  via: "hook" | "git" | "other";
+  url: string | null;
+}
+
+export function vercelConfig(env: NodeJS.ProcessEnv = process.env): { token: string; projectId: string; teamId: string } | null {
+  const token = env.VERCEL_TOKEN?.trim();
+  if (!token) return null;
+  return {
+    token,
+    projectId: env.VERCEL_WEB_PROJECT_ID?.trim() || VERCEL_WEB_PROJECT_ID_DEFAULT,
+    teamId: env.VERCEL_TEAM_ID?.trim() || VERCEL_TEAM_ID_DEFAULT,
+  };
+}
+
+interface VercelDeployment {
+  state?: string;
+  readyState?: string;
+  created?: number;
+  ready?: number;
+  url?: string;
+  meta?: { githubCommitSha?: string; deployHookId?: string; githubDeployment?: string };
+}
+
+export async function latestProductionDeployment(
+  cfg: { token: string; projectId: string; teamId: string },
+  fetchImpl: typeof fetch = fetch
+): Promise<DeploymentStatus | null> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), HOOK_TIMEOUT_MS);
+  try {
+    const url = `https://api.vercel.com/v6/deployments?projectId=${encodeURIComponent(cfg.projectId)}&teamId=${encodeURIComponent(cfg.teamId)}&target=production&limit=1`;
+    const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${cfg.token}` }, signal: ctl.signal });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { deployments?: VercelDeployment[] };
+    const d = body.deployments?.[0];
+    if (!d) return null;
+    return {
+      state: d.readyState ?? d.state ?? "UNKNOWN",
+      sha: d.meta?.githubCommitSha ?? null,
+      created_at: new Date(d.created ?? 0).toISOString(),
+      ready_at: d.ready ? new Date(d.ready).toISOString() : null,
+      via: d.meta?.deployHookId ? "hook" : d.meta?.githubDeployment ? "git" : "other",
+      url: d.url ? `https://${d.url}` : null,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+

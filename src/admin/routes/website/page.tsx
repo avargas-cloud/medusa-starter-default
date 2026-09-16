@@ -21,10 +21,22 @@ interface RedeployRecord {
   error?: string | null;
 }
 
+interface DeploymentStatus {
+  state: string; // BUILDING | QUEUED | INITIALIZING | READY | ERROR | CANCELED
+  sha: string | null;
+  created_at: string;
+  ready_at: string | null;
+  via: "hook" | "git" | "other";
+  url: string | null;
+}
+
 interface StatusResponse {
   configured: boolean;
+  /** Hay VERCEL_TOKEN → `deployment` trae el estado real del último deploy de prod. */
+  status_configured: boolean;
   dedupe_seconds: number;
   last: RedeployRecord | null;
+  deployment: DeploymentStatus | null;
 }
 
 const BUILD_MINUTES = "3-5";
@@ -39,9 +51,18 @@ function ago(iso: string): string {
   return new Date(iso).toLocaleString("en-US");
 }
 
-/** Un build disparado hace menos de BUILD_MINUTES minutos probablemente sigue corriendo. */
+/** Sin estado real (sin token): un build disparado hace < 5 min probablemente sigue corriendo. */
 function likelyBuilding(last: RedeployRecord | null): boolean {
   return !!last && last.status === "ok" && Date.now() - Date.parse(last.at) < 5 * 60 * 1000;
+}
+
+const IN_PROGRESS = new Set(["BUILDING", "QUEUED", "INITIALIZING"]);
+
+/** Con estado real: el deploy que disparó el botón (o cualquiera posterior) sigue en curso. */
+function isBuilding(status: StatusResponse | null): boolean {
+  if (!status) return false;
+  if (status.deployment) return IN_PROGRESS.has(status.deployment.state);
+  return likelyBuilding(status.last);
 }
 
 const WebsitePage = () => {
@@ -66,11 +87,15 @@ const WebsitePage = () => {
     void load();
   }, [load]);
 
-  // Refresca el "N min ago" y el estado "building" sin volver a pedir al servidor.
+  // Refresca el "N min ago"; y mientras hay un build en curso, vuelve a pedir el
+  // estado real cada 15 s para que "Building…" pase a "Live" solo.
   useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), 15_000);
+    const id = window.setInterval(() => {
+      setTick((t) => t + 1);
+      if (isBuilding(status)) void load();
+    }, 15_000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [status, load]);
 
   const publish = async () => {
     setBusy(true);
@@ -99,7 +124,8 @@ const WebsitePage = () => {
   };
 
   const last = status?.last ?? null;
-  const building = likelyBuilding(last);
+  const building = isBuilding(status);
+  const dep = status?.deployment ?? null;
 
   return (
     <Container className="divide-y p-0">
@@ -162,6 +188,40 @@ const WebsitePage = () => {
             </div>
           ) : (
             <Text size="small" className="text-ui-fg-subtle">Never triggered from here.</Text>
+          )}
+        </div>
+
+        <div className="rounded-md border border-ui-border-base bg-ui-bg-subtle px-4 py-3" data-testid="web-deployment-status">
+          <Text size="small" weight="plus">Website build</Text>
+          {loading ? (
+            <Text size="small" className="text-ui-fg-subtle">Loading…</Text>
+          ) : dep ? (
+            <div className="mt-1 flex flex-col gap-0.5">
+              <Text size="small">
+                {IN_PROGRESS.has(dep.state) ? (
+                  <Badge color="blue" size="2xsmall">Building…</Badge>
+                ) : dep.state === "READY" ? (
+                  <Badge color="green" size="2xsmall">Live</Badge>
+                ) : (
+                  <Badge color="red" size="2xsmall">{dep.state}</Badge>
+                )}{" "}
+                · started {ago(dep.created_at)}
+                {dep.ready_at ? ` · live ${ago(dep.ready_at)}` : ""}
+                {" · "}
+                {dep.via === "hook" ? "from this button" : dep.via === "git" ? "from a git push" : "manual"}
+              </Text>
+              {dep.sha && (
+                <Text size="xsmall" className="text-ui-fg-subtle">
+                  commit <code>{dep.sha.slice(0, 8)}</code>
+                </Text>
+              )}
+            </div>
+          ) : status?.status_configured ? (
+            <Text size="small" className="text-ui-fg-subtle">Could not read the deploy status from Vercel right now.</Text>
+          ) : (
+            <Text size="small" className="text-ui-fg-subtle">
+              Set <code>VERCEL_TOKEN</code> (read-only) in Railway to see the real build status here.
+            </Text>
           )}
         </div>
 

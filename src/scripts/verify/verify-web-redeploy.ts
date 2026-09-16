@@ -14,6 +14,8 @@
  *  3. RMW: escribir `web_redeploy_last` NO pisa otras claves de store.metadata.
  *  4. Hook OK → 202 + registro `ok` con job_id; hook 500 → 502 + registro `failed`.
  *  5. Dentro de la ventana, POST → 200 deduped con el registro vigente.
+ *  6. Estado real del build: sin VERCEL_TOKEN → null; con token, READY/BUILDING se
+ *     mapean (state, sha, via hook/git) y un 401 de Vercel devuelve null, nunca tira.
  */
 import assert from "node:assert/strict";
 import { Client } from "pg";
@@ -24,6 +26,8 @@ import {
   lastRecord,
   loadStore,
   withinDedupeWindow,
+  vercelConfig,
+  latestProductionDeployment,
   type KnexLike,
 } from "../../lib/web-redeploy";
 import { GET, POST } from "../../api/admin/web/redeploy/route";
@@ -173,6 +177,39 @@ async function main(): Promise<void> {
     } finally {
       globalThis.fetch = realFetch;
       delete process.env.VERCEL_WEB_DEPLOY_HOOK_URL;
+    }
+
+    // 6. Estado real del build.
+    assert.equal(vercelConfig({} as NodeJS.ProcessEnv), null, "sin token → sin config");
+    const cfg = vercelConfig({ VERCEL_TOKEN: "t" } as NodeJS.ProcessEnv);
+    assert.ok(cfg && cfg.projectId.startsWith("prj_") && cfg.teamId.startsWith("team_"), "defaults del proyecto web");
+    const fakeDeployments = (list: unknown[], status = 200) =>
+      (async (url: string | URL | Request, init?: RequestInit) => {
+        assert.match(String(url), /api\.vercel\.com\/v6\/deployments\?projectId=prj_.*target=production&limit=1/);
+        assert.equal((init?.headers as Record<string, string>).Authorization, "Bearer t");
+        return new Response(JSON.stringify({ deployments: list }), { status });
+      }) as unknown as typeof fetch;
+    const ready = await latestProductionDeployment(cfg!, fakeDeployments([{ readyState: "READY", created: 1, ready: 2, url: "x.vercel.app", meta: { githubCommitSha: "abc", deployHookId: "h" } }]));
+    assert.deepEqual({ state: ready?.state, sha: ready?.sha, via: ready?.via, url: ready?.url }, { state: "READY", sha: "abc", via: "hook", url: "https://x.vercel.app" });
+    const building = await latestProductionDeployment(cfg!, fakeDeployments([{ state: "BUILDING", created: 1, meta: { githubCommitSha: "def", githubDeployment: "1" } }]));
+    assert.deepEqual({ state: building?.state, via: building?.via, ready_at: building?.ready_at }, { state: "BUILDING", via: "git", ready_at: null });
+    assert.equal(await latestProductionDeployment(cfg!, fakeDeployments([], 401)), null, "401 de Vercel → null, no throw");
+    assert.equal(await latestProductionDeployment(cfg!, fakeDeployments([])), null, "sin deploys → null");
+    ok("estado del build: sin token null; READY/BUILDING mapeados con via hook/git; 401 → null");
+    // GET con token pero Vercel caído → status_configured true y deployment null.
+    process.env.VERCEL_TOKEN = "t";
+    const realFetch2 = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("ECONNRESET"); }) as unknown as typeof fetch;
+    try {
+      const g = fakeRes();
+      await (GET as unknown as Handler)(fakeReq(knex) as never, g.res as never);
+      const b = g.out.body as { status_configured: boolean; deployment: unknown };
+      assert.equal(b.status_configured, true);
+      assert.equal(b.deployment, null);
+      ok("GET con token y Vercel caído → status_configured:true, deployment:null (nunca 500)");
+    } finally {
+      globalThis.fetch = realFetch2;
+      delete process.env.VERCEL_TOKEN;
     }
   } finally {
     await client.query("ROLLBACK");

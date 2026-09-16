@@ -8,11 +8,14 @@ import {
   saveRecord,
   withinDedupeWindow,
   DEDUPE_WINDOW_SECONDS,
+  latestProductionDeployment,
+  vercelConfig,
   type KnexLike,
 } from "../../../../lib/web-redeploy";
 
 /**
- * GET  /admin/web/redeploy → { configured, dedupe_seconds, last }
+ * GET  /admin/web/redeploy → { configured, dedupe_seconds, last, deployment }
+ *                            (deployment = último deploy de prod si hay VERCEL_TOKEN; si no, null)
  * POST /admin/web/redeploy → 202 { triggered: true, last } | 200 { deduped: true, last }
  *                            503 HOOK_NOT_CONFIGURED · 502 HOOK_FAILED
  *
@@ -27,10 +30,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const knex = req.scope.resolve("__pg_connection__") as KnexLike;
   try {
     const store = await loadStore(knex);
+    const cfg = vercelConfig();
+    const deployment = cfg ? await latestProductionDeployment(cfg) : null;
     return res.json({
       configured: hookUrl() !== null,
+      status_configured: cfg !== null,
       dedupe_seconds: DEDUPE_WINDOW_SECONDS,
       last: lastRecord(store),
+      deployment,
     });
   } catch {
     return res.status(500).json({ error: "No se pudo leer el estado del último deploy", code: "READ_FAILED" });
