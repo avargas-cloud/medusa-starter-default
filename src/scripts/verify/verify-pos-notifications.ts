@@ -10,6 +10,10 @@
  * §3 puro     — helpers sin DB (limit, fingerprint, guard de las 7 am, audiencias).
  * §4 DB       — transacción con ROLLBACK: dedupe, privacidad de la bandeja,
  *               rep WEB en orden web (nunca en una POS), PO de hoy, fila QB.
+ * §5 fase 2   — recibo → separables (stock forzado a 0 y restaurado en la tx),
+ *               pendientes de Accounting, estimates 7 días + semana, resolver
+ *               acotado por kind, invitaciones de calendar con fetch inyectado
+ *               (Google nunca se llama), ruta rsvp por JWT.
  *
  * Mutation-tested (09/17/2026): §1 con una ruta que lee `req.query.user_id`;
  * §2 con un INSERT directo en un productor. Las dos ramas ponen rojo.
@@ -26,6 +30,13 @@ import { errorFingerprint, produceQbFailureNotifications, qbFailureDedupeKey } f
 import { produceWebOrderPlaced, WEB_SALES_REP } from "../../lib/notifications/producers/web-order";
 import { publishNotification, resolveNotificationsByEntity } from "../../lib/notifications/publish";
 import { resolveRecipients } from "../../lib/notifications/recipients";
+import { produceAccountingNotifications } from "../../lib/notifications/producers/accounting";
+import { produceCalendarInvites, inviteDedupeKey } from "../../lib/notifications/producers/calendar-invites";
+import { AWAITING_STATUSES, buildEstimateNotification, produceStaleEstimates, weekBucket } from "../../lib/notifications/producers/estimates";
+import { resolveOrphanNotifications } from "../../lib/notifications/producers/resolver";
+import { candidateOrdersForItems, newlySeparable, produceSeparableAfterReceipt, snapshotSeparation, type RawSql } from "../../lib/notifications/producers/separable";
+import { pendingInvitationsOf, rsvpPatchBody } from "../../lib/calendar/google-calendar-client";
+import { USA_LOC } from "../../lib/locations";
 
 const ROOT = resolve(__dirname, "../../..");
 const failures: string[] = [];
@@ -99,10 +110,11 @@ function section2(): void {
       `${rel}: no importa quickbooks / invoices / finance / calendar`,
       !/from\s+["'][^"']*(lib\/quickbooks|api\/admin\/invoices|api\/admin\/finance|lib\/calendar)/.test(src)
     );
-    const isPure = /producers\/format\.ts$/.test(rel);
+    // format.ts es puro; resolver.ts sólo marca resolved_at (UPDATE, jamás INSERT).
+    const isPure = /producers\/(format|resolver)\.ts$/.test(rel);
     if (!isPure) {
       const producesViaPublish = /publishNotification\(/.test(body);
-      const delegates = /produce(PaymentNotifications|PoDueToday|QbFailureNotifications|WebOrderPlaced)\(/.test(body);
+      const delegates = /produce(PaymentNotifications|PoDueToday|QbFailureNotifications|WebOrderPlaced|SeparableAfterReceipt|AccountingNotifications|StaleEstimates|CalendarInvites)\(/.test(body);
       check(`${rel}: publica vía publishNotification o delega a un productor`, producesViaPublish || delegates);
     }
   }
@@ -135,15 +147,14 @@ function section3(): void {
   check("businessHour: medianoche ET → 0", businessHour(new Date("2026-09-17T04:00:00Z")) === 0);
 
   const built = buildPaymentNotification({
-    id: "papp_1", payment_id: "cp_1", invoice_id: "inv_1", invoice_number: "21999", order_id: "ord_1",
-    amount_applied: "12345", applied_at: null, method: "credit_card", payment_display_id: 7,
-    order_display_id: 9, document_number: "S9", rep_initials: "AG",
+    id: "cp_1", display_id: 7, amount: "12345", method: "credit_card", received_at: null, created_at: "2026-09-17T12:00:00Z",
+    invoice_id: "inv_1", invoice_number: "21999", order_id: "ord_1", order_display_id: 9, document_number: "S9", rep_initials: "AG",
     company_name: "ACME", first_name: null, last_name: null, email: null,
   });
   check("pago: título con monto en dólares y método", built.title.includes("$123.45") && built.title.includes("Credit card"));
   check("pago: audiencias admins + rep", built.audiences.some((a) => a.kind === "admins") && built.audiences.some((a) => a.kind === "rep"));
   check("pago: navega a la factura", built.action_url === "/invoices/inv_1");
-  check("pago: dedupe por payment_application", built.dedupe_key === "payment_applied:papp_1");
+  check("pago: dedupe por PAGO (linkear un pago viejo no es dinero nuevo)", built.dedupe_key === "payment_received:cp_1" && built.entity_type === "customer_payment");
 }
 
 // ─── §4 DB ───────────────────────────────────────────────────────────────────
@@ -240,27 +251,34 @@ async function section4(): Promise<void> {
       check("PO due: agrupada → destinatarios = admins", forced.result === null || forced.result.created === false || forced.result.recipient_user_ids.length === admins.length);
     }
 
-    // Pago: se recicla una aplicación existente moviéndola a la ventana
-    const papp = (await client.query(
-      `SELECT pa.id FROM payment_application pa JOIN customer_payment cp ON cp.id = pa.payment_id
-        WHERE pa.deleted_at IS NULL AND pa.voided_at IS NULL AND cp.method IN ('cash','credit_card','debit_card') LIMIT 1`
+    // Pago: se recicla un PAGO existente moviéndolo a la ventana
+    const pay = (await client.query(
+      `SELECT id FROM customer_payment WHERE deleted_at IS NULL AND type = 'payment' AND status <> 'voided'
+        AND method IN ('cash','credit_card','debit_card') LIMIT 1`
     )).rows[0];
-    if (papp) {
-      await client.query(`DELETE FROM pos_notification WHERE dedupe_key = $1`, [`payment_applied:${papp.id}`]);
-      await client.query(`UPDATE payment_application SET created_at = NOW() WHERE id = $1`, [papp.id]);
+    if (pay) {
+      await client.query(`DELETE FROM pos_notification WHERE dedupe_key = $1`, [`payment_received:${pay.id}`]);
+      await client.query(`UPDATE customer_payment SET created_at = NOW() WHERE id = $1`, [pay.id]);
       const r1 = await producePaymentNotifications(client, { windowHours: 1 });
       const r2 = await producePaymentNotifications(client, { windowHours: 1 });
       check("pago: 1ª corrida crea, 2ª no", r1.created >= 1 && r2.created === 0, `${r1.created}/${r2.created}`);
+      // Linkear ese pago a OTRA orden crea una aplicación nueva: NO es otro aviso.
+      const other = (await client.query(`SELECT id FROM "order" WHERE deleted_at IS NULL AND status = 'pending' LIMIT 1`)).rows[0];
+      if (other) {
+        await client.query(`INSERT INTO payment_application (id, payment_id, invoice_id, order_id, amount_applied, applied_at, created_at, updated_at, raw_amount_applied)
+                            VALUES ('papp_verify', $1, NULL, $2, 100, NOW(), NOW(), NOW(), '{"value":"100","precision":20}'::jsonb)`, [pay.id, other.id]);
+        const r3 = await producePaymentNotifications(client, { windowHours: 1 });
+        check("pago: linkear el pago a otra orden NO avisa de nuevo", r3.created === 0);
+      }
     }
     const cm = (await client.query(
-      `SELECT pa.id FROM payment_application pa JOIN customer_payment cp ON cp.id = pa.payment_id
-        WHERE pa.deleted_at IS NULL AND cp.method = 'credit_memo' LIMIT 1`
+      `SELECT id FROM customer_payment WHERE deleted_at IS NULL AND type = 'credit_memo' LIMIT 1`
     )).rows[0];
     if (cm) {
-      await client.query(`UPDATE payment_application SET created_at = NOW() WHERE id = $1`, [cm.id]);
+      await client.query(`UPDATE customer_payment SET created_at = NOW() WHERE id = $1`, [cm.id]);
       await producePaymentNotifications(client, { windowHours: 1 });
-      const none = await client.query(`SELECT 1 FROM pos_notification WHERE dedupe_key = $1`, [`payment_applied:${cm.id}`]);
-      check("pago: un credit memo aplicado NO es dinero recibido", none.rowCount === 0);
+      const none = await client.query(`SELECT 1 FROM pos_notification WHERE dedupe_key = $1`, [`payment_received:${cm.id}`]);
+      check("pago: un credit memo NO es dinero recibido", none.rowCount === 0);
     }
 
     // Fila QB en failed
@@ -287,11 +305,162 @@ async function section4(): Promise<void> {
   }
 }
 
+function rawAdapter(client: Client): RawSql {
+  return {
+    raw: async (sql, bindings = []) => {
+      let i = 0;
+      const converted = sql.replace(/\?/g, () => `$${++i}`);
+      const r = await client.query(converted, bindings as unknown[]);
+      return { rows: r.rows as unknown[] };
+    },
+  };
+}
+
+// ─── §5 fase 2 ───────────────────────────────────────────────────────────────
+function section5static(): void {
+  console.log("\n§5a fase 2 — puro y estático");
+  const invites = pendingInvitationsOf([
+    { id: "ev1", summary: "Meet", start: { dateTime: "2026-09-20T10:00:00-04:00" }, organizer: { email: "Boss@ecopowertech.com", self: false }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] },
+    { id: "ev2", summary: "Done", start: { date: "2026-09-21" }, attendees: [{ email: "me@x", self: true, responseStatus: "accepted" }] },
+    { id: "ev3", summary: "Mine", start: { date: "2026-09-22" }, organizer: { self: true }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] },
+    { id: "ev4", summary: "Cancelled", status: "cancelled", start: { date: "2026-09-23" }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] },
+  ]);
+  check("invitaciones: sólo self+needsAction, no propias ni canceladas", invites.length === 1 && invites[0].id === "ev1" && invites[0].organizer_email === "boss@ecopowertech.com" && !invites[0].all_day);
+  const body = rsvpPatchBody("me@ecopowertech.com", "accepted");
+  check("rsvp: attendeesOmitted + un solo attendee", body.attendeesOmitted === true && body.attendees?.length === 1 && body.attendees[0].responseStatus === "accepted");
+  check("weekBucket cambia cada 7 días", weekBucket(new Date("2026-09-17T12:00:00Z")) === weekBucket(new Date("2026-09-20T12:00:00Z")) && weekBucket(new Date("2026-09-17T12:00:00Z")) !== weekBucket(new Date("2026-09-25T12:00:00Z")));
+  check("estimates: sólo entregados al cliente", AWAITING_STATUSES.includes("sent by email") && AWAITING_STATUSES.includes("provided in store") && !AWAITING_STATUSES.includes("created"));
+  const est = buildEstimateNotification({ id: "o1", display_id: 5, document_number: "E5", order_status: "Sent by Email", rep_initials: "AG", updated_at: "2026-09-01T00:00:00Z", company_name: "ACME", first_name: null, last_name: null, email: null }, new Date("2026-09-17T12:00:00Z"));
+  check("estimate: 16 días, al rep, expira", est.title.includes("16 days") && est.audiences[0].kind === "rep" && !!est.expires_at);
+  check("newlySeparable: sólo 0→>0 con pendiente", JSON.stringify(newlySeparable(new Map([["a", { pending: 2, available: 0 }], ["b", { pending: 2, available: 1 }]]), new Map([["a", { pending: 2, available: 2 }], ["b", { pending: 2, available: 2 }], ["c", { pending: 0, available: 3 }]]))) === JSON.stringify(["a"]));
+
+  const rsvp = codeLines(read("src/api/admin/pos/calendar/events/[eventId]/rsvp/route.ts")).join("\n");
+  check("rsvp: impersona al actor del JWT (resolveAccessLevel), sin user_id", /resolveAccessLevel\(req\)/.test(rsvp) && !/[.[]\s*["']?user_id/.test(rsvp));
+  check("rsvp: fuera de dominio → 409", /status\(409\)/.test(rsvp));
+  const client = read("src/lib/calendar/google-calendar-client.ts");
+  check("calendar client: scope sigue calendar.events.owned", /calendar\.events\.owned"/.test(client) && !/calendar\.readonly|auth\/calendar"/.test(client));
+  const route = read("src/api/admin/purchase-orders/[id]/receive/route.ts");
+  const hookLines = route.split("\n").filter((l) => /separationBeforeReceipt|notifySeparableAfterReceipt|separationBefore/.test(l) && !/^import/.test(l));
+  check("receive route: hook en ≤ 6 líneas de código", hookLines.length >= 2 && hookLines.length <= 6, `${hookLines.length}`);
+  const hook = read("src/lib/notifications/producers/separable-hook.ts");
+  check("hook: las dos mitades tragan errores (try/catch)", (hook.match(/catch \(err\)/g) ?? []).length === 2);
+  const resolver = read("src/lib/notifications/producers/resolver.ts");
+  const rules = (resolver.match(/name: "/g) ?? []).length;
+  check("resolver: toda regla acotada por kind", rules >= 7 && (resolver.match(/n\.kind/g) ?? []).length >= rules, `${rules} reglas`);
+}
+
+async function section5db(): Promise<void> {
+  console.log("\n§5b fase 2 — base de datos (transacción con ROLLBACK)");
+  const url = process.env.DATABASE_URL;
+  if (!url) { console.log("⏭️  sin DATABASE_URL — se omite"); return; }
+  const client = new Client({ connectionString: url });
+  await client.connect();
+  const raw = rawAdapter(client);
+  try {
+    await client.query("BEGIN");
+    const staff = await resolveRecipients(client, [{ kind: "all" }]);
+
+    // ── recibo → separable: elegir una orden con pendiente y stock, forzar 0, restaurar
+    const items = (await client.query<{ inventory_item_id: string }>(
+      `SELECT DISTINCT ri.inventory_item_id FROM reservation_item ri
+         JOIN order_item oi ON oi.item_id = ri.line_item_id AND oi.deleted_at IS NULL
+         JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version AND o.status = 'pending' AND o.is_draft_order = false
+        WHERE ri.deleted_at IS NULL LIMIT 40`
+    )).rows.map((r) => r.inventory_item_id);
+    const candidates = await candidateOrdersForItems(raw, items);
+    const base = await snapshotSeparation(raw, candidates);
+    const target = [...base.entries()].find(([, p]) => p.pending > 0 && p.available > 0);
+    check("separable: hay una orden con pendiente y stock para probar", Boolean(target), `${candidates.length} candidatas`);
+    if (target) {
+      const [orderId] = target;
+      const orderItems = (await client.query<{ inventory_item_id: string }>(
+        `SELECT DISTINCT ri.inventory_item_id FROM reservation_item ri
+           JOIN order_item oi ON oi.item_id = ri.line_item_id AND oi.deleted_at IS NULL
+          WHERE oi.order_id = $1 AND ri.deleted_at IS NULL`, [orderId]
+      )).rows.map((r) => r.inventory_item_id);
+      await client.query(`UPDATE inventory_level SET stocked_quantity = 0, raw_stocked_quantity = jsonb_build_object('value','0','precision',20) WHERE inventory_item_id = ANY($1::text[]) AND location_id = $2`, [orderItems, USA_LOC]);
+      const before = await snapshotSeparation(raw, [orderId]);
+      check("separable: sin stock → available 0", (before.get(orderId)?.available ?? -1) === 0);
+      // "llega el PO": stock de sobra en el ítem (la tx entera se rollbackea al final)
+      await client.query(`UPDATE inventory_level SET stocked_quantity = 1000, raw_stocked_quantity = jsonb_build_object('value','1000','precision',20) WHERE inventory_item_id = ANY($1::text[]) AND location_id = $2`, [orderItems, USA_LOC]);
+      const out = await produceSeparableAfterReceipt(client, raw, { receipt: { id: "rcp_verify", number: "RCP-VERIFY", po_number: "PO-VERIFY" }, before, orderIds: [orderId] });
+      check("separable: tras el recibo cruza y avisa", out.crossed.includes(orderId) && out.results.some((r) => r.created), `${out.crossed.length} cruzadas`);
+      const again = await produceSeparableAfterReceipt(client, raw, { receipt: { id: "rcp_verify", number: "RCP-VERIFY", po_number: "PO-VERIFY" }, before: await snapshotSeparation(raw, [orderId]), orderIds: [orderId] });
+      check("separable: ya separable antes → no cruza", again.crossed.length === 0);
+      const row = (await client.query(`SELECT title, action_url FROM pos_notification WHERE dedupe_key = $1`, [`separable:rcp_verify:${orderId}`])).rows[0];
+      check("separable: título con PO y link a la orden", /can be separated — PO-VERIFY received/.test(row?.title ?? "") && row?.action_url === `/orders/${orderId}`);
+      await client.query(`UPDATE "order" SET status = 'canceled' WHERE id = $1`, [orderId]);
+      const res1 = await resolveOrphanNotifications(client);
+      check("resolver: orden cancelada → separable resuelta", res1.order_canceled >= 1);
+    }
+
+    // ── accounting
+    const cr = (await client.query(`SELECT id FROM commission_request WHERE deleted_at IS NULL LIMIT 1`)).rows[0];
+    const pb = (await client.query(`SELECT id FROM price_change_batch WHERE deleted_at IS NULL LIMIT 1`)).rows[0];
+    const rf = (await client.query(`SELECT id FROM customer_payment WHERE deleted_at IS NULL AND type = 'payment' AND status = 'applied' LIMIT 1`)).rows[0];
+    if (cr) await client.query(`UPDATE commission_request SET status = 'pending', requested_at = NOW() WHERE id = $1`, [cr.id]);
+    if (pb) await client.query(`UPDATE price_change_batch SET status = 'submitted', submitted_at = NOW(), updated_at = NOW() WHERE id = $1`, [pb.id]);
+    if (rf) await client.query(`UPDATE customer_payment SET status = 'refunded', updated_at = NOW() WHERE id = $1`, [rf.id]);
+    const payBefore = (await client.query(`SELECT COUNT(*)::int AS n FROM pos_notification WHERE kind = 'payment_received' AND resolved_at IS NULL`)).rows[0].n as number;
+    const acc1 = await produceAccountingNotifications(client, { windowHours: 1 });
+    const acc2 = await produceAccountingNotifications(client, { windowHours: 1 });
+    const expected = [cr, pb, rf].filter(Boolean).length;
+    check("accounting: una por pendiente, 2ª corrida 0", acc1.created === expected && acc2.created === 0, `${acc1.created}/${expected} · ${acc2.created}`);
+    const accRecips = (await client.query(`SELECT COUNT(DISTINCT r.user_id)::int AS n FROM pos_notification_recipient r JOIN pos_notification n ON n.id = r.notification_id WHERE n.kind IN ('commission_request_pending','price_batch_submitted','refund_pending')`)).rows[0].n as number;
+    const accounting = await resolveRecipients(client, [{ kind: "accounting" }]);
+    check("accounting: destinatarios = Accounting (grant + owner), no todo el staff", accRecips <= accounting.length && accRecips < staff.length, `${accRecips} vs accounting=${accounting.length} staff=${staff.length}`);
+    if (cr) await client.query(`UPDATE commission_request SET status = 'approved' WHERE id = $1`, [cr.id]);
+    if (pb) await client.query(`UPDATE price_change_batch SET status = 'approved' WHERE id = $1`, [pb.id]);
+    if (rf) await client.query(`UPDATE customer_payment SET status = 'applied' WHERE id = $1`, [rf.id]);
+    const res2 = await resolveOrphanNotifications(client);
+    check("resolver: pendientes revisados → resueltos", (res2.commission_request_reviewed + res2.price_batch_reviewed + res2.refund_settled) === expected, JSON.stringify(res2));
+    const payAfter = (await client.query(`SELECT COUNT(*)::int AS n FROM pos_notification WHERE kind = 'payment_received' AND resolved_at IS NULL`)).rows[0].n as number;
+    check("resolver: refund_settled NO toca los avisos de pago (mismo entity_type)", payAfter === payBefore, `${payBefore}→${payAfter}`);
+
+    // ── estimates
+    const est = (await client.query(`SELECT id FROM "order" WHERE deleted_at IS NULL AND status = 'draft' AND is_draft_order = true AND COALESCE(btrim(metadata->'sales_rep'->>'initials'),'') <> '' LIMIT 1`)).rows[0];
+    if (est) {
+      await client.query(`UPDATE "order" SET metadata = metadata || '{"order_status":"Sent by Email"}', updated_at = NOW() - INTERVAL '10 days' WHERE id = $1`, [est.id]);
+      await client.query(`DELETE FROM pos_notification WHERE kind = 'estimate_stale'`);
+      const now = new Date();
+      const e1 = await produceStaleEstimates(client, { now });
+      const e2 = await produceStaleEstimates(client, { now });
+      const e3 = await produceStaleEstimates(client, { now: new Date(now.getTime() + 8 * 86_400_000) });
+      check("estimates: 1ª crea, misma semana 0, semana siguiente re-avisa", e1.created >= 1 && e2.created === 0 && e3.created >= 1, `${e1.created}/${e2.created}/${e3.created}`);
+      await client.query(`UPDATE "order" SET metadata = metadata || '{"order_status":"Created"}' WHERE id = $1`, [est.id]);
+      const c1 = await produceStaleEstimates(client, { now: new Date(now.getTime() + 16 * 86_400_000) });
+      check("estimates: un 'Created' (nunca entregado) no avisa", !c1.results.some((r) => r.created && r.notification_id && false) && (await client.query(`SELECT COUNT(*)::int AS n FROM pos_notification WHERE kind='estimate_stale' AND entity_id=$1 AND dedupe_key LIKE '%:' || $2`, [est.id, String(weekBucket(new Date(now.getTime() + 16 * 86_400_000)))])).rows[0].n === 0);
+      const res3 = await resolveOrphanNotifications(client);
+      check("resolver: estimate que dejó de estar entregado → resuelto", res3.estimate_converted_or_closed >= 1);
+    }
+
+    // ── calendar con fetch inyectado (Google jamás)
+    const domainUser = (await client.query(`SELECT u.id FROM "user" u JOIN pos_user p ON lower(p.email)=lower(u.email) AND p.deleted_at IS NULL WHERE u.deleted_at IS NULL AND lower(u.email) LIKE '%@ecopowertech.com' AND lower(u.email) NOT LIKE 'webhook@%' LIMIT 1`)).rows[0];
+    if (domainUser && process.env.GMAIL_SERVICE_ACCOUNT_KEY) {
+      const fake = { id: "evt_verify", title: "Verify", start: "2026-09-20", all_day: true, organizer_email: "boss@ecopowertech.com" };
+      const c1 = await produceCalendarInvites(client, { fetch: async () => [fake] });
+      const c2 = await produceCalendarInvites(client, { fetch: async () => [fake] });
+      check("calendar: una por invitación, 2ª corrida 0", c1.created >= 1 && c2.created === 0, `${c1.created}/${c2.created}`);
+      const recips = (await client.query(`SELECT r.user_id FROM pos_notification_recipient r JOIN pos_notification n ON n.id = r.notification_id WHERE n.dedupe_key = $1`, [inviteDedupeKey(domainUser.id, "evt_verify")])).rows;
+      check("calendar: sólo el invitado la recibe", recips.length === 1 && recips[0].user_id === domainUser.id);
+      const c3 = await produceCalendarInvites(client, { fetch: async () => [] });
+      check("calendar: respondida en Google → resuelta", c3.resolved >= 1);
+    } else {
+      console.log("⏭️  calendar DB: sin usuario del dominio o sin GMAIL_SERVICE_ACCOUNT_KEY — se omite");
+    }
+  } finally {
+    await client.query("ROLLBACK");
+    await client.end();
+  }
+}
+
 async function main(): Promise<void> {
   section1();
   section2();
   section3();
   await section4();
+  section5static();
+  await section5db();
   console.log(
     failures.length
       ? `\n❌ ${failures.length} check(s) fallaron: ${failures.join(" · ")}`

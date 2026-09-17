@@ -267,3 +267,90 @@ export async function probeScope(subjectEmail: string): Promise<{ result: ScopeP
     return { result: "error", detail: `calendarList: HTTP ${s.status}: ${s.message}` };
   }
 }
+
+// ─── Invitaciones + RSVP (pos-notifications-phase2-20260917) ─────────────────
+//
+// Con el principal como calendario del POS (scope calendar.events.owned), las
+// invitaciones que recibe el usuario están en `primary` como eventos donde él
+// es attendee con `self: true` y `responseStatus: needsAction`. Responder es un
+// `events.patch` sobre SU copia con `attendeesOmitted: true` — PATCH reemplaza
+// arrays, y sin ese flag mandar un solo attendee borraría a los demás — y
+// `sendUpdates: none`: Google ya le avisa al organizador por su cuenta.
+
+export type RsvpResponse = "accepted" | "declined" | "tentative";
+export const RSVP_RESPONSES: readonly RsvpResponse[] = ["accepted", "declined", "tentative"];
+
+export interface PendingInvitation {
+  id: string;
+  title: string;
+  start: string;
+  all_day: boolean;
+  organizer_email: string | null;
+}
+
+/** Puro: de una lista de eventos del principal, los que esperan MI respuesta. */
+export function pendingInvitationsOf(items: calendar_v3.Schema$Event[]): PendingInvitation[] {
+  const out: PendingInvitation[] = [];
+  for (const ev of items) {
+    if (!ev.id || ev.status === "cancelled") continue;
+    const me = (ev.attendees ?? []).find((a) => a.self === true);
+    if (!me || me.responseStatus !== "needsAction") continue;
+    if (ev.organizer?.self === true) continue;
+    const start = ev.start?.date ?? ev.start?.dateTime ?? null;
+    if (!start) continue;
+    out.push({
+      id: ev.id,
+      title: ev.summary ?? "",
+      start,
+      all_day: !!ev.start?.date,
+      organizer_email: ev.organizer?.email ? ev.organizer.email.toLowerCase() : null,
+    });
+  }
+  return out;
+}
+
+export async function listPendingInvitations(
+  subjectEmail: string,
+  fromDate: string,
+  toDate: string
+): Promise<PendingInvitation[]> {
+  try {
+    const res = await calendarFor(subjectEmail).events.list({
+      calendarId: PRIMARY_CALENDAR_ID,
+      timeMin: `${fromDate}T00:00:00-05:00`,
+      timeMax: `${toDate}T23:59:59-04:00`,
+      singleEvents: true,
+      showHiddenInvitations: true,
+      maxResults: 500,
+      timeZone: BUSINESS_TZ,
+    });
+    return pendingInvitationsOf(res.data.items ?? []);
+  } catch (err) {
+    throw summarize(err);
+  }
+}
+
+/** El cuerpo exacto del PATCH — separado para poder afirmarlo sin Google. */
+export function rsvpPatchBody(selfEmail: string, response: RsvpResponse): calendar_v3.Schema$Event {
+  return { attendeesOmitted: true, attendees: [{ email: selfEmail, responseStatus: response }] };
+}
+
+export async function respondToEvent(
+  subjectEmail: string,
+  eventId: string,
+  response: RsvpResponse
+): Promise<{ status: RsvpResponse | null }> {
+  try {
+    const res = await calendarFor(subjectEmail).events.patch({
+      calendarId: PRIMARY_CALENDAR_ID,
+      eventId,
+      sendUpdates: "none",
+      requestBody: rsvpPatchBody(subjectEmail, response),
+    });
+    const me = (res.data.attendees ?? []).find((a) => a.self === true || a.email?.toLowerCase() === subjectEmail.toLowerCase());
+    const status = me?.responseStatus && (RSVP_RESPONSES as readonly string[]).includes(me.responseStatus) ? (me.responseStatus as RsvpResponse) : null;
+    return { status };
+  } catch (err) {
+    throw summarize(err);
+  }
+}

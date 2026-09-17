@@ -6,3 +6,8 @@ export { producePaymentNotifications } from "./producers/payments";
 export { producePoDueToday, isPoDueHour } from "./producers/po-due-today";
 export { produceQbFailureNotifications } from "./producers/qb-failures";
 export { produceWebOrderPlaced } from "./producers/web-order";
+export { produceAccountingNotifications } from "./producers/accounting";
+export { produceStaleEstimates } from "./producers/estimates";
+export { produceCalendarInvites } from "./producers/calendar-invites";
+export { resolveOrphanNotifications } from "./producers/resolver";
+export { produceSeparableAfterReceipt, newlySeparable } from "./producers/separable";

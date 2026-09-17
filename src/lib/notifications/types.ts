@@ -16,6 +16,13 @@ export const NOTIFICATION_KINDS = [
   "po_due_today",
   "web_order_placed",
   "qb_pipeline_failed",
+  // fase 2 (pos-notifications-phase2-20260917)
+  "order_separable",
+  "commission_request_pending",
+  "price_batch_submitted",
+  "refund_pending",
+  "estimate_stale",
+  "calendar_invite",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

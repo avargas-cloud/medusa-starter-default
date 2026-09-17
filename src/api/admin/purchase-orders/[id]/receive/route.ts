@@ -18,6 +18,7 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
+import { separationBeforeReceipt, notifySeparableAfterReceipt } from "../../../../../lib/notifications/producers/separable-hook";
 import { receivePurchaseOrderWorkflow } from "../../../../../workflows/purchase-orders/receive-purchase-order";
 import { onPoReceiveApplied } from "../../../../../lib/inventory-transfer-link";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
@@ -43,6 +44,8 @@ interface PoHeader {
   vendor_name_snapshot: string | null;
   vendor_qb_list_id_snapshot: string | null;
   qb_purchase_order_list_id: string | null;
+  /** JSON array (text) de órdenes que este PO surte — sólo para el aviso de separables. */
+  linked_order_ids?: string | null;
 }
 
 interface PoLine {
@@ -332,6 +335,9 @@ export async function POST(
   const qbMemo =
     body.qb_memo ?? `${po.number} bill#${body.vendor_bill_number ?? "—"}`;
 
+    // Notificaciones (best-effort, nunca falla el recibo): foto de qué órdenes
+    // pueden separarse ANTES del recibo, para avisar sólo las que cruzan.
+    const separationBefore = await separationBeforeReceipt(knex, workflowLines.map((l) => l.inventory_item_id), po.linked_order_ids);
     const { result } = await receivePurchaseOrderWorkflow(req.scope).run({
       input: {
         po_id: id,
@@ -374,6 +380,10 @@ export async function POST(
         })
       )
     );
+
+    await notifySeparableAfterReceipt(knex, separationBefore, {
+      id: result.receipt_id, number: result.receipt_number, po_number: po.number,
+    });
 
     // GL (best-effort, gl-purchases-v2 §5): la recepción ya commiteó — postearla ahora.
     await runLedgerHook(

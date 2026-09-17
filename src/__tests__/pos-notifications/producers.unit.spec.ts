@@ -4,7 +4,7 @@
 
 import { clampLimit, INBOX_LIMIT_DEFAULT, INBOX_LIMIT_MAX } from "../../lib/notifications/inbox";
 import { centsToUsd, customerLabel, methodLabel, truncate } from "../../lib/notifications/producers/format";
-import { buildPaymentNotification, PAYMENT_EXCLUDED_METHODS } from "../../lib/notifications/producers/payments";
+import { buildPaymentNotification, PAYMENT_EXCLUDED_METHODS, PAYMENT_EXCLUDED_TYPES } from "../../lib/notifications/producers/payments";
 import { buildPoDueNotification, businessHour, isPoDueHour, poDueDedupeKey } from "../../lib/notifications/producers/po-due-today";
 import { buildQbFailureNotification, errorFingerprint, qbFailureDedupeKey } from "../../lib/notifications/producers/qb-failures";
 import { buildWebOrderNotification, hasSalesRep, isPosCreated, WEB_SALES_REP } from "../../lib/notifications/producers/web-order";
@@ -46,9 +46,8 @@ describe("inbox limit", () => {
 
 describe("payments", () => {
   const row = {
-    id: "papp_1", payment_id: "cp_1", invoice_id: "inv_1", invoice_number: "21999", order_id: "ord_1",
-    amount_applied: "12345", applied_at: "2026-09-17T12:00:00Z", method: "cash", payment_display_id: 7,
-    order_display_id: 9, document_number: "S9", rep_initials: "AG",
+    id: "cp_1", display_id: 7, amount: "12345", method: "cash", received_at: "2026-09-17T12:00:00Z", created_at: "2026-09-17T12:00:00Z",
+    invoice_id: "inv_1", invoice_number: "21999", order_id: "ord_1", order_display_id: 9, document_number: "S9", rep_initials: "AG",
     company_name: "ACME", first_name: null, last_name: null, email: null,
   };
   it("arma título, cuerpo, link y audiencias admins + rep", () => {
@@ -56,7 +55,8 @@ describe("payments", () => {
     expect(n.title).toBe("Payment received — $123.45 (Cash) · 21999");
     expect(n.body).toBe("ACME · Order S9 · PAY-7");
     expect(n.action_url).toBe("/invoices/inv_1");
-    expect(n.dedupe_key).toBe("payment_applied:papp_1");
+    expect(n.dedupe_key).toBe("payment_received:cp_1");
+    expect(n.entity_type).toBe("customer_payment");
     expect(n.audiences).toEqual([{ kind: "admins" }, { kind: "rep", initials: "AG" }]);
   });
   it("sin factura navega a la orden; sin rep la audiencia rep queda vacía (sólo admins)", () => {
@@ -65,8 +65,9 @@ describe("payments", () => {
     expect(n.title).not.toContain("·");
     expect(n.audiences[1]).toEqual({ kind: "rep", initials: null });
   });
-  it("crédito, credit memo y store credit no son dinero recibido", () => {
+  it("crédito, credit memo, store credit y refunds no son dinero recibido", () => {
     expect(PAYMENT_EXCLUDED_METHODS).toEqual(["credit", "credit_memo", "store_credit"]);
+    expect(PAYMENT_EXCLUDED_TYPES).toEqual(["credit_memo", "refund"]);
   });
 });
 
