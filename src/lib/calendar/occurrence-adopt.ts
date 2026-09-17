@@ -46,7 +46,8 @@ type OccRow = {
   tolerance: string;
   payee_type: string | null;
   payee_id: string | null;
-  payee_norm: string | null;
+  /** Payee sin espacios ni puntuación, en mayúsculas: "RingCentral" ≡ "Ring Central", "AT&T" ≡ "ATT". */
+  payee_squash: string | null;
   expense_account_list_id: string | null;
   pay_from_account_list_id: string | null;
 };
@@ -76,7 +77,7 @@ async function checkCandidatesWithBank(pg: RawPg, o: OccRow, bank: string | null
         AND (?::text IS NULL OR c.bank_account_list_id = ?)
         AND (
           (?::text IS NOT NULL AND c.payee_id = ?)
-          OR upper(regexp_replace(trim(c.payee_name), '\\s+', ' ', 'g')) = ?
+          OR regexp_replace(upper(c.payee_name), '[^A-Z0-9]', '', 'g') = ?
         )
         AND (?::text IS NULL OR EXISTS (SELECT 1 FROM gl_check_line l WHERE l.check_id = c.id AND l.account_list_id = ?))
         AND NOT EXISTS (SELECT 1 FROM recurring_expense_occurrence x WHERE x.matched_kind = 'gl_check' AND x.matched_id = c.id)
@@ -84,7 +85,7 @@ async function checkCandidatesWithBank(pg: RawPg, o: OccRow, bank: string | null
     [
       o.expected_amount_cents, o.tolerance, o.due_date, ADOPT_DAYS,
       bank, bank,
-      o.payee_id, o.payee_id, o.payee_norm ?? "",
+      o.payee_id, o.payee_id, o.payee_squash || "__NO_PAYEE__",
       o.expense_account_list_id, o.expense_account_list_id,
       o.due_date,
     ]
@@ -154,7 +155,7 @@ export async function adoptExistingDocuments(
             o.expected_amount_cents::text AS expected_amount_cents,
             GREATEST(o.tolerance_cents, round(o.expected_amount_cents * o.tolerance_pct / 100))::bigint::text AS tolerance,
             o.payee_type, o.payee_id,
-            upper(regexp_replace(trim(o.payee_name), '\\s+', ' ', 'g')) AS payee_norm,
+            regexp_replace(upper(o.payee_name), '[^A-Z0-9]', '', 'g') AS payee_squash,
             o.expense_account_list_id, o.pay_from_account_list_id
        FROM recurring_expense_occurrence o
        JOIN recurring_expense_rule r ON r.id = o.rule_id

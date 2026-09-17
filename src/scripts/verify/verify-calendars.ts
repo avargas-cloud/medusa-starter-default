@@ -595,6 +595,16 @@ async function section8(): Promise<void> {
     const r5 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
     check("adopción: sin candidato en la cuenta pagadora, adopta el único de otra cuenta", r5.adopted.some((x) => x.occurrence_id === e.occ.id && x.document.id === docOther));
 
+    // El feed escribe "AT&T" / "RingCentral" donde el catálogo dice "ATT" / "Ring Central".
+    const h = await mk("VERIFY adopt squash", { day_of_month: 22, payee_name: "Ring Central" });
+    await glCheck(forRule("RINGCENTRAL", { day: "2026-03-22" }));
+    const r9 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("adopción: el payee se compara sin espacios ni puntuación (Ring Central ≡ RINGCENTRAL)", r9.adopted.some((x) => x.occurrence_id === h.occ.id));
+    const h2 = await mk("VERIFY adopt no-squash", { day_of_month: 23, payee_name: "AT&T" });
+    await glCheck(forRule("ATT SERVICES LLC", { day: "2026-03-23" }));
+    const r9b = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("NEGATIVO: un payee que sólo comparte prefijo no calza (AT&T vs ATT SERVICES LLC)", !r9b.adopted.some((x) => x.occurrence_id === h2.occ.id));
+
     // Dry-run no escribe.
     const f = await mk("VERIFY adopt dryrun", { day_of_month: 30 });
     await glCheck(forRule("VERIFY adopt dryrun", { day: "2026-03-30" }));

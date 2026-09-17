@@ -12,11 +12,17 @@
  *
  * Dry-run por default: imprime la tabla resuelta (ids reales) y el reporte de
  * adopción SIN escribir. `APPLY=true` escribe en UNA transacción. Idempotente
- * por nombre de regla (una regla que ya existe se saltea). Todo payee/cuenta se
- * resuelve contra la base y un faltante ABORTA antes de escribir nada.
+ * por nombre de regla (una regla que ya existe se saltea). Con `UPDATE=true`
+ * además CORRIGE en el lugar las reglas del seed cuya configuración cambió
+ * (payee, cuentas, monto, día): actualiza la regla, borra sus ocurrencias
+ * `expected` SIN enlace (booked/paid/skipped y las movidas a mano se conservan)
+ * y las regenera con el snapshot nuevo desde el 1° del mes — así la adopción
+ * las vuelve a evaluar. Todo payee/cuenta se resuelve contra la base y un
+ * faltante ABORTA antes de escribir nada.
  *
  *   env DATABASE_URL=... npx medusa exec ./src/scripts/fix/seed-recurring-expense-rules.ts
  *   env DATABASE_URL=... APPLY=true npx medusa exec ./src/scripts/fix/seed-recurring-expense-rules.ts
+ *   env DATABASE_URL=... APPLY=true UPDATE=true npx medusa exec ./src/scripts/fix/seed-recurring-expense-rules.ts
  *
  * Reversa: DELETE FROM recurring_expense_rule WHERE created_by_user_id = 'seed:calendar-audit-20260917'
  * (cascade a ocurrencias; los documentos adoptados sólo pierden el enlace).
@@ -30,6 +36,7 @@ import {
   createRule,
   listRules,
   materializeRule,
+  updateRule,
   type RawPg,
 } from "../../lib/calendar/recurring-repo";
 import { parseRecurringRule, type RecurringRuleInput } from "../../lib/calendar/recurring-types";
@@ -86,30 +93,30 @@ const FIXED: SeedRule[] = [
   { name: "SunPass", kind: "check", payee: v("qbvnd_01KPGGRZTJDWMJG6H0552643DV", "SunPass Florida"), account: "Automobile Expense:Tolls & Parking", payFrom: REGIONS, cents: 1000, amount: "fixed", day: 1 },
   { name: "AT&T — landline", kind: "check", payee: ATT, account: "Telephone Expense:AT&T Services", payFrom: REGIONS, cents: 13910, amount: "fixed", day: 2 },
   { name: "Ascendant — general liability", kind: "check", payee: v("qbvnd_01KPGGN94E72RFQ48968RPF0EM", "Ascendant Commercial Insurance Inc."), account: "Insurance Expense:General Liability Insurance", payFrom: TD, cents: 11899, amount: "fixed", day: 6 },
-  { name: "The One Percent", kind: "expense", payee: other("The One Percent"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 9900, amount: "fixed", day: 5 },
+  { name: "The One Percent", kind: "expense", payee: v("qbvnd_01KPGGNKJHVPS0FRAECAHF5JTA", "Capitalism.com LLC"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 9900, amount: "fixed", day: 5, notes: "El contador lo registra al vendor Capitalism.com LLC (CHK-0959)" },
   { name: "OpenAI", kind: "expense", payee: other("OpenAI"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 10000, amount: "fixed", day: 4 },
   { name: "Shutterstock", kind: "expense", payee: other("Shutterstock"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 5900, amount: "fixed", day: 20 },
   { name: "SimpliSafe", kind: "expense", payee: other("SimpliSafe"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 3744, amount: "fixed", day: 18 },
   { name: "Mailchimp", kind: "expense", payee: other("Mailchimp"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 2650, amount: "fixed", day: 30 },
   { name: "GoDaddy", kind: "expense", payee: other("GoDaddy"), account: "Dues and Subscriptions", payFrom: AMEX, cents: 2319, amount: "fixed", day: 5 },
   { name: "ClickUp", kind: "expense", payee: v("qbvnd_01KPGGNS803967N84ZQH46HMRB", "ClickUp San Diego"), account: "Business Licenses and Permits", payFrom: VISA_REGIONS, cents: 3000, amount: "fixed", day: 31 },
-  { name: "Vercel", kind: "expense", payee: other("Vercel Inc."), account: "Office Supplies", payFrom: VISA_REGIONS, cents: 2000, amount: "fixed", day: 6 },
-  { name: "Banahosting", kind: "expense", payee: other("Banahosting"), account: "Dues and Subscriptions", payFrom: VISA_CHASE, cents: 695, amount: "fixed", day: 10, notes: "Sólo visto en el feed de la 7704; nunca se cargó en el libro" },
-  { name: "Wells Fargo — monthly service fee", kind: "expense", payee: WELLS_ON, account: "Bank Service Charges:Fees", payFrom: WELLS, cents: 1500, amount: "fixed", day: 31 },
+  { name: "Vercel", kind: "expense", payee: other("Vercel"), account: "Computer and Internet Expenses", payFrom: VISA_REGIONS, cents: 2000, amount: "fixed", day: 6 },
+  { name: "Banahosting", kind: "expense", payee: other("Banahosting"), account: "Computer and Internet Expenses", payFrom: VISA_CHASE, cents: 695, amount: "fixed", day: 10 },
+  { name: "Wells Fargo — monthly service fee", kind: "expense", payee: WELLS_ON, account: "Bank Service Charges", payFrom: WELLS, cents: 3000, amount: "fixed", day: 15, notes: "Era $15 el 30 hasta julio; desde septiembre $30 (CHK-0991)" },
 ];
 
 // ── B · monto ESTIMADO (último valor; el contador lo corrige) ────────────────
 const ESTIMATED: SeedRule[] = [
   { name: "FPL — Unit #4", kind: "check", payee: v("qbvnd_01KPGGPHJ9DFWESFT24SMPDR3Y", "FPL"), account: "Utilities:FPL:Unit #4", payFrom: CHASE, cents: 56453, amount: "estimated", day: 2 },
   { name: "FPL — Unit #5", kind: "check", payee: v("qbvnd_01KPGGPHJ9DFWESFT24SMPDR3Y", "FPL"), account: "Utilities:FPL:Unit #5", payFrom: CHASE, cents: 48800, amount: "estimated", day: 2 },
-  { name: "AT&T — services", kind: "check", payee: ATT, account: "Telephone Expense", payFrom: REGIONS, cents: 66500, amount: "estimated", day: 14 },
-  { name: "Ring Central", kind: "expense", payee: v("qbvnd_01KPGGRG0EN05M90KRXQ1SBKZW", "Ring Central"), account: "Telephone Expense:Ring Central", payFrom: VISA_CHASE, cents: 12000, amount: "estimated", day: 5 },
+  { name: "AT&T — services", kind: "check", payee: other("AT&T"), account: "Telephone Expense:AT&T Services", payFrom: REGIONS, cents: 48165, amount: "estimated", day: 15 },
+  { name: "Ring Central", kind: "expense", payee: other("RingCentral"), account: "Telephone Expense:Ring Central", payFrom: VISA_CHASE, cents: 16658, amount: "estimated", day: 6 },
   { name: "GEICO — auto", kind: "check", payee: v("qbvnd_01KPGGPN1RM965KAVHPTM5FJ4E", "GEICO Auto"), account: "Insurance Expense:Auto Insurance", payFrom: REGIONS, cents: 23817, amount: "estimated", day: 6 },
   { name: "Fundation — credit line (Quantum SPV)", kind: "check", payee: v("qbvnd_01KPGGPKEKMRH1KNYDRMMWPS29", "Fundation"), account: "Loans Payable:Credit Line Fundation:Principal", payFrom: REGIONS, cents: 619616, amount: "estimated", day: 5, notes: "Principal + interés en el mismo pago; repartir al guardar" },
   { name: "TD Bank — line of credit interest", kind: "check", payee: TD_BANK, account: "Interest Expense:Line of Credit TD Bank", payFrom: TD, cents: 207800, amount: "estimated", day: 10 },
   { name: "Chase — credit line payment", kind: "check", payee: other("Chase Bank"), account: "Loans Payable:Chase Credit Line:Principal", payFrom: CHASE, cents: 131023, amount: "estimated", day: 10 },
-  { name: "Visa Chase 7704 — interest", kind: "expense", payee: other("Chase Bank"), account: "Interest Expense:Chase Bank", payFrom: VISA_CHASE, cents: 10200, amount: "estimated", day: 10 },
-  { name: "Visa Regions 2084 — interest", kind: "expense", payee: v("qbvnd_01KPGGREPTY9N33VEK5TE2D811", "Regions Bank"), account: "Interest Expense:Regions Bank", payFrom: VISA_REGIONS, cents: 60000, amount: "estimated", day: 15 },
+  { name: "Visa Chase 7704 — interest", kind: "expense", payee: other("PURCHASE INTEREST CHARGE"), account: "Interest Expense:Chase Bank", payFrom: VISA_CHASE, cents: 15915, amount: "estimated", day: 10, notes: "Payee = el texto del feed, que es como lo registra el contador" },
+  { name: "Visa Regions 2084 — interest", kind: "expense", payee: other("INTEREST CHARGE-PURCHASE"), account: "Interest Expense:Regions Bank", payFrom: VISA_REGIONS, cents: 62236, amount: "estimated", day: 15, notes: "Payee = el texto del feed, que es como lo registra el contador" },
   { name: "Amerant — interest", kind: "check", payee: other("Amerant Bank"), account: "Interest Expense:Amerant Bank", payFrom: TD, cents: 35700, amount: "estimated", day: 17 },
   { name: "TD Bank — merchant fee A", kind: "expense", payee: TD_BANK, account: "Merchant Acct Fees", payFrom: TD, cents: 4495, amount: "fixed", day: 3, notes: "Dos cargos el mismo día (44.95 y 34.95): una regla por cargo" },
   { name: "TD Bank — merchant fee B", kind: "expense", payee: TD_BANK, account: "Merchant Acct Fees", payFrom: TD, cents: 3495, amount: "fixed", day: 3, notes: "Dos cargos el mismo día (44.95 y 34.95): una regla por cargo" },
@@ -185,8 +192,19 @@ async function resolveAll(pg: RawPg, todayEt: string): Promise<{ resolved: Resol
   return { resolved, problems };
 }
 
+/** Campos de la regla que el seed gobierna; si alguno difiere, la regla se corrige. */
+const GOVERNED: Array<keyof RecurringRuleInput> = [
+  "document_kind", "payee_type", "payee_id", "payee_name", "expense_account_list_id", "pay_from_account_list_id",
+  "expected_amount_cents", "amount_kind", "tolerance_cents", "tolerance_pct", "day_of_month",
+];
+
+function diffFields(current: RecurringRuleInput, wanted: RecurringRuleInput): string[] {
+  return GOVERNED.filter((k) => String(current[k] ?? "") !== String(wanted[k] ?? ""));
+}
+
 export default async function seedRecurringExpenseRules({ container }: ExecArgs): Promise<void> {
   const apply = process.env.APPLY === "true";
+  const update = process.env.UPDATE === "true";
   const pg = container.resolve("__pg_connection__") as RawPg & { transaction?: () => Promise<RawPg & { commit: () => Promise<void>; rollback: () => Promise<void> }> };
   const today = getBusinessDateString();
   const { resolved, problems } = await resolveAll(pg, today);
@@ -197,11 +215,23 @@ export default async function seedRecurringExpenseRules({ container }: ExecArgs)
     process.exitCode = 1;
     return;
   }
-  const existing = new Set((await listRules(pg, true)).map((r) => r.name));
-  const fresh = resolved.filter((r) => !existing.has(r.input.name));
-  console.log(`   ${existing.size} regla(s) ya en la base · ${fresh.length} por crear\n`);
+  const rules = await listRules(pg, true);
+  const byName = new Map(rules.map((r) => [r.name, r]));
+  const fresh = resolved.filter((r) => !byName.has(r.input.name));
+  // Sólo reglas nacidas del seed: una editada a mano por el contador no se pisa.
+  const changed = update
+    ? resolved
+        .map((r) => ({ r, cur: byName.get(r.input.name) }))
+        .filter((x): x is { r: Resolved; cur: NonNullable<typeof x.cur> } => !!x.cur && x.cur.created_by_user_id === SEED_ACTOR)
+        .map((x) => ({ ...x, fields: diffFields(x.cur, x.r.input) }))
+        .filter((x) => x.fields.length > 0)
+    : [];
+  console.log(`   ${byName.size} regla(s) ya en la base · ${fresh.length} por crear · ${changed.length} por corregir${update ? "" : " (UPDATE=true para corregir)"}\n`);
   for (const r of fresh) {
     console.log(`   ${r.input.document_kind.padEnd(8)} d${String(r.input.day_of_month).padStart(2)}  $${(r.input.expected_amount_cents / 100).toFixed(2).padStart(9)} ${r.input.amount_kind.padEnd(9)} ${r.input.name}`);
+  }
+  for (const c of changed) {
+    console.log(`   ✎ ${c.r.input.name}: ${c.fields.map((f) => `${f} ${String(c.cur[f] ?? "∅")} → ${String(c.r.input[f] ?? "∅")}`).join(" · ")}`);
   }
   if (!apply) {
     console.log(`\n(dry-run) La adopción se evalúa sólo con las reglas creadas — correr con APPLY=true para ver el enlace real.`);
@@ -216,9 +246,20 @@ export default async function seedRecurringExpenseRules({ container }: ExecArgs)
       const rule = await createRule(db, r.input, SEED_ACTOR);
       inserted += await materializeRule(db, rule, `${today.slice(0, 7)}-01`, horizon);
     }
+    let regenerated = 0;
+    for (const c of changed) {
+      const rule = await updateRule(db, c.cur.id, c.r.input, SEED_ACTOR);
+      if (!rule) throw new Error(`rule ${c.cur.id} vanished`);
+      // Las expected SIN enlace y sin fecha movida vuelven a nacer con el snapshot nuevo.
+      await db.raw(
+        `DELETE FROM recurring_expense_occurrence WHERE rule_id = ? AND status = 'expected' AND matched_id IS NULL AND NOT due_date_override`,
+        [rule.id]
+      );
+      regenerated += await materializeRule(db, rule, `${today.slice(0, 7)}-01`, horizon);
+    }
     const adopt = await adoptExistingDocuments(db, `${today.slice(0, 7)}-01`, horizon, { actorId: SEED_ACTOR });
     if (trx) await trx.commit();
-    console.log(`\n✅ ${fresh.length} regla(s) creadas · ${inserted} ocurrencia(s) materializadas · ${adopt.adopted.length} adoptada(s) · ${adopt.ambiguous.length} ambigua(s) de ${adopt.scanned}`);
+    console.log(`\n✅ ${fresh.length} regla(s) creadas · ${changed.length} corregida(s) (${regenerated} ocurrencias regeneradas) · ${inserted} ocurrencia(s) materializadas · ${adopt.adopted.length} adoptada(s) · ${adopt.ambiguous.length} ambigua(s) de ${adopt.scanned}`);
     for (const a of adopt.adopted) console.log(`   ✔ ${a.due_date} ${a.rule_name} → ${a.document.doc_number} (${a.document.day}, $${(a.document.total_cents / 100).toFixed(2)})`);
     for (const a of adopt.ambiguous) console.log(`   ? ${a.due_date} ${a.rule_name}: ${a.candidates.map((c) => `${c.doc_number} ${c.day} $${(c.total_cents / 100).toFixed(2)}`).join(" | ")}`);
   } catch (error) {
