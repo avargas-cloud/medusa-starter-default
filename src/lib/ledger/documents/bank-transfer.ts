@@ -151,10 +151,16 @@ async function resolve(client: PoolClient, input: BankTransferWriteInput) {
   return { fromAccount, toAccount, feeAccount, ledgerLines };
 }
 
+/** Trabajo DENTRO de la transacción del documento (enlace con el Accounting Calendar). */
+export interface BankTransferHooks {
+  inTransaction?: (client: PoolClient, id: string) => Promise<void>;
+}
+
 export async function createBankTransfer(
   client: PoolClient,
   input: BankTransferWriteInput,
-  actorId: string
+  actorId: string,
+  hooks: BankTransferHooks = {}
 ): Promise<BankTransferDto> {
   const id = newGlId("gtr");
   await runInPostingTransaction(client, async () => {
@@ -181,6 +187,7 @@ export async function createBankTransfer(
         actorId,
       ]
     );
+    if (hooks.inTransaction) await hooks.inTransaction(client, id);
   });
   return (await getBankTransfer(client, id))!;
 }
@@ -236,7 +243,8 @@ export async function voidBankTransfer(
   client: PoolClient,
   id: string,
   reason: string,
-  actorId: string
+  actorId: string,
+  hooks: BankTransferHooks = {}
 ): Promise<BankTransferDto> {
   await runInPostingTransaction(client, async () => {
     const row = await loadRow(client, id, true);
@@ -259,6 +267,7 @@ export async function voidBankTransfer(
       [id, reason]
     );
     await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "gl_transfer", id);
+    if (hooks.inTransaction) await hooks.inTransaction(client, id);
   });
   return (await getBankTransfer(client, id))!;
 }

@@ -23,6 +23,11 @@ const DUE_SOON_DAYS = 7;
 /** Qué le falta al snapshot para poder abrir su documento — sin pegarle a la base. */
 function configIssue(occ: RecurringOccurrence): string | null {
   const kind = occ.document_kind ?? "expense";
+  if (kind === "transfer") {
+    if (!occ.pay_from_account_list_id) return "No source bank account";
+    if (!occ.expense_account_list_id) return "No destination account";
+    return null;
+  }
   if (!occ.expense_account_list_id) return "No expense account";
   if (kind === "bill") {
     if (occ.payee_type !== "vendor" || !occ.payee_id) return "A bill needs a vendor payee";

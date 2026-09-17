@@ -7,7 +7,8 @@
  *
  * Sale del SNAPSHOT de la ocurrencia (no de la regla viva) y valida lo que
  * cada documento exige: un bill sin vendor no existe; un check/expense sin
- * cuenta pagadora Bank/CreditCard tampoco. Si algo falta, `blocked` lo dice
+ * cuenta pagadora Bank/CreditCard tampoco; un transfer necesita origen Bank y
+ * destino tarjeta / pasivo / banco. Si algo falta, `blocked` lo dice
  * con nombre y la pantalla manda a la regla en vez de a un Save que va a
  * fallar. Nada se escribe.
  */
@@ -37,6 +38,8 @@ export interface OccurrencePrefill {
   payee: { type: PayeeType; id: string | null; name: string } | null;
   expense_account: PrefillAccount | null;
   pay_from_account: PrefillAccount | null;
+  /** Sólo `transfer`: la cuenta DESTINO (la tarjeta / el pasivo), que la regla guarda en `expense_account_list_id`. */
+  to_account: PrefillAccount | null;
   /** Sólo `bill`: el vendor de QB tal como lo espera `/vendor-bills/new`. */
   vendor: { id: string; name: string } | null;
   /** Motivo por el que NO se puede abrir el documento (arreglar la regla). */
@@ -84,8 +87,15 @@ export async function buildOccurrencePrefill(
   ]);
   const vendor = documentKind === "bill" && occ.payee_type === "vendor" ? await loadVendor(db, occ.payee_id) : null;
 
+  const TRANSFER_TARGETS = ["CreditCard", "Bank", "OtherCurrentLiability", "LongTermLiability", "OtherCurrentAsset"];
   let blocked: string | null = null;
-  if (!expenseAccount) blocked = "The rule has no expense account";
+  if (documentKind === "transfer") {
+    if (!payFromAccount) blocked = "The rule has no source bank account (Pay from)";
+    else if (payFromAccount.account_type !== "Bank") blocked = `The rule pays from ${payFromAccount.name}, which is not a bank account`;
+    else if (!expenseAccount) blocked = "The rule has no destination account (To account)";
+    else if (!TRANSFER_TARGETS.includes(expenseAccount.account_type))
+      blocked = `${expenseAccount.name} is not a card, loan or bank account`;
+  } else if (!expenseAccount) blocked = "The rule has no expense account";
   else if (documentKind === "bill") {
     if (occ.payee_type !== "vendor" || !occ.payee_id) blocked = "A bill needs a vendor payee on the rule";
     else if (!vendor) blocked = "The rule's vendor is inactive or was deleted";
@@ -97,7 +107,7 @@ export async function buildOccurrencePrefill(
   }
 
   const checkKind =
-    documentKind === "bill" || !payFromAccount
+    documentKind === "bill" || documentKind === "transfer" || !payFromAccount
       ? null
       : payFromAccount.account_type === "CreditCard"
         ? "card_charge"
@@ -114,8 +124,9 @@ export async function buildOccurrencePrefill(
     amount_cents: occ.expected_amount_cents,
     memo: prefillMemo(rule.name, occ.period_key),
     payee: occ.payee_name ? { type: occ.payee_type ?? "other", id: occ.payee_id, name: occ.payee_name } : null,
-    expense_account: expenseAccount,
+    expense_account: documentKind === "transfer" ? null : expenseAccount,
     pay_from_account: payFromAccount,
+    to_account: documentKind === "transfer" ? expenseAccount : null,
     vendor,
     blocked,
     existing: occ.matched_kind && occ.matched_id ? { kind: occ.matched_kind, id: occ.matched_id } : null,

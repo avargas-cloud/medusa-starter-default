@@ -15,7 +15,8 @@ export type EndOfMonthPolicy = (typeof EOM_POLICIES)[number];
 export const AMOUNT_KINDS = ["fixed", "estimated"] as const;
 export type AmountKind = (typeof AMOUNT_KINDS)[number];
 
-export const DOCUMENT_KINDS = ["check", "expense", "bill"] as const;
+/** `transfer` = pago de tarjeta / línea: `pay_from` es el origen y `expense_account_list_id` el DESTINO. */
+export const DOCUMENT_KINDS = ["check", "expense", "bill", "transfer"] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 
 /**
@@ -28,7 +29,7 @@ export type OccurrenceStatus = (typeof OCCURRENCE_STATUSES)[number];
 /** Lo que un PATCH manual puede pedir: nunca `booked` (eso lo decide el enlace). */
 export const OCCURRENCE_PATCH_STATUSES = ["expected", "paid", "skipped"] as const;
 
-export const MATCHED_KINDS = ["gl_check", "vendor_bill"] as const;
+export const MATCHED_KINDS = ["gl_check", "vendor_bill", "gl_transfer"] as const;
 export type MatchedKind = (typeof MATCHED_KINDS)[number];
 
 /**

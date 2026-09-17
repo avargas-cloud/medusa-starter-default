@@ -74,6 +74,24 @@ export async function resolveMatchedDocuments(
       });
     }
   }
+  const transferIds = occurrences.filter((o) => o.matched_kind === "gl_transfer").map((o) => o.matched_id as string);
+  if (transferIds.length) {
+    const res = await pool.query<{ id: string; doc_number: string; status: string; amount_cents: string }>(
+      `SELECT id, doc_number, status, amount_cents::text FROM gl_transfer WHERE id = ANY($1::text[]) AND deleted_at IS NULL`,
+      [transferIds]
+    );
+    for (const r of res.rows) {
+      out.set(`gl_transfer:${r.id}`, {
+        kind: "gl_transfer",
+        id: r.id,
+        doc_number: r.doc_number,
+        status: r.status,
+        settled: r.status === "posted",
+        total_cents: Number(r.amount_cents),
+        href: `/accounting/transfers?transfer=${encodeURIComponent(r.id)}`,
+      });
+    }
+  }
   if (billIds.length) {
     const res = await pool.query<{ id: string; number: string | null; status: string }>(
       `SELECT id, number, status FROM vendor_bill WHERE id = ANY($1::text[]) AND deleted_at IS NULL`,

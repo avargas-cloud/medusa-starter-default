@@ -29,6 +29,10 @@
  *    una tarjeta; y la CARRERA real: dos transacciones sobre la misma
  *    ocurrencia → una enlaza y la otra 409 (datos commiteados y borrados al
  *    final, porque dos conexiones no comparten un ROLLBACK).
+ * §8 Adopción automática (calendar-rules-seed-20260917) + kind `transfer`:
+ *    candidato único → booked; ambiguo / payee distinto / voided / sin la cuenta
+ *    de gasto → no; la cuenta pagadora es preferencia; dry-run no escribe;
+ *    transfer y bill adoptan por sus propias llaves; el job y el POST adoptan.
  * §7 Estático: cada camino que crea o mata un documento llama al enlace /
  *    desenlace (fuera de imports); el feed lee `expected` y su Create & match
  *    enlaza DENTRO de la transacción del documento con la ocurrencia en el
@@ -55,6 +59,7 @@ import {
   pgLinkDb,
   unlinkByDocument,
 } from "../../lib/calendar/occurrence-link";
+import { adoptExistingDocuments } from "../../lib/calendar/occurrence-adopt";
 import { buildOccurrencePrefill } from "../../lib/calendar/occurrence-prefill";
 import {
   createRule,
@@ -505,6 +510,148 @@ function section7(): void {
   check("store-pos: la pestaña Scheduled existe y su fila mueve por moveOccurrence (PATCH due_date)", /fetchScheduled\(/.test(posRead("app/(pos)/accounting/calendar/_components/ScheduledTab.tsx")) && /moveOccurrence\(/.test(posRead("app/(pos)/accounting/calendar/_components/ScheduledRow.tsx")) && /body: \{ due_date \}/.test(posRead("lib/calendar/api.ts")));
 }
 
+/**
+ * §8 — adopción automática (calendar-rules-seed-20260917) y kind `transfer`.
+ * Fixtures sintéticos de gl_check / gl_transfer / vendor_bill dentro de una
+ * transacción con ROLLBACK: cada caso tiene su control NEGATIVO al lado.
+ */
+async function section8(): Promise<void> {
+  console.log("\n§8 adopción automática + transfer (transacción con ROLLBACK)");
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.log("⏭️  sin DATABASE_URL — se omite");
+    return;
+  }
+  const client = new Client({ connectionString: url });
+  await client.connect();
+  const pg = rawAdapter(client);
+  const acc = await sampleAccounts(client);
+  const card = (await client.query<{ qb_list_id: string }>(`SELECT qb_list_id FROM qb_account WHERE account_type = 'CreditCard' AND is_active AND deleted_at IS NULL ORDER BY full_name LIMIT 1`)).rows[0]?.qb_list_id ?? null;
+  let n = 0;
+  const glCheck = async (o: { day: string; cents: number; payeeId: string | null; payeeName: string; bank: string; account: string; status?: string }) => {
+    const id = `gchk_verify_${++n}`;
+    await client.query(
+      `INSERT INTO gl_check (id, doc_number, kind, day, bank_account_list_id, bank_account_snapshot, payee_type, payee_id, payee_name, total_cents, status, created_by)
+       VALUES ($1, $2, 'check', $3::date, $4, '{}'::jsonb, $5, $6, $7, $8, $9, 'verify')`,
+      [id, `CHK-V${n}`, o.day, o.bank, o.payeeId ? "vendor" : "other", o.payeeId, o.payeeName, o.cents, o.status ?? "posted"]
+    );
+    await client.query(
+      `INSERT INTO gl_check_line (id, check_id, sort_order, account_list_id, account_snapshot, amount_cents) VALUES ($1, $2, 0, $3, '{}'::jsonb, $4)`,
+      [`${id}_l`, id, o.account, o.cents]
+    );
+    return id;
+  };
+  try {
+    await client.query("BEGIN");
+    // Cada caso tiene su PROPIO payee (por nombre): así un documento de un caso
+    // nunca es candidato de otro aunque las fechas queden a ≤7 días.
+    const mk = async (name: string, extra: Record<string, unknown>) => {
+      const input = parseRecurringRule({
+        name, frequency: "monthly", day_of_month: 5, expected_amount_cents: 100000, tolerance_cents: 500, start_date: "2026-03-01",
+        document_kind: "check", payee_type: "other", payee_id: null, payee_name: name,
+        expense_account_list_id: acc.expense, pay_from_account_list_id: acc.bank, ...extra,
+      });
+      if (!input.ok) throw new Error(input.error);
+      const rule = await createRule(pg, input.value, "verify");
+      await materializeRule(pg, rule, "2026-03-01", "2026-03-31");
+      const occ = (await listOccurrences(pg, "2026-03-01", "2026-03-31")).find((o) => o.rule_id === rule.id)!;
+      return { rule, occ };
+    };
+    const base = { day: "2026-03-06", cents: 100200, payeeId: null as string | null, payeeName: "", bank: acc.bank!, account: acc.expense! };
+    const forRule = (name: string, o: Partial<typeof base>) => ({ ...base, payeeName: name, ...o });
+
+    // Único → adopta (monto a $2 del esperado, 1 día después).
+    const a = await mk("VERIFY adopt unique", {});
+    const docA = await glCheck(forRule("VERIFY adopt unique", {}));
+    const r1 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31", { actorId: "verify" });
+    const occA = await getOccurrence(pg, a.occ.id);
+    check("adopción: candidato único → booked con el documento y su monto real", r1.adopted.some((x) => x.occurrence_id === a.occ.id && x.document.id === docA) && occA?.status === "booked" && occA.matched_id === docA && occA.actual_amount_cents === 100200);
+    check("NEGATIVO: segunda corrida no re-adopta (la ocurrencia ya no es expected)", (await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31")).adopted.length === 0);
+
+    // Ambiguo → no adopta y lo reporta.
+    const b = await mk("VERIFY adopt ambiguous", { day_of_month: 12 });
+    await glCheck(forRule("VERIFY adopt ambiguous", { day: "2026-03-12" }));
+    await glCheck(forRule("VERIFY adopt ambiguous", { day: "2026-03-13" }));
+    const r2 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("NEGATIVO: dos candidatos → ambiguous, sigue expected", r2.ambiguous.some((x) => x.occurrence_id === b.occ.id && x.candidates.length === 2) && (await getOccurrence(pg, b.occ.id))?.status === "expected");
+
+    // Payee distinto / voided / cuenta de gasto distinta → nada.
+    const c = await mk("VERIFY adopt no-match", { day_of_month: 20 });
+    await glCheck(forRule("Somebody Else", { day: "2026-03-20" }));
+    await glCheck(forRule("VERIFY adopt no-match", { day: "2026-03-20", status: "voided" }));
+    await glCheck(forRule("VERIFY adopt no-match", { day: "2026-03-20", account: acc.bank! }));
+    const r3 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("NEGATIVO: payee distinto, voided o sin la cuenta de gasto → no adopta", !r3.adopted.some((x) => x.occurrence_id === c.occ.id) && !r3.ambiguous.some((x) => x.occurrence_id === c.occ.id));
+
+    // Cuenta pagadora es preferencia: mismo banco gana; sin mismo banco, cualquiera.
+    const d = await mk("VERIFY adopt bank pref", { day_of_month: 25 });
+    const otherBank = (await client.query<{ qb_list_id: string }>(`SELECT qb_list_id FROM qb_account WHERE account_type = 'Bank' AND is_active AND deleted_at IS NULL AND qb_list_id <> $1 ORDER BY full_name LIMIT 1`, [acc.bank])).rows[0]?.qb_list_id;
+    const docSame = await glCheck(forRule("VERIFY adopt bank pref", { day: "2026-03-25" }));
+    await glCheck(forRule("VERIFY adopt bank pref", { day: "2026-03-25", bank: otherBank ?? acc.bank! }));
+    const r4 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("adopción: con dos candidatos, el de la MISMA cuenta pagadora gana", r4.adopted.some((x) => x.occurrence_id === d.occ.id && x.document.id === docSame));
+    const e = await mk("VERIFY adopt other bank", { day_of_month: 28 });
+    const docOther = await glCheck(forRule("VERIFY adopt other bank", { day: "2026-03-28", bank: otherBank ?? acc.bank! }));
+    const r5 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("adopción: sin candidato en la cuenta pagadora, adopta el único de otra cuenta", r5.adopted.some((x) => x.occurrence_id === e.occ.id && x.document.id === docOther));
+
+    // Dry-run no escribe.
+    const f = await mk("VERIFY adopt dryrun", { day_of_month: 30 });
+    await glCheck(forRule("VERIFY adopt dryrun", { day: "2026-03-30" }));
+    const r6 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31", { dryRun: true });
+    check("dry-run: reporta la adopción y NO escribe", r6.adopted.some((x) => x.occurrence_id === f.occ.id) && (await getOccurrence(pg, f.occ.id))?.status === "expected");
+
+    // Transfer: prefill + adopción + enlace/desenlace.
+    if (card) {
+      const t = await mk("VERIFY transfer", { day_of_month: 8, document_kind: "transfer", payee_type: null, payee_name: null, expense_account_list_id: card });
+      const pf = await buildOccurrencePrefill(t.occ, t.rule, client);
+      check("prefill transfer: origen Bank + destino CreditCard, sin check_kind ni expense_account", pf.blocked === null && pf.check_kind === null && pf.to_account?.list_id === card && pf.pay_from_account?.list_id === acc.bank && pf.expense_account === null);
+      const pfBad = await buildOccurrencePrefill({ ...t.occ, expense_account_list_id: acc.expense }, t.rule, client);
+      check("NEGATIVO: prefill transfer hacia una cuenta de gasto → blocked", /not a card/.test(pfBad.blocked ?? ""));
+      await client.query(
+        `INSERT INTO gl_transfer (id, doc_number, day, from_account_list_id, from_snapshot, to_account_list_id, to_snapshot, amount_cents, status, created_by)
+         VALUES ('gtr_verify_1', 'TR-V1', '2026-03-09', $1, '{}'::jsonb, $2, '{}'::jsonb, 100300, 'posted', 'verify')`,
+        [acc.bank, card]
+      );
+      const r7 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+      const occT = await getOccurrence(pg, t.occ.id);
+      check("adopción transfer: origen + destino + monto + fecha → booked gl_transfer", r7.adopted.some((x) => x.occurrence_id === t.occ.id && x.document.kind === "gl_transfer") && occT?.matched_kind === "gl_transfer" && occT.matched_id === "gtr_verify_1");
+      const link = pgLinkDb(client as unknown as import("pg").PoolClient);
+      check("desenlace transfer: 1 reabierta", (await unlinkByDocument(link, "gl_transfer", "gtr_verify_1", "TR-V1 voided")) === 1 && (await getOccurrence(pg, t.occ.id))?.status === "expected");
+    } else {
+      check("el sandbox tiene una cuenta CreditCard para probar transfer", false);
+    }
+
+    // Vendor bill: por vendor + total de líneas + document_date.
+    const g = await mk("VERIFY adopt bill", { day_of_month: 15, document_kind: "bill", payee_type: "vendor", payee_id: acc.vendor, payee_name: "Verify Adopt Payee", pay_from_account_list_id: null });
+    await client.query(
+      `INSERT INTO vendor_bill (id, number, vendor_id, vendor_name_snapshot, bill_type, status, document_date, commission_mode)
+       VALUES ('vb_verify_1', 'VB-V1', $1, 'Verify Adopt Payee', 'expense', 'draft', '2026-03-16T12:00:00Z', 'percent')`,
+      [acc.vendor]
+    );
+    await client.query(
+      `INSERT INTO vendor_bill_line (id, vendor_bill_id, sku, description, qty, unit_cost_cents, line_type, qb_account_list_id, amount_cents)
+       VALUES ('vbl_verify_1', 'vb_verify_1', 'ACCOUNT', 'rent', 1, 100100, 'qb_account', $1, 100100)`,
+      [acc.expense]
+    );
+    const r8 = await adoptExistingDocuments(pg, "2026-03-01", "2026-03-31");
+    check("adopción bill: vendor + Σ líneas + document_date → booked vendor_bill", r8.adopted.some((x) => x.occurrence_id === g.occ.id && x.document.kind === "vendor_bill" && x.document.id === "vb_verify_1"));
+  } finally {
+    await client.query("ROLLBACK");
+    await client.end();
+  }
+
+  // Estático: el job y el POST de regla adoptan; los transfers enlazan/desenlazan.
+  const read = (rel: string) => stripImports(readFileSync(resolve(ROOT, rel), "utf8"));
+  check("job diario: materializa y después adopta", /adoptExistingDocuments\(/.test(read("src/jobs/recurring-expenses-materialize.ts")));
+  check("POST de regla: adopta lo ya cargado de esa regla", /adoptExistingDocuments\([\s\S]*ruleId: rule\.id/.test(read("src/api/admin/accounting/recurring-expenses/route.ts")));
+  const tr = read("src/api/admin/accounting/transfers/route.ts");
+  check("POST /accounting/transfers: lockLinkable + linkOccurrence dentro de la tx", /inTransaction:/.test(tr) && /lockLinkable\(/.test(tr) && /linkOccurrence\(/.test(tr) && /kind: "gl_transfer"/.test(tr));
+  check("void de transfer llama unlinkByDocument", /unlinkByDocument\([\s\S]{0,80}"gl_transfer"/.test(read("src/api/admin/accounting/transfers/[id]/void/route.ts")));
+  const mig = readFileSync(resolve(ROOT, "src/migrations/Migration20260917230000-RecurringExpenseTransfers.ts"), "utf8");
+  check("migración: CHECKs con transfer / gl_transfer", /'transfer'\)/.test(mig) && /'gl_transfer'\)/.test(mig));
+}
+
 async function main(): Promise<void> {
   section1();
   section2();
@@ -513,6 +660,7 @@ async function main(): Promise<void> {
   section5();
   await section6();
   section7();
+  await section8();
   console.log(failures.length ? `\n❌ ${failures.length} check(s) fallaron: ${failures.join(" · ")}` : "\n✅ verify-calendars: todo verde");
   process.exit(failures.length ? 1 : 0);
 }

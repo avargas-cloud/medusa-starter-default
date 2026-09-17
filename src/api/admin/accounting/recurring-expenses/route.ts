@@ -4,7 +4,8 @@
  * PIN de supervisor EN LA RUTA (misma forma que payroll y revenue-baseline).
  *
  * Crear una regla materializa sus vencimientos de los próximos 90 días en la
- * misma request, así el calendario la muestra al instante sin esperar al job.
+ * misma request, así el calendario la muestra al instante sin esperar al job,
+ * y adopta los documentos ya cargados que sean inequívocamente suyos.
  * Nunca escribe documentos, GL ni QuickBooks.
  */
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
@@ -17,6 +18,7 @@ import {
   listRules,
   materializeRule,
 } from "../../../../lib/calendar/recurring-repo";
+import { adoptExistingDocuments } from "../../../../lib/calendar/occurrence-adopt";
 import { addDays } from "../../../../lib/calendar/recurring-occurrences";
 import { parseRecurringRule } from "../../../../lib/calendar/recurring-types";
 
@@ -41,7 +43,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const rule = await createRule(pg, parsed.value, resolveActorId(req));
     const today = getBusinessDateString();
     const materialized = await materializeRule(pg, rule, today, addDays(today, MATERIALIZE_HORIZON_DAYS));
-    return res.status(201).json({ rule, materialized });
+    // Lo que ya está cargado para esta regla se enlaza en el acto (candidato único).
+    const adopted = await adoptExistingDocuments(pg, today, addDays(today, MATERIALIZE_HORIZON_DAYS), {
+      ruleId: rule.id,
+      actorId: resolveActorId(req),
+    });
+    return res.status(201).json({ rule, materialized, adopted: adopted.adopted.length, ambiguous: adopted.ambiguous.length });
   } catch {
     return res.status(500).json({ error: "Failed to create recurring expense rule" });
   }

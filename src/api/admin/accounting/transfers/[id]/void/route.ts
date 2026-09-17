@@ -4,6 +4,7 @@ import type {
 } from "@medusajs/framework/http";
 import type { PoolClient } from "pg";
 
+import { pgLinkDb, unlinkByDocument } from "../../../../../../lib/calendar/occurrence-link";
 import { voidBankTransfer } from "../../../../../../lib/ledger";
 import {
   REASON_SCHEMA,
@@ -44,7 +45,15 @@ export async function POST(
       client,
       req.params.id as string,
       parsed.data.reason,
-      actorId
+      actorId,
+      {
+        // La ocurrencia del calendario que esta transferencia liquidaba vuelve a
+        // `expected` (misma transacción; sólo si seguía booked con ESTE documento).
+        inTransaction: async (tx, id) => {
+          const doc = await tx.query<{ doc_number: string }>(`SELECT doc_number FROM gl_transfer WHERE id = $1`, [id]);
+          await unlinkByDocument(pgLinkDb(tx), "gl_transfer", id, `${doc.rows[0]?.doc_number ?? "Transfer"} voided`);
+        },
+      }
     );
     return res.json({ transfer });
   } catch (error) {

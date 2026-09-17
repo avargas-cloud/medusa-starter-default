@@ -5,6 +5,13 @@ import type {
 import type { PoolClient } from "pg";
 
 import {
+  OccurrenceError,
+  linkOccurrence,
+  lockLinkable,
+  occurrenceErrorStatus,
+  pgLinkDb,
+} from "../../../../lib/calendar/occurrence-link";
+import {
   createBankTransfer,
   getBankTransfer,
   listBankTransfers,
@@ -80,19 +87,35 @@ export async function POST(
   const parsed = bankTransferBodySchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues[0]?.message);
 
+  // calendar-rules-seed-20260917: una ocurrencia `transfer` del Accounting
+  // Calendar queda `booked` en la MISMA transacción que la transferencia.
+  const occurrenceId = parsed.data.recurring_occurrence_id ?? null;
+  const input = toBankTransferInput(parsed.data);
   const client: PoolClient = await getDbPool().connect();
   try {
-    const created = await createBankTransfer(
-      client,
-      toBankTransferInput(parsed.data),
-      actorId
-    );
+    const created = await createBankTransfer(client, input, actorId, {
+      inTransaction: occurrenceId
+        ? async (tx, id) => {
+            const db = pgLinkDb(tx);
+            await lockLinkable(db, occurrenceId);
+            await linkOccurrence(db, occurrenceId, {
+              kind: "gl_transfer",
+              documentId: id,
+              totalCents: Number(input.amount_cents),
+              day: input.day,
+              actorId,
+            });
+          }
+        : undefined,
+    });
     if (!parsed.data.post) return res.status(201).json({ transfer: created });
     const post = await postBankTransfer(client, created.id, actorId);
     return res
       .status(201)
       .json({ transfer: await getBankTransfer(client, created.id), post });
   } catch (error) {
+    if (error instanceof OccurrenceError)
+      return res.status(occurrenceErrorStatus(error.code)).json({ code: error.code, error: error.message });
     return ledgerFailure(res, error);
   } finally {
     client.release();

@@ -129,6 +129,8 @@ export const bankTransferBodySchema = z
     memo: MEMO_SCHEMA,
     evidence_id: OPTIONAL_ID_SCHEMA,
     post: z.boolean().optional(),
+    /** Ocurrencia del Accounting Calendar que esta transferencia liquida (enlace en la misma tx). */
+    recurring_occurrence_id: OPTIONAL_ID_SCHEMA,
   })
   .strict()
   // `fee_account_list_id` es obligatoria SÓLO si hay fee; el tipo (Expense activa)

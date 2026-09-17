@@ -97,7 +97,7 @@ export async function expectedHintsByTransaction(
               o.id AS occurrence_id, r.id AS rule_id, r.name AS rule_name, o.due_date::text AS due_date,
               o.expected_amount_cents::text AS expected_amount_cents, o.document_kind, o.payee_type, o.payee_id, o.payee_name,
               o.expense_account_list_id, qa.full_name AS expense_account_name, o.status, o.matched_kind, o.matched_id,
-              gc.doc_number, gc.status AS doc_status, o.updated_at::text AS updated_at,
+              COALESCE(gc.doc_number, gt.doc_number) AS doc_number, COALESCE(gc.status, gt.status) AS doc_status, o.updated_at::text AS updated_at,
               abs(o.due_date - t.transaction_date::date)::text AS day_distance,
               abs(round(t.amount::numeric * 100) - o.expected_amount_cents)::text AS amount_delta
          FROM bank_transaction t
@@ -111,6 +111,7 @@ export async function expectedHintsByTransaction(
          JOIN recurring_expense_rule r ON r.id = o.rule_id
          LEFT JOIN qb_account qa ON qa.qb_list_id = o.expense_account_list_id AND qa.deleted_at IS NULL
          LEFT JOIN gl_check gc ON o.matched_kind = 'gl_check' AND gc.id = o.matched_id AND gc.deleted_at IS NULL
+         LEFT JOIN gl_transfer gt ON o.matched_kind = 'gl_transfer' AND gt.id = o.matched_id AND gt.deleted_at IS NULL
         WHERE t.id = ANY($1::text[]) AND t.deleted_at IS NULL AND t.amount::numeric > 0
         ORDER BY t.id, o.due_date, o.id`,
       [transactionIds, EXPECTED_HINT_DAYS]
