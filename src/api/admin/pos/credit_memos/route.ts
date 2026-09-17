@@ -22,6 +22,9 @@ export async function GET(
         {
           skip: parseInt(skip),
           take: parseInt(take),
+          // Sin orden, una página de `take` es un subconjunto ARBITRARIO: el
+          // Prev/Next de returns lo usaba de universo y le faltaban memos.
+          order: { created_at: "DESC" },
           relations: ["items"],
         }
       );
