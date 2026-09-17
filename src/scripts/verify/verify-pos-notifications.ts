@@ -34,6 +34,7 @@ import { produceAccountingNotifications } from "../../lib/notifications/producer
 import { produceCalendarInvites, inviteDedupeKey } from "../../lib/notifications/producers/calendar-invites";
 import { AWAITING_STATUSES, buildEstimateNotification, produceStaleEstimates, weekBucket } from "../../lib/notifications/producers/estimates";
 import { resolveOrphanNotifications } from "../../lib/notifications/producers/resolver";
+import { purgeNotifications } from "../../lib/notifications/producers/purge";
 import { candidateOrdersForItems, newlySeparable, produceSeparableAfterReceipt, snapshotSeparation, type RawSql } from "../../lib/notifications/producers/separable";
 import { pendingInvitationsOf, rsvpPatchBody } from "../../lib/calendar/google-calendar-client";
 import { USA_LOC } from "../../lib/locations";
@@ -111,7 +112,7 @@ function section2(): void {
       !/from\s+["'][^"']*(lib\/quickbooks|api\/admin\/invoices|api\/admin\/finance|lib\/calendar)/.test(src)
     );
     // format.ts es puro; resolver.ts sólo marca resolved_at (UPDATE, jamás INSERT).
-    const isPure = /producers\/(format|resolver)\.ts$/.test(rel);
+    const isPure = /producers\/(format|resolver|purge)\.ts$/.test(rel);
     if (!isPure) {
       const producesViaPublish = /publishNotification\(/.test(body);
       const delegates = /produce(PaymentNotifications|PoDueToday|QbFailureNotifications|WebOrderPlaced|SeparableAfterReceipt|AccountingNotifications|StaleEstimates|CalendarInvites)\(/.test(body);
@@ -433,6 +434,22 @@ async function section5db(): Promise<void> {
       const res3 = await resolveOrphanNotifications(client);
       check("resolver: estimate que dejó de estar entregado → resuelto", res3.estimate_converted_or_closed >= 1);
     }
+
+    // ── purge: leída vieja se archiva, no leída vieja NUNCA; borrado sólo sin no leídas
+    const who = staff[0];
+    await publishNotification(client, { kind: "payment_received", title: "old read", dedupe_key: "verify:purge:read", audiences: [{ kind: "users", user_ids: [who] }] });
+    await publishNotification(client, { kind: "payment_received", title: "old unread", dedupe_key: "verify:purge:unread", audiences: [{ kind: "users", user_ids: [who] }] });
+    await publishNotification(client, { kind: "payment_received", title: "ancient read", dedupe_key: "verify:purge:ancient", audiences: [{ kind: "users", user_ids: [who] }] });
+    await client.query(`UPDATE pos_notification_recipient r SET read_at = NOW() - INTERVAL '40 days' FROM pos_notification n WHERE n.id = r.notification_id AND n.dedupe_key IN ('verify:purge:read','verify:purge:ancient')`);
+    await client.query(`UPDATE pos_notification SET created_at = NOW() - INTERVAL '200 days' WHERE dedupe_key IN ('verify:purge:ancient','verify:purge:unread')`);
+    const purged = await purgeNotifications(client);
+    const state = (await client.query(`SELECT n.dedupe_key, r.archived_at IS NOT NULL AS archived FROM pos_notification n LEFT JOIN pos_notification_recipient r ON r.notification_id = n.id WHERE n.dedupe_key LIKE 'verify:purge:%'`)).rows as { dedupe_key: string; archived: boolean }[];
+    const byKey = Object.fromEntries(state.map((r) => [r.dedupe_key, r.archived]));
+    check("purge: leída hace 40 días → archivada", byKey["verify:purge:read"] === true, JSON.stringify(purged));
+    check("purge: NO leída de 200 días → intacta (ni archivada ni borrada)", byKey["verify:purge:unread"] === false);
+    check("purge: leída de 200 días → borrada", !("verify:purge:ancient" in byKey));
+    const unreadAfter = await countUnread(client, who);
+    check("purge: el conteo de no leídas del usuario no baja por la purga", unreadAfter >= 1);
 
     // ── calendar con fetch inyectado (Google jamás)
     const domainUser = (await client.query(`SELECT u.id FROM "user" u JOIN pos_user p ON lower(p.email)=lower(u.email) AND p.deleted_at IS NULL WHERE u.deleted_at IS NULL AND lower(u.email) LIKE '%@ecopowertech.com' AND lower(u.email) NOT LIKE 'webhook@%' LIMIT 1`)).rows[0];

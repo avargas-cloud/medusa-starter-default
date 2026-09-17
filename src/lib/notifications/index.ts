@@ -11,3 +11,4 @@ export { produceStaleEstimates } from "./producers/estimates";
 export { produceCalendarInvites } from "./producers/calendar-invites";
 export { resolveOrphanNotifications } from "./producers/resolver";
 export { produceSeparableAfterReceipt, newlySeparable } from "./producers/separable";
+export { purgeNotifications } from "./producers/purge";
