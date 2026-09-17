@@ -31,6 +31,10 @@ const CLIENT_METADATA_KEYS = [
   "original_discount_cents",
   "original_shipping_cents",
   "parent_invoice_date",
+  // El código de la promoción de la factura (p.ej. ORDER-DISCOUNT-10%): sólo
+  // etiqueta, para que el return y su impreso muestren el MISMO descuento que
+  // la factura. El monto sigue saliendo de discount_type/value.
+  "promotion_code",
 ] as const;
 
 function pickClientMetadata(raw: unknown): Record<string, unknown> | null {

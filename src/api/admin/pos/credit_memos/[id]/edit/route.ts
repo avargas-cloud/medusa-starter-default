@@ -482,24 +482,33 @@ export async function PATCH(
           const amountPaid = Number(invoice.amount_paid ?? 0);
           const invoiceTotal = Number(invoice.total ?? 0);
 
-          let newStatus: string;
-          if (newRefunded > 0) {
-            newStatus =
-              newRefunded >= invoiceTotal - 1 ? "refunded" : "partially_refunded";
-          } else {
-            newStatus =
-              amountPaid >= invoiceTotal - 1
-                ? "paid"
-                : amountPaid > 0
-                  ? "partial"
-                  : "issued";
+          // El status de la factura sólo se mueve cuando el memo es un
+          // REEMBOLSO real — misma regla que `complete`: un store credit deja la
+          // factura `paid` (el cliente recibió crédito, no plata). Esta ruta
+          // flipeaba a `partially_refunded` por el solo hecho de refunded > 0,
+          // así que editar un memo de store credit contradecía a completarlo
+          // (INV-21820, 09/17/2026).
+          const isRefundMemo = creditMemo.refund_method === "refund";
+          let newStatus: string | undefined;
+          if (isRefundMemo) {
+            if (newRefunded > 0) {
+              newStatus =
+                newRefunded >= invoiceTotal - 1 ? "refunded" : "partially_refunded";
+            } else {
+              newStatus =
+                amountPaid >= invoiceTotal - 1
+                  ? "paid"
+                  : amountPaid > 0
+                    ? "partial"
+                    : "issued";
+            }
           }
 
           await invoiceService.updatePosInvoices({
             id: invoice.id,
             refunded_amount: newRefunded,
             refunded_shipping: newRefShip,
-            status: newStatus,
+            ...(newStatus ? { status: newStatus } : {}),
           });
 
           // Update per-item refunded_quantity using sku-based delta
@@ -544,7 +553,7 @@ export async function PATCH(
           }
 
           logger.info(
-            `[edit CM] Invoice ${invoice.id} → refunded_amount: ${newRefunded}, status: ${newStatus}`
+            `[edit CM] Invoice ${invoice.id} → refunded_amount: ${newRefunded}, status: ${newStatus ?? "(unchanged: store credit)"}`
           );
         }
       } catch (invErr: any) {
