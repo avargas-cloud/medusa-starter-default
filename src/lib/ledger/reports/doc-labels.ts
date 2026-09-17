@@ -26,6 +26,8 @@ const LABEL_PREFIX: Readonly<Record<string, string>> = {
   transfer: "Transfer",
   gl_transfer: "Transfer",
   bank_deposit: "Deposit",
+  sales_tax_payment: "Sales tax payment",
+  sales_tax_adjustment: "Sales tax adjustment",
   year_close: "Year close",
   customer_payment: "Customer payment",
   po_receipt: "PO receipt",

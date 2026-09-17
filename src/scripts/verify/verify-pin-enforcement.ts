@@ -125,7 +125,36 @@ if (!posExists) {
 // envuelve. Cinco rutas lo usaban directo y por eso rechazaban el `confirm`
 // literal de un admin —que sólo el guard acepta— y verificaban sin límite de
 // intentos. Ver 3b, que lo prohíbe por LLAMADA en todo el backend.
-const SHARED = /guardSupervisorPin|assertWebOrderAuthorized/;
+const SHARED = /guardSupervisorPin|assertWebOrderAuthorized|withAccountingAndPin/;
+/**
+ * sales-tax-center-20260917: `withAccountingAndPin` es el delegado de las rutas
+ * de Sales Tax (Accounting + PIN en un solo wrapper, `_lib/common.ts`). Cuenta
+ * como guard SÓLO porque acá se afirma que su cuerpo llama a
+ * `guardSupervisorPin(` — sin import, por LLAMADA — igual que 4b hace con las
+ * rutas. Un delegado que dejara de llamarlo pondría rojo este chequeo antes
+ * que a ninguna ruta.
+ */
+const PIN_DELEGATES: { fn: string; rel: string }[] = [
+  { fn: "withAccountingAndPin", rel: "api/admin/accounting/sales-tax/_lib/common.ts" },
+];
+for (const { fn, rel } of PIN_DELEGATES) {
+  const p = path.join(BACKEND_SRC, rel);
+  if (!fs.existsSync(p)) {
+    failures.push(`${rel} (delegado ${fn}) no existe — si se movió, actualizar PIN_DELEGATES.`);
+    continue;
+  }
+  const bodyNoImports = stripComments(fs.readFileSync(p, "utf8"))
+    .split("\n")
+    .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
+    .join("\n");
+  if (!/guardSupervisorPin\s*\(/.test(bodyNoImports)) {
+    failures.push(
+      `${rel}: ${fn}() cuenta como guard para las rutas que lo llaman, pero su ` +
+        `cuerpo no llama a guardSupervisorPin(). Sin esa llamada las rutas de ` +
+        `Sales Tax quedan sin PIN con este verificador en verde.`
+    );
+  }
+}
 /** Una comparación cruda contra la metadata es exactamente lo que no debe pasar. */
 const HAND_ROLLED =
   /metadata(\?)?\.\[?["']?pos_supervisor_pin["']?\]?\s*(===|!==|==)/;
@@ -455,6 +484,36 @@ const MUST_GATE_ROUTES: {
       "escribe el baseline manual que se SUMA al gráfico anual de ventas — un " +
       "número tipeado a mano que después se lee como si fuera facturación",
   },
+  // Sales Tax Center (2026-09-17): pagar y ajustar el sales tax mueven el
+  // payable y van a QuickBooks (SalesTaxPaymentCheckAdd / JournalEntryAdd con
+  // el vendor del DOR); anular reversa y manda TxnVoid; Settings decide contra
+  // qué ítem, vendor y banco sale la plata; reopen deshace una declaración
+  // registrada. `assertAccounting` dice QUIÉN; el PIN, que alguien lo autorizó.
+  // Callsites del POS: `lib/sales-tax/api.ts`, por header.
+  {
+    rel: "api/admin/accounting/sales-tax/payments/route.ts",
+    what: "registra un pago de sales tax (Dr payable / Cr banco) y lo manda a QuickBooks",
+  },
+  {
+    rel: "api/admin/accounting/sales-tax/payments/[id]/void/route.ts",
+    what: "anula un pago de sales tax (reversa + TxnVoid SalesTaxPaymentCheck)",
+  },
+  {
+    rel: "api/admin/accounting/sales-tax/adjustments/route.ts",
+    what: "crea un ajuste de sales tax due (allowance, penalty, interest…) que mueve el payable",
+  },
+  {
+    rel: "api/admin/accounting/sales-tax/adjustments/[id]/void/route.ts",
+    what: "anula un ajuste de sales tax (reversa + TxnVoid JournalEntry)",
+  },
+  {
+    rel: "api/admin/accounting/sales-tax/settings/route.ts",
+    what: "cambia el tax item, el vendor del DOR y el banco default de los pagos de sales tax",
+  },
+  {
+    rel: "api/admin/accounting/sales-tax/periods/[period]/reopen/route.ts",
+    what: "reabre una declaración preparada o registrada como presentada",
+  },
 ];
 for (const { rel, what } of MUST_GATE_ROUTES) {
   const p = path.join(BACKEND_SRC, rel);
@@ -475,8 +534,9 @@ for (const { rel, what } of MUST_GATE_ROUTES) {
     .split("\n")
     .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
     .join("\n");
-  // `verifySupervisorPin` no alcanza (ver 3b): el gate es el guard.
-  if (!/(guardSupervisorPin|assertWebOrderAuthorized)\s*\(/.test(bodyNoImports)) {
+  // `verifySupervisorPin` no alcanza (ver 3b): el gate es el guard — o uno de
+  // los delegados de PIN_DELEGATES, cuyo cuerpo ya se afirmó arriba.
+  if (!/(guardSupervisorPin|assertWebOrderAuthorized|withAccountingAndPin)\s*\(/.test(bodyNoImports)) {
     failures.push(
       `${rel} ${what} y no llama a guardSupervisorPin(). Como todo cajero es un ` +
         `usuario admin, sin el gate cualquier token válido ejecuta la operación ` +

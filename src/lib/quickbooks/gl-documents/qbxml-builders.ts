@@ -43,7 +43,8 @@ export type GlQbTxnType =
   | "Check"
   | "CreditCardCharge"
   | "Deposit"
-  | "JournalEntry";
+  | "JournalEntry"
+  | "SalesTaxPaymentCheck";
 
 /** `<Tipo>AddRq` / `<Tipo>AddRs` / `<Tipo>Ret` — derivados del tipo, nunca tipeados aparte. */
 export const glQbRequestTag = (type: GlQbTxnType): string => `${type}AddRq`;
@@ -311,4 +312,57 @@ export function buildJournalEntryAddQbxml(input: JournalEntryAddInput): string {
   return qbxmlEnvelope(
     `<JournalEntryAddRq><JournalEntryAdd>${body}</JournalEntryAdd></JournalEntryAddRq>`
   );
+}
+
+// ── SalesTaxPaymentCheck ────────────────────────────────────────────────────
+
+export interface SalesTaxPaymentLineInput {
+  /** ListID del ItemSalesTax. Ausente = línea de AJUSTE (QB la aplica contra el ajuste pendiente del vendor). */
+  itemSalesTaxListId?: string | null;
+  /** Con signo: la línea del tax item es positiva; un allowance aplicado es negativo. */
+  amountCents: bigint | number;
+}
+
+export interface SalesTaxPaymentCheckAddInput {
+  payeeListId: string;
+  txnDate: string;
+  bankAccountListId: string;
+  refNumber?: string | null;
+  memo?: string | null;
+  lines: SalesTaxPaymentLineInput[];
+}
+
+/**
+ * SalesTaxPaymentCheckAdd (qbXML 9.0+): PayeeEntityRef → TxnDate → BankAccountRef →
+ * (IsToBePrinted | RefNumber) → Memo → SalesTaxPaymentCheckLineAdd* {ItemSalesTaxRef? → Amount}.
+ * Forma medida en producción (readback de 1B44DA-1768504629, 09/17/2026): línea 1 con
+ * ItemSalesTaxRef "Sale Tax 7%" por el bruto, línea 2 SIN item por −30.00 (el ajuste
+ * aplicado); el Amount del cheque es el neto. Es el write correcto — un CheckAdd
+ * contra Sales Tax Payable deja la deuda viva en la ventana Pay Sales Tax.
+ */
+export function buildSalesTaxPaymentCheckAddQbxml(input: SalesTaxPaymentCheckAddInput): string {
+  const rq = "SalesTaxPaymentCheckAddRq";
+  if (!input.payeeListId) throw new Error(`${rq} requires the PayeeEntityRef ListID (the tax vendor)`);
+  if (!input.bankAccountListId) throw new Error(`${rq} requires the BankAccountRef ListID`);
+  assertDate(input.txnDate, rq);
+  if (input.lines.length === 0) throw new Error(`${rq} requires at least one SalesTaxPaymentCheckLineAdd`);
+  const first = input.lines[0]!;
+  if (!first.itemSalesTaxListId) throw new Error(`${rq}: line 1 must carry the ItemSalesTaxRef`);
+  let total = 0n;
+  const lines = input.lines.map((line, i) => {
+    const cents = toBigInt(line.amountCents);
+    if (cents === 0n) throw new Error(`${rq}: line ${i + 1} is zero`);
+    if (line.itemSalesTaxListId && cents <= 0n) throw new Error(`${rq}: tax item line ${i + 1} must be positive`);
+    total += cents;
+    return `<SalesTaxPaymentCheckLineAdd>` + ref("ItemSalesTaxRef", line.itemSalesTaxListId) + amount("Amount", cents) + `</SalesTaxPaymentCheckLineAdd>`;
+  });
+  if (total <= 0n) throw new Error(`${rq}: the check total must be positive (got ${total} cents)`);
+  const body =
+    ref("PayeeEntityRef", input.payeeListId) +
+    tag("TxnDate", input.txnDate) +
+    ref("BankAccountRef", input.bankAccountListId) +
+    (input.refNumber ? tag("RefNumber", input.refNumber) : `<IsToBePrinted>false</IsToBePrinted>`) +
+    tag("Memo", input.memo) +
+    lines.join("");
+  return qbxmlEnvelope(`<SalesTaxPaymentCheckAddRq><SalesTaxPaymentCheckAdd>${body}</SalesTaxPaymentCheckAdd></SalesTaxPaymentCheckAddRq>`);
 }

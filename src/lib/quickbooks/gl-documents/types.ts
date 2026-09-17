@@ -20,6 +20,9 @@ export const GL_DOCUMENT_KINDS = [
   "gl_transfer",
   "gl_journal_entry",
   "bank_deposit",
+  // sales-tax-center-20260917: Pay Sales Tax (SalesTaxPaymentCheck) y Adjust Sales Tax Due (JournalEntry)
+  "gl_sales_tax_payment",
+  "gl_sales_tax_adjustment",
 ] as const;
 export type GlDocumentKind = (typeof GL_DOCUMENT_KINDS)[number];
 

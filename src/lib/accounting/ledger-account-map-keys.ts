@@ -81,6 +81,18 @@ export const LEDGER_ACCOUNT_MAP_KEYS: LedgerAccountMapKeyDef[] = [
     label: "Merchant Fees (processor)",
     allowedTypes: ["Expense", "CostOfGoodsSold"],
   },
+  // sales-tax-center-20260917: contrapartidas de "Adjust Sales Tax Due". Opcionales
+  // (no están en ACCOUNT_MAP_KEYS): el ajuste elige cuenta, estas son sus defaults.
+  {
+    key: "sales_tax_adjustment_income",
+    label: "Sales Tax Adjustment (collection allowance income)",
+    allowedTypes: ["Income", "OtherIncome"],
+  },
+  {
+    key: "sales_tax_penalty_expense",
+    label: "Sales Tax Penalty / Interest (expense)",
+    allowedTypes: ["Expense", "OtherExpense"],
+  },
 ];
 
 export const LEDGER_ACCOUNT_MAP_KEY_SET = new Set(

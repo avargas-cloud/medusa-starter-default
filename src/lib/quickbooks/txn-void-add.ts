@@ -29,7 +29,9 @@ export type VoidableTxnType =
   // Card Credit" (reembolso en la tarjeta); su TxnVoidType es este.
   | "CreditCardCredit"
   | "Deposit"
-  | "JournalEntry";
+  | "JournalEntry"
+  // sales-tax-center-20260917: Pay Sales Tax del POS (gl_sales_tax_payment).
+  | "SalesTaxPaymentCheck";
 
 export function buildTxnVoidQbxml(
   txnVoidType: VoidableTxnType,

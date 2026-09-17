@@ -56,6 +56,9 @@ export interface EnqueuePurchaseQbOperationInput {
     | "gl_transfer"
     | "gl_journal_entry"
     | "bank_deposit"
+    // sales-tax-center-20260917: Pay Sales Tax / Adjust Sales Tax Due del POS.
+    | "gl_sales_tax_payment"
+    | "gl_sales_tax_adjustment"
     // qb-import-void-ui-20260915: documento importado de QuickBooks (no es tabla).
     | "qb_import";
   step: PurchaseQbStep;

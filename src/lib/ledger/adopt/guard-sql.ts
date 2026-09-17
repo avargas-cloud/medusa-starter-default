@@ -34,53 +34,59 @@
  *            asiento `document` o en su `reversal`, y `NEW.document_number` es
  *            el `doc_number` vivo del documento.
  *
+ * sales-tax-center-20260917: las mismas tres aristas valen para
+ * `sales_tax_payment` (`gl_sales_tax_payment`) y `sales_tax_adjustment`
+ * (`gl_sales_tax_adjustment`). La tabla nativa de cada kind la resuelve
+ * `bank_journal_native_table()` (lista cerrada — un kind desconocido devuelve
+ * NULL y la arista se rechaza) y el lookup del documento es UNO solo, por
+ * `EXECUTE format(%I)`, en vez de una rama copiada por tabla.
+ *
  * Sólo cuerpos de función (`CREATE OR REPLACE`), sin tocar triggers — regla
  * de la migración 20260915000000 (el DROP TRIGGER hizo deadlock en prod).
  */
 export const journalReparentGuardSql = `
+CREATE FUNCTION bank_journal_native_table(p_source_kind text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE p_source_kind
+    WHEN 'bank_check' THEN 'gl_check'
+    WHEN 'bank_transfer' THEN 'gl_transfer'
+    WHEN 'sales_tax_payment' THEN 'gl_sales_tax_payment'
+    WHEN 'sales_tax_adjustment' THEN 'gl_sales_tax_adjustment'
+    ELSE NULL END
+$$;
+
 CREATE FUNCTION bank_journal_reparent_allowed(
   p_entry_id text, p_kind text, p_old_source_kind text, p_old_source_id text,
   p_new_source_kind text, p_new_source_id text, p_new_document_number text
 ) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE doc_ok boolean := false;
+        tbl text;
 BEGIN
   -- adopt: qb_import → nativo, sólo asiento document sin reversa
-  IF p_old_source_kind = 'qb_import' AND p_new_source_kind IN ('bank_check','bank_transfer') THEN
+  tbl := bank_journal_native_table(p_new_source_kind);
+  IF p_old_source_kind = 'qb_import' AND tbl IS NOT NULL THEN
     IF p_kind <> 'document' THEN RETURN false; END IF;
     IF EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id = p_entry_id) THEN RETURN false; END IF;
-    IF p_new_source_kind = 'bank_check' THEN
-      SELECT true INTO doc_ok FROM gl_check c
-       WHERE c.id = p_new_source_id AND c.entry_id = p_entry_id AND c.qb_txn_id = p_old_source_id
-         AND c.status = 'posted' AND c.deleted_at IS NULL AND c.qb_source = 'adopted' AND c.doc_number = p_new_document_number;
-    ELSE
-      SELECT true INTO doc_ok FROM gl_transfer t
-       WHERE t.id = p_new_source_id AND t.entry_id = p_entry_id AND t.qb_txn_id = p_old_source_id
-         AND t.status = 'posted' AND t.deleted_at IS NULL AND t.qb_source = 'adopted' AND t.doc_number = p_new_document_number;
-    END IF;
+    EXECUTE format(
+      'SELECT true FROM %I d WHERE d.id = $1 AND d.entry_id = $2 AND d.qb_txn_id = $3
+         AND d.status = ''posted'' AND d.deleted_at IS NULL AND d.qb_source = ''adopted'' AND d.doc_number = $4', tbl)
+      INTO doc_ok USING p_new_source_id, p_entry_id, p_old_source_id, p_new_document_number;
     RETURN COALESCE(doc_ok, false);
   END IF;
   -- revert: nativo adoptado (ya soft-deleted) → qb_import con el mismo TxnID
-  IF p_old_source_kind IN ('bank_check','bank_transfer') AND p_new_source_kind = 'qb_import' THEN
+  tbl := bank_journal_native_table(p_old_source_kind);
+  IF tbl IS NOT NULL AND p_new_source_kind = 'qb_import' THEN
     IF p_kind <> 'document' THEN RETURN false; END IF;
-    IF p_old_source_kind = 'bank_check' THEN
-      SELECT true INTO doc_ok FROM gl_check c
-       WHERE c.id = p_old_source_id AND c.entry_id = p_entry_id AND c.qb_txn_id = p_new_source_id
-         AND c.deleted_at IS NOT NULL AND c.qb_source = 'adopted';
-    ELSE
-      SELECT true INTO doc_ok FROM gl_transfer t
-       WHERE t.id = p_old_source_id AND t.entry_id = p_entry_id AND t.qb_txn_id = p_new_source_id
-         AND t.deleted_at IS NOT NULL AND t.qb_source = 'adopted';
-    END IF;
+    EXECUTE format(
+      'SELECT true FROM %I d WHERE d.id = $1 AND d.entry_id = $2 AND d.qb_txn_id = $3
+         AND d.deleted_at IS NOT NULL AND d.qb_source = ''adopted''', tbl)
+      INTO doc_ok USING p_old_source_id, p_entry_id, p_new_source_id;
     RETURN COALESCE(doc_ok, false);
   END IF;
   -- renumber: mismo documento, número nuevo = doc_number vivo
   IF p_old_source_kind = p_new_source_kind AND p_old_source_id = p_new_source_id
-     AND p_new_source_kind IN ('bank_check','bank_transfer') AND p_kind IN ('document','reversal') THEN
-    IF p_new_source_kind = 'bank_check' THEN
-      SELECT true INTO doc_ok FROM gl_check c WHERE c.id = p_new_source_id AND c.deleted_at IS NULL AND c.doc_number = p_new_document_number;
-    ELSE
-      SELECT true INTO doc_ok FROM gl_transfer t WHERE t.id = p_new_source_id AND t.deleted_at IS NULL AND t.doc_number = p_new_document_number;
-    END IF;
+     AND tbl IS NOT NULL AND p_kind IN ('document','reversal') THEN
+    EXECUTE format('SELECT true FROM %I d WHERE d.id = $1 AND d.deleted_at IS NULL AND d.doc_number = $2', tbl)
+      INTO doc_ok USING p_new_source_id, p_new_document_number;
     RETURN COALESCE(doc_ok, false);
   END IF;
   RETURN false;

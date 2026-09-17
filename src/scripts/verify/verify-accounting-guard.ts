@@ -128,6 +128,34 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     why: "delega en lib/ledger/reports/route-common.ts (GL reports; accounts POST exige además assertOwner)",
   })),
   /**
+   * Sales Tax Center (sales-tax-center-20260917): todas las rutas pasan por
+   * `withAccounting` / `withAccountingAndPin` de `sales-tax/_lib/common.ts`
+   * (el chequeo 3 prueba que los dos llaman a assertAccounting; el PIN lo
+   * afirma verify-pin-enforcement §4b por nombre de ruta).
+   */
+  ...[
+    "accounting/sales-tax/settings/route.ts",
+    "accounting/sales-tax/periods/route.ts",
+    "accounting/sales-tax/periods/[period]/route.ts",
+    "accounting/sales-tax/periods/[period]/prepare/route.ts",
+    "accounting/sales-tax/periods/[period]/file/route.ts",
+    "accounting/sales-tax/payments/route.ts",
+    "accounting/sales-tax/adjustments/route.ts",
+  ].map((file) => ({
+    file,
+    call: "withAccounting(",
+    why: "delega en api/admin/accounting/sales-tax/_lib/common.ts",
+  })),
+  ...[
+    "accounting/sales-tax/periods/[period]/reopen/route.ts",
+    "accounting/sales-tax/payments/[id]/void/route.ts",
+    "accounting/sales-tax/adjustments/[id]/void/route.ts",
+  ].map((file) => ({
+    file,
+    call: "withAccountingAndPin(",
+    why: "delega en api/admin/accounting/sales-tax/_lib/common.ts (Accounting + PIN)",
+  })),
+  /**
    * E1 (gl-documents): las rutas de documentos del GL. Si todavía no existen
    * en este árbol el chequeo 1 lo dice ("NO EXISTE") — una lista que apunta a
    * la nada aprueba en vacío, así que se declaran por NOMBRE desde ya.
@@ -287,6 +315,10 @@ const DELEGATES: Array<{ file: string; calls: string[] }> = [
   {
     file: "src/lib/calendar/recurring-http.ts",
     calls: ["assertAccounting("],
+  },
+  {
+    file: "src/api/admin/accounting/sales-tax/_lib/common.ts",
+    calls: ["assertAccounting(", "guardSupervisorPin("],
   },
 ];
 let delegatesOk = 0;

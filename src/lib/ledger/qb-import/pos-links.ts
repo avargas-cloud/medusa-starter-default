@@ -77,6 +77,8 @@ const KNOWN_TXN_ID_SQL = `
     UNION SELECT qb_txn_id FROM gl_transfer
     UNION SELECT qb_txn_id FROM gl_journal_entry
     UNION SELECT qb_txn_id FROM bank_deposit
+    UNION SELECT qb_txn_id FROM gl_sales_tax_payment
+    UNION SELECT qb_txn_id FROM gl_sales_tax_adjustment
   ) u WHERE t IS NOT NULL AND t <> ''`;
 
 /** TxnIDs de QuickBooks enlazados a documentos del POS que el libro postea. */
@@ -96,7 +98,9 @@ export async function loadPosKnownTxnIds(client: PoolClient): Promise<ReadonlySe
 export async function loadPosPostedTxnIds(client: PoolClient): Promise<ReadonlySet<string>> {
   const { rows } = await client.query<{ t: string }>(
     `SELECT qb_txn_id AS t FROM gl_check WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL
-     UNION SELECT qb_txn_id FROM gl_transfer WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL`
+     UNION SELECT qb_txn_id FROM gl_transfer WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL
+     UNION SELECT qb_txn_id FROM gl_sales_tax_payment WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL
+     UNION SELECT qb_txn_id FROM gl_sales_tax_adjustment WHERE qb_txn_id IS NOT NULL AND entry_id IS NOT NULL AND deleted_at IS NULL`
   );
   return new Set(rows.map((r) => r.t));
 }

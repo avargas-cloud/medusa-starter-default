@@ -724,6 +724,15 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
             LEFT JOIN bank_account a ON a.id = d.account_id
             LEFT JOIN qb_account qa ON qa.qb_list_id = d.account_list_id AND qa.deleted_at IS NULL
            WHERE d.deleted_at IS NULL
+          UNION ALL
+          -- sales-tax-center-20260917: Pay Sales Tax (SalesTaxPaymentCheck) y Adjust Sales Tax Due (JournalEntry)
+          SELECT p.id, p.doc_number, p.qb_txn_id,
+                 'Sales tax payment ' || p.period || ' - ' || p.vendor_name || ' · $' || (p.total_cents::numeric / 100)::text
+            FROM gl_sales_tax_payment p WHERE p.deleted_at IS NULL
+          UNION ALL
+          SELECT a.id, a.doc_number, a.qb_txn_id,
+                 'Sales tax adjustment ' || a.period || ' - ' || a.type || ' · $' || (a.amount_cents::numeric / 100)::text
+            FROM gl_sales_tax_adjustment a WHERE a.deleted_at IS NULL
         ) doc ON doc.id = qop.reference_id
         WHERE qop.step IN ('gl_document_add', 'gl_document_void')
 
