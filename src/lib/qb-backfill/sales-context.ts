@@ -18,6 +18,7 @@ import { avgCostDollars } from "../cost/cost-sql";
 import type { EnsureLog } from "./ensure";
 import type { ItemIndex, QueryableDb } from "./resolve";
 import type { QbRef } from "./types";
+import { SALES_SQL, WRITE, normalizePipelineStatus } from "../quickbooks/pipeline-status";
 
 export function makeId(prefix: string): string {
   return `${prefix}_${ulid().toLowerCase()}`;
@@ -136,7 +137,11 @@ export interface PipelineSeed {
   referenceId: string | null;
   referenceType: string | null;
   step: string;
-  status: "confirmed" | "skipped";
+  // Kept as `string` (not the canonical union) on purpose: some qb-backfill
+  // callers outside this file still seed with the legacy literal — reading
+  // BOTH vocabularies is the EXPAND-phase contract, so this doesn't spell a
+  // literal here and lets `normalizePipelineStatus` below sort it out.
+  status: string;
   qbTxnId: string | null;
   qbRefNumber: string | null;
   medusaRefNumber: string | null;
@@ -146,12 +151,16 @@ export interface PipelineSeed {
 
 /** Fila terminal de `qb_order_pipeline`: el GL importer la reconoce por `qb_txn_id` y `QB_CREATE_STEPS` no la vuelve a encolar. */
 export async function seedPipelineRow(db: QueryableDb, runId: string, seed: PipelineSeed): Promise<void> {
+  // Accepts either vocabulary in `seed.status` (see the field comment above);
+  // normalize once so `confirmed_at` is stamped for a canonical `synced` row
+  // exactly as it was for the legacy `confirmed` literal.
+  const isConfirmedNow = normalizePipelineStatus("sales", seed.status) === WRITE.sales.synced;
   await db.query(
     `INSERT INTO qb_order_pipeline
        (order_id, reference_id, reference_type, step, status, qb_txn_id, qb_ref_number,
         medusa_ref_number, payload, error, submitted_at, confirmed_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10,
-             CASE WHEN $5 = 'confirmed' THEN now() ELSE NULL END, now())`,
+             CASE WHEN $11 THEN now() ELSE NULL END, now())`,
     [
       seed.orderId,
       seed.referenceId,
@@ -163,6 +172,7 @@ export async function seedPipelineRow(db: QueryableDb, runId: string, seed: Pipe
       seed.medusaRefNumber,
       JSON.stringify({ backfilled: true, run_id: runId, ...seed.payload }),
       seed.error ?? null,
+      isConfirmedNow,
     ]
   );
 }
@@ -253,21 +263,21 @@ export async function loadKnownSalesTxnIds(db: QueryableDb): Promise<KnownSalesT
     `SELECT metadata->>'qb_txn_id' AS t FROM pos_invoice WHERE deleted_at IS NULL AND coalesce(metadata->>'is_sales_receipt','false') <> 'true'
      UNION SELECT metadata->>'qb_invoice_txn_id' FROM "order" WHERE deleted_at IS NULL
      UNION SELECT e->>'txn_id' FROM "order" o, jsonb_array_elements(CASE WHEN jsonb_typeof(o.metadata->'qb_invoices') = 'array' THEN o.metadata->'qb_invoices' ELSE '[]'::jsonb END) e WHERE o.deleted_at IS NULL
-     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'invoice' AND status IN ('confirmed','fixed')`
+     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'invoice' AND status IN (${SALES_SQL.done})`
   );
   const sr = await db.query(
     `SELECT metadata->>'qb_txn_id' AS t FROM pos_invoice WHERE deleted_at IS NULL AND metadata->>'is_sales_receipt' = 'true'
      UNION SELECT metadata->>'qb_sales_receipt_txn_id' FROM "order" WHERE deleted_at IS NULL
-     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'sales_receipt' AND status IN ('confirmed','fixed')`
+     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'sales_receipt' AND status IN (${SALES_SQL.done})`
   );
   const pay = await db.query(
     `SELECT metadata->>'qb_txn_id' AS t FROM customer_payment WHERE deleted_at IS NULL
-     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'payment' AND status IN ('confirmed','fixed')
+     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'payment' AND status IN (${SALES_SQL.done})
      UNION SELECT l.qb_txn_id FROM qb_legacy_payment l JOIN customer_payment cp ON cp.id = l.applied_payment_id AND cp.deleted_at IS NULL`
   );
   const cm = await db.query(
     `SELECT qb_txn_id AS t FROM pos_credit_memo WHERE deleted_at IS NULL
-     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'credit_memo' AND status IN ('confirmed','fixed')`
+     UNION SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'credit_memo' AND status IN (${SALES_SQL.done})`
   );
   return { invoices: toSet(inv.rows), sales_receipts: toSet(sr.rows), receive_payments: toSet(pay.rows), credit_memos: toSet(cm.rows) };
 }

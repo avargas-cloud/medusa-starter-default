@@ -18,6 +18,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as fs from "fs";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
@@ -64,7 +65,7 @@ function testStaticChecks() {
     "qb-pos-sync does NOT call handlePosPaymentCreated"
   );
   assert(
-    /SET status = 'pending', error = NULL/.test(ps),
+    /SET status = '\$\{WRITE\.sales\.dispatchable\}', error = NULL/.test(ps),
     "qb-pos-sync resets row to 'pending' for retry"
   );
 
@@ -188,7 +189,7 @@ async function testEnqueueAndPickup(client: Client) {
   const dispatch = await client.query(`
     SELECT id, step FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'payment', 'apply_payment')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = ANY($1::uuid[])
   `, [TEST_ROW_IDS]);
   assert(

@@ -10,6 +10,7 @@ jest.mock("../../api/utils/db-pool", () => ({
   getDbPool: () => ({ query: (...args: unknown[]) => query(...args) }),
 }));
 
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 import {
   PURCHASE_EXISTENCE_MAX_ATTEMPTS,
   schedulePurchaseAddExistenceCheck,
@@ -39,8 +40,8 @@ describe("schedulePurchaseAddExistenceCheck — tope y contrato de retorno", () 
 
     expect(scheduled).toBe(true);
     const [sql, params] = query.mock.calls[0];
-    expect(String(sql)).toMatch(/status\s*=\s*'pending'/);
-    expect(String(sql)).toMatch(/status = 'submitted'/);
+    expect(String(sql)).toMatch(new RegExp(`status\\s*=\\s*'${WRITE.sales.dispatchable}'`));
+    expect(String(sql)).toMatch(new RegExp(`status IN \\(${SALES_SQL.submitted}\\)`));
     // El contador arranca en 1, no en 0: si arrancara en 0 el tope permitiría
     // un intento de más y el bug volvería con otro número.
     expect(params).toContain(1);

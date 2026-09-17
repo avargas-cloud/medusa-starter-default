@@ -16,6 +16,7 @@ import { buildOrderCostSnapshot } from "../../../../../lib/finance/build-order-c
 import { upsertOrderOnlyApplication } from "../../../../../lib/finance/upsert-order-only-application";
 import { USA_LOC } from "../../../../../lib/locations";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
+import { SALES_SQL, WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 import {
   replaceOrderTaxLines,
   representedDiscountDollars,
@@ -405,17 +406,17 @@ export async function POST(
           const pool = getDbPool();
           await pool.query(
             `UPDATE qb_order_pipeline
-                         SET status = 'skipped',
+                         SET status = '${WRITE.sales.skipped}',
                              error  = 'Converted to Sales Order — Estimate not needed'
                          WHERE order_id = $1
                            AND step     = 'estimate'
-                           AND status IN ('waiting', 'pending')`,
+                           AND status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable})`,
             [id]
           );
           await writePipelineRow({
             orderId: id,
             step: "sales_order",
-            status: "waiting",
+            status: WRITE.sales.blocked,
             medusaRefNumber: documentNumber,
           });
           console.log(
@@ -486,7 +487,7 @@ export async function POST(
       };
       const idRes = await depConn.raw(
         `SELECT id FROM customer_payment
-         WHERE type = 'payment' AND deleted_at IS NULL AND status <> 'voided'
+         WHERE type = 'payment' AND deleted_at IS NULL AND status <> 'voided' -- entity-status
            AND (locked_order_id = ? OR metadata->>'order_id' = ?)`,
         [id, id]
       );
@@ -498,7 +499,7 @@ export async function POST(
           )
         : [];
       const active = (deposits ?? []).filter(
-        (d: any) => d.status !== "voided"
+        (d: any) => d.status !== "voided" // entity-status
       );
       if (active.length > 0) {
         const pgConn = req.scope.resolve("__pg_connection__") as Parameters<

@@ -42,6 +42,7 @@ import {
 import { unbindReceiptFromBills } from "../../../lib/purchase-orders/unbind-receipt-from-bills";
 
 import type { ReceiptReversedDelta } from "./contra-apply-receipt-stock-step";
+import { WRITE, normalizePipelineStatus } from "../../../lib/quickbooks/pipeline-status";
 
 export interface PersistDeleteReceiptStepInput {
   receipt_id: string;
@@ -208,7 +209,7 @@ export const persistDeleteReceiptStep = createStep(
       const po = (await service.retrievePurchaseOrder(
         input.po_id
       )) as unknown as {
-        status: "submitted" | "partially_received" | "received";
+        status: "submitted" | "partially_received" | "received"; // entity-status
         total_units_received: number;
       };
       newPoStatus = po.status;
@@ -295,10 +296,10 @@ export const persistDeleteReceiptStep = createStep(
     for (const p of pipelineRows) {
       if (!p.qb_list_id) continue; // shouldn't happen since isQbSynced=true
       hasUsablePipelineRow = true;
-      if (p.void_status === "voided") continue; // already QB-deleted
+      if (normalizePipelineStatus("purchase", p.void_status) === WRITE.purchase.synced) continue; // already QB-deleted
       pipelineUpdates.push({
         id: p.id,
-        void_status: "waiting",
+        void_status: WRITE.purchase.dispatchable,
         void_retries: 0,
         void_last_error: null,
         void_next_retry_at: null,
@@ -319,7 +320,7 @@ export const persistDeleteReceiptStep = createStep(
         {
           purchase_order_receipt_id: input.receipt_id,
           purchase_order_id: input.po_id,
-          status: "synced",
+          status: WRITE.purchase.synced,
           qb_list_id: input.qb_item_receipt_list_id,
           synced_at: new Date(),
           payload: {
@@ -327,7 +328,7 @@ export const persistDeleteReceiptStep = createStep(
             seeded_for: "delete-receipt",
             seeded_at: new Date().toISOString(),
           },
-          void_status: "waiting",
+          void_status: WRITE.purchase.dispatchable,
           void_retries: 0,
         },
       ]);

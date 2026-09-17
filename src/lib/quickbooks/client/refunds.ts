@@ -52,7 +52,7 @@ export const qbRefunds = {
     const checkResult = await pollOperationResult(checkData.operation_id);
 
     if (
-      (checkResult as any).status === "failed" ||
+      (checkResult as any).status === "failed" || // bridge-status
       (!(checkResult as any).result?.checkTxnId &&
         !(checkResult as any).result?.CheckRet?.TxnID)
     ) {
@@ -97,7 +97,7 @@ export const qbRefunds = {
     }
 
     const rpResult = await pollOperationResult(rpData.operation_id);
-    if ((rpResult as any).status === "failed") {
+    if ((rpResult as any).status === "failed") { // bridge-status
       throw new Error(
         `ReceivePayment sync failed in QuickBooks: ${(rpResult as any).error}`
       );

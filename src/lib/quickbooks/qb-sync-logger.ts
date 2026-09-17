@@ -27,6 +27,7 @@
 import * as os from "os";
 
 import { Client } from "pg";
+import { WRITE } from "./pipeline-status";
 
 /** Identifies where this code is running: Railway service name or local hostname */
 const SERVER_LABEL: string = process.env.RAILWAY_SERVICE_NAME
@@ -160,7 +161,7 @@ export const QbSyncLogger = {
       await db.query(
         `
                 UPDATE qb_sync_log SET
-                    status         = 'completed',
+                    status         = '${WRITE.log.synced}',
                     completed_at   = NOW(),
                     duration_ms    = EXTRACT(EPOCH FROM (NOW() - initiated_at)) * 1000,
                     message        = COALESCE($2, message),
@@ -198,7 +199,7 @@ export const QbSyncLogger = {
       await db.query(
         `
                 UPDATE qb_sync_log SET
-                    status       = 'failed',
+                    status       = '${WRITE.log.failed}',
                     completed_at = NOW(),
                     duration_ms  = EXTRACT(EPOCH FROM (NOW() - initiated_at)) * 1000,
                     error        = $2,
@@ -232,7 +233,7 @@ export const QbSyncLogger = {
       await db.query(
         `
                 UPDATE qb_sync_log SET
-                    status       = 'skipped',
+                    status       = 'skipped',  -- canonical-literal
                     completed_at = NOW(),
                     duration_ms  = EXTRACT(EPOCH FROM (NOW() - initiated_at)) * 1000,
                     message      = $2

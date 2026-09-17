@@ -33,6 +33,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-cm-damage-adjustment-sandbox.ts
  */
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import {
   syncCreditMemoDamageAdjustment,
@@ -365,14 +366,14 @@ async function main(): Promise<void> {
     await setLines(client, [{ variant: A, qty: 2, damaged: 0 }]);
     await syncCreditMemoDamageAdjustment({ creditMemoId: CM_ID, reason: "damaged_edit", logger });
     let vrows = await rowsFor(client, "void_cm_damage_adjustment");
-    assert(vrows.length === 1 && vrows[0].status === "pending", "el void quedó encolado");
+    assert(vrows.length === 1 && vrows[0].status === WRITE.sales.dispatchable, "el void quedó encolado");
 
     await setLines(client, [{ variant: A, qty: 2, damaged: 1 }]);
     out = await syncCreditMemoDamageAdjustment({ creditMemoId: CM_ID, reason: "damaged_edit", logger });
     assert(out.action === "mod", "se edita el MISMO ajuste, no se crea otro", out.action);
     vrows = await rowsFor(client, "void_cm_damage_adjustment");
     assert(
-      vrows[0].status === "skipped",
+      vrows[0].status === WRITE.sales.skipped,
       "el void sin despachar se CANCELA — no se voidea un documento para recrearlo igual",
       vrows[0].status
     );

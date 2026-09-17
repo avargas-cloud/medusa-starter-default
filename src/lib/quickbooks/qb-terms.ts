@@ -148,13 +148,13 @@ export async function fetchQbTermsMap(
       throw new Error(`Terms query op ${operationId} expired (HTTP 404)`);
     }
     const status = (polled.data as Record<string, any>)?.operation?.status;
-    if (status === "failed") {
+    if (status === "failed") { // bridge-status
       throw new Error(
         (polled.data as Record<string, any>)?.operation?.error ??
           "Terms query failed on the bridge"
       );
     }
-    if (status === "completed") {
+    if (status === "completed") { // bridge-status
       return parseQbTermsMap(polled.data);
     }
   }

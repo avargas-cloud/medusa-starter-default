@@ -69,6 +69,7 @@ import {
   type CostTruncationLine,
 } from "./qb-vendor-bill-cost-truncation-guard";
 import { resolveVendorIdentityForBill } from "./vendor-bill-vendor-identity";
+import { PURCHASE_SQL, WRITE } from "../quickbooks/pipeline-status";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 
 export type EnqueueKnex = {
@@ -621,7 +622,7 @@ export async function enqueueQbVendorBillAdd(
   // (the poller's object-state gate owns re-adds via rebuild_generation).
   const updateResult = await knex.raw(
     `UPDATE qb_vendor_bill_pipeline
-        SET status = 'waiting',
+        SET status = '${WRITE.purchase.dispatchable}',
             intent = 'add',
             payload = ?::jsonb,
             qb_operation_id = NULL,
@@ -631,7 +632,7 @@ export async function enqueueQbVendorBillAdd(
             updated_at = NOW()
       WHERE vendor_bill_id = ?
         AND deleted_at IS NULL
-        AND status IN ('waiting', 'error', 'failed_permanent')
+        AND status IN (${PURCHASE_SQL.open}, ${PURCHASE_SQL.failed})
       RETURNING id`,
     [JSON.stringify(payload), vendorBillId]
   );

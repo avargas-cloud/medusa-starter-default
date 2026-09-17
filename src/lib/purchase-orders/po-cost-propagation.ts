@@ -35,10 +35,11 @@ import {
   type PurchaseDependencyKnex,
 } from "./qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { WRITE } from "../quickbooks/pipeline-status";
 
 /** PO lifecycle states whose QuickBooks document still accepts a Mod. */
 const QB_MODDABLE_STATUSES = new Set([
-  "submitted",
+  "submitted", // entity-status (purchase_order.status)
   "partially_received",
   "received",
 ]);
@@ -288,7 +289,7 @@ export async function propagateUnitCostsToPurchaseOrder(
   // re-INSERTing violates its uniqueness).
   const resetResult = await db.raw(
     `UPDATE qb_purchase_order_pipeline
-        SET status          = 'waiting',
+        SET status          = '${WRITE.purchase.dispatchable}',
             qb_operation_id = NULL,
             payload         = ?,
             retries         = 0,

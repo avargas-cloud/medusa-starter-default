@@ -20,6 +20,7 @@ import { INVENTORY_COUNT_MODULE } from "../modules/inventory-count";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
+import { WRITE, pipelineStatusIs } from "../lib/quickbooks/pipeline-status";
 /**
  * QB Inventory Adjustment poller.
  *
@@ -95,7 +96,7 @@ interface BridgeEnqueueResponse {
 
 interface BridgeStatusResponse {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed" | "expired";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired"; // bridge-status
     result?: any;
     error?: string;
     txnId?: string;
@@ -264,9 +265,9 @@ export default async function qbInventoryAdjustmentPoller(
   });
 
   const isAddEligible = (r: PipelineRow): boolean => {
-    if (r.status === "waiting") return true;
-    if (r.status === "processing") return true;
-    if (r.status === "error" && (r.retries ?? 0) < MAX_RETRIES) {
+    if (pipelineStatusIs("purchase", r, "waiting")) return true;
+    if (pipelineStatusIs("purchase", r, "processing")) return true;
+    if (pipelineStatusIs("purchase", r, "error") && (r.retries ?? 0) < MAX_RETRIES) {
       const next = r.next_retry_at
         ? new Date(r.next_retry_at).toISOString()
         : null;
@@ -276,9 +277,10 @@ export default async function qbInventoryAdjustmentPoller(
   };
 
   const isVoidEligible = (r: PipelineRow): boolean => {
-    if (r.void_status === "waiting") return true;
-    if (r.void_status === "processing") return true;
-    if (r.void_status === "error" && (r.void_retries ?? 0) < MAX_RETRIES) {
+    const voidRow = { status: r.void_status };
+    if (pipelineStatusIs("purchase", voidRow, "waiting")) return true;
+    if (pipelineStatusIs("purchase", voidRow, "processing")) return true;
+    if (pipelineStatusIs("purchase", voidRow, "error") && (r.void_retries ?? 0) < MAX_RETRIES) {
       const next = r.void_next_retry_at
         ? new Date(r.void_next_retry_at).toISOString()
         : null;
@@ -304,14 +306,14 @@ export default async function qbInventoryAdjustmentPoller(
   for (const row of eligible) {
     try {
       // ─── POLL PHASE ────────────────────────────────────────────────────────
-      if (row.qb_operation_id && row.status === "processing") {
+      if (row.qb_operation_id && pipelineStatusIs("purchase", row, "processing")) {
         const data = await fetchBridgeStatus(row.qb_operation_id);
         const status = data.operation?.status;
 
         if (status === "expired") {
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
             id: row.id,
-            status: "error",
+            status: WRITE.purchase.error,
             last_error: data.operation?.error ?? "Bridge operation expired",
             qb_operation_id: null,
             next_retry_at: new Date(Date.now() + 2 * 60_000),
@@ -320,13 +322,13 @@ export default async function qbInventoryAdjustmentPoller(
           continue;
         }
 
-        if (status === "completed") {
+        if (status === "completed") { // bridge-status
           const txnId = extractTxnId(data);
           const txnNumber = extractTxnNumber(data);
           if (!txnId) {
             await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
               id: row.id,
-              status: "error",
+              status: WRITE.purchase.error,
               last_error: "Completed but no TxnID in response",
               retries: (row.retries ?? 0) + 1,
               next_retry_at: nextBackoffDate((row.retries ?? 0) + 1),
@@ -336,7 +338,7 @@ export default async function qbInventoryAdjustmentPoller(
           }
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
             id: row.id,
-            status: "synced",
+            status: WRITE.purchase.synced,
             qb_list_id: txnId,
             qb_txn_number: txnNumber,
             synced_at: new Date(),
@@ -349,10 +351,10 @@ export default async function qbInventoryAdjustmentPoller(
           continue;
         }
 
-        if (status === "failed") {
+        if (status === "failed") { // bridge-status
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
             id: row.id,
-            status: "error",
+            status: WRITE.purchase.error,
             last_error: data.operation?.error ?? "Bridge returned failed",
             retries: (row.retries ?? 0) + 1,
             next_retry_at: nextBackoffDate((row.retries ?? 0) + 1),
@@ -374,7 +376,7 @@ export default async function qbInventoryAdjustmentPoller(
       ) {
         await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
           id: row.id,
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: "Pipeline payload missing or empty",
         });
         errored++;
@@ -392,7 +394,7 @@ export default async function qbInventoryAdjustmentPoller(
       const { data: itemRows } = await query.graph({
         entity: "qb_item_pipeline",
         fields: ["sku", "qb_list_id", "status"],
-        filters: { sku: skus, status: "synced" } as any,
+        filters: { sku: skus, status: WRITE.purchase.synced } as any,
         pagination: { skip: 0, take: skus.length },
       });
       for (const r of itemRows as Array<{
@@ -431,7 +433,7 @@ export default async function qbInventoryAdjustmentPoller(
           .join(", ");
         await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
           id: row.id,
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: `${missing.length} item(s) have no QB ListID (neither in qb_item_pipeline nor variant.metadata.quickbooks_id): ${skuList}`,
           retries: (row.retries ?? 0) + 1,
           next_retry_at: nextBackoffDate((row.retries ?? 0) + 1),
@@ -454,7 +456,7 @@ export default async function qbInventoryAdjustmentPoller(
 
       await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
         id: row.id,
-        status: "processing",
+        status: WRITE.purchase.processing,
         qb_operation_id: enqueued.operationId,
         last_error: null,
       });
@@ -462,7 +464,7 @@ export default async function qbInventoryAdjustmentPoller(
     } catch (err: any) {
       await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
         id: row.id,
-        status: "error",
+        status: WRITE.purchase.error,
         last_error: err.message,
         retries: (row.retries ?? 0) + 1,
         next_retry_at: nextBackoffDate((row.retries ?? 0) + 1),
@@ -476,14 +478,15 @@ export default async function qbInventoryAdjustmentPoller(
   for (const row of eligibleVoid) {
     try {
       // Void POLL phase
-      if (row.void_operation_id && row.void_status === "processing") {
+      const rowVoidStatus = { status: row.void_status };
+      if (row.void_operation_id && pipelineStatusIs("purchase", rowVoidStatus, "processing")) {
         const data = await fetchBridgeStatus(row.void_operation_id);
         const status = data.operation?.status;
 
         if (status === "expired") {
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
             id: row.id,
-            void_status: "error",
+            void_status: WRITE.purchase.error,
             void_last_error: data.operation?.error ?? "Bridge operation expired",
             void_operation_id: null,
             void_next_retry_at: new Date(Date.now() + 2 * 60_000),
@@ -492,19 +495,19 @@ export default async function qbInventoryAdjustmentPoller(
           continue;
         }
 
-        if (status === "completed") {
+        if (status === "completed") { // bridge-status
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
             id: row.id,
-            void_status: "voided",
+            void_status: WRITE.purchase.synced,
             void_synced_at: new Date(),
           });
           voidSynced++;
           continue;
         }
-        if (status === "failed") {
+        if (status === "failed") { // bridge-status
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
             id: row.id,
-            void_status: "error",
+            void_status: WRITE.purchase.error,
             void_last_error: data.operation?.error ?? "Bridge returned failed",
             void_retries: (row.void_retries ?? 0) + 1,
             void_next_retry_at: nextBackoffDate((row.void_retries ?? 0) + 1),
@@ -520,7 +523,7 @@ export default async function qbInventoryAdjustmentPoller(
       if (!row.qb_list_id) {
         await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
           id: row.id,
-          void_status: "error",
+          void_status: WRITE.purchase.error,
           void_last_error:
             "Cannot void: no qb_list_id (original adjustment never reached QB)",
           void_retries: (row.void_retries ?? 0) + 1,
@@ -542,7 +545,7 @@ export default async function qbInventoryAdjustmentPoller(
 
       await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
         id: row.id,
-        void_status: "processing",
+        void_status: WRITE.purchase.processing,
         void_operation_id: enqueued.operationId,
         void_last_error: null,
       });
@@ -551,7 +554,7 @@ export default async function qbInventoryAdjustmentPoller(
       const message = err instanceof Error ? err.message : "unknown error";
       await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
         id: row.id,
-        void_status: "error",
+        void_status: WRITE.purchase.error,
         void_last_error: message,
         void_retries: (row.void_retries ?? 0) + 1,
         void_next_retry_at: nextBackoffDate((row.void_retries ?? 0) + 1),

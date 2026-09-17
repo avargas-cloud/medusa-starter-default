@@ -10,6 +10,7 @@
  *       ./node_modules/.bin/medusa exec ./src/scripts/verify/verify-terminal-payment-round2.ts
  */
 import { FINANCE_MODULE } from "../../modules/finance";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { handlePosPaymentApplied } from "../../lib/quickbooks/handlers/handle-pos-payment-applied";
 
 const BASE = "http://localhost:9099";
@@ -50,7 +51,7 @@ export default async function script({ container }: { container: any }) {
     `SELECT o.id, o.display_id, o.customer_id,
             EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id) AS has_inv
        FROM "order" o
-      WHERE o.status = 'pending' AND o.deleted_at IS NULL AND o.customer_id IS NOT NULL
+      WHERE o.status = 'pending' AND o.deleted_at IS NULL AND o.customer_id IS NOT NULL -- entity-status
       ORDER BY EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id) ASC,
                o.created_at DESC
       LIMIT 10`
@@ -309,7 +310,7 @@ export default async function script({ container }: { container: any }) {
       [convertApp.id]
     );
     check(
-      ["failed", "submitted", "confirmed"].includes(rows[0]?.status),
+      ([WRITE.sales.failed, WRITE.sales.submitted, WRITE.sales.synced] as string[]).includes(rows[0]?.status),
       `handler reached bridge boundary (row status=${rows[0]?.status})`,
       rows[0]
     );
@@ -330,7 +331,7 @@ export default async function script({ container }: { container: any }) {
       `SELECT status, error FROM qb_order_pipeline WHERE step='apply_payment' AND reference_id = ?`,
       [convertApp.id]
     );
-    check(r2[0]?.status === "skipped", `row skipped (got ${r2[0]?.status})`, r2[0]);
+    check(r2[0]?.status === WRITE.sales.skipped, `row skipped (got ${r2[0]?.status})`, r2[0]);
   }
 
   // ═══ N. UPSERT: second link (different intent) INCREMENTS, never duplicates ═══

@@ -20,6 +20,7 @@ import { recordPosActivity } from "../../../../../lib/pos/order-activity";
 import type { KnexRawConnection } from "../../../../../lib/pos/order-activity";
 import { applyOrderDiscount } from "../../../../../lib/order-discount/apply-order-discount";
 import { resolveCposPromotion } from "../../../../../lib/order-discount/resolve-cpos-promotion";
+import { SALES_SQL, WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 
 /**
  * POST /admin/orders/:id/post-edit-sync
@@ -367,7 +368,7 @@ export async function POST(
              AND ((o.metadata->'qb_estimate'->>'txn_id') IS NULL)
              AND EXISTS (
                SELECT 1 FROM pos_invoice pi
-               WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+               WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL -- entity-status
              )
            ) AS needs_so_repair
            FROM "order" o WHERE o.id = $1`,
@@ -434,14 +435,14 @@ export async function POST(
       if (invoiceTxnId) {
         const { rows: activeRows } = await getDbPool().query(
           `SELECT id FROM qb_order_pipeline
-           WHERE order_id = $1 AND step IN ('invoice', 'sales_receipt') AND status = 'confirmed'
+           WHERE order_id = $1 AND step IN ('invoice', 'sales_receipt') AND status IN (${SALES_SQL.synced})
            AND NOT EXISTS (
              SELECT 1 FROM qb_order_pipeline v
-             WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status = 'confirmed'
+             WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
            )
            AND NOT EXISTS (
              SELECT 1 FROM pos_invoice pi
-             WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+             WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL -- entity-status
            )
            LIMIT 1`,
           [id]
@@ -460,12 +461,12 @@ export async function POST(
         `SELECT 1 FROM qb_order_pipeline
          WHERE order_id = $1 AND step = 'sales_order'
            AND (
-             status = 'waiting'
+             status IN (${SALES_SQL.blocked})
              OR (
-               status = 'skipped'
+               status IN (${SALES_SQL.skipped})
                AND EXISTS (
                  SELECT 1 FROM pos_invoice pi
-                 WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+                 WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL -- entity-status
                )
              )
            )
@@ -502,7 +503,7 @@ export async function POST(
           await writePipelineRow({
             orderId: id,
             step: isEstimateOnly ? "estimate" : "sales_order",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             // intent:"mod" — the QB doc already exists (txnId). Without this the
             // QB_CREATE_STEPS guard leaves the confirmed row untouched and the
             // consolidator never runs the MOD, silently dropping the edit
@@ -643,7 +644,7 @@ export async function POST(
                   await writePipelineRow({
                     orderId: id,
                     step: "sales_order",
-                    status: "pending",
+                    status: WRITE.sales.dispatchable,
                     medusaRefNumber: friendlyRef,
                   });
                 } catch (pErr: any) {}
@@ -659,7 +660,7 @@ export async function POST(
                       await writePipelineRow({
                         orderId: id,
                         step: "sales_order",
-                        status: "pending",
+                        status: WRITE.sales.dispatchable,
                         payload: {
                           customerId: qbListId,
                           date: getBusinessDateString(),
@@ -682,7 +683,7 @@ export async function POST(
                         await writePipelineRow({
                           orderId: id,
                           step: "sales_order",
-                          status: "failed",
+                          status: WRITE.sales.failed,
                           error: e.message,
                         });
                       } catch (err) {}

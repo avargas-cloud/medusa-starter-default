@@ -7,7 +7,7 @@ import {
 /** Shape a completed bridge poll returns. */
 const polled = (termsQueryRs: Record<string, unknown>) => ({
   operation: {
-    status: "completed",
+    status: "completed", // bridge-status
     result: { QBXML: { QBXMLMsgsRs: { TermsQueryRs: termsQueryRs } } },
   },
 });
@@ -101,7 +101,7 @@ describe("qb-terms", () => {
 
     it("returns an empty map instead of throwing on an unexpected payload", () => {
       expect(parseQbTermsMap(undefined)).toEqual({});
-      expect(parseQbTermsMap({ operation: { status: "failed" } })).toEqual({});
+      expect(parseQbTermsMap({ operation: { status: "failed" } })).toEqual({}); // bridge-status
     });
 
     it("skips entries with no name rather than keying on undefined", () => {

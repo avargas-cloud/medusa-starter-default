@@ -18,6 +18,7 @@ process.env.QB_DRY_RUN = "true";
 process.env.QB_BRIDGE_URL = "http://localhost:9999/disabled";
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `e2e1514-${Date.now()}`;
@@ -119,7 +120,7 @@ async function main() {
       [testInvoice.order_id]
     );
     check("A", "void_invoice pending row written", pendingRows.rows.length === 1);
-    check("A", "row.status = pending", pendingRows.rows[0]?.status === "pending");
+    check("A", "row.status = pending", pendingRows.rows[0]?.status === WRITE.sales.dispatchable);
     check("A", "row.qb_txn_id matches", pendingRows.rows[0]?.qb_txn_id === fakeTxnId);
     check("A", "row.reference_id = pos_invoice.id", pendingRows.rows[0]?.reference_id === testInvoice.id);
     if (pendingRows.rows[0]?.id) cleanupIds.push(pendingRows.rows[0].id);
@@ -129,7 +130,7 @@ async function main() {
     const dispatchable = await client.query(
       `SELECT COUNT(*)::int AS n FROM qb_order_pipeline
        WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment')
-         AND status = 'pending'
+         AND status = '${WRITE.sales.dispatchable}'
          AND id = $1`,
       [pendingRows.rows[0]?.id]
     );
@@ -160,14 +161,14 @@ async function main() {
       `SELECT status, bridge_op_id FROM qb_order_pipeline WHERE id = $1`,
       [pendingRows.rows[0].id]
     );
-    check("C", "row.status = submitted", afterSubmit.rows[0]?.status === "submitted");
+    check("C", "row.status = submitted", afterSubmit.rows[0]?.status === WRITE.sales.submitted);
     check("C", "row.bridge_op_id populated (DRY_RUN)", afterSubmit.rows[0]?.bridge_op_id === "DRY_RUN");
 
     // ─── Section D: simulate confirmed → my post-confirm metadata code ──────
     console.log("\n=== D — Post-confirm metadata sync flips pos_invoice ===");
     // Simulate poll-submitted-rows confirming the row
     await client.query(
-      `UPDATE qb_order_pipeline SET status='confirmed', confirmed_at=NOW() WHERE id = $1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.synced}', confirmed_at=NOW() WHERE id = $1`,
       [pendingRows.rows[0].id]
     );
     // Manually invoke the metadata-sync block from poll-submitted-rows.ts
@@ -229,7 +230,7 @@ async function main() {
     // Find or create a refundable customer_payment with a check_txn_id
     const cp = await client.query(`
       SELECT id FROM customer_payment
-      WHERE type = 'refund' AND status != 'voided'
+      WHERE type = 'refund' AND status != 'voided' -- entity-status
         AND qb->>'check_txn_id' IS NOT NULL
         AND qb->>'status' = 'yes'
       LIMIT 1
@@ -264,7 +265,7 @@ async function main() {
         referenceId: refundId,
         referenceType: "customer_payment",
         step: "void_check",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         qbTxnId: checkTxnId,
       });
     }
@@ -274,7 +275,7 @@ async function main() {
        ORDER BY created_at DESC LIMIT 1`,
       [refundId]
     );
-    check("F", "void_check pending row enqueued", checkRows.rows[0]?.status === "pending");
+    check("F", "void_check pending row enqueued", checkRows.rows[0]?.status === WRITE.sales.dispatchable);
     if (checkRows.rows[0]?.id) cleanupIds.push(checkRows.rows[0].id);
 
     // ─── Section G: void_check consolidator path ────────────────────────────
@@ -296,7 +297,7 @@ async function main() {
         `SELECT status, bridge_op_id FROM qb_order_pipeline WHERE id = $1`,
         [checkRows.rows[0].id]
       );
-      check("G", "void_check transitions to submitted", afterCheck.rows[0]?.status === "submitted");
+      check("G", "void_check transitions to submitted", afterCheck.rows[0]?.status === WRITE.sales.submitted);
     }
   } finally {
     // ─── Cleanup ────────────────────────────────────────────────────────────

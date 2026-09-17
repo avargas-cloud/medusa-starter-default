@@ -1,4 +1,5 @@
 import { bridgeFetch } from "../client/core";
+import { WRITE } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -116,7 +117,7 @@ export async function activateRefundPaymentRow(
 
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(),
+        SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(),
             error = NULL, updated_at = NOW()
       WHERE id = $1`,
     [rpRow.id, rpRes.operation_id]

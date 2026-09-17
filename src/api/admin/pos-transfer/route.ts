@@ -14,6 +14,7 @@ import { handleDraftOrderUpdated } from "../../../lib/quickbooks/handlers/handle
 import { handleOrderUpdated } from "../../../lib/quickbooks/handlers/handle-order-updated";
 import { getEstimateTxnId, getSoTxnId } from "../../../lib/quickbooks/qb-metadata-types";
 import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
+import { SALES_SQL, pipelineStatusIs } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * POST /admin/pos-transfer
@@ -87,7 +88,7 @@ async function findLinkedPayments(
                       AND pa2.invoice_id IS NOT NULL) AS has_invoice_apps
        FROM customer_payment cp
       WHERE cp.type = 'payment'
-        AND cp.status NOT IN ('voided', 'refunded')
+        AND cp.status NOT IN ('voided', 'refunded') -- entity-status
         AND cp.deleted_at IS NULL
         AND (
           COALESCE(cp.locked_order_id, cp.metadata->>'order_id') = $1
@@ -129,7 +130,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       };
       const invoices = await invoiceService.listPosInvoices({ order_id: id });
       const active = (invoices ?? []).filter(
-        (inv) => inv.status !== "voided" && !inv.voided_at
+        (inv) => inv.status !== "voided" && !inv.voided_at // entity-status
       );
 
       if (active.length > 0) {
@@ -360,11 +361,11 @@ async function transferLinkedPayments(
       const { rows: unresolved } = await client.query(
         `SELECT id, status FROM qb_order_pipeline
           WHERE reference_id = $1 AND step = 'transfer_payment'
-            AND status NOT IN ('confirmed', 'cancelled', 'skipped')
+            AND status NOT IN (${SALES_SQL.synced}, 'cancelled', ${SALES_SQL.skipped}) -- entity-status
           ORDER BY created_at DESC`,
         [p.id]
       );
-      if (unresolved.some((r) => r.status === "failed")) {
+      if (unresolved.some((r) => pipelineStatusIs("sales", r, "error", "failed"))) {
         throw new Error(
           `payment ${p.id} has a failed prior QB transfer pending review`
         );
@@ -483,7 +484,7 @@ async function unlinkLinkedPayments(
             : "available";
       await client.query(
         `UPDATE customer_payment SET status = $2, updated_at = NOW()
-          WHERE id = $1 AND status NOT IN ('voided', 'refunded')`,
+          WHERE id = $1 AND status NOT IN ('voided', 'refunded')`, // entity-status
         [p.id, newStatus]
       );
     }

@@ -19,6 +19,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import * as fs from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as path from "path";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
@@ -255,7 +256,7 @@ async function testStateMachine() {
     // Verify all three are queryable as pending
     const { rows } = await client.query(
       `SELECT step FROM qb_order_pipeline
-       WHERE order_id=$1 AND status='pending' ORDER BY step`,
+       WHERE order_id=$1 AND status='${WRITE.sales.dispatchable}' ORDER BY step`,
       [synthOrderId]
     );
     const steps = rows.map((r: { step: string }) => r.step).sort();

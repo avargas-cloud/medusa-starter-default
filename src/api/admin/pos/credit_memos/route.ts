@@ -3,6 +3,7 @@ import { Modules } from "@medusajs/utils";
 
 import { CREDIT_MEMO_MODULE } from "../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../modules/credit_memos/service";
+import { SALES_SQL } from "../../../../lib/quickbooks/pipeline-status";
 
 export async function GET(
   req: MedusaRequest,
@@ -93,7 +94,8 @@ export async function GET(
     const pipelineRows = txnIds.length
       ? await pgConnection("qb_order_pipeline")
           .whereIn("qb_txn_id", txnIds)
-          .where({ step: "credit_memo", status: "confirmed" })
+          .where({ step: "credit_memo" })
+          .whereRaw(`status IN (${SALES_SQL.synced})`)
           .select("qb_txn_id", "qb_ref_number")
       : [];
     const qbRefMap: Record<string, string | null> = {};

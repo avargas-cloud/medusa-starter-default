@@ -23,6 +23,7 @@ import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-fl
 import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
 import { postRoundingAdjustment } from "../../../../../../lib/ledger";
 import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 /**
  * POST /admin/finance/payments/:id/apply
@@ -515,7 +516,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: bound.id,
             referenceType: "payment_application",
             step: "apply_payment",
-            status: "waiting",
+            status: WRITE.sales.blocked,
             dependsOn: invoicePipelineRowId,
             medusaRefNumber: applyMedusaRef,
           });
@@ -537,7 +538,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: bound.id,
             referenceType: "payment_application",
             step: "apply_payment",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             payload: {
               payment_id: paymentId,
               invoice_id,

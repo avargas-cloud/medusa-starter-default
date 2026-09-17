@@ -22,6 +22,7 @@
  */
 import type { Server } from "http";
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { startStubBridge, type StubState } from "./_stub-qb-bridge";
 
@@ -174,14 +175,14 @@ async function dispatchAndConfirm(client: Client, rowId: string): Promise<Row> {
   const { pollSubmittedRows } = await import("../../lib/quickbooks/consolidator/poll-submitted-rows");
   const claimed = (
     await client.query<Row>(
-      `UPDATE qb_order_pipeline SET status='processing', updated_at=NOW(), error=NULL WHERE id=$1 AND status IN ('pending','waiting','failed')
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.processing}', updated_at=NOW(), error=NULL WHERE id=$1 AND status IN ('${WRITE.sales.dispatchable}','${WRITE.sales.blocked}','${WRITE.sales.failed}')
        RETURNING id, order_id, reference_id, reference_type, step, status, bridge_op_id, COALESCE(retry_count,0) AS retry_count, qb_txn_id, next_retry_at, error, payload`,
       [rowId]
     )
   ).rows[0]!;
   await resubmitByStep(claimed, stubContainer, logger);
   let after = await rowById(client, rowId);
-  if (after.status === "submitted" && after.bridge_op_id) {
+  if (after.status === WRITE.sales.submitted && after.bridge_op_id) {
     await pollSubmittedRows([{ ...after, bridge_op_id: after.bridge_op_id }], stubContainer, logger);
     after = await rowById(client, rowId);
   }
@@ -228,7 +229,7 @@ async function main(): Promise<void> {
     const mirror = await lineSums(client, rev1!.id);
     assert(orig.n === mirror.n && orig.d === mirror.c && orig.c === mirror.d, "reversal lines mirror the original (debit↔credit)", `${orig.n}/${mirror.n} · ${orig.d}/${mirror.c}`);
     const rows1 = await rowsFor(client, a.txn_id);
-    assert(rows1.length === 1 && rows1[0]!.status === "pending", "one qb_import_void row, pending", rows1.map((r) => r.status).join(","));
+    assert(rows1.length === 1 && rows1[0]!.status === WRITE.sales.dispatchable, "one qb_import_void row, pending", rows1.map((r) => r.status).join(","));
     assert(rows1[0]?.reference_type === "qb_import" && rows1[0]?.qb_txn_id === a.txn_id, "row keyed by the TxnID (reference_type qb_import)");
     const payload1 = rows1[0]?.payload as { qb_txn_type?: string; qbxml?: string; reason?: string } | null;
     assert(payload1?.qb_txn_type === "Check" && (payload1?.qbxml ?? "").includes(`<TxnVoidType>Check</TxnVoidType><TxnID>${a.txn_id}</TxnID>`), "payload carries TxnVoidRq Check for that TxnID");
@@ -239,7 +240,7 @@ async function main(): Promise<void> {
     // ── 2 · dispatch + confirm por el stub ────────────────────────────────
     console.log("\n── 2. dispatch → stub bridge → confirm");
     const d2 = await dispatchAndConfirm(client, rows1[0]!.id);
-    assert(d2.status === "confirmed", "row confirmed after TxnVoidRs statusCode 0", `${d2.status} ${d2.error ?? ""}`);
+    assert(d2.status === WRITE.sales.synced, "row confirmed after TxnVoidRs statusCode 0", `${d2.status} ${d2.error ?? ""}`);
     assert(d2.qb_txn_id === a.txn_id, "confirmed row keeps the TxnID");
     const j2 = journalEntries().filter((e) => e.event === "direct_query" && e.isVoid);
     assert(j2.length === 1 && String(j2[0]!.qbxml).includes("<TxnVoidType>Check</TxnVoidType>"), "the stub received exactly one TxnVoidRq Check", `${j2.length}`);
@@ -344,17 +345,17 @@ async function main(): Promise<void> {
     const row7 = (await rowsFor(client, fresh6.txn_id))[0]!;
     state!.directQueryMode = "reject";
     const d7 = await dispatchAndConfirm(client, row7.id);
-    assert(d7.status === "failed" && /3120/.test(d7.error ?? ""), "rejected → failed with the QB code", `${d7.status} ${d7.error}`);
+    assert(d7.status === WRITE.sales.failed && /3120/.test(d7.error ?? ""), "rejected → failed with the QB code", `${d7.status} ${d7.error}`);
     assert(d7.next_retry_at !== null, "…and a retry is scheduled (void family)", `${d7.next_retry_at}`);
     assert(!!(await reversalOf(client, fresh6.entry_id)), "the ledger reversal stays (QB is the mirror; the row shows the drift)");
     const retry = await api(contador, "POST", `/admin/purchase-orders/qb-pipeline/${row7.id}__qb_import_void/retry`, {});
     assert(retry.status === 200 && retry.json.success === true, "retry route re-queues a qb_import_void row", `${retry.status} ${JSON.stringify(retry.json).slice(0, 120)}`);
     const after7r = await rowById(client, row7.id);
-    assert(["pending", "waiting"].includes(after7r.status), "row back to pending/waiting", after7r.status);
+    assert(([WRITE.sales.dispatchable, WRITE.sales.blocked] as string[]).includes(after7r.status), "row back to pending/waiting", after7r.status);
     const fixed = await api(contador, "POST", `/admin/purchase-orders/qb-pipeline/${row7.id}__qb_import_void/mark-fixed`, {});
     assert(fixed.status === 200 && fixed.json.success === true, "mark-fixed route accepts a qb_import_void row", `${fixed.status} ${JSON.stringify(fixed.json).slice(0, 120)}`);
     const after7f = await rowById(client, row7.id);
-    assert(after7f.status === "fixed", "row marked fixed", after7f.status);
+    assert(after7f.status === WRITE.sales.fixed, "row marked fixed", after7f.status);
 
     // ── 8 · QB_SYNC_ENABLED=false (in-process) ────────────────────────────
     console.log("\n── 8. QB sync disabled: reversal still posts, void not queued");
@@ -386,7 +387,7 @@ async function main(): Promise<void> {
     assert(feed.rows.length === (b ? 3 : 2), `feed lists this run's ${b ? 3 : 2} qb_import_void rows (confirmed · ${b ? "pending · " : ""}fixed)`, `${feed.rows.length}`);
     assert(feed.rows.every((r) => r.id.endsWith("__qb_import_void")), "feed ids carry the step suffix the retry/mark-fixed routes parse");
     const feedA = feed.rows.find((r) => r.qb_list_id === a.txn_id);
-    assert(feedA?.status === "synced" && feedA.vendor_name === a.reference, "confirmed row reads synced with the entry's label", `${feedA?.status} · ${feedA?.vendor_name}`);
+    assert(feedA?.status === WRITE.sales.synced && feedA.vendor_name === a.reference, "confirmed row reads synced with the entry's label", `${feedA?.status} · ${feedA?.vendor_name}`);
     const { loadPosKnownTxnIds } = await import("../../lib/ledger/qb-import/pos-links");
     const known = await loadPosKnownTxnIds(poolClientFor(client));
     assert(!known.has(a.txn_id), "importer does NOT treat a voided TxnID as POS-owned (S4: QB stays the mirror)");

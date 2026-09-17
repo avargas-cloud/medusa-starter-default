@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { ResubmitRow } from "./resubmit-by-step";
+import { WRITE } from "../pipeline-status";
 
 export class PermanentPurchaseOperationError extends Error {
   constructor(message: string) {
@@ -123,7 +124,7 @@ export async function completeVendorBillRebuildPreflight(
     if (legacyId) {
       await pool.query(
         `UPDATE qb_vendor_bill_pipeline
-            SET intent = 'rebuild_deleting', status = 'waiting',
+            SET intent = 'rebuild_deleting', status = '${WRITE.purchase.dispatchable}',
                 qb_operation_id = NULL, retries = 0,
                 next_retry_at = NULL,
                 last_error = 'Preflight found no QB Bill; delete will verify it is already absent',
@@ -208,7 +209,7 @@ export async function completeVendorBillRebuildPreflight(
     if (legacyId) {
       await pool.query(
         `UPDATE qb_vendor_bill_pipeline
-            SET status = 'failed_permanent', qb_operation_id = NULL,
+            SET status = '${WRITE.purchase.failed}', qb_operation_id = NULL,
                 last_error = $2, next_retry_at = NULL, updated_at = NOW()
           WHERE id = $1`,
         [legacyId, message]
@@ -220,7 +221,7 @@ export async function completeVendorBillRebuildPreflight(
   if (legacyId) {
     await pool.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET intent = 'rebuild_deleting', status = 'waiting',
+          SET intent = 'rebuild_deleting', status = '${WRITE.purchase.dispatchable}',
               qb_operation_id = NULL, retries = 0,
               next_retry_at = NULL,
               edit_sequence = COALESCE($2, edit_sequence),
@@ -355,7 +356,7 @@ export async function completeVendorBillRebuildDelete(
     );
     await client.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET intent = 'rebuild_ready', status = 'waiting',
+          SET intent = 'rebuild_ready', status = '${WRITE.purchase.dispatchable}',
               qb_operation_id = NULL, qb_txn_id = NULL,
               qb_ref_number = NULL, edit_sequence = NULL,
               rebuild_generation = rebuild_generation + 1,

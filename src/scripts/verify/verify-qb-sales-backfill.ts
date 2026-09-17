@@ -52,6 +52,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Pool, type PoolClient } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { normalizeCreditMemos, normalizeInvoices, normalizeReceivePayments, normalizeSalesReceipts } from "../../lib/qb-backfill/sales-normalize";
 import { derivePaymentRefund, derivePaymentStatus, invoiceTotalCents, isRefundApplication } from "../../lib/qb-backfill/sales-derive";
@@ -445,7 +446,7 @@ async function main(): Promise<void> {
     const orderIds = [...orderByTxn.values()].map((r) => String(r.id));
     const { rows: dispatchable } = await client.query<Row>(
       `SELECT id, step, status FROM qb_order_pipeline
-        WHERE status IN ('pending','submitted','waiting','processing')
+        WHERE status IN ('${WRITE.sales.dispatchable}','${WRITE.sales.submitted}','${WRITE.sales.blocked}','${WRITE.sales.processing}')
           AND (payload->>'run_id' = $1 OR order_id = ANY($2::text[]) OR reference_id = ANY($3::text[]))`,
       [RUN_ID, orderIds, [...paymentIds, ...[...cmByTxn.values()].map((r) => String(r.id))]]
     );
@@ -461,7 +462,7 @@ async function main(): Promise<void> {
       for (const [t, r] of byTxn) {
         const s = seedKey.get(`${step}:${r.id}`);
         if (!s) badH.push(`${step} ${r.id} (${t}): sin fila de pipeline sembrada`);
-        else if (s.status !== "confirmed" || s.qb_txn_id !== t) badH.push(`${step} ${r.id}: fila ${s.status} qb_txn_id ${s.qb_txn_id} ≠ ${t}`);
+        else if (s.status !== WRITE.sales.synced || s.qb_txn_id !== t) badH.push(`${step} ${r.id}: fila ${s.status} qb_txn_id ${s.qb_txn_id} != ${t}`);
       }
     };
     seedCheck("invoice", invByTxn);

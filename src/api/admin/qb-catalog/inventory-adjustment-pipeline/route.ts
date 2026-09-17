@@ -15,6 +15,7 @@
 
 import { getDbPool } from "../../../../api/utils/db-pool";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { WRITE } from "../../../../lib/quickbooks/pipeline-status";
 
 type UiAddStatus = "waiting" | "processing" | "synced" | "error";
 type UiVoidStatus = "waiting" | "processing" | "voided" | "error" | null;
@@ -175,7 +176,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       id: r.id as string,
       seq: r.seq as number,
       seq_label: String(r.seq_label),
-      status: (r.ui_status ?? "waiting") as UiAddStatus,
+      status: (r.ui_status ?? WRITE.purchase.dispatchable) as UiAddStatus,
       void_status: (r.ui_void_status ?? null) as UiVoidStatus,
       count_id: (r.count_id as string) ?? null,
       count_number: (r.count_number_col as string | null) ?? payload.count_number ?? null,

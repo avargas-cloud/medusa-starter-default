@@ -208,8 +208,8 @@ export async function createPurchaseOrderFromQb(
       qbPoNumber, // 20 — qb_purchase_order_txn_number guarda el RefNumber (P.O. No.) de QB, como hace el pipeline nativo (poller :691); el TxnNumber interno va en metadata
       po.edit_sequence, // 21
       metadata, // 22
-      status === "voided" ? businessAt : null, // 23
-      status === "voided" ? "VOID en QuickBooks (total 0, líneas en 0)" : null, // 24
+      status === "voided" ? businessAt : null, // 23  // entity-status
+      status === "voided" ? "VOID en QuickBooks (total 0, líneas en 0)" : null, // 24  // entity-status
     ]
   );
   void dueAt; // DueDate de QB no tiene columna propia en purchase_order; queda documentado, no se pierde (memo/metadata podría sumarse si un caller lo pide).

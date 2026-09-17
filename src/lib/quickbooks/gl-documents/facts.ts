@@ -62,6 +62,7 @@ import {
   type GlDocumentDb,
 } from "./facts-shared";
 import type { GlDocumentKind } from "./types";
+import { SALES_SQL } from "../pipeline-status";
 
 export { majorToCents, type GlDocumentAddFacts, type GlDocumentDb } from "./facts-shared";
 
@@ -413,8 +414,8 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
                 -- deposited to Undeposited Funds — is what the DepositLineAdd points at
                 -- (09/16/2026: DEP-0685 waited forever on receipt 5023 / SR 29094).
                 (SELECT sr.qb_txn_id FROM qb_order_pipeline pp
-                   JOIN qb_order_pipeline sr ON sr.order_id = pp.order_id AND sr.step = 'sales_receipt' AND sr.status = 'confirmed'
-                  WHERE pp.reference_id = cp.id AND pp.step = 'payment' AND pp.status = 'skipped'
+                   JOIN qb_order_pipeline sr ON sr.order_id = pp.order_id AND sr.step = 'sales_receipt' AND sr.status IN (${SALES_SQL.synced})
+                  WHERE pp.reference_id = cp.id AND pp.step = 'payment' AND pp.status IN (${SALES_SQL.skipped})
                     AND pp.error ILIKE 'Superseded by Sales Receipt%'
                   ORDER BY sr.confirmed_at DESC LIMIT 1)) AS payment_qb_txn_id,
               cp.status AS payment_status,
@@ -425,7 +426,7 @@ async function depositFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAdd
               -- The JE's confirmed AddRs (kept on its pipeline row): the UF credit line's TxnLineID
               -- is what DepositLineAdd must name for a journal entry (PaymentTxnLineID).
               (SELECT pj.qb_result FROM gl_journal_entry je JOIN qb_order_pipeline pj ON pj.reference_id = je.id
-                  AND pj.step = 'gl_document_add' AND pj.status = 'confirmed'
+                  AND pj.step = 'gl_document_add' AND pj.status IN (${SALES_SQL.synced})
                 WHERE je.id = cp.qb->>'refund_journal_entry_id' ORDER BY pj.confirmed_at DESC LIMIT 1) AS refund_je_result
          FROM bank_deposit_line l
          LEFT JOIN customer_payment cp ON cp.id = l.payment_id

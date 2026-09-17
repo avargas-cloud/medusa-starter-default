@@ -34,7 +34,7 @@ export interface SubmitPurchaseOrderWorkflowInput {
 export interface SubmitPurchaseOrderWorkflowOutput {
   po_id: string;
   number: string;
-  status: "submitted";
+  status: "submitted"; // entity-status
   qb_pipeline_id: string;
   submitted_at: Date;
 }
@@ -83,7 +83,7 @@ export const submitPurchaseOrderWorkflow = createWorkflow(
     const response = transform({ input, frozen, queued }, (data) => ({
       po_id: data.input.po_id,
       number: data.frozen.number,
-      status: "submitted" as const,
+      status: "submitted" as const, // entity-status
       qb_pipeline_id: data.queued.pipeline_id,
       submitted_at: data.frozen.submitted_at,
     }));

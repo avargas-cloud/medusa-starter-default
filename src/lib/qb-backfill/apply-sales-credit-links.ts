@@ -54,6 +54,7 @@ import {
   type SalesApplyContext,
 } from "./sales-context";
 import type { QbLinkedTxn } from "./sales-types";
+import { WRITE } from "../quickbooks/pipeline-status";
 
 /** `pos_credit_memo` del run, con los enlaces de QB que el creador guardó en `metadata.qb_linked_txns`. */
 export interface BackfilledCreditMemo {
@@ -172,7 +173,7 @@ export async function loadBackfilledCreditMemos(db: QueryableDb, runId: string):
             to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS cm_date,
             CASE WHEN jsonb_typeof(metadata->'qb_linked_txns') = 'array' THEN metadata->'qb_linked_txns' ELSE '[]'::jsonb END AS linked_txns
        FROM pos_credit_memo
-      WHERE deleted_at IS NULL AND status = 'completed' AND qb_txn_id IS NOT NULL
+      WHERE deleted_at IS NULL AND status = 'completed' AND qb_txn_id IS NOT NULL -- entity-status
         AND metadata->'qb_backfill'->>'run_id' = $1
       ORDER BY completed_at, qb_txn_id`,
     [runId]
@@ -400,7 +401,7 @@ async function applyOneCreditMemo(ctx: SalesApplyContext, cm: BackfilledCreditMe
       );
     }
     await seedPipelineRow(ctx.client, ctx.runId, {
-      orderId: row.order_id, referenceId: applicationId, referenceType: "payment_application", step: "apply_payment", status: "confirmed",
+      orderId: row.order_id, referenceId: applicationId, referenceType: "payment_application", step: "apply_payment", status: WRITE.sales.synced,
       qbTxnId: cm.cm_txn_id, qbRefNumber: cm.cm_ref_number, medusaRefNumber: displayId != null ? `PAY-${displayId}` : null,
       payload: {
         txn_type: "CreditMemo",

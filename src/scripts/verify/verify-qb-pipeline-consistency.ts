@@ -23,6 +23,7 @@
  */
 
 import { Pool } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as dotenv from "dotenv";
 dotenv.config();
 
@@ -40,9 +41,9 @@ async function findOrphanPaymentRows() {
            FROM qb_order_pipeline sr
            JOIN qb_order_pipeline p ON p.order_id = sr.order_id
           WHERE sr.step   = 'sales_receipt'
-            AND sr.status = 'confirmed'
+            AND sr.status = '${WRITE.sales.synced}'
             AND p.step   IN ('payment','apply_payment')
-            AND p.status IN ('waiting','pending')
+            AND p.status IN ('${WRITE.sales.blocked}','${WRITE.sales.dispatchable}')
           ORDER BY sr.created_at DESC`
   );
   return res.rows;
@@ -61,13 +62,13 @@ async function findUntaggedSrPayments() {
           WHERE cp.metadata->>'order_id' IS NOT NULL
             AND cp.metadata->>'order_id' IN (
                 SELECT order_id FROM qb_order_pipeline
-                 WHERE step='sales_receipt' AND status='confirmed'
+                 WHERE step='sales_receipt' AND status='${WRITE.sales.synced}'
             )
             AND COALESCE(cp.metadata->>'qb_source', '') <> 'sales_receipt'
             AND COALESCE(cp.metadata->>'qb_sync_status', '') <> 'pending_sr'
             AND COALESCE(cp.metadata->>'qb_sync_status', '') <> 'voided'
             AND (cp.metadata->>'is_sales_receipt_payment') IS DISTINCT FROM 'true'
-            AND cp.status <> 'voided'
+            AND cp.status <> 'voided' -- entity-status
             AND cp.deleted_at IS NULL`
   );
   return res.rows;

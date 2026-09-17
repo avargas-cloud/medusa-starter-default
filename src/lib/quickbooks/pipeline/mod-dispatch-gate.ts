@@ -27,6 +27,7 @@
  */
 import { getDbPool } from "../../../api/utils/db-pool";
 import { deferPipelineRow } from "./row-mutations";
+import { SALES_SQL } from "../pipeline-status";
 
 export const MOD_DISPATCH_DEFER_SECONDS = 60;
 
@@ -119,8 +120,8 @@ export async function findOldestInFlightSibling(
         AND step = ANY($2)
         AND id <> $3
         AND (
-          status IN ('processing', 'submitted')
-          OR (status = 'pending' AND bridge_op_id IS NOT NULL)
+          status IN (${SALES_SQL.processing}, ${SALES_SQL.submitted})
+          OR (status IN (${SALES_SQL.dispatchable}) AND bridge_op_id IS NOT NULL)
         )
       ORDER BY created_at ASC, id ASC
       LIMIT 1`,

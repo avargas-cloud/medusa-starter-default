@@ -40,6 +40,7 @@ import type { Server } from "http";
 import { Client } from "pg";
 
 import { startStubBridge, type StubState } from "./_stub-qb-bridge";
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 const PREFIX = "e2e_gldq_";
 const BACKEND = process.env.E2E_BACKEND_URL ?? "http://localhost:9096";
@@ -123,14 +124,14 @@ async function rowsFor(client: Client, refId: string, step?: string): Promise<Ro
 }
 async function claim(client: Client, id: string): Promise<Row> {
   const r = await client.query<Row>(
-    `UPDATE qb_order_pipeline SET status='processing', updated_at=NOW(), error=NULL WHERE id=$1
+    `UPDATE qb_order_pipeline SET status='${WRITE.sales.processing}', updated_at=NOW(), error=NULL WHERE id=$1
      RETURNING id, order_id, reference_id, reference_type, step, status, bridge_op_id, COALESCE(retry_count,0) AS retry_count, qb_txn_id, next_retry_at, error, payload`,
     [id]
   );
   return r.rows[0]!;
 }
 async function wake(client: Client, id: string): Promise<void> {
-  await client.query(`UPDATE qb_order_pipeline SET status='pending', updated_at=NOW() WHERE id=$1 AND status='waiting'`, [id]);
+  await client.query(`UPDATE qb_order_pipeline SET status='${WRITE.sales.dispatchable}', updated_at=NOW() WHERE id=$1 AND status IN (${SALES_SQL.blocked})`, [id]);
 }
 async function rowById(client: Client, id: string): Promise<Row> {
   const r = await client.query<Row>(
@@ -153,7 +154,7 @@ async function dispatchAndConfirm(client: Client, rowId: string, opts: { confirm
   const claimed = await claim(client, rowId);
   await resubmitByStep(claimed, stubContainer, logger);
   let after = await rowById(client, rowId);
-  if (opts.confirm !== false && after.status === "submitted" && after.bridge_op_id) {
+  if (opts.confirm !== false && after.status === WRITE.sales.submitted && after.bridge_op_id) {
     await pollSubmittedRows([{ ...after, bridge_op_id: after.bridge_op_id }], stubContainer, logger);
     after = await rowById(client, rowId);
   }
@@ -269,14 +270,14 @@ async function main(): Promise<void> {
       memo: `${PREFIX}uber · viaje`, lines: [{ account_list_id: BANK_FEES, amount_cents: 615, memo: "ride" }], post: true,
     });
     assert(c1.status === 201 && c1.json.check?.status === "posted", "check created + posted", `HTTP ${c1.status}`);
-    assert(c1.json.post?.qb?.queued === true && c1.json.post?.qb?.status === "pending", "post response carries qb: { queued, status: pending }", JSON.stringify(c1.json.post?.qb));
+    assert(c1.json.post?.qb?.queued === true && c1.json.post?.qb?.status === WRITE.sales.dispatchable, "post response carries qb: { queued, status: pending }", JSON.stringify(c1.json.post?.qb));
     const check1 = c1.json.check.id as string;
     let rows = await rowsFor(client, check1, "gl_document_add");
-    assert(rows.length === 1 && rows[0]!.status === "pending" && rows[0]!.reference_type === "gl_check", "exactly one gl_document_add row, pending, reference_type gl_check");
+    assert(rows.length === 1 && rows[0]!.status === WRITE.sales.dispatchable && rows[0]!.reference_type === "gl_check", "exactly one gl_document_add row, pending, reference_type gl_check");
     const xml1 = String(rows[0]!.payload?.qbxml ?? "");
     assert(xml1.includes("<CheckAddRq><CheckAdd>") && xml1.includes("<Memo>Payee: Uber - e2e_gldq_uber - viaje</Memo>") && xml1.includes("<Amount>6.15</Amount>"), "payload QBXML: CheckAdd, payee in memo, ASCII folded, amount", xml1.slice(0, 200));
     const r1 = await dispatchAndConfirm(client, rows[0]!.id);
-    assert(r1.status === "confirmed" && !!r1.qb_txn_id, "dispatch → submitted → poll → confirmed with TxnID", `${r1.status} ${r1.qb_txn_id}`);
+    assert(r1.status === WRITE.sales.synced && !!r1.qb_txn_id, "dispatch → submitted → poll → confirmed with TxnID", `${r1.status} ${r1.qb_txn_id}`);
     const j1 = lastJournal("Check");
     assert(!!j1 && /^[\x20-\x7E]*$/.test(String(j1.qbxml)), "the bridge received CheckAddRq in 7-bit ASCII");
     let link1 = await docLink(client, "gl_check", check1);
@@ -299,7 +300,7 @@ async function main(): Promise<void> {
     assert(xml2.includes("<CreditCardChargeAddRq>") && xml2.includes(`<PayeeEntityRef><ListID>${vendor.qb_list_id}</ListID></PayeeEntityRef>`) && xml2.indexOf("<TxnDate>") < xml2.indexOf("<RefNumber>"), "CreditCardChargeAdd with vendor ListID, TxnDate before RefNumber");
     const r2 = await dispatchAndConfirm(client, rows[0]!.id);
     const link2 = await docLink(client, "gl_check", check2);
-    assert(r2.status === "confirmed" && link2.qb_txn_type === "CreditCardCharge", "confirmed as CreditCardCharge", `${r2.status} ${link2.qb_txn_type}`);
+    assert(r2.status === WRITE.sales.synced && link2.qb_txn_type === "CreditCardCharge", "confirmed as CreditCardCharge", `${r2.status} ${link2.qb_txn_type}`);
     txnIdsSeen.push(r2.qb_txn_id!);
 
     // ── 3 · transfers ──────────────────────────────────────────────────────
@@ -316,7 +317,7 @@ async function main(): Promise<void> {
     const rt1 = await dispatchAndConfirm(client, (await rowsFor(client, tr1, "gl_document_add"))[0]!.id);
     const rt2 = await dispatchAndConfirm(client, (await rowsFor(client, tr2, "gl_document_add"))[0]!.id);
     const lt2 = await docLink(client, "gl_transfer", tr2);
-    assert(rt1.status === "confirmed" && rt2.status === "confirmed" && lt2.qb_txn_type === "JournalEntry", "both transfers confirmed as JournalEntry");
+    assert(rt1.status === WRITE.sales.synced && rt2.status === WRITE.sales.synced && lt2.qb_txn_type === "JournalEntry", "both transfers confirmed as JournalEntry");
     txnIdsSeen.push(rt1.qb_txn_id!, rt2.qb_txn_id!);
 
     // ── 4 · journal entry ──────────────────────────────────────────────────
@@ -329,7 +330,7 @@ async function main(): Promise<void> {
     const jeId = je.json.journal_entry?.id ?? je.json.id;
     const rj = await dispatchAndConfirm(client, (await rowsFor(client, jeId, "gl_document_add"))[0]!.id);
     const lj = await docLink(client, "gl_journal_entry", jeId);
-    assert(rj.status === "confirmed" && lj.qb_txn_type === "JournalEntry" && lj.qb_txn_id === rj.qb_txn_id, "JE confirmed, TxnID on the document");
+    assert(rj.status === WRITE.sales.synced && lj.qb_txn_type === "JournalEntry" && lj.qb_txn_id === rj.qb_txn_id, "JE confirmed, TxnID on the document");
     txnIdsSeen.push(rj.qb_txn_id!);
 
     // ── 5 · deposit ────────────────────────────────────────────────────────
@@ -387,7 +388,7 @@ async function main(): Promise<void> {
       assert(roles.join(" ") === "bank:39078/0 expense:125/0 clearing:0/35203 clearing:0/4000" || roles.some((r: string) => r.startsWith("clearing:0/4000")), "preview amounts are cents of the 2-decimal deposit amounts (not truncated dollars)", roles.join(" "));
       assert((await client.query(`SELECT 1 FROM bank_journal_entry WHERE deposit_id=$1 OR (kind='deposit' AND source_id=$1)`, [depositId])).rowCount === 0, "no Banking-local deposit entry was written");
       let drows = await rowsFor(client, depositId, "gl_document_add");
-      assert(drows.length === 1 && drows[0]!.status === "pending" && drows[0]!.reference_type === "bank_deposit", "posting enqueued exactly one gl_document_add(bank_deposit)");
+      assert(drows.length === 1 && drows[0]!.status === WRITE.sales.dispatchable && drows[0]!.reference_type === "bank_deposit", "posting enqueued exactly one gl_document_add(bank_deposit)");
       const dx = String(drows[0]!.payload?.qbxml ?? "");
       assert(dx.includes(`<DepositToAccountRef><ListID>${PETTY}</ListID>`), "DepositAdd into the deposit-to account", dx.slice(0, 200));
       assert(dx.includes(`<DepositLineAdd><PaymentTxnID>${pick.txn}</PaymentTxnID></DepositLineAdd>`), "payment line references the payment's real QuickBooks TxnID", `txn=${pick.txn}`);
@@ -395,7 +396,7 @@ async function main(): Promise<void> {
       assert(dx.includes(`<AccountRef><ListID>${BANK_FEES}</ListID></AccountRef><Memo>Fee processor</Memo><Amount>-1.25</Amount>`), "fee is a negative line to the fee account");
       const rd = await dispatchAndConfirm(client, drows[0]!.id);
       const dlink = await docLink(client, "bank_deposit", depositId);
-      assert(rd.status === "confirmed" && !!rd.qb_txn_id && dlink.qb_txn_id === rd.qb_txn_id && dlink.qb_txn_type === "Deposit", "DepositAdd confirmed; bank_deposit carries qb_txn_id + qb_txn_type=Deposit", JSON.stringify(dlink));
+      assert(rd.status === WRITE.sales.synced && !!rd.qb_txn_id && dlink.qb_txn_id === rd.qb_txn_id && dlink.qb_txn_type === "Deposit", "DepositAdd confirmed; bank_deposit carries qb_txn_id + qb_txn_type=Deposit", JSON.stringify(dlink));
       txnIdsSeen.push(rd.qb_txn_id!);
       const listed = await api("GET", `/admin/banking/deposits?q=${PREFIX}dep`);
       const row = (listed.json.deposits ?? []).find((d: any) => d.id === depositId);
@@ -407,7 +408,7 @@ async function main(): Promise<void> {
       assert(vrows.length === 1 && vrows[0]!.qb_txn_id === rd.qb_txn_id, "reverse enqueued one gl_document_void with the Deposit's TxnID");
       const rvd = await dispatchAndConfirm(client, vrows[0]!.id);
       const dlink2 = await docLink(client, "bank_deposit", depositId);
-      assert(rvd.status === "confirmed" && dlink2.qb_txn_id === null, "TxnVoid confirmed; qb_txn_id cleared on the deposit", JSON.stringify(dlink2));
+      assert(rvd.status === WRITE.sales.synced && dlink2.qb_txn_id === null, "TxnVoid confirmed; qb_txn_id cleared on the deposit", JSON.stringify(dlink2));
       assert(lastJournal("TxnVoid")?.qbxml?.includes("<TxnVoidType>Deposit</TxnVoidType>"), "the bridge received TxnVoidRq with TxnVoidType Deposit");
       // Void del depósito en el POS (ya reversado) → nada más que anular en QB.
       const cur = await api("GET", `/admin/banking/deposits/${depositId}`);
@@ -423,7 +424,7 @@ async function main(): Promise<void> {
     assert(vr.length === 1 && vr[0]!.qb_txn_id === r1.qb_txn_id, "one void row with the check's TxnID");
     const rv1 = await dispatchAndConfirm(client, vr[0]!.id);
     link1 = await docLink(client, "gl_check", check1);
-    assert(rv1.status === "confirmed" && link1.status === "voided" && link1.qb_txn_id === null, "void confirmed; document voided with qb_txn_id cleared", JSON.stringify(link1));
+    assert(rv1.status === WRITE.sales.synced && link1.status === "voided" /* entity-status */ && link1.qb_txn_id === null, "void confirmed; document voided with qb_txn_id cleared", JSON.stringify(link1));
 
     // ── 7 · carrera void-in-flight ─────────────────────────────────────────
     console.log("\n── 7. void while the Add is in flight (submitted, not yet confirmed)");
@@ -434,16 +435,16 @@ async function main(): Promise<void> {
     const check7 = c7.json.check.id as string;
     const add7 = (await rowsFor(client, check7, "gl_document_add"))[0]!;
     const submitted7 = await dispatchAndConfirm(client, add7.id, { confirm: false });
-    assert(submitted7.status === "submitted", "Add submitted (not confirmed yet)", submitted7.status);
+    assert(submitted7.status === WRITE.sales.submitted, "Add submitted (not confirmed yet)", submitted7.status);
     const v7 = await api("POST", `/admin/accounting/checks/${check7}/void`, { reason: `${PREFIX}race-void` });
     assert(v7.status === 200 && (await rowsFor(client, check7, "gl_document_void")).length === 0, "void in the POS with the Add in flight enqueues NOTHING yet (no TxnID to name)");
     const { pollSubmittedRows } = await import("../../lib/quickbooks/consolidator/poll-submitted-rows");
     await pollSubmittedRows([{ ...submitted7, bridge_op_id: submitted7.bridge_op_id! }], stubContainer, logger);
     const add7After = await rowById(client, add7.id);
     const void7 = await rowsFor(client, check7, "gl_document_void");
-    assert(add7After.status === "confirmed" && void7.length === 1 && void7[0]!.qb_txn_id === add7After.qb_txn_id, "confirming the Add of a voided document enqueues its void with the fresh TxnID", `${add7After.status} voids=${void7.length}`);
+    assert(add7After.status === WRITE.sales.synced && void7.length === 1 && void7[0]!.qb_txn_id === add7After.qb_txn_id, "confirming the Add of a voided document enqueues its void with the fresh TxnID", `${add7After.status} voids=${void7.length}`);
     const rv7 = await dispatchAndConfirm(client, void7[0]!.id);
-    assert(rv7.status === "confirmed" && (await docLink(client, "gl_check", check7)).qb_txn_id === null, "race void dispatched, confirmed, TxnID cleared");
+    assert(rv7.status === WRITE.sales.synced && (await docLink(client, "gl_check", check7)).qb_txn_id === null, "race void dispatched, confirmed, TxnID cleared");
     txnIdsSeen.push(add7After.qb_txn_id!);
 
     // ── 8 · void antes de despachar ────────────────────────────────────────
@@ -455,7 +456,7 @@ async function main(): Promise<void> {
     const check8 = c8.json.check.id as string;
     await api("POST", `/admin/accounting/checks/${check8}/void`, { reason: `${PREFIX}never-void` });
     const rows8 = await rowsFor(client, check8);
-    assert(rows8.length === 1 && rows8[0]!.step === "gl_document_add" && rows8[0]!.status === "skipped", "Add row skipped with a reason, no void row", JSON.stringify(rows8.map((r) => [r.step, r.status])));
+    assert(rows8.length === 1 && rows8[0]!.step === "gl_document_add" && rows8[0]!.status === WRITE.sales.skipped, "Add row skipped with a reason, no void row", JSON.stringify(rows8.map((r) => [r.step, r.status])));
 
     // ── 9 · cuenta creada en el POS ────────────────────────────────────────
     console.log("\n── 9. line on a pos_ account → Add failed (structural), GL still posted");
@@ -470,7 +471,7 @@ async function main(): Promise<void> {
     const check9 = c9.json.check?.id as string;
     const rows9 = check9 ? await rowsFor(client, check9, "gl_document_add") : [];
     assert(c9.status === 201 && c9.json.check?.status === "posted", "GL posting succeeds regardless of QuickBooks", `HTTP ${c9.status} ${JSON.stringify(c9.json).slice(0, 160)}`);
-    assert(rows9.length === 1 && rows9[0]!.status === "failed" && rows9[0]!.next_retry_at === null && /account_not_in_quickbooks/.test(rows9[0]!.error ?? ""), "pipeline row failed terminal with account_not_in_quickbooks", JSON.stringify(rows9.map((r) => [r.status, r.error?.slice(0, 80)])));
+    assert(rows9.length === 1 && rows9[0]!.status === WRITE.sales.failed && rows9[0]!.next_retry_at === null && /account_not_in_quickbooks/.test(rows9[0]!.error ?? ""), "pipeline row failed terminal with account_not_in_quickbooks", JSON.stringify(rows9.map((r) => [r.status, r.error?.slice(0, 80)])));
 
     // ── 10 · deposit con partida de apertura → skip ────────────────────────
     console.log("\n── 10. deposit consuming an opening item → facts skip");
@@ -505,15 +506,15 @@ async function main(): Promise<void> {
     process.env.QB_BRIDGE_URL = CLOSED_PORT_URL;
     const rDead = await dispatchAndConfirm(client, dead);
     process.env.QB_BRIDGE_URL = `http://127.0.0.1:${STUB_PORT}`;
-    assert(rDead.status === "failed" && rDead.next_retry_at === null, "dead bridge → Add failed TERMINAL (no auto-retry of an ADD)", `${rDead.status} retry_at=${rDead.next_retry_at}`);
+    assert(rDead.status === WRITE.sales.failed && rDead.next_retry_at === null, "dead bridge → Add failed TERMINAL (no auto-retry of an ADD)", `${rDead.status} retry_at=${rDead.next_retry_at}`);
     const unknown = await mk("unknown");
     state!.directQueryMode = "unknown_outcome";
     const rUnknown = await dispatchAndConfirm(client, unknown);
-    assert(rUnknown.status === "failed" && rUnknown.next_retry_at === null && /Outcome unknown/.test(rUnknown.error ?? ""), "bridge op failed without a verdict → failed terminal, reason says to reconcile", `${rUnknown.status} ${rUnknown.error?.slice(0, 100)}`);
+    assert(rUnknown.status === WRITE.sales.failed && rUnknown.next_retry_at === null && /Outcome unknown/.test(rUnknown.error ?? ""), "bridge op failed without a verdict → failed terminal, reason says to reconcile", `${rUnknown.status} ${rUnknown.error?.slice(0, 100)}`);
     const rejected = await mk("reject");
     state!.directQueryMode = "reject";
     const rRej = await dispatchAndConfirm(client, rejected);
-    assert(rRej.status === "failed" && rRej.next_retry_at === null && /rejected gl_document_add \(3140\)/.test(rRej.error ?? ""), "QB rejection (3140, under `$`) → failed terminal with the code", `${rRej.status} ${rRej.error?.slice(0, 100)}`);
+    assert(rRej.status === WRITE.sales.failed && rRej.next_retry_at === null && /rejected gl_document_add \(3140\)/.test(rRej.error ?? ""), "QB rejection (3140, under `$`) → failed terminal with the code", `${rRej.status} ${rRej.error?.slice(0, 100)}`);
     assert((await docLink(client, "gl_check", (await rowById(client, rejected)).reference_id!)).qb_txn_id === null, "a rejected Add leaves the document without TxnID");
 
     // ── 14 · Other Name de QB enlazado (qb-other-names-picker-20260916) ────
@@ -539,10 +540,10 @@ async function main(): Promise<void> {
     const jeOnRows = await rowsFor(client, jeOnId, "gl_document_add");
     const xjOn = String(jeOnRows[0]?.payload?.qbxml ?? "");
     const creditOn = xjOn.slice(xjOn.indexOf("<JournalCreditLine>"));
-    assert(jeOnRows[0]?.status === "pending" && creditOn.includes(`<EntityRef><ListID>${OTHER_LIST_ID}</ListID></EntityRef>`), "JournalEntryAdd carries EntityRef = the Other Name's ListID on the bank line", creditOn.slice(0, 200));
+    assert(jeOnRows[0]?.status === WRITE.sales.dispatchable && creditOn.includes(`<EntityRef><ListID>${OTHER_LIST_ID}</ListID></EntityRef>`), "JournalEntryAdd carries EntityRef = the Other Name's ListID on the bank line", creditOn.slice(0, 200));
     assert(!xjOn.slice(0, xjOn.indexOf("<JournalCreditLine>")).includes("<EntityRef>"), "the expense line (no entity) carries no EntityRef");
     const rjOn = await dispatchAndConfirm(client, jeOnRows[0]!.id);
-    assert(rjOn.status === "confirmed" && !!rjOn.qb_txn_id, "other_name JE confirmed with TxnID", `${rjOn.status}`);
+    assert(rjOn.status === WRITE.sales.synced && !!rjOn.qb_txn_id, "other_name JE confirmed with TxnID", `${rjOn.status}`);
     txnIdsSeen.push(rjOn.qb_txn_id!);
 
     const chkOn = await api("POST", "/admin/accounting/checks", {
@@ -553,7 +554,7 @@ async function main(): Promise<void> {
     const xcOn = String((await rowsFor(client, chkOn.json.check?.id, "gl_document_add"))[0]?.payload?.qbxml ?? "");
     assert(xcOn.includes(`<PayeeEntityRef><ListID>${OTHER_LIST_ID}</ListID></PayeeEntityRef>`) && !xcOn.includes("Payee: Amerant"), "CheckAdd carries PayeeEntityRef (no 'Payee:' memo fallback)", xcOn.slice(0, 200));
     const rcOn = await dispatchAndConfirm(client, (await rowsFor(client, chkOn.json.check?.id, "gl_document_add"))[0]!.id);
-    assert(rcOn.status === "confirmed", "other_name check confirmed", rcOn.status);
+    assert(rcOn.status === WRITE.sales.synced, "other_name check confirmed", rcOn.status);
     txnIdsSeen.push(rcOn.qb_txn_id!);
 
     // Negativas: A/R con Other Name → estructural; sin id → 400; id inexistente → 400.
@@ -565,7 +566,7 @@ async function main(): Promise<void> {
         post: true,
       });
       const arRow = (await rowsFor(client, jeAr.json.journal_entry?.id ?? "", "gl_document_add"))[0];
-      assert(jeAr.status === 201 && arRow?.status === "failed" && /other_name_on_ar_ap_line/.test(arRow?.error ?? ""), "Other Name on an A/R line: GL posts, QB row failed structural", `${jeAr.status} ${arRow?.status} ${arRow?.error?.slice(0, 80)}`);
+      assert(jeAr.status === 201 && arRow?.status === WRITE.sales.failed && /other_name_on_ar_ap_line/.test(arRow?.error ?? ""), "Other Name on an A/R line: GL posts, QB row failed structural", `${jeAr.status} ${arRow?.status} ${arRow?.error?.slice(0, 80)}`);
     } else {
       assert(false, "no AccountsReceivable account in the sandbox mirror (cannot run the A/R negative)");
     }

@@ -15,6 +15,7 @@ import {
   type CostTruncationLine,
 } from "./qb-vendor-bill-cost-truncation-guard";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { WRITE, pipelineStatusIs } from "../quickbooks/pipeline-status";
 
 export type VendorBillModKnex = {
   raw: (
@@ -658,7 +659,7 @@ async function enqueueOneBillMod(
     const row = existing.rows[0] as
       | { id: string; status: string }
       | undefined;
-    if (row && ["waiting", "submitted", "error"].includes(String(row.status))) {
+    if (row && pipelineStatusIs("purchase", row, "waiting", "submitted", "error")) {
       throw new Error(
         `${bill.number ?? bill.id}: QuickBooks sync is already ${String(row.status)}`
       );
@@ -668,7 +669,7 @@ async function enqueueOneBillMod(
       vendorBillPipelineId = String(row.id);
       await db.raw(
         `UPDATE qb_vendor_bill_pipeline
-            SET purchase_order_id = ?, status = 'waiting', intent = 'mod',
+            SET purchase_order_id = ?, status = '${WRITE.purchase.dispatchable}', intent = 'mod',
                 payload = ?::jsonb, snapshot = NULL,
                 qb_operation_id = NULL, qb_txn_id = ?,
                 qb_ref_number = ?, edit_sequence = ?, retries = 0,

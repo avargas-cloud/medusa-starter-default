@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * QuickBooks ItemReceipt sync queue.
@@ -30,7 +31,7 @@ export const QbItemReceiptPipeline = model.define("qb_item_receipt_pipeline", {
   purchase_order_receipt_id: model.text(),
   purchase_order_id: model.text(), // denormalized for admin views
 
-  status: model.text().default("waiting"),
+  status: model.text().default(WRITE.purchase.dispatchable),
 
   // Bridge / QB identifiers
   qb_operation_id: model.text().nullable(),

@@ -9,6 +9,8 @@ import {
 } from "react";
 
 import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+import { PipelineStatusBadge } from "./PipelineStatusBadge";
+import { normalizePipelineStatus } from "../../../../lib/quickbooks/pipeline-status";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -138,25 +140,6 @@ const STEP_LABEL: Record<PoStep, string> = {
 
 type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
 
-function StatusBadge({ status }: { status: PoStatus }) {
-  const map: Record<PoStatus, { color: BadgeColor; label: string }> = {
-    waiting: { color: "orange", label: "Waiting" },
-    processing: { color: "blue", label: "Processing" },
-    submitted: { color: "blue", label: "Submitted" },
-    completed: { color: "green", label: "Completed" },
-    error: { color: "red", label: "Error" },
-    synced: { color: "green", label: "Synced" },
-    failed_permanent: { color: "red", label: "Failed" },
-    skipped: { color: "grey", label: "Skipped" },
-  };
-  const s = map[status] ?? { color: "grey" as BadgeColor, label: status };
-  return (
-    <Badge color={s.color} size="xsmall">
-      {s.label}
-    </Badge>
-  );
-}
-
 function formatDate(iso: string | null): ReactNode {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -221,18 +204,24 @@ function PipelinePoRow({
       step === "add_gl_document") &&
     !row.qb_list_id;
 
-  const updatedAt =
-    row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
+  const normalizedStatus = normalizePipelineStatus("purchase", row.status);
+  const isFailedBadge =
+    normalizedStatus === "error" || normalizedStatus === "failed";
+  const isSyncedBadge = normalizedStatus === "synced";
+  const isSubmittedBadge = normalizedStatus === "submitted";
+  const isWaitingBadge = normalizedStatus === "waiting";
+
+  const updatedAt = isSyncedBadge ? row.synced_at : (row.updated_at ?? null);
 
   return (
     <>
       <tr
         className={`border-b border-ui-border-base text-xs transition-colors ${
-          row.status === "error" || row.status === "failed_permanent"
+          isFailedBadge
             ? "bg-red-50/5"
-            : row.status === "submitted"
+            : isSubmittedBadge
               ? "bg-blue-50/5"
-              : row.status === "waiting"
+              : isWaitingBadge
                 ? "bg-yellow-50/5"
                 : ""
         }`}
@@ -287,7 +276,7 @@ function PipelinePoRow({
             <span className="font-mono text-xs text-violet-600 font-semibold">
               {row.qb_txn_number}
             </span>
-          ) : row.status === "synced" ? (
+          ) : isSyncedBadge ? (
             <span className="text-ui-fg-muted">—</span>
           ) : (
             <span className="text-ui-fg-muted text-[10px]">pending…</span>
@@ -301,7 +290,7 @@ function PipelinePoRow({
 
         {/* Status */}
         <td className="px-3 py-2 whitespace-nowrap">
-          <StatusBadge status={row.status} />
+          <PipelineStatusBadge status={row.status} family="purchase" />
         </td>
 
         {/* QB ListID / Op */}
@@ -338,11 +327,11 @@ function PipelinePoRow({
           {updatedAt ? (
             <span
               className={
-                row.status === "synced"
+                isSyncedBadge
                   ? "text-green-500"
-                  : row.status === "error" || row.status === "failed_permanent"
+                  : isFailedBadge
                     ? "text-red-400"
-                    : row.status === "submitted"
+                    : isSubmittedBadge
                       ? "text-blue-400"
                       : "text-ui-fg-subtle"
               }
@@ -365,9 +354,7 @@ function PipelinePoRow({
                 {expanded ? "▲ hide" : "▼ error"}
               </button>
             )}
-            {(row.status === "error" ||
-              row.status === "waiting" ||
-              row.status === "failed_permanent") && (
+            {(isFailedBadge || isWaitingBadge) && (
               <button
                 onClick={() => onRetry(row.id)}
                 disabled={retrying}
@@ -381,7 +368,7 @@ function PipelinePoRow({
                 {retrying ? "…" : isUnidentifiedAdd ? "Retry (verifies)" : "Retry"}
               </button>
             )}
-            {(row.status === "error" || row.status === "failed_permanent") &&
+            {isFailedBadge &&
               !isReviewedRebuild &&
               !isUnidentifiedAdd && (
               <button

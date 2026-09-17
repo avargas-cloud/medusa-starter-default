@@ -31,6 +31,7 @@ import {
   type PurchaseDependencyKnex,
 } from "../../purchase-orders/qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../sync-enabled";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 import { buildTxnVoidQbxml } from "../txn-void-add";
 import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "./facts";
 import {
@@ -42,11 +43,24 @@ import {
 } from "./types";
 
 export type GlDocumentEnqueueResult =
-  | { queued: true; pipelineRowId: string; status: "pending" | "waiting" | "failed" | "skipped" }
+  | {
+      queued: true;
+      pipelineRowId: string;
+      status:
+        | typeof WRITE.sales.dispatchable
+        | typeof WRITE.sales.blocked
+        | typeof WRITE.sales.failed
+        | typeof WRITE.sales.skipped;
+    }
   | { queued: false; reason: string };
 
-const LIVE_UNSENT = ["pending", "waiting", "failed"] as const;
-const IN_FLIGHT = ["processing", "submitted"] as const;
+const LIVE_UNSENT = [
+  WRITE.sales.dispatchable,
+  WRITE.sales.blocked,
+  WRITE.sales.failed,
+  WRITE.sales.error,
+] as const;
+const IN_FLIGHT = [WRITE.sales.processing, WRITE.sales.submitted] as const;
 
 async function findAddRow(
   db: PurchaseDependencyKnex,
@@ -72,7 +86,7 @@ async function findLiveVoidRow(
   const result = await db.raw(
     `SELECT id FROM qb_order_pipeline
       WHERE step = ? AND reference_type = ? AND reference_id = ? AND qb_txn_id = ?
-        AND status NOT IN ('failed', 'skipped')
+        AND status NOT IN (${SALES_SQL.notLive})
       ORDER BY created_at DESC LIMIT 1`,
     [GL_DOCUMENT_VOID_STEP, kind, documentId, qbTxnId]
   );
@@ -113,11 +127,11 @@ export async function enqueueGlDocumentAdd(
     // Listo, o transitorio: el despachador re-evalúa los facts y difiere solo.
     return { queued: true, pipelineRowId: operation.id, status: operation.status };
   }
-  const terminal = facts.skip ? "skipped" : "failed";
+  const terminal = facts.skip ? WRITE.sales.skipped : WRITE.sales.failed;
   await db.raw(
     `UPDATE qb_order_pipeline
-        SET status = ?, error = ?, failed_at = CASE WHEN ? = 'failed' THEN NOW() ELSE failed_at END, updated_at = NOW()
-      WHERE id = ?::uuid AND status IN ('pending', 'waiting')`,
+        SET status = ?, error = ?, failed_at = CASE WHEN ? = '${WRITE.sales.failed}' THEN NOW() ELSE failed_at END, updated_at = NOW()
+      WHERE id = ?::uuid AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked})`,
     [terminal, facts.reason, terminal, operation.id]
   );
   return { queued: true, pipelineRowId: operation.id, status: terminal };
@@ -138,7 +152,7 @@ export async function enqueueGlDocumentVoid(
     if (unsent) {
       await db.raw(
         `UPDATE qb_order_pipeline
-            SET status = 'skipped', error = ?, updated_at = NOW()
+            SET status = '${WRITE.sales.skipped}', error = ?, updated_at = NOW()
           WHERE id = ?::uuid AND status = ANY(?::text[])`,
         ["document voided in the POS before its Add reached QuickBooks", unsent.id, [...LIVE_UNSENT]]
       );
@@ -155,7 +169,7 @@ export async function enqueueGlDocumentVoid(
   }
 
   const existing = await findLiveVoidRow(db, kind, documentId, link.qb_txn_id);
-  if (existing) return { queued: true, pipelineRowId: existing.id, status: "pending" };
+  if (existing) return { queued: true, pipelineRowId: existing.id, status: WRITE.sales.dispatchable };
 
   const payload: GlDocumentVoidPayload = {
     kind,

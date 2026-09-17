@@ -12,6 +12,7 @@
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const DB_URL =
   process.env.DATABASE_URL ||
@@ -103,7 +104,7 @@ async function main() {
         'void_invoice','void_sales_receipt','void_check','payment','apply_payment',
         'inventory_adjustment','void_inventory_adjustment'
       )
-      AND status = 'pending'
+      AND status = '${WRITE.sales.dispatchable}'
       AND id = $1
     `, [id]);
 
@@ -136,10 +137,10 @@ async function main() {
     const updatedPayload = { ...payload, count_memo: "updated memo" };
     const updateRes = await client.query(
       `UPDATE qb_order_pipeline
-          SET status = 'pending', payload = $2::jsonb, error = NULL,
+          SET status = '${WRITE.sales.dispatchable}', payload = $2::jsonb, error = NULL,
               next_retry_at = NULL, updated_at = NOW()
         WHERE reference_id = $1 AND step = 'inventory_adjustment'
-          AND status IN ('pending', 'failed')
+          AND status IN ('${WRITE.sales.dispatchable}', '${WRITE.sales.failed}')
         RETURNING id`,
       [referenceId, JSON.stringify(updatedPayload)]
     );

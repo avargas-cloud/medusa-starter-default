@@ -24,6 +24,7 @@ import {
 } from "./_lib/_qb-vendor-bill-invariant-sections";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { PURCHASE_SQL, SALES_SQL, pipelineStatusIs } from "../lib/quickbooks/pipeline-status";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
 const ADMIN_BASE_URL =
@@ -108,8 +109,10 @@ const renderSection = (section: PipelineSection): string => {
   }
 
   const tableRows = section.rows
-    .map(
-      (r) => `
+    .map((r) => {
+      const rowRow = { status: r.status };
+      const isTerminal = pipelineStatusIs("purchase", rowRow, "failed");
+      return `
       <tr>
         <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px; color: #111;">
           ${escapeHtml(r.medusa_ref || "—")}
@@ -121,7 +124,7 @@ const renderSection = (section: PipelineSection): string => {
           ${escapeHtml(r.step || "—")}
         </td>
         <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 12px;">
-          <span style="background: ${r.status === "failed_permanent" || r.status === "failed" ? "#fee2e2" : "#fef3c7"}; padding: 2px 6px; border-radius: 4px;">
+          <span style="background: ${isTerminal ? "#fee2e2" : "#fef3c7"}; padding: 2px 6px; border-radius: 4px;">
             ${escapeHtml(r.status)}
           </span>
         </td>
@@ -134,8 +137,8 @@ const renderSection = (section: PipelineSection): string => {
         <td style="padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 12px; color: #b91c1c; max-width: 320px;">
           ${escapeHtml((r.error ?? "").slice(0, 240))}${(r.error ?? "").length > 240 ? "…" : ""}
         </td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join("");
 
   return (
@@ -333,7 +336,7 @@ export async function buildDigestEmail(
        o.display_id AS order_display_id
      FROM qb_order_pipeline p
      LEFT JOIN "order" o ON o.id = p.order_id
-     WHERE p.status = 'failed'
+     WHERE p.status IN (${SALES_SQL.failed})
        AND p.next_retry_at IS NULL
        AND (
          -- (a) broke or retried inside the window — the daily "what happened
@@ -393,9 +396,9 @@ export async function buildDigestEmail(
          -- own (same auto-retry ladder as the other 3 pipelines) — only
          -- failed_permanent (exhausted) or an 'error' with nothing scheduled
          -- counts as a real, non-self-resolving error.
-         ((status = 'failed_permanent' OR (status = 'error' AND next_retry_at IS NULL))
+         ((status IN (${PURCHASE_SQL.failed}) OR (status IN (${PURCHASE_SQL.error}) AND next_retry_at IS NULL))
           AND updated_at >= ?)
-         OR (status NOT IN ('synced', 'failed_permanent')
+         OR (status NOT IN (${PURCHASE_SQL.synced}, ${PURCHASE_SQL.failed})
              AND created_at < now() - interval '2 hours'
              -- Dedup: don't repeat the exact same still-broken incident every
              -- day. Re-surface only if it's new (never notified), something
@@ -439,7 +442,7 @@ export async function buildDigestEmail(
        ic.number AS count_number
      FROM qb_inventory_adjustment_pipeline p
      LEFT JOIN inventory_count ic ON ic.id = p.inventory_count_id
-     WHERE p.status = 'error'
+     WHERE p.status IN (${PURCHASE_SQL.error})
        AND p.next_retry_at IS NULL
        AND p.updated_at >= ?
        AND p.deleted_at IS NULL
@@ -473,7 +476,7 @@ export async function buildDigestEmail(
        po.reference_number AS po_reference_number
      FROM qb_purchase_order_pipeline p
      LEFT JOIN purchase_order po ON po.id = p.purchase_order_id
-     WHERE (p.status = 'failed_permanent' OR (p.status = 'error' AND p.next_retry_at IS NULL))
+     WHERE (p.status IN (${PURCHASE_SQL.failed}) OR (p.status IN (${PURCHASE_SQL.error}) AND p.next_retry_at IS NULL))
        AND p.updated_at >= ?
        AND p.deleted_at IS NULL
      ORDER BY p.updated_at DESC
@@ -566,7 +569,7 @@ export async function buildDigestEmail(
           .join(" · "),
         error:
           r.last_error ??
-          (r.status !== "error" && r.status !== "failed_permanent"
+          (!pipelineStatusIs("purchase", r, "error", "failed")
             ? `Stuck in '${r.status}' since ${new Date(r.created_at).toLocaleString("en-US")}`
             : null),
         retries: r.retries ?? 0,

@@ -207,7 +207,7 @@ async function runDirectQuery(
       throw new Error(`Bridge operation ${operationId} expired`);
     }
     const status = (polled.data as Record<string, any>)?.operation?.status;
-    if (status === "failed") {
+    if (status === "failed") { // bridge-status
       throw new Error(
         String(
           (polled.data as Record<string, any>)?.operation?.error ??
@@ -215,7 +215,7 @@ async function runDirectQuery(
         )
       );
     }
-    if (status === "completed") return polled.data;
+    if (status === "completed") return polled.data; // bridge-status
   }
   throw new Error(
     `Bridge operation ${operationId} did not complete within ${Math.round(timeoutMs / 1000)}s`

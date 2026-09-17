@@ -11,6 +11,7 @@
  *     npx medusa exec ./src/scripts/verify/verify-qb-edit-sequence-auto-heal.ts
  */
 import { stepToCacheEntityType } from "../../lib/quickbooks/consolidator/refresh-edit-sequence";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 export default async function verifyQbEditSequenceAutoHeal({
   container,
@@ -56,7 +57,7 @@ export default async function verifyQbEditSequenceAutoHeal({
         SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{editSequence}', to_jsonb(?::text)),
             next_retry_at = NOW(),
             updated_at = NOW()
-      WHERE id = ? AND status = 'failed'`,
+      WHERE id = ? AND status = '${WRITE.sales.failed}'`,
     ["FAKE-EDITSEQ-123", bogusId]
   );
   const rowCount = result.rowCount ?? result.rows?.length ?? 0;

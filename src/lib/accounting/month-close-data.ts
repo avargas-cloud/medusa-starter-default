@@ -1,5 +1,6 @@
 import { avgCostDollars } from "../cost/cost-sql";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { SALES_SQL } from "../quickbooks/pipeline-status";
 import { etMidnightUtc } from "../date/et";
 import { getDbPool } from "../../api/utils/db-pool";
 import { computeBillBalancesBatch } from "../finance/recompute-bill-finance";
@@ -213,7 +214,7 @@ export async function loadOpenDocuments(
            AND COALESCE(NULLIF(o.metadata->>'order_placed_at', '')::timestamptz, o.created_at) >= ?
            AND COALESCE(NULLIF(o.metadata->>'order_placed_at', '')::timestamptz, o.created_at) < ?
            AND o.is_draft_order = false
-           AND o.status NOT IN ('completed','canceled','archived')
+           AND o.status NOT IN ('completed','canceled','archived') -- entity-status
            AND COALESCE((o.metadata->>'pos_closed')::boolean, false) = false
            AND COALESCE(o.metadata->>'qb_sync_status', '') <> 'voided'
            AND (
@@ -255,7 +256,7 @@ export async function loadOpenDocuments(
          WHERE i.deleted_at IS NULL
            AND COALESCE(i.issued_at, i.created_at) >= ?
            AND COALESCE(i.issued_at, i.created_at) < ?
-           AND i.status <> 'voided'
+           AND i.status <> 'voided' -- entity-status
            AND (
              i.balance_due > 0
              OR i.fulfillment_id IS NULL
@@ -296,13 +297,13 @@ export async function loadOpenDocuments(
            AND vb.status = 'draft')::int AS vendor_bills,
        (SELECT COUNT(*) FROM pos_credit_memo cm
          WHERE cm.deleted_at IS NULL AND cm.created_at >= ? AND cm.created_at < ?
-           AND cm.status NOT IN ('completed','voided'))::int AS credit_memos,
+           AND cm.status NOT IN ('completed','voided'))::int AS credit_memos, -- entity-status
        (SELECT COUNT(*) FROM inventory_count ic
          WHERE ic.deleted_at IS NULL AND ic.created_at >= ? AND ic.created_at < ?
-           AND ic.status IN ('draft','submitted','partially_applied'))::int AS inventory_adjustments,
+           AND ic.status IN ('draft','submitted','partially_applied'))::int AS inventory_adjustments, -- entity-status
        (SELECT COUNT(*) FROM qb_order_pipeline qp
          WHERE qp.created_at >= ? AND qp.created_at < ?
-           AND qp.status IN ('pending','processing','submitted','waiting','failed'))::int AS qb_unsynced`,
+           AND qp.status IN (${SALES_SQL.inFlight}, ${SALES_SQL.failedAny}))::int AS qb_unsynced`,
     [
       range.from, range.to,
       range.from, range.to,

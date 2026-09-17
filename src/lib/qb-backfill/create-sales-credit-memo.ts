@@ -29,6 +29,7 @@ import {
   type SalesApplyContext,
 } from "./sales-context";
 import type { QbCreditMemo } from "./sales-types";
+import { WRITE } from "../quickbooks/pipeline-status";
 
 export type CreditMemoCreateResult =
   | { ok: true; credit_memo_id: string; credit_memo_number: string; linked_invoice: string | null }
@@ -67,7 +68,7 @@ export async function createCreditMemoFromQb(ctx: SalesApplyContext, cm: QbCredi
       order_id: target?.order_id ?? null,
       invoice_id: target?.invoice_id ?? null,
       customer_id: customerId,
-      status: "completed",
+      status: "completed", // entity-status
       subtotal: t.subtotal_cents,
       discount: t.discount_cents,
       shipping: t.shipping_cents,
@@ -113,7 +114,7 @@ export async function createCreditMemoFromQb(ctx: SalesApplyContext, cm: QbCredi
   await backdateChildren(ctx.client, "pos_credit_memo_item", "credit_memo_id", cmId, at);
 
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: target?.order_id ?? null, referenceId: cmId, referenceType: "credit_memo", step: "credit_memo", status: "confirmed",
+    orderId: target?.order_id ?? null, referenceId: cmId, referenceType: "credit_memo", step: "credit_memo", status: WRITE.sales.synced,
     qbTxnId: cm.txn_id, qbRefNumber: cm.ref_number, medusaRefNumber: number,
     payload: { txn_type: "CreditMemo", edit_sequence: cm.edit_sequence, source: `QB CreditMemo ${cm.ref_number ?? cm.txn_id}` },
   });

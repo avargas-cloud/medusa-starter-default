@@ -17,6 +17,7 @@ import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { voidReceiptSchema } from "../../_lib/validators";
 import { zodErrorToBody } from "../../_lib/format";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
+import { WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 
 interface PoHeader {
   id: string;
@@ -93,13 +94,13 @@ export async function POST(
   )) as unknown as PoLine[];
 
   const lineUpdates = lines
-    .filter((l) => l.status !== "cancelled" && l.status !== "complete")
+    .filter((l) => l.status !== "cancelled" && l.status !== "complete") // entity-status
     .map((l) => {
       const remaining = l.qty_ordered - l.qty_received - l.qty_cancelled;
       return {
         id: l.id,
         qty_cancelled: l.qty_cancelled + Math.max(0, remaining),
-        status: (l.qty_received > 0 ? "partial" : "cancelled") as "partial" | "cancelled",
+        status: (l.qty_received > 0 ? "partial" : "cancelled") as "partial" | "cancelled", // entity-status
       };
     });
 
@@ -110,7 +111,7 @@ export async function POST(
   const [updated] = await service.updatePurchaseOrders([
     {
       id,
-      status: "voided",
+      status: "voided", // entity-status
       voided_at: new Date(),
       voided_by_user_id: userId,
       void_reason,
@@ -134,7 +135,7 @@ export async function POST(
     try {
       const result = await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status          = 'waiting',
+            SET status          = '${WRITE.purchase.dispatchable}',
                 qb_operation_id = NULL,
                 payload         = ?,
                 retries         = 0,
@@ -148,7 +149,7 @@ export async function POST(
       );
       if ((result.rowCount ?? 0) === 0) {
         await service.createQbPurchaseOrderPipelines([
-          { purchase_order_id: id, status: "waiting", payload: voidPayload },
+          { purchase_order_id: id, status: WRITE.purchase.dispatchable, payload: voidPayload },
         ]);
       }
     } catch (qbErr) {

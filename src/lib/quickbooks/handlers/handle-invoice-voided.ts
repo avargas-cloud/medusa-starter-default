@@ -3,6 +3,7 @@ import { FINANCE_MODULE } from "../../../modules/finance";
 import { findInFlightQbRows } from "../pipeline/in-flight";
 import { writePipelineRow } from "../qb-pipeline";
 import { QbSyncLogger } from "../qb-sync-logger";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 import { LOG_PREFIX } from "./utils";
 
@@ -58,7 +59,7 @@ export async function handleInvoiceVoided(
           `SELECT qb_txn_id, qb_ref_number FROM qb_order_pipeline
             WHERE reference_id = $1
               AND step IN ('invoice','sales_receipt')
-              AND status = 'confirmed'
+              AND status IN (${SALES_SQL.synced})
               AND qb_txn_id IS NOT NULL
             ORDER BY confirmed_at DESC LIMIT 1`,
           [invoice_id]
@@ -178,7 +179,7 @@ export async function handleInvoiceVoided(
     referenceId: invoice_id ?? null,
     referenceType: "pos_invoice",
     step: pipelineStep,
-    status: "pending",
+    status: WRITE.sales.dispatchable,
     qbTxnId: invoiceTxnId,
     qbRefNumber: invoiceRef ?? null,
     medusaRefNumber: friendlyInvoiceId ?? invoiceRef ?? invoice_id ?? null,
@@ -228,7 +229,7 @@ async function voidSRPaymentIfExists({
              WHERE pa.invoice_id = $1
                AND (cp.metadata->>'qb_source' = 'sales_receipt'
                     OR cp.metadata->>'is_sales_receipt_payment' = 'true')
-               AND cp.status != 'voided'
+               AND cp.status != 'voided' -- entity-status
              LIMIT 1`,
       [invoice_id]
     );
@@ -243,14 +244,14 @@ async function voidSRPaymentIfExists({
     const payment = res.rows[0];
     await financeService.updateCustomerPayments({
       id: payment.id,
-      status: "voided",
+      status: "voided", // entity-status
       metadata: {
         ...(payment.metadata || {}),
         qb_sync_status: "voided",
       },
       qb: {
         ...(payment.qb || {}),
-        status: "voided",
+        status: "voided", // entity-status
       },
     });
     logger.info(

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "crypto";
 
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../quickbooks/pipeline-status";
 
 export type PurchaseQbStep =
   | "purchase_order_mod"
@@ -69,7 +70,7 @@ export interface EnqueuePurchaseQbOperationInput {
 
 export interface EnqueuedPurchaseQbOperation {
   id: string;
-  status: "pending" | "waiting";
+  status: typeof WRITE.sales.dispatchable | typeof WRITE.sales.blocked;
   dependsOn: string | null;
   reused: boolean;
 }
@@ -85,8 +86,6 @@ interface TailRow extends PipelineRow {
   reference_id: string | null;
   payload: Record<string, unknown> | null;
 }
-
-const SUCCESS_STATUSES = new Set(["confirmed", "fixed"]);
 
 /**
  * Steps whose queued-but-unsent row can absorb a newer edit of the same
@@ -181,7 +180,7 @@ export async function enqueuePurchaseQbOperation(
     if (coalesced) return toResult(coalesced, true);
 
     const id = randomUUID();
-    const status = tailId ? "waiting" : "pending";
+    const status = tailId ? WRITE.sales.blocked : WRITE.sales.dispatchable;
     const insertedResult = await trx.raw(
       `INSERT INTO qb_order_pipeline
          (id, order_id, reference_id, reference_type, step, depends_on, status,
@@ -285,10 +284,10 @@ async function coalesceIntoTail(
                 OR EXISTS (
                   SELECT 1 FROM qb_order_pipeline parent
                    WHERE parent.id = qb_order_pipeline.depends_on
-                     AND parent.status IN ('confirmed', 'fixed')
+                     AND parent.status IN (${SALES_SQL.done})
                 )
-              THEN 'pending'
-              ELSE 'waiting'
+              THEN '${WRITE.sales.dispatchable}'
+              ELSE '${WRITE.sales.blocked}'
             END,
             bridge_op_id = NULL, submitted_at = NULL, failed_at = NULL,
             next_retry_at = NULL, retry_count = 0,
@@ -339,11 +338,11 @@ function toResult(
 ): EnqueuedPurchaseQbOperation {
   return {
     id: String(row.id),
-    status: SUCCESS_STATUSES.has(String(row.status))
-      ? "pending"
-      : row.status === "pending"
-        ? "pending"
-        : "waiting",
+    status:
+      pipelineStatusIs("sales", row, "synced", "fixed") ||
+      pipelineStatusIs("sales", row, "waiting")
+        ? WRITE.sales.dispatchable
+        : WRITE.sales.blocked,
     dependsOn: row.depends_on ? String(row.depends_on) : null,
     reused,
   };

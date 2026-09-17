@@ -138,7 +138,7 @@ async function main() {
       FROM "order" o
       JOIN order_item oi ON oi.order_id = o.id AND oi.version = o.version AND oi.deleted_at IS NULL
       JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
-     WHERE o.deleted_at IS NULL AND o.status = 'pending' AND o.is_draft_order = false
+     WHERE o.deleted_at IS NULL AND o.status = 'pending' AND o.is_draft_order = false -- entity-status
        AND o.customer_id IS NOT NULL
        AND oli.variant_id IS NOT NULL
        -- Una línea sin inventory item está FUERA del dominio de separación

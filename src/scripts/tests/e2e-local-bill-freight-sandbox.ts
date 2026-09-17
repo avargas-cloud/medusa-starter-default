@@ -651,7 +651,7 @@ async function main(): Promise<void> {
     );
 
     const billEAfter = await db.query<{ status: string }>(`SELECT status FROM vendor_bill WHERE id = $1`, [billE]);
-    check("el bill queda confirmed", billEAfter.rows[0]?.status === "confirmed", String(billEAfter.rows[0]?.status));
+    check("el bill queda confirmed", billEAfter.rows[0]?.status === "confirmed", String(billEAfter.rows[0]?.status)); // entity-status
 
     const payloadRowE = await db.query<{ payload: Record<string, unknown> }>(
       `SELECT payload FROM qb_order_pipeline WHERE order_id = $1 AND step = 'vendor_bill_add'`,

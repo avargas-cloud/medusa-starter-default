@@ -24,6 +24,7 @@ import {
 } from "./qb-purchase-dependency-chain";
 import { buildBillPaymentCreditCardAddQbxml } from "../quickbooks/bill-payment-add";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { SALES_SQL, WRITE } from "../quickbooks/pipeline-status";
 import { getBusinessDateString } from "../date/et";
 import {
   loadApAccountListId,
@@ -283,8 +284,8 @@ export async function enqueueVendorCreditApply(
     );
     await knex.raw(
       `UPDATE qb_order_pipeline
-          SET status = 'waiting', depends_on = ?::uuid, updated_at = NOW()
-        WHERE id = ?::uuid AND status NOT IN ('confirmed', 'fixed')`,
+          SET status = '${WRITE.sales.blocked}', depends_on = ?::uuid, updated_at = NOW()
+        WHERE id = ?::uuid AND status NOT IN (${SALES_SQL.done})`,
       [blockerOpId, operation.id]
     );
   }

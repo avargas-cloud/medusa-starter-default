@@ -32,6 +32,7 @@ import type { QbRef } from "./types";
 import type { ItemIndex, ItemIndexEntry, QueryableDb } from "./resolve";
 import { resolveItemRef } from "./resolve";
 import type { QbSalesLine } from "./sales-types";
+import { SALES_SQL } from "../quickbooks/pipeline-status";
 
 export interface CustomerIndexEntry {
   id: string;
@@ -114,7 +115,7 @@ export async function loadKnownSalesTxnIds(db: QueryableDb): Promise<KnownSalesT
          SELECT elem->>'txn_id' FROM "order", jsonb_array_elements(metadata->'qb_invoices') elem
           WHERE deleted_at IS NULL AND jsonb_typeof(metadata->'qb_invoices') = 'array'
          UNION
-         SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'invoice' AND status NOT IN ('failed','skipped')
+         SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'invoice' AND status NOT IN (${SALES_SQL.notLive})
        ) u WHERE t IS NOT NULL AND t <> ''`
     ),
     loadTxnIdSet(
@@ -124,7 +125,7 @@ export async function loadKnownSalesTxnIds(db: QueryableDb): Promise<KnownSalesT
          UNION
          SELECT metadata->>'qb_txn_id' FROM pos_invoice WHERE deleted_at IS NULL AND metadata->>'qb_txn_id' IS NOT NULL
          UNION
-         SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'sales_receipt' AND status NOT IN ('failed','skipped')
+         SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'sales_receipt' AND status NOT IN (${SALES_SQL.notLive})
        ) u WHERE t IS NOT NULL AND t <> ''`
     ),
     loadTxnIdSet(
@@ -134,7 +135,7 @@ export async function loadKnownSalesTxnIds(db: QueryableDb): Promise<KnownSalesT
          UNION
          SELECT qb->>'txn_id' FROM customer_payment WHERE deleted_at IS NULL AND qb->>'txn_id' IS NOT NULL
          UNION
-         SELECT qb_txn_id FROM qb_order_pipeline WHERE step IN ('payment', 'apply_payment') AND status NOT IN ('failed','skipped')
+         SELECT qb_txn_id FROM qb_order_pipeline WHERE step IN ('payment', 'apply_payment') AND status NOT IN (${SALES_SQL.notLive})
          UNION
          SELECT l.qb_txn_id FROM qb_legacy_payment l JOIN customer_payment cp ON cp.id = l.applied_payment_id AND cp.deleted_at IS NULL WHERE l.qb_txn_id IS NOT NULL
        ) u WHERE t IS NOT NULL AND t <> ''`
@@ -144,7 +145,7 @@ export async function loadKnownSalesTxnIds(db: QueryableDb): Promise<KnownSalesT
       `SELECT DISTINCT t FROM (
          SELECT qb_txn_id t FROM pos_credit_memo WHERE qb_txn_id IS NOT NULL AND deleted_at IS NULL
          UNION
-         SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'credit_memo' AND status NOT IN ('failed','skipped')
+         SELECT qb_txn_id FROM qb_order_pipeline WHERE step = 'credit_memo' AND status NOT IN (${SALES_SQL.notLive})
        ) u WHERE t IS NOT NULL AND t <> ''`
     ),
   ]);

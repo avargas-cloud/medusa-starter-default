@@ -1,6 +1,7 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { bridgeFetch } from "../client/core";
 import { invalidateEditSequenceCache } from "../qb-pipeline";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -14,7 +15,11 @@ export async function runTimeoutPass(logger: any): Promise<void> {
   try {
     const { rows: timedOutRows, rowCount } = await pool.query(`
             UPDATE qb_order_pipeline
-            SET    status        = 'failed',
+            SET    status        = CASE
+                     WHEN COALESCE(retry_count, 0) < 5
+                       THEN '${WRITE.sales.error}'
+                     ELSE '${WRITE.sales.failed}'
+                   END,
                    updated_at    = NOW(),
                    error         = 'Timed out before submitted state (>20 min) — no response from QB bridge',
                    failed_at     = NOW(),
@@ -26,7 +31,7 @@ export async function runTimeoutPass(logger: any): Promise<void> {
                        THEN NOW() + INTERVAL '2 minutes'
                      ELSE NULL
                    END
-            WHERE  status IN ('pending', 'processing')
+            WHERE  status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.processing})
               AND  COALESCE(updated_at, created_at) < NOW() - INTERVAL '20 minutes'
             RETURNING id, step, order_id
         `);
@@ -76,7 +81,7 @@ export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
     const { rows: staleSubmitted } = await pool.query(
       `SELECT id, step, qb_txn_id, bridge_op_id, submitted_at
        FROM qb_order_pipeline
-       WHERE status = 'submitted' AND updated_at < NOW() - INTERVAL '30 minutes'`
+       WHERE status IN (${SALES_SQL.submitted}) AND updated_at < NOW() - INTERVAL '30 minutes'`
     );
 
     for (const row of staleSubmitted) {
@@ -138,7 +143,7 @@ export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
       // No bridge_op_id, bridge says failed/not-found, or op pending >2h
       await pool.query(
         `UPDATE qb_order_pipeline
-         SET    status       = 'failed',
+         SET    status       = '${WRITE.sales.failed}',
                 error        = 'Stale: no bridge confirmation after 30 minutes',
                 updated_at   = NOW(),
                 failed_at    = NOW(),
@@ -174,8 +179,8 @@ export async function runStalePendingCleanup(logger: any): Promise<void> {
   try {
     const { rows: stalePending } = await pool.query(
       `UPDATE qb_order_pipeline
-             SET status = 'failed', error = 'Stale: never submitted within 20 minutes', updated_at = NOW(), failed_at = NOW(), confirmed_at = NULL
-             WHERE status IN ('pending', 'processing') AND updated_at < NOW() - INTERVAL '20 minutes'
+             SET status = '${WRITE.sales.failed}', error = 'Stale: never submitted within 20 minutes', updated_at = NOW(), failed_at = NOW(), confirmed_at = NULL
+             WHERE status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.processing}) AND updated_at < NOW() - INTERVAL '20 minutes'
              RETURNING id, step, status`
     );
     for (const row of stalePending) {

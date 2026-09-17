@@ -39,6 +39,7 @@
  */
 import { createServer, type Server } from "http";
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const PREFIX = "e2e_pcnr_";
 // Port 1 (as suggested by the original spec) does NOT work: undici's fetch()
@@ -206,7 +207,7 @@ async function main(): Promise<void> {
     const r1After = await fetchRow(client, r1Id);
     const now = Date.now();
     const nextRetryMs = r1After.next_retry_at ? new Date(r1After.next_retry_at).getTime() : null;
-    assert(r1After.status === "failed", "R1.status='failed'", `got '${r1After.status}'`);
+    assert(r1After.status === WRITE.sales.failed, "R1 went to failed", `got '${r1After.status}'`);
     assert(r1After.retry_count === 1, "R1.retry_count=1", `got ${r1After.retry_count}`);
     assert(
       nextRetryMs !== null && nextRetryMs >= now + 90_000 && nextRetryMs <= now + 150_000,
@@ -231,7 +232,7 @@ async function main(): Promise<void> {
       logger
     );
     const r2After = await fetchRow(client, r2Id);
-    assert(r2After.status === "failed", "R2.status='failed'", `got '${r2After.status}'`);
+    assert(r2After.status === WRITE.sales.failed, "R2 went to failed", `got '${r2After.status}'`);
     assert(
       r2After.next_retry_at === null,
       "R2.next_retry_at IS NULL — retry is per-step, not global"
@@ -249,7 +250,7 @@ async function main(): Promise<void> {
     process.env.QB_BRIDGE_URL = `http://127.0.0.1:${port}`;
     await client.query(
       `UPDATE qb_order_pipeline
-          SET status = 'processing', next_retry_at = NULL, updated_at = NOW()
+          SET status = '${WRITE.sales.processing}', next_retry_at = NULL, updated_at = NOW()
         WHERE id = $1`,
       [r1Id]
     );
@@ -262,8 +263,8 @@ async function main(): Promise<void> {
     );
     const r1Recovered = await fetchRow(client, r1Id);
     assert(
-      r1Recovered.status === "submitted",
-      "R1.status='submitted'",
+      r1Recovered.status === WRITE.sales.submitted,
+      "R1 went to submitted",
       `got '${r1Recovered.status}'`
     );
     assert(

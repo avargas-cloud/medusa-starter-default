@@ -2,7 +2,13 @@ import { ArrowPath } from "@medusajs/icons";
 import { Badge, Container, Heading, IconButton, Text } from "@medusajs/ui";
 import { useCallback, useEffect, useState } from "react";
 
-type Bucket = "pending" | "processing" | "completed" | "failed" | "skipped";
+import {
+  PIPELINE_STATUSES,
+  STATUS_PRESENTATION,
+  type PipelineStatus,
+} from "../../../../lib/quickbooks/pipeline-status";
+
+type Bucket = PipelineStatus;
 
 type PipelineSummary = {
   key: string;
@@ -20,30 +26,19 @@ type SummaryResponse = {
   error?: string;
 };
 
-const BUCKET_ORDER: Bucket[] = [
-  "pending",
-  "processing",
-  "completed",
-  "failed",
-  "skipped",
-];
+const BUCKET_ORDER: Bucket[] = [...PIPELINE_STATUSES];
 
-const BUCKET_LABEL: Record<Bucket, string> = {
-  pending: "Pending",
-  processing: "Processing",
-  completed: "Completed",
-  failed: "Failed",
-  skipped: "Skipped",
-};
-
-// Tailwind text colors per bucket. Kept neutral so the card doesn't scream
-// when everything is fine; only red Failed and green Completed pop.
+// Tailwind text colors per canonical bucket (same tone table the badges use).
 const BUCKET_TEXT: Record<Bucket, string> = {
-  pending: "text-ui-fg-subtle",
+  waiting: "text-ui-fg-subtle",
+  blocked: "text-ui-fg-subtle",
   processing: "text-ui-tag-blue-text",
-  completed: "text-ui-tag-green-text",
+  submitted: "text-ui-tag-blue-text",
+  synced: "text-ui-tag-green-text",
+  error: "text-ui-tag-orange-text",
   failed: "text-ui-tag-red-text",
   skipped: "text-ui-fg-muted",
+  fixed: "text-ui-tag-purple-text",
 };
 
 const REFRESH_MS = 30_000;
@@ -77,6 +72,14 @@ export const PipelinesBreakdown = () => {
     const id = setInterval(() => void load(), REFRESH_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  // Buckets with zero across every pipeline (and the totals row) are hidden —
+  // nine columns for meanings nothing in this deploy ever hits is just noise.
+  const visibleBuckets = BUCKET_ORDER.filter((b) => {
+    if ((data?.totals.counts[b] ?? 0) > 0) return true;
+    return (data?.pipelines ?? []).some((p) => p.counts[b] > 0);
+  });
+  const columns = visibleBuckets.length > 0 ? visibleBuckets : BUCKET_ORDER;
 
   return (
     <Container className="p-4">
@@ -121,9 +124,9 @@ export const PipelinesBreakdown = () => {
           <thead>
             <tr className="text-ui-fg-subtle text-xs uppercase tracking-wide">
               <th className="text-left font-medium pb-2">Pipeline</th>
-              {BUCKET_ORDER.map((b) => (
+              {columns.map((b) => (
                 <th key={b} className="text-right font-medium pb-2 px-3">
-                  {BUCKET_LABEL[b]}
+                  {STATUS_PRESENTATION[b].label}
                 </th>
               ))}
               <th className="text-right font-medium pb-2 pl-3">Total</th>
@@ -131,12 +134,12 @@ export const PipelinesBreakdown = () => {
           </thead>
           <tbody>
             {(data?.pipelines ?? []).map((p) => (
-              <PipelineRow key={p.key} pipeline={p} />
+              <PipelineRow key={p.key} pipeline={p} columns={columns} />
             ))}
             {data?.totals ? (
               <tr className="border-t border-ui-border-base font-semibold">
                 <td className="py-2 text-ui-fg-base">All pipelines</td>
-                {BUCKET_ORDER.map((b) => (
+                {columns.map((b) => (
                   <td
                     key={b}
                     className={`py-2 px-3 text-right tabular-nums ${BUCKET_TEXT[b]}`}
@@ -151,7 +154,7 @@ export const PipelinesBreakdown = () => {
             ) : null}
             {!data && !error ? (
               <tr>
-                <td colSpan={BUCKET_ORDER.length + 2} className="py-4">
+                <td colSpan={columns.length + 2} className="py-4">
                   <Text className="text-ui-fg-subtle text-sm">Loading…</Text>
                 </td>
               </tr>
@@ -163,9 +166,9 @@ export const PipelinesBreakdown = () => {
   );
 };
 
-type RowProps = { pipeline: PipelineSummary };
+type RowProps = { pipeline: PipelineSummary; columns: Bucket[] };
 
-const PipelineRow = ({ pipeline }: RowProps) => {
+const PipelineRow = ({ pipeline, columns }: RowProps) => {
   const onJump = () => {
     // Tabs are rendered as buttons with `value` mapped to the tab key.
     const trigger = document.querySelector<HTMLButtonElement>(
@@ -174,7 +177,7 @@ const PipelineRow = ({ pipeline }: RowProps) => {
     trigger?.click();
   };
 
-  const failed = pipeline.counts.failed;
+  const failed = (pipeline.counts.error ?? 0) + (pipeline.counts.failed ?? 0);
 
   return (
     <tr
@@ -191,7 +194,7 @@ const PipelineRow = ({ pipeline }: RowProps) => {
           ) : null}
         </div>
       </td>
-      {BUCKET_ORDER.map((b) => (
+      {columns.map((b) => (
         <td
           key={b}
           className={`py-2 px-3 text-right tabular-nums ${BUCKET_TEXT[b]}`}

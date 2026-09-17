@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * QuickBooks Vendor Bill sync queue.
@@ -36,7 +37,7 @@ export const QbVendorBillPipeline = model.define("qb_vendor_bill_pipeline", {
   vendor_bill_id: model.text(),
   purchase_order_id: model.text().nullable(), // denormalized for admin views
 
-  status: model.text().default("waiting"),
+  status: model.text().default(WRITE.purchase.dispatchable),
   intent: model.text().default("add"), // add | mod | rebuild_* | void
 
   // Bridge / QB identifiers

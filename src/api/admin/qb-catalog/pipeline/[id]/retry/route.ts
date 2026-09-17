@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../../modules/quickbooks-catalog";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 type PipelineRow = {
   id: string;
@@ -56,7 +57,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     await catalog.updateQbItemPipelines({
       id: row.id,
-      status: "waiting",
+      status: WRITE.purchase.dispatchable,
       retries: 0,
       qb_operation_id: null,
       next_retry_at: null,

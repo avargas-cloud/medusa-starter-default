@@ -74,6 +74,7 @@ import { handleVendorCreditVoidConfirmed } from "../handlers/handle-vendor-credi
 import { handleBillPaymentAddConfirmed } from "../handlers/handle-bill-payment-add";
 import { handleBillPaymentVoidConfirmed } from "../handlers/handle-bill-payment-void";
 import { handleVendorCreditApplyConfirmed } from "../handlers/handle-vendor-credit-apply";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -627,7 +628,7 @@ export async function pollSubmittedRows(
             "BillMod completed without BillRet";
           await pool.query(
             `UPDATE qb_vendor_bill_pipeline
-                SET status = 'error', qb_operation_id = NULL,
+                SET status = '${WRITE.purchase.error}', qb_operation_id = NULL,
                     last_error = $2, updated_at = NOW()
               WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
             [row.reference_id, String(statusMessage)]
@@ -719,7 +720,7 @@ export async function pollSubmittedRows(
               : null;
           await pool.query(
             `UPDATE qb_vendor_bill_pipeline
-                  SET status = 'synced', qb_operation_id = NULL,
+                  SET status = '${WRITE.purchase.synced}', qb_operation_id = NULL,
                       qb_txn_id = COALESCE($2, qb_txn_id),
                       qb_ref_number = COALESCE($3, qb_ref_number),
                       edit_sequence = $4, synced_at = NOW(), retries = 0,
@@ -729,7 +730,7 @@ export async function pollSubmittedRows(
           );
           await pool.query(
             `UPDATE vendor_bill
-                  SET status = 'synced', qb_source = 'owned',
+                  SET status = 'synced', qb_source = 'owned', -- entity-status: vendor_bill.status
                       qb_txn_id = COALESCE($2, qb_txn_id),
                       qb_ref_number = COALESCE($3, qb_ref_number),
                       qb_edit_sequence = $4, qb_synced_at = NOW(),
@@ -1237,8 +1238,8 @@ export async function pollSubmittedRows(
           try {
             await pool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'pending', updated_at = NOW()
-                WHERE depends_on = $1 AND step = 'void_check' AND status = 'waiting'`,
+                  SET status = '${WRITE.sales.dispatchable}', updated_at = NOW()
+                WHERE depends_on = $1 AND step = 'void_check' AND status IN (${SALES_SQL.blocked})`,
               [row.id]
             );
           } catch (wakeErr: any) {
@@ -1285,12 +1286,12 @@ export async function pollSubmittedRows(
           try {
             await pool.query(
               `UPDATE customer_payment
-                             SET qb = COALESCE(qb, '{}'::jsonb) || '{"status":"voided"}'::jsonb
+                             SET qb = COALESCE(qb, '{}'::jsonb) || '{"status":"voided"}'::jsonb -- entity-status: customer_payment.qb
                              WHERE id = $1`,
               [row.reference_id]
             );
             logger.info(
-              `${LOG_PREFIX} ✅ Synced customer_payment ${row.reference_id} → qb.status='voided' (void_check)`
+              `${LOG_PREFIX} ✅ Synced customer_payment ${row.reference_id} → qb.status='voided' (void_check)` // entity-status
             );
           } catch (cpErr: any) {
             logger.warn(
@@ -1309,7 +1310,7 @@ export async function pollSubmittedRows(
             await pool.query(
               `UPDATE customer_payment
                   SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
-                      qb = COALESCE(qb, '{}'::jsonb) || '{"status":"voided"}'::jsonb
+                      qb = COALESCE(qb, '{}'::jsonb) || '{"status":"voided"}'::jsonb -- entity-status: customer_payment.qb
                 WHERE id = $1`,
               [
                 row.reference_id,
@@ -1480,7 +1481,7 @@ export async function pollSubmittedRows(
                                      updated_at = NOW()
                                  WHERE reference = $1
                                    AND type = 'credit_memo'
-                                   AND status <> 'voided'
+                                   AND status <> 'voided' -- entity-status: customer_payment.status
                                    AND deleted_at IS NULL
                                    AND (metadata->>'qb_txn_id') IS DISTINCT FROM $4`,
                 [
@@ -1511,7 +1512,7 @@ export async function pollSubmittedRows(
           try {
             const { rows: waitingVoidCms } = await pool.query(
               `SELECT id FROM qb_order_pipeline
-                             WHERE depends_on = $1 AND status = 'waiting' AND step = 'void_credit_memo'`,
+                             WHERE depends_on = $1 AND status IN (${SALES_SQL.blocked}) AND step = 'void_credit_memo'`,
               [row.id]
             );
             for (const vcRow of waitingVoidCms) {
@@ -1524,7 +1525,7 @@ export async function pollSubmittedRows(
                 if (vcResult.success && vcResult.data?.operationId) {
                   await pool.query(
                     `UPDATE qb_order_pipeline
-                                         SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3, submitted_at = NOW()
+                                         SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3, submitted_at = NOW()
                                          WHERE id = $1`,
                     [vcRow.id, vcResult.data.operationId, txnId]
                   );
@@ -1534,7 +1535,7 @@ export async function pollSubmittedRows(
                 } else {
                   await pool.query(
                     `UPDATE qb_order_pipeline
-                                         SET status = 'failed', error = $2, qb_txn_id = $3, failed_at = NOW()
+                                         SET status = '${WRITE.sales.failed}', error = $2, qb_txn_id = $3, failed_at = NOW()
                                          WHERE id = $1`,
                     [vcRow.id, vcResult.error ?? "QB CM void failed", txnId]
                   );
@@ -1586,7 +1587,7 @@ export async function pollSubmittedRows(
                 `SELECT rp.id, rp.reference_id, rp.payload
                                  FROM qb_order_pipeline rp
                                  WHERE rp.step = 'refund_payment'
-                                   AND rp.status = 'waiting'
+                                   AND rp.status IN (${SALES_SQL.blocked})
                                    AND rp.depends_on = $1`,
                 [row.id]
               );
@@ -1625,7 +1626,7 @@ export async function pollSubmittedRows(
                     SET payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb,
                         updated_at = NOW()
                   WHERE step = 'write_check' AND reference_id = $1
-                    AND status = 'confirmed'`,
+                    AND status IN (${SALES_SQL.synced})`,
                 [row.reference_id, JSON.stringify({ bankAccountId: modBankId })]
               );
               logger.info(
@@ -1667,7 +1668,7 @@ export async function pollSubmittedRows(
           try {
             const { rows: csetRows } = await pool.query(
               `UPDATE commission_settlement
-                  SET qb_payment_txn_id = $2, status = 'confirmed', updated_at = NOW()
+                  SET qb_payment_txn_id = $2, status = 'confirmed', updated_at = NOW() -- entity-status: commission_settlement.status
                 WHERE id = $1
                 RETURNING recipient_id`,
               [row.reference_id, txnId]
@@ -1792,7 +1793,7 @@ export async function pollSubmittedRows(
           try {
             const { rows: waitingRows } = await pool.query(
               `SELECT id, step, order_id FROM qb_order_pipeline
-                             WHERE depends_on = $1 AND status = 'waiting'
+                             WHERE depends_on = $1 AND status IN (${SALES_SQL.blocked})
                                AND step IN ('so_close', 'so_reopen')`,
               [row.id]
             );
@@ -1822,7 +1823,7 @@ export async function pollSubmittedRows(
                 if (wResult.success && wResult.data?.operationId) {
                   await pool.query(
                     `UPDATE qb_order_pipeline
-                                         SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
+                                         SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW()
                                          WHERE id = $1`,
                     [waitingRow.id, wResult.data.operationId]
                   );
@@ -1832,7 +1833,7 @@ export async function pollSubmittedRows(
                 } else {
                   await pool.query(
                     `UPDATE qb_order_pipeline
-                                         SET status = 'failed', error = $2, failed_at = NOW()
+                                         SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW()
                                          WHERE id = $1`,
                     [waitingRow.id, wResult.error ?? "QB sync failed"]
                   );
@@ -1858,7 +1859,7 @@ export async function pollSubmittedRows(
           try {
             const { rows: waitingVoids } = await pool.query(
               `SELECT id, step FROM qb_order_pipeline
-                             WHERE depends_on = $1 AND status = 'waiting'
+                             WHERE depends_on = $1 AND status IN (${SALES_SQL.blocked})
                                AND step IN ('void_sales_order', 'void_invoice', 'estimate_deactivate')`,
               [row.id]
             );
@@ -1877,7 +1878,7 @@ export async function pollSubmittedRows(
                 if (vResult.success && vResult.data?.operationId) {
                   await pool.query(
                     `UPDATE qb_order_pipeline
-                                         SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3, submitted_at = NOW()
+                                         SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3, submitted_at = NOW()
                                          WHERE id = $1`,
                     [voidRow.id, vResult.data.operationId, txnId]
                   );
@@ -1887,7 +1888,7 @@ export async function pollSubmittedRows(
                 } else {
                   await pool.query(
                     `UPDATE qb_order_pipeline
-                                         SET status = 'failed', error = $2, qb_txn_id = $3, failed_at = NOW()
+                                         SET status = '${WRITE.sales.failed}', error = $2, qb_txn_id = $3, failed_at = NOW()
                                          WHERE id = $1`,
                     [voidRow.id, vResult.error ?? "QB void failed", txnId]
                   );
@@ -2101,7 +2102,7 @@ export async function pollSubmittedRows(
         if (row.step === "vendor_bill_mod" && row.reference_id) {
           await pool.query(
             `UPDATE qb_vendor_bill_pipeline
-                SET status = 'error', qb_operation_id = NULL,
+                SET status = '${WRITE.purchase.error}', qb_operation_id = NULL,
                     last_error = $2, updated_at = NOW()
               WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
             [row.reference_id, errMsg]
@@ -2188,12 +2189,12 @@ export async function pollSubmittedRows(
           try {
             const { rowCount } = await pool.query(
               `UPDATE qb_order_pipeline
-                             SET status       = 'failed',
+                             SET status       = '${WRITE.sales.failed}',
                                  error        = $2,
                                  failed_at    = NOW(),
                                  confirmed_at = NULL,
                                  updated_at   = NOW()
-                             WHERE depends_on = $1 AND status = 'waiting'
+                             WHERE depends_on = $1 AND status IN (${SALES_SQL.blocked})
                                AND step IN ('so_close', 'so_reopen')`,
               [row.id, `Dependency ${row.id} (${row.step}) failed`]
             );
@@ -2214,13 +2215,13 @@ export async function pollSubmittedRows(
           try {
             const { rowCount: vcSkipCount } = await pool.query(
               `UPDATE qb_order_pipeline
-                             SET status       = 'skipped',
+                             SET status       = '${WRITE.sales.skipped}',
                                  error        = $2,
                                  submitted_at = NULL,
                                  confirmed_at = NULL,
                                  failed_at    = NULL,
                                  updated_at   = NOW()
-                             WHERE depends_on = $1 AND status = 'waiting' AND step = 'void_credit_memo'`,
+                             WHERE depends_on = $1 AND status IN (${SALES_SQL.blocked}) AND step = 'void_credit_memo'`,
               [row.id, `Skipped — parent credit_memo never reached QB`]
             );
             if (vcSkipCount && vcSkipCount > 0) {
@@ -2240,13 +2241,13 @@ export async function pollSubmittedRows(
           try {
             const { rowCount: skipCount } = await pool.query(
               `UPDATE qb_order_pipeline
-                             SET status       = 'skipped',
+                             SET status       = '${WRITE.sales.skipped}',
                                  error        = $2,
                                  submitted_at = NULL,
                                  confirmed_at = NULL,
                                  failed_at    = NULL,
                                  updated_at   = NOW()
-                             WHERE depends_on = $1 AND status = 'waiting'
+                             WHERE depends_on = $1 AND status IN (${SALES_SQL.blocked})
                                AND step IN ('void_sales_order', 'void_invoice', 'estimate_deactivate')`,
               [row.id, `Skipped — parent ${row.step} never reached QB`]
             );

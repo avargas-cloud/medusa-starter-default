@@ -204,7 +204,8 @@ export async function POST(
     await trx.raw(
       `UPDATE vendor_bill_revision
           SET status = 'superseded', superseded_at = NOW(), updated_at = NOW()
-        WHERE vendor_bill_id = ? AND status = 'confirmed'`,
+        WHERE vendor_bill_id = ? AND status = 'confirmed' -- entity-status
+        `,
       [bill.id]
     );
 

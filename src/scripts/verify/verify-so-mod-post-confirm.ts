@@ -51,6 +51,7 @@
  */
 import { getDbPool } from "../../api/utils/db-pool";
 import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SYNTH_ORDER = `order_VERIFYSOMOD_${Date.now()}`;
 const SYNTH_TXN = "9C9999-9999999999";
@@ -97,13 +98,13 @@ async function main() {
     const rowId = await writePipelineRow({
       orderId: SYNTH_ORDER,
       step: "sales_order",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       medusaRefNumber: "S-VERIFY",
     });
     await writePipelineRow({
       orderId: SYNTH_ORDER,
       step: "sales_order",
-      status: "confirmed",
+      status: WRITE.sales.synced,
       qbTxnId: SYNTH_TXN,
     });
     ok("seed: row is 'confirmed'", (await statusOf(pool)) === "confirmed");
@@ -113,7 +114,7 @@ async function main() {
     await writePipelineRow({
       orderId: SYNTH_ORDER,
       step: "sales_order",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
     });
     ok(
       "1. pending WITHOUT intent over confirmed → stays 'confirmed' (ADD guard holds)",
@@ -125,7 +126,7 @@ async function main() {
     const modRowId = await writePipelineRow({
       orderId: SYNTH_ORDER,
       step: "sales_order",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       intent: "mod",
       qbTxnId: SYNTH_TXN,
     });
@@ -144,7 +145,7 @@ async function main() {
     ok("2b. the new row is step='sales_order_mod'", modRow?.step === "sales_order_mod");
     ok(
       `2b. …status is live, not terminal (got '${modRow?.status ?? "none"}')`,
-      modRow?.status === "pending" || modRow?.status === "waiting"
+      modRow?.status === WRITE.sales.dispatchable || modRow?.status === WRITE.sales.blocked
     );
     ok("2b. …and carries the qb_txn_id to modify", modRow?.qb_txn_id === SYNTH_TXN);
 
@@ -161,7 +162,7 @@ async function main() {
       await writePipelineRow({
         orderId: SYNTH_ORDER,
         step: "sales_order",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         intent: "mod",
       });
     } catch {

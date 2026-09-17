@@ -1,3 +1,4 @@
+import type { PipelineStatus as CanonicalPipelineStatus } from "../pipeline-status";
 export type PipelineStep =
   | "customer"
   | "estimate"
@@ -80,19 +81,17 @@ export type PipelineStep =
   // Sin ADD: el POS nunca lo emitió. Ver lib/ledger/qb-import/void.ts.
   | "qb_import_void";
 
+/**
+ * Sales pipeline row status. The canonical nine live in
+ * `lib/quickbooks/pipeline-status.ts`; `pending` is the legacy spelling of a
+ * dispatchable row that the expand phase still WRITES (see VOCAB_PHASE) and
+ * `manual` is a display-only value (qb_skip=true — order intentionally
+ * excluded from QB auto-sync) that never reaches the table.
+ */
 export type PipelineStatus =
+  | CanonicalPipelineStatus
   | "pending"
-  | "processing"
-  | "submitted"
-  | "confirmed"
-  | "failed"
-  | "skipped"
-  | "waiting" // POS 1-hour delay window — cron will process when time arrives
-  | "manual" // qb_skip=true — order intentionally excluded from QB auto-sync
-  | "synced"
-  | "error"
-  | "cancelled"
-  | "voided";
+  | "manual";
 
 export interface WritePipelineRowInput {
   orderId?: string | null;

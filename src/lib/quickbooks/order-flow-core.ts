@@ -63,6 +63,7 @@ import { isQbIntegrationEnabled } from "./qb-integration-guard";
 import { getEstimateTxnId } from "./qb-metadata-types";
 import { getCachedEditSequence, writePipelineRow } from "./qb-pipeline";
 import { QbSyncLogger } from "./qb-sync-logger";
+import { WRITE } from "./pipeline-status";
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
 const DRY_RUN = process.env.QB_DRY_RUN === "true";
@@ -1790,7 +1791,7 @@ export async function processDeactivateEstimateInQb(draft: {
     await writePipelineRow({
       orderId: draft.draftOrderId,
       step: "void_estimate",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: draft.estimateTxnId,
       qbRefNumber: draft.estimateRef ?? null,
       medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,
@@ -1828,7 +1829,7 @@ export async function processDeactivateEstimateInQb(draft: {
       await writePipelineRow({
         orderId: draft.draftOrderId,
         step: "void_estimate",
-        status: "failed",
+        status: WRITE.sales.failed,
         qbTxnId: draft.estimateTxnId,
         qbRefNumber: draft.estimateRef ?? null,
         medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,
@@ -1852,7 +1853,7 @@ export async function processDeactivateEstimateInQb(draft: {
     await writePipelineRow({
       orderId: draft.draftOrderId,
       step: "void_estimate",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       bridgeOpId: asyncData.operationId ?? null,
       qbTxnId: draft.estimateTxnId,
       qbRefNumber: draft.estimateRef ?? null,
@@ -1882,7 +1883,7 @@ export async function processDeactivateEstimateInQb(draft: {
           await writePipelineRow({
             orderId: draft.draftOrderId,
             step: "void_estimate",
-            status: "failed",
+            status: WRITE.sales.failed,
             qbTxnId: draft.estimateTxnId,
             qbRefNumber: draft.estimateRef ?? null,
             medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,

@@ -1,4 +1,5 @@
 import { VendorCreditError, type PgClient } from "./types";
+import { SALES_SQL } from "../quickbooks/pipeline-status";
 
 interface AppRow {
   id: string;
@@ -55,7 +56,7 @@ export async function voidVendorCreditApplication(
     const { rows: liveApplyRows } = await client.query(
       `SELECT id FROM qb_order_pipeline
         WHERE step = 'vendor_credit_apply' AND reference_id = $1
-          AND status IN ('waiting', 'pending', 'processing', 'submitted')`,
+          AND status IN (${SALES_SQL.inFlight})`,
       [applicationId]
     );
     if (liveApplyRows.length > 0) {

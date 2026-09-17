@@ -36,6 +36,7 @@
 import type { ExecArgs } from "@medusajs/framework/types";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { handleDraftOrderUpdated } from "../../lib/quickbooks/handlers/handle-draft-order-updated";
 import {
   findConfirmedAddTxnId,
@@ -75,7 +76,7 @@ export default async function e2eEstimateAddSelfDetect({ container }: ExecArgs) 
        FROM qb_order_pipeline p
        JOIN "order" o ON o.id = p.order_id
       WHERE p.step = 'estimate'
-        AND p.status IN ('skipped', 'waiting')
+        AND p.status IN ('${WRITE.sales.skipped}', '${WRITE.sales.blocked}')
         AND p.bridge_op_id IS NULL
         AND p.qb_txn_id IS NULL
         AND (o.metadata->>'qb_estimate_txn_id') IS NULL
@@ -98,7 +99,7 @@ export default async function e2eEstimateAddSelfDetect({ container }: ExecArgs) 
   try {
     // Simular el claim del consolidator
     await pool.query(
-      `UPDATE qb_order_pipeline SET status = 'processing', updated_at = NOW() WHERE id = $1`,
+      `UPDATE qb_order_pipeline SET status = '${WRITE.sales.processing}', updated_at = NOW() WHERE id = $1`,
       [target.row_id]
     );
 
@@ -139,7 +140,7 @@ export default async function e2eEstimateAddSelfDetect({ container }: ExecArgs) 
     );
     check(
       `mod fantasma parqueado con depends_on = fila reclamada`,
-      phantoms.length === 1 && phantoms[0].status === "waiting"
+      phantoms.length === 1 && phantoms[0].status === WRITE.sales.blocked
     );
     tempRowIds.push(...phantoms.map((r: { id: string }) => r.id));
 

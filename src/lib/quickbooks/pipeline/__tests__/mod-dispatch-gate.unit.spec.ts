@@ -6,6 +6,7 @@
  * freeze this replaces).
  */
 import type { InFlightSibling } from "../mod-dispatch-gate";
+import { WRITE } from "../../pipeline-status";
 
 // Hoisted mocks for the whole file — `decideModDispatch` never touches
 // either module, so they're inert there; `gateModDispatch` below is what
@@ -37,7 +38,7 @@ describe("decideModDispatch", () => {
   it("dispatches when the only in-flight row IS this row", () => {
     const inFlight: InFlightSibling = {
       id: OWN_ID,
-      status: "processing",
+      status: WRITE.sales.processing,
       created_at: new Date("2026-09-11T10:00:00Z"),
     };
     const decision = decideModDispatch({
@@ -51,7 +52,7 @@ describe("decideModDispatch", () => {
   it("defers behind an OLDER sibling (Date inputs)", () => {
     const inFlight: InFlightSibling = {
       id: "row_older",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       created_at: new Date("2026-09-11T09:00:00Z"),
     };
     const decision = decideModDispatch({
@@ -65,7 +66,7 @@ describe("decideModDispatch", () => {
   it("dispatches ahead of a YOUNGER sibling (ISO-string inputs)", () => {
     const inFlight: InFlightSibling = {
       id: "row_younger",
-      status: "processing",
+      status: WRITE.sales.processing,
       created_at: "2026-09-11T11:00:00Z",
     };
     const decision = decideModDispatch({
@@ -80,7 +81,7 @@ describe("decideModDispatch", () => {
     const sameTs = "2026-09-11T10:00:00Z";
     const inFlight: InFlightSibling = {
       id: "row_zzz",
-      status: "processing",
+      status: WRITE.sales.processing,
       created_at: sameTs,
     };
     const decision = decideModDispatch({
@@ -95,7 +96,7 @@ describe("decideModDispatch", () => {
     const sameTs = "2026-09-11T10:00:00Z";
     const inFlight: InFlightSibling = {
       id: "row_aaa",
-      status: "processing",
+      status: WRITE.sales.processing,
       created_at: sameTs,
     };
     const decision = decideModDispatch({
@@ -109,7 +110,7 @@ describe("decideModDispatch", () => {
   it("defers when ownCreatedAt is null (unknown ordering yields)", () => {
     const inFlight: InFlightSibling = {
       id: "row_other",
-      status: "processing",
+      status: WRITE.sales.processing,
       created_at: "2026-09-11T10:00:00Z",
     };
     const decision = decideModDispatch({
@@ -123,7 +124,7 @@ describe("decideModDispatch", () => {
   it("defers when the sibling's created_at is an invalid string", () => {
     const inFlight: InFlightSibling = {
       id: "row_other",
-      status: "processing",
+      status: WRITE.sales.processing,
       created_at: "not-a-date",
     };
     const decision = decideModDispatch({
@@ -165,7 +166,7 @@ describe("gateModDispatch", () => {
     mockQueryImplementation([
       {
         id: "row_older",
-        status: "processing",
+        status: WRITE.sales.processing,
         created_at: "2026-09-11T09:00:00Z",
       },
     ]);
@@ -214,7 +215,7 @@ describe("gateModDispatch", () => {
     mockQueryImplementation([
       {
         id: "row_younger",
-        status: "processing",
+        status: WRITE.sales.processing,
         created_at: "2026-09-11T11:00:00Z",
       },
     ]);

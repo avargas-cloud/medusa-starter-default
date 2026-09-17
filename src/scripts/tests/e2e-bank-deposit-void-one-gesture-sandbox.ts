@@ -26,6 +26,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-bank-deposit-void-one-gesture-sandbox.ts
  */
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { voidBankDeposit } from "../../lib/banking/deposit-core";
 
@@ -64,12 +65,12 @@ async function snap(client: Client, id: string): Promise<Snap> {
           WHERE e.source_kind='bank_deposit' AND e.source_id=d.id) AS reversals,
        (SELECT count(*)::text FROM qb_order_pipeline p WHERE p.reference_id=d.id AND p.step='gl_document_void') AS voids,
        (SELECT count(*)::text FROM qb_order_pipeline p WHERE p.reference_id=d.id AND p.step='gl_document_add') AS adds,
-       (SELECT count(*)::text FROM qb_order_pipeline p WHERE p.reference_id=d.id AND p.step='gl_document_add' AND p.status='skipped') AS adds_skipped
+       (SELECT count(*)::text FROM qb_order_pipeline p WHERE p.reference_id=d.id AND p.step='gl_document_add' AND p.status='${WRITE.sales.skipped}') AS adds_skipped
      FROM bank_deposit d WHERE d.id=$1`, [id])).rows[0]!;
 }
 /** Simula que el DepositAdd ya CONFIRMÓ en QuickBooks (el bridge está apagado en sandbox). */
 async function confirmAddInQb(client: Client, id: string, txn: string): Promise<void> {
-  await client.query(`UPDATE qb_order_pipeline SET status='confirmed', updated_at=now() WHERE reference_id=$1 AND step='gl_document_add'`, [id]);
+  await client.query(`UPDATE qb_order_pipeline SET status='${WRITE.sales.synced}', updated_at=now() WHERE reference_id=$1 AND step='gl_document_add'`, [id]);
   await client.query(`UPDATE bank_deposit SET qb_txn_id=$2, qb_txn_type='Deposit', qb_synced_at=now() WHERE id=$1`, [id, txn]);
 }
 

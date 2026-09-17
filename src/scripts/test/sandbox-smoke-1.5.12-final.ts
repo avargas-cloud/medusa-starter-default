@@ -20,6 +20,7 @@ process.env.DATABASE_URL =
 import { Client } from "pg";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `t1512-${Date.now()}`;
@@ -269,7 +270,7 @@ async function testStateMachine(client: Client) {
   const dispatch = await client.query(
     `SELECT id, step FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'payment', 'apply_payment')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = ANY($1::uuid[])`,
     [insertedIds]
   );
@@ -281,7 +282,7 @@ async function testStateMachine(client: Client) {
   // Test transition pending → failed (simulated failure)
   await client.query(
     `UPDATE qb_order_pipeline
-     SET status = 'failed', error = 'simulated failure',
+     SET status = '${WRITE.sales.failed}', error = 'simulated failure',
          retry_count = COALESCE(retry_count, 0) + 1,
          failed_at = NOW(),
          updated_at = NOW()
@@ -292,7 +293,7 @@ async function testStateMachine(client: Client) {
     `SELECT status, error, retry_count, failed_at FROM qb_order_pipeline WHERE id = $1`,
     [insertedIds[0]]
   );
-  assert(errorRow.rows[0].status === "failed", "row → failed transition works");
+  assert(errorRow.rows[0].status === WRITE.sales.failed, "row went to failed transition");
   assert(
     errorRow.rows[0].retry_count >= 1,
     "retry_count incremented on failure"
@@ -343,7 +344,7 @@ async function testRetryResilience(client: Client) {
       `SELECT status, qb_operation_id FROM qb_purchase_order_pipeline WHERE id = $1`,
       [stalePoRowId]
     );
-    assert(after.rows[0].status === "error", "stale row → error");
+    assert(after.rows[0].status === WRITE.purchase.error, "stale row went to error");
     assert(
       after.rows[0].qb_operation_id === null,
       "qb_operation_id cleared on stale (B3 behavior preserved)"

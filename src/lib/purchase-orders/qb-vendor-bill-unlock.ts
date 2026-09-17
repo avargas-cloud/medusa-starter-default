@@ -7,6 +7,7 @@ import {
 } from "./qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
 import { loadRebuildShapeFacts, needsShapeRebuild } from "./vendor-bill-rebuild-shape";
+import { WRITE, pipelineStatusIs } from "../quickbooks/pipeline-status";
 
 /**
  * Stages the destructive half of a Vendor Bill rebuild.
@@ -71,11 +72,10 @@ interface PipelineRow {
   delegated_status: string | null;
 }
 
-const TERMINAL_VOID_STATUSES = new Set<string | null>([
-  null,
-  "voided",
-  "failed_permanent",
-]);
+// void_status terminal states — null (never voided), synced (legacy `voided`),
+// failed (legacy `failed_permanent`); read through the vocabulary helper.
+const isTerminalVoidStatus = (v: string | null): boolean =>
+  v === null || pipelineStatusIs("purchase", { status: v }, "synced", "failed");
 const REBUILD_INTENTS = new Set([
   "unlock_rebuild",
   "rebuild_prepare",
@@ -219,7 +219,7 @@ export async function claimUnlock(
       existing &&
       (REBUILD_INTENTS.has(existing.intent) ||
         delegatedInFlight ||
-        !TERMINAL_VOID_STATUSES.has(existing.void_status))
+        !isTerminalVoidStatus(existing.void_status))
     ) {
       return {
         ok: false,
@@ -242,7 +242,7 @@ export async function claimUnlock(
     if (pipelineRowId) {
       const updated = await trx.raw(
         `UPDATE qb_vendor_bill_pipeline
-            SET intent = 'rebuild_prepare', status = 'waiting',
+            SET intent = 'rebuild_prepare', status = '${WRITE.purchase.dispatchable}',
                 qb_operation_id = NULL, retries = 0,
                 next_retry_at = NULL, last_error = NULL,
                 qb_txn_id = COALESCE(qb_txn_id, ?),

@@ -26,13 +26,14 @@ import {
   writeCheckIdempotencyKey,
 } from "../../lib/quickbooks/pipeline/claim-write-check";
 import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 const INDEX_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS uq_qb_pipeline_write_check_live
     ON qb_order_pipeline (reference_id)
    WHERE step = 'write_check'
      AND reference_id IS NOT NULL
-     AND status NOT IN ('failed', 'skipped')
+     AND status NOT IN (${SALES_SQL.notLive})
 `;
 
 const REF = `cpay_E2ECLAIM${Date.now().toString(36).toUpperCase()}`;
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
     const afterRelease = await rowsFor();
     check(
       "la fila queda failed",
-      afterRelease.length === 1 && afterRelease[0].status === "failed",
+      afterRelease.length === 1 && afterRelease[0].status === WRITE.sales.failed,
       `status=${afterRelease[0]?.status}`
     );
     const retry = await claimWriteCheckAttempt({
@@ -139,7 +140,7 @@ async function main(): Promise<void> {
     // ── C. Un cheque confirmado bloquea para siempre ──────────────────────────
     console.log("\nC. Con el cheque ya confirmado");
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='confirmed' WHERE id=$1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.synced}' WHERE id=$1`,
       [firstRowId]
     );
     const afterConfirmed = await claimWriteCheckAttempt({
@@ -156,7 +157,7 @@ async function main(): Promise<void> {
     // ── D. Un revert (skipped) SÍ permite un refund nuevo, con key nueva ──────
     console.log("\nD. Tras un revert que dejó la fila skipped");
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='skipped' WHERE id=$1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.skipped}' WHERE id=$1`,
       [firstRowId]
     );
     const afterSkipped = await claimWriteCheckAttempt({
@@ -196,7 +197,7 @@ async function main(): Promise<void> {
       referenceId: REF,
       referenceType: "customer_payment",
       step: "write_check",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       bridgeOpId: "op-e2e-fake",
       medusaRefNumber: "Refund E2E-CLAIM",
       payload: { bankAccountId: "bank_e2e", txnDate: "2026-07-31" },
@@ -214,7 +215,7 @@ async function main(): Promise<void> {
     );
     check(
       "y quedó submitted con su bridge_op_id",
-      happyRows[0]?.status === "submitted",
+      happyRows[0]?.status === WRITE.sales.submitted,
       `status=${happyRows[0]?.status}`
     );
 

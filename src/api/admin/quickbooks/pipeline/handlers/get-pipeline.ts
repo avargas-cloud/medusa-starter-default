@@ -1,6 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
+import { SALES_SQL, WRITE } from "../../../../../lib/quickbooks/pipeline-status";
+
 import {
   COMMISSION_PIPELINE_STEPS,
   PURCHASE_PIPELINE_STEPS,
@@ -32,13 +34,13 @@ export async function GET(
     // Auto-timeout: submitted rows older than 10 min with no bridge_op_id → failed + schedule retry if budget remains
     const { rows: timeout1 } = await client.query(`
             UPDATE qb_order_pipeline
-            SET status        = 'failed',
+            SET status        = CASE WHEN COALESCE(retry_count, 0) < 5 THEN '${WRITE.sales.error}' ELSE '${WRITE.sales.failed}' END,
                 failed_at     = NOW(),
                 confirmed_at  = NULL,
                 updated_at    = NOW(),
                 error         = 'Submission timed out — no bridge_op_id recorded',
                 next_retry_at = CASE WHEN COALESCE(retry_count, 0) < 5 THEN NOW() + INTERVAL '2 minutes' ELSE NULL END
-            WHERE status = 'submitted'
+            WHERE status IN (${SALES_SQL.submitted})
               AND bridge_op_id IS NULL
               AND step <> ALL($1::text[])
               AND submitted_at < NOW() - INTERVAL '10 minutes'
@@ -48,13 +50,13 @@ export async function GET(
     // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed + schedule retry
     const { rows: timeout2 } = await client.query(`
             UPDATE qb_order_pipeline
-            SET status        = 'failed',
+            SET status        = CASE WHEN COALESCE(retry_count, 0) < 5 THEN '${WRITE.sales.error}' ELSE '${WRITE.sales.failed}' END,
                 failed_at     = NOW(),
                 confirmed_at  = NULL,
                 updated_at    = NOW(),
                 error         = 'QBWC did not respond within 15 minutes — QuickBooks Desktop may be offline or QBWC disconnected',
                 next_retry_at = CASE WHEN COALESCE(retry_count, 0) < 5 THEN NOW() + INTERVAL '2 minutes' ELSE NULL END
-            WHERE status = 'submitted'
+            WHERE status IN (${SALES_SQL.submitted})
               AND bridge_op_id IS NOT NULL
               AND step <> ALL($1::text[])
               AND submitted_at < NOW() - INTERVAL '15 minutes'
@@ -65,13 +67,13 @@ export async function GET(
     // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
     const { rows: timeout3 } = await client.query(`
             UPDATE qb_order_pipeline
-            SET status        = 'failed',
+            SET status        = CASE WHEN COALESCE(retry_count, 0) < 5 THEN '${WRITE.sales.error}' ELSE '${WRITE.sales.failed}' END,
                 failed_at     = NOW(),
                 confirmed_at  = NULL,
                 updated_at    = NOW(),
                 error         = 'Operation stuck in pending — handler did not re-submit within 30 minutes',
                 next_retry_at = CASE WHEN COALESCE(retry_count, 0) < 5 THEN NOW() + INTERVAL '2 minutes' ELSE NULL END
-            WHERE status = 'pending'
+            WHERE status IN (${SALES_SQL.dispatchable})
               AND step <> ALL($1::text[])
               AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes'
             RETURNING step, qb_txn_id

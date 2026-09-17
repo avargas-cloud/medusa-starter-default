@@ -30,6 +30,7 @@ import { handleOrderPlaced } from "./handle-order-placed";
 import { LOG_PREFIX, getQbConfig, getFloat, consumeClosestNet } from "./utils";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { resolveTaxListid } from "../resolve-tax-listid";
+import { WRITE } from "../pipeline-status";
 
 function normalizePosInvoicePayloadItems(items: any[]): any[] {
   return items.map((item) => ({
@@ -771,7 +772,7 @@ export async function handleFulfillmentCreated(
       referenceId: invoiceReferenceId,
       referenceType: invoiceReferenceType,
       step: "invoice",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       medusaRefNumber: invoiceMedusaRefNumber,
     });
   } catch (pErr: any) {
@@ -813,7 +814,7 @@ export async function handleFulfillmentCreated(
         referenceId: invoiceReferenceId,
         referenceType: invoiceReferenceType,
         step: "invoice",
-        status: "submitted",
+        status: WRITE.sales.submitted,
         bridgeOpId: operationId,
         medusaRefNumber: invoiceMedusaRefNumber,
       });
@@ -837,7 +838,7 @@ export async function handleFulfillmentCreated(
         referenceId: invoiceReferenceId,
         referenceType: invoiceReferenceType,
         step: "invoice",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: result.error,
         medusaRefNumber: invoiceMedusaRefNumber,
       });
@@ -857,7 +858,7 @@ export async function handleFulfillmentCreated(
         referenceId: invoiceReferenceId,
         referenceType: invoiceReferenceType,
         step: "invoice",
-        status: result.operationId && !result.txnId ? "submitted" : "confirmed",
+        status: result.operationId && !result.txnId ? WRITE.sales.submitted : WRITE.sales.synced,
         bridgeOpId: result.operationId || null,
         qbTxnId: result.txnId || null,
         qbRefNumber: result.refNumber || null,

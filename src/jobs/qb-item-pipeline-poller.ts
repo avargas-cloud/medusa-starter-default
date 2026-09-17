@@ -13,6 +13,7 @@ import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-invent
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
+import { PURCHASE_SQL, WRITE } from "../lib/quickbooks/pipeline-status";
 // Read at call time so tests can override QB_BRIDGE_URL after module load.
 const bridgeUrl = (): string =>
   requireBridgeUrl();
@@ -52,7 +53,7 @@ type RecoveryMode = "none" | "editseq_query" | "reconcile_query";
 
 type BridgeStatusResponse = {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed" | "expired";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired"; // bridge-status
     result?: any;
     error?: string;
     txnId?: string;
@@ -310,7 +311,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       "recovery_mode",
       "submit_count",
     ],
-    filters: { status: "waiting" },
+    filters: { status: WRITE.purchase.dispatchable },
     pagination: { skip: 0, take: MAX_ROWS_PER_TICK },
   });
 
@@ -331,7 +332,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         // Set next_retry_at: null so Phase B picks it up on the very next tick.
         await catalog.updateQbItemPipelines({
           id: row.id,
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: "Missing qb_operation_id — awaiting Phase B resubmit",
           next_retry_at: null,
         });
@@ -346,7 +347,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         const isItemQuery = recoveryMode === "editseq_query";
         const isReconcileQuery = recoveryMode === "reconcile_query";
 
-        if (status === "expired" || status === "failed") {
+        if (status === "expired" || status === "failed") { // bridge-status
           const errorMsg =
             data.operation?.error ??
             (status === "expired"
@@ -358,7 +359,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             // ItemQuery didn't complete — restore error so Phase B retries with stale EditSequence.
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "error",
+              status: WRITE.purchase.error,
               last_error: `ItemQuery ${status}: ${errorMsg} — will retry with stale EditSequence`,
               last_error_code: errorCode,
               qb_operation_id: null,
@@ -378,7 +379,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             const isExhausted = newRetries >= MAX_RETRIES;
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: isExhausted ? "failed_permanent" : "error",
+              status: isExhausted ? WRITE.purchase.failed : WRITE.purchase.error,
               last_error: `Reconcile ItemQuery ${status} (item name already in use) — ${errorMsg}`,
               last_error_code: errorCode,
               qb_operation_id: null,
@@ -397,7 +398,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
           if (status === "expired") {
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "error",
+              status: WRITE.purchase.error,
               last_error: errorMsg,
               last_error_code: errorCode,
               qb_operation_id: null,
@@ -408,7 +409,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
           await catalog.updateQbItemPipelines({
             id: row.id,
-            status: "error",
+            status: WRITE.purchase.error,
             last_error: errorMsg,
             last_error_code: errorCode,
             // Don't increment retries here — we haven't re-emitted yet, the
@@ -421,7 +422,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
           continue;
         }
 
-        if (status !== "completed") continue;
+        if (status !== "completed") continue; // bridge-status
 
         // Backstop: a completed op on a row that has already dispatched too many
         // times means we're in a resubmit loop that never closes. Demote instead
@@ -429,7 +430,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         if ((isItemQuery || isReconcileQuery) && overSubmitCap(row)) {
           await catalog.updateQbItemPipelines({
             id: row.id,
-            status: "failed_permanent",
+            status: WRITE.purchase.failed,
             last_error: `Submit cap reached (${row.submit_count}/${MAX_SUBMITS}) during ${recoveryMode} recovery — possible resubmit loop, demoted for manual review`,
             qb_operation_id: null,
             recovery_mode: "none",
@@ -458,7 +459,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             const isExhausted = newRetries >= MAX_RETRIES;
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: isExhausted ? "failed_permanent" : "error",
+              status: isExhausted ? WRITE.purchase.failed : WRITE.purchase.error,
               last_error: "ItemQuery completed but returned no EditSequence — will retry with stale",
               qb_operation_id: null,
               recovery_mode: "none",
@@ -489,7 +490,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             const newOpId = await resubmitToBridge("mod", editSeqPayload);
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "waiting",
+              status: WRITE.purchase.dispatchable,
               qb_operation_id: newOpId,
               op_payload: editSeqPayload,
               recovery_mode: "none",
@@ -504,7 +505,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
           } catch (resubErr: any) {
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "error",
+              status: WRITE.purchase.error,
               last_error: resubErr.message,
               last_error_code: parseQbErrorCode(resubErr.message),
               qb_operation_id: null,
@@ -534,7 +535,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             // add (recovery_mode: none → Phase B resubmits as add).
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "error",
+              status: WRITE.purchase.error,
               last_error:
                 "Reconcile query returned no ListID — item not found by name; will retry as add",
               qb_operation_id: null,
@@ -575,7 +576,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             const newOpId = await resubmitToBridge("mod", modPayload);
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "waiting",
+              status: WRITE.purchase.dispatchable,
               op_action: "mod",
               qb_id: recoveredListId,
               qb_operation_id: newOpId,
@@ -594,7 +595,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
           } catch (resubErr: any) {
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "error",
+              status: WRITE.purchase.error,
               op_action: "mod",
               qb_id: recoveredListId,
               last_error: resubErr.message,
@@ -619,7 +620,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         if (!listId && row.op_action === "add") {
           await catalog.updateQbItemPipelines({
             id: row.id,
-            status: "error",
+            status: WRITE.purchase.error,
             last_error: "Completed but no ListID in response",
             next_retry_at: new Date(
               Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
@@ -672,7 +673,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
         await catalog.updateQbItemPipelines({
           id: row.id,
-          status: "synced",
+          status: WRITE.purchase.synced,
           qb_list_id: listId ?? row.qb_id,
           qb_edit_sequence: editSequence,
           recovery_mode: "none",
@@ -685,7 +686,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       } catch (err: any) {
         await catalog.updateQbItemPipelines({
           id: row.id,
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: err.message,
           last_error_code: parseQbErrorCode(err.message),
           next_retry_at: new Date(
@@ -718,7 +719,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       "recovery_mode",
       "submit_count",
     ],
-    filters: { status: "error" },
+    filters: { status: WRITE.purchase.error },
     pagination: { skip: 0, take: MAX_ROWS_PER_TICK },
   });
 
@@ -757,7 +758,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       if (overSubmitCap(row)) {
         await catalog.updateQbItemPipelines({
           id: row.id,
-          status: "failed_permanent",
+          status: WRITE.purchase.failed,
           last_error: `Submit cap reached (${row.submit_count}/${MAX_SUBMITS}) — possible resubmit loop, demoted for manual review`,
           recovery_mode: "none",
           next_retry_at: null,
@@ -812,7 +813,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
               if (iqJson.operationId) {
                 await catalog.updateQbItemPipelines({
                   id: row.id,
-                  status: "waiting",
+                  status: WRITE.purchase.dispatchable,
                   qb_operation_id: iqJson.operationId,
                   recovery_mode: "reconcile_query",
                   op_payload: payload,
@@ -856,7 +857,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             if (iqJson.operationId) {
               await catalog.updateQbItemPipelines({
                 id: row.id,
-                status: "waiting",
+                status: WRITE.purchase.dispatchable,
                 qb_operation_id: iqJson.operationId,
                 recovery_mode: "editseq_query",
                 op_payload: payload,
@@ -882,7 +883,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         const operationId = await resubmitToBridge(row.op_action, payload);
         await catalog.updateQbItemPipelines({
           id: row.id,
-          status: "waiting",
+          status: WRITE.purchase.dispatchable,
           qb_operation_id: operationId,
           op_payload: payload,
           recovery_mode: "none",
@@ -903,7 +904,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         const backoffMin = backoffForRetry(newRetries);
         await catalog.updateQbItemPipelines({
           id: row.id,
-          status: isExhausted ? "failed_permanent" : "error",
+          status: isExhausted ? WRITE.purchase.failed : WRITE.purchase.error,
           last_error: err.message,
           last_error_code: parseQbErrorCode(err.message),
           retries: newRetries,
@@ -937,7 +938,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
     const stuckRes = await knex.raw(
       `SELECT count(*)::int AS n
          FROM qb_item_pipeline
-        WHERE status NOT IN ('synced', 'failed_permanent')
+        WHERE status NOT IN (${PURCHASE_SQL.synced}, ${PURCHASE_SQL.failed})
           AND deleted_at IS NULL
           AND created_at < now() - interval '${STUCK_ALERT_HOURS} hours'`
     );

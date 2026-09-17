@@ -37,6 +37,11 @@
  * Careful when editing: this is a JS template literal, so a backtick inside a
  * SQL comment closes the string and breaks the parse.
  */
+import {
+  SALES_SQL,
+  PURCHASE_SQL,
+  salesTerminal,
+} from "../../../../../lib/quickbooks/pipeline-status";
 
 /** Feed `step` values of the "Ledger → QuickBooks" family (09/16/2026); the
  * Purchase tab shows everything else. Same feed SQL, split by `?family=`. */
@@ -172,11 +177,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           NULL::text                                     AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -249,11 +254,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           por.number                                     AS receipt_number,
           NULL::text                                     AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -411,11 +416,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           vb.number                                      AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -455,12 +460,12 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                       AS receipt_number,
           vb.number                                        AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL
-              THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')}
+              THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                              AS status,
           qop.bridge_op_id                                 AS qb_operation_id,
@@ -506,7 +511,7 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           po.draft_number                                AS draft_number,
           NULL::text                                     AS receipt_number,
           vb.number                                      AS vendor_bill_number,
-          CASE WHEN qvb.void_status = 'completed' THEN 'synced'
+          CASE WHEN qvb.void_status IN (${PURCHASE_SQL.modSynced}) THEN 'synced' -- canonical-literal
                ELSE qvb.void_status END                  AS status,
           qvb.void_operation_id                          AS qb_operation_id,
           qvb.qb_txn_id                                  AS qb_list_id,
@@ -515,7 +520,7 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           COALESCE(qvb.void_retries, 0)                  AS retries,
           0                                              AS coalesced_edits,
           qvb.void_next_retry_at                         AS next_retry_at,
-          CASE WHEN qvb.void_status IN ('synced','completed') THEN qvb.updated_at END
+          CASE WHEN qvb.void_status IN (${PURCHASE_SQL.modSynced}) THEN qvb.updated_at END
                                                            AS synced_at,
           qvb.created_at                                 AS created_at,
           qvb.updated_at                                 AS updated_at,
@@ -548,11 +553,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           vc.number                                      AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -594,11 +599,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           vbp.number                                     AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -640,11 +645,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           vc.number                                       AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -685,11 +690,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           doc.number                                     AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,
@@ -754,11 +759,11 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
           NULL::text                                     AS receipt_number,
           doc.document_number                            AS vendor_bill_number,
           CASE
-            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
-            WHEN qop.status = 'skipped' THEN 'skipped'
-            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL THEN 'failed_permanent'
-            WHEN qop.status = 'failed' THEN 'error'
-            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            WHEN qop.status IN (${SALES_SQL.done}) THEN 'synced' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.skipped}) THEN 'skipped' -- canonical-literal
+            WHEN ${salesTerminal('qop.')} THEN 'failed' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.retryable}) THEN 'error' -- canonical-literal
+            WHEN qop.status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing}) THEN 'submitted' -- canonical-literal
             ELSE 'waiting'
           END                                            AS status,
           qop.bridge_op_id                               AS qb_operation_id,

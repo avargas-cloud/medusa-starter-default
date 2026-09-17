@@ -1,3 +1,4 @@
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
@@ -36,8 +37,8 @@ function buildContainer(opts: { waiting?: Row[]; error?: Row[] }) {
   const updateQbItemPipelines = jest.fn().mockResolvedValue(undefined);
   const knexRaw = jest.fn().mockResolvedValue({ rows: [{ n: 0 }] });
   const graph = jest.fn(async ({ filters }: { filters?: { status?: string } }) => {
-    if (filters?.status === "waiting") return { data: opts.waiting ?? [] };
-    if (filters?.status === "error") return { data: opts.error ?? [] };
+    if (filters?.status === WRITE.purchase.dispatchable) return { data: opts.waiting ?? [] };
+    if (filters?.status === WRITE.purchase.error) return { data: opts.error ?? [] };
     return { data: [] };
   });
 
@@ -115,7 +116,7 @@ describe("qb-item-pipeline-poller — name-conflict reconcile", () => {
     expect(updateQbItemPipelines).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "row1",
-        status: "waiting",
+        status: WRITE.purchase.dispatchable,
         qb_operation_id: "iq-1",
         recovery_mode: "reconcile_query",
       })
@@ -148,10 +149,10 @@ describe("qb-item-pipeline-poller — name-conflict reconcile", () => {
 
     // The reconcile ItemQuery completed and returned the existing item's ids.
     pollBridgeStatus.mockResolvedValue({
-      status: "completed",
+      status: "completed", // bridge-status
       data: {
         operation: {
-          status: "completed",
+          status: "completed", // bridge-status
           listId: "80000123-1700000000",
           editSequence: "5",
         },
@@ -196,7 +197,7 @@ describe("qb-item-pipeline-poller — name-conflict reconcile", () => {
     expect(updateQbItemPipelines).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "row1",
-        status: "waiting",
+        status: WRITE.purchase.dispatchable,
         op_action: "mod",
         qb_id: "80000123-1700000000",
         qb_operation_id: "mod-1",
@@ -225,8 +226,8 @@ describe("qb-item-pipeline-poller — name-conflict reconcile", () => {
 
     // Completed but empty — QB returned no matching item (no listId).
     pollBridgeStatus.mockResolvedValue({
-      status: "completed",
-      data: { operation: { status: "completed" } },
+      status: "completed", // bridge-status
+      data: { operation: { status: "completed" } }, // bridge-status
     });
     global.fetch = jest.fn() as any;
 
@@ -242,7 +243,7 @@ describe("qb-item-pipeline-poller — name-conflict reconcile", () => {
     expect(updateQbItemPipelines).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "row1",
-        status: "error",
+        status: WRITE.purchase.error,
         qb_operation_id: null,
         recovery_mode: "none",
       })
@@ -251,7 +252,7 @@ describe("qb-item-pipeline-poller — name-conflict reconcile", () => {
 });
 
 describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
-  it("Phase A: a completed recovery op on a row over the submit cap is demoted to failed_permanent (no resubmit)", async () => {
+  it("Phase A: a completed recovery op on a row over the submit cap is demoted to failed (terminal) (no resubmit)", async () => {
     const waitingRow: Row = {
       id: "row1",
       variant_id: "var_1",
@@ -269,8 +270,8 @@ describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
       waiting: [waitingRow],
     });
     pollBridgeStatus.mockResolvedValue({
-      status: "completed",
-      data: { operation: { status: "completed", listId: "8000188F-1670254873", editSequence: "9" } },
+      status: "completed", // bridge-status
+      data: { operation: { status: "completed", listId: "8000188F-1670254873", editSequence: "9" } }, // bridge-status
     });
     const fetchMock = jest.fn();
     global.fetch = fetchMock as any;
@@ -282,13 +283,13 @@ describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
     expect(updateQbItemPipelines).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "row1",
-        status: "failed_permanent",
+        status: WRITE.purchase.failed,
         recovery_mode: "none",
       })
     );
   });
 
-  it("Phase B: an error row over the submit cap is demoted to failed_permanent before any dispatch", async () => {
+  it("Phase B: an error row over the submit cap is demoted to failed (terminal) before any dispatch", async () => {
     const errorRow: Row = {
       id: "row1",
       variant_id: "var_1",
@@ -312,7 +313,7 @@ describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(lastUpdateFor(updateQbItemPipelines, "row1")).toEqual(
-      expect.objectContaining({ id: "row1", status: "failed_permanent" })
+      expect.objectContaining({ id: "row1", status: WRITE.purchase.failed })
     );
   });
 
@@ -341,8 +342,8 @@ describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
       waiting: [waitingRow],
     });
     pollBridgeStatus.mockResolvedValue({
-      status: "completed",
-      data: { operation: { status: "completed", listId: "8000188F-1670254873", editSequence: "7" } },
+      status: "completed", // bridge-status
+      data: { operation: { status: "completed", listId: "8000188F-1670254873", editSequence: "7" } }, // bridge-status
     });
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -365,7 +366,7 @@ describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
     );
     expect(lastUpdateFor(updateQbItemPipelines, "row1")).toEqual(
       expect.objectContaining({
-        status: "waiting",
+        status: WRITE.purchase.dispatchable,
         op_action: "mod",
         recovery_mode: "none",
         submit_count: 2,
@@ -410,7 +411,7 @@ describe("qb-item-pipeline-poller — loop guards & price guardrail", () => {
     // A real $0 edit on a normal retry must reach QB (no recovery guardrail here).
     expect(sentBody.data).toHaveProperty("SalesPrice", 0);
     expect(lastUpdateFor(updateQbItemPipelines, "row1")).toEqual(
-      expect.objectContaining({ status: "waiting", submit_count: 2 })
+      expect.objectContaining({ status: WRITE.purchase.dispatchable, submit_count: 2 })
     );
   });
 });

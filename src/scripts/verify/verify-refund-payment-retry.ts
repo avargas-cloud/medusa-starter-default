@@ -14,6 +14,7 @@
  *        ./node_modules/.bin/medusa exec ./src/scripts/verify/verify-refund-payment-retry.ts
  */
 import type { ExecArgs } from "@medusajs/framework/types";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const CLAIM_SQL = `
   SELECT rp.id, rp.reference_id, rp.status, rp.retry_count, rp.next_retry_at,
@@ -22,11 +23,11 @@ const CLAIM_SQL = `
   JOIN qb_order_pipeline wc ON wc.id = rp.depends_on
   WHERE rp.step   = 'refund_payment'
     AND wc.step   = 'write_check'
-    AND wc.status = 'confirmed'
+    AND wc.status = '${WRITE.sales.synced}'
     AND wc.qb_txn_id IS NOT NULL
     AND (
-      rp.status = 'waiting'
-      OR (rp.status = 'failed'
+      rp.status = '${WRITE.sales.blocked}'
+      OR (rp.status = '${WRITE.sales.failed}'
           AND rp.next_retry_at IS NOT NULL
           AND rp.next_retry_at <= NOW()
           AND COALESCE(rp.retry_count, 0) < 8)
@@ -64,8 +65,8 @@ export default async function verifyRefundPaymentRetry({ container }: ExecArgs) 
            left(coalesce(rp.error, ''), 80) AS error
     FROM qb_order_pipeline rp
     JOIN qb_order_pipeline wc ON wc.id = rp.depends_on
-    WHERE rp.step = 'refund_payment' AND rp.status = 'failed'
-      AND wc.step = 'write_check' AND wc.status = 'confirmed'
+    WHERE rp.step = 'refund_payment' AND rp.status = '${WRITE.sales.failed}'
+      AND wc.step = 'write_check' AND wc.status = '${WRITE.sales.synced}'
       AND wc.qb_txn_id IS NOT NULL
       AND NOT (rp.next_retry_at IS NOT NULL AND rp.next_retry_at <= NOW()
                AND COALESCE(rp.retry_count, 0) < 8)

@@ -19,6 +19,7 @@ import { bridgeFetch } from "../client/core";
 import { receivePaymentInQb } from "../client/payments";
 import { failOrRetryPipelineRow, failPipelineRow } from "../pipeline/row-mutations";
 import { getDbPool } from "../../../api/utils/db-pool";
+import { WRITE } from "../pipeline-status";
 
 export interface CommissionPipelineRow {
   id: string;
@@ -35,7 +36,7 @@ async function markSubmitted(rowId: string, operationId: string): Promise<void> 
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'submitted', bridge_op_id = $2, updated_at = NOW(), error = NULL
+        SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, updated_at = NOW(), error = NULL
       WHERE id = $1`,
     [rowId, operationId]
   );
@@ -46,7 +47,8 @@ async function markSettlementWaiting(settlementId: string): Promise<void> {
   await pool.query(
     `UPDATE commission_settlement
         SET status = 'qb_waiting', updated_at = NOW()
-      WHERE id = $1 AND status = 'pending'`,
+      WHERE id = $1 AND status = 'pending' -- entity-status
+      `,
     [settlementId]
   );
 }

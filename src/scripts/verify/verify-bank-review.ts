@@ -179,7 +179,7 @@ async function main() {
     let review = record(saved.review);
     await api(`/admin/banking/transactions/${tx}/confirm`, { ...version(review), expected_source_version: 999 }, { status: 409 });
     review = record((await api(`/admin/banking/transactions/${tx}/confirm`, version(review))).review);
-    equal(review.status, "confirmed", "Confirm prepares for audit");
+    equal(review.status, "confirmed", "Confirm prepares for audit"); // entity-status
     const pdf = Buffer.from("%PDF-1.4\nHTTP attachment evidence\n%%EOF");
     const added = await api(`/admin/banking/transactions/${tx}/attachments`, { ...version(review), name: "receipt.pdf",
       mime_type: "application/pdf", content_base64: pdf.toString("base64") });

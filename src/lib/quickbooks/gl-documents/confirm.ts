@@ -114,5 +114,5 @@ export async function isDocumentVoidedInPos(
   }
   const result = await db.raw(`SELECT status FROM ${kind} WHERE id = ? AND deleted_at IS NULL`, [documentId]);
   const row = result.rows[0] as { status: string } | undefined;
-  return row?.status === "voided";
+  return row?.status === "voided"; // entity-status
 }

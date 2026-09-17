@@ -24,6 +24,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const TAG = "[smoke-ir-mod]";
 let pass = 0;
@@ -226,7 +227,7 @@ async function main(): Promise<void> {
       hdr.vendor_qb_list_id === "QB-VEND-1",
       "header.vendor_qb_list_id preserved"
     );
-    assert(hdr.pipe_status === "synced", "pipeline ADD status = synced");
+    assert(hdr.pipe_status === WRITE.purchase.synced, "pipeline ADD status = synced");
     assert(
       hdr.pipe_void_status === null,
       "no void in progress",
@@ -306,7 +307,7 @@ async function main(): Promise<void> {
     };
     await c.query(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status = 'waiting',
+          SET mod_status = '${WRITE.purchase.dispatchable}',
               mod_payload = $1::jsonb,
               mod_retries = 0
         WHERE id = $2`,
@@ -321,8 +322,8 @@ async function main(): Promise<void> {
       [pipelineId]
     );
     assert(
-      pendingCheck.rows[0]?.mod_status === "waiting",
-      "mod_status='waiting' accepted by constraint"
+      pendingCheck.rows[0]?.mod_status === WRITE.purchase.dispatchable,
+      "mod_status dispatchable (waiting) accepted by constraint"
     );
     assert(
       pendingCheck.rows[0]?.pay_edit_seq === '"999111222"' ||
@@ -337,7 +338,7 @@ async function main(): Promise<void> {
 
     // ── D) Constraint test: 'error' state accepted (chunk 3a)
     await c.query(
-      `UPDATE qb_item_receipt_pipeline SET mod_status='error' WHERE id=$1`,
+      `UPDATE qb_item_receipt_pipeline SET mod_status='${WRITE.purchase.error}' WHERE id=$1`,
       [pipelineId]
     );
     const errCheck = await c.query(
@@ -345,8 +346,8 @@ async function main(): Promise<void> {
       [pipelineId]
     );
     assert(
-      errCheck.rows[0]?.mod_status === "error",
-      "mod_status='error' accepted by constraint"
+      errCheck.rows[0]?.mod_status === WRITE.purchase.error,
+      "mod_status error accepted by constraint"
     );
 
     // ── E) Constraint rejects invalid state
@@ -366,7 +367,7 @@ async function main(): Promise<void> {
 
     // ── F) Guard simulation: mod_status='waiting' would 409 the PATCH route
     await c.query(
-      `UPDATE qb_item_receipt_pipeline SET mod_status='waiting' WHERE id=$1`,
+      `UPDATE qb_item_receipt_pipeline SET mod_status='${WRITE.purchase.dispatchable}' WHERE id=$1`,
       [pipelineId]
     );
     const guardRes = await c.query(

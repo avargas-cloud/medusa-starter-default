@@ -32,6 +32,7 @@ import assert from "node:assert/strict";
 import type { PoolClient } from "pg";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { requireBankingSandbox } from "../../lib/banking/security";
 import { statementContext } from "../../lib/banking/statement-read";
 import { applyAdoption, revertAdoption, type AdoptionPlanItem } from "../../lib/ledger/adopt/apply";
@@ -199,7 +200,7 @@ async function main(): Promise<void> {
     assert.deepEqual(reverted, before, "revert no devolvió el estado inicial");
     const qbTextsAfter = await one<{ h: string }>(client, `SELECT md5(string_agg(id||document_number||reference||description, ',' ORDER BY id)) AS h FROM bank_journal_entry WHERE source_kind='qb_import'`);
     assert.equal(qbTextsAfter.h, qbTexts.h, "los textos de los qb_import no volvieron idénticos");
-    const skipped = await one<{ n: string }>(client, `SELECT count(*)::text AS n FROM qb_order_pipeline WHERE step='gl_document_add' AND qb_result->>'adopted'='true' AND status='skipped'`);
+    const skipped = await one<{ n: string }>(client, `SELECT count(*)::text AS n FROM qb_order_pipeline WHERE step='gl_document_add' AND qb_result->>'adopted'='true' AND status='${WRITE.sales.skipped}'`);
     assert.equal(Number(skipped.n), rev.reverted);
     ok(`revert: ${rev.reverted} asientos de vuelta a qb_import, textos/números/contadores idénticos al inicio, ${skipped.n} filas skipped`);
     const plan3 = await buildPlan(client);
@@ -215,7 +216,7 @@ async function main(): Promise<void> {
       `SELECT id, doc_number, qb_txn_id FROM gl_check WHERE qb_source='adopted' AND deleted_at IS NULL AND status='posted' AND day >= '2026-09-01' ORDER BY day DESC LIMIT 1`);
     assert.ok(sept, "hace falta un adoptado de septiembre (mes abierto)");
     const voided = await voidBankCheck(client, sept.id, "e2e: anulación de un adoptado", actor);
-    assert.equal(voided.status, "voided");
+    assert.equal(voided.status, "voided"); // entity-status
     const reversal = await one<{ n: string; label: string }>(client, `SELECT count(*)::text AS n, max(document_number) AS label FROM bank_journal_entry WHERE kind='reversal' AND source_kind='bank_check' AND source_id=$1`, [sept.id]);
     assert.equal(reversal.n, "1");
     assert.equal(reversal.label, sept.doc_number);

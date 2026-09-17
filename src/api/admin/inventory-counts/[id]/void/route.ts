@@ -36,6 +36,7 @@ import { zodErrorToBody } from "../../_lib/format";
 import { getInventoryCountService } from "../../_lib/service-resolver";
 import { voidSchema } from "../../_lib/validators";
 import { getDbPool } from "../../../../utils/db-pool";
+import { pipelineStatusIs } from "../../../../../lib/quickbooks/pipeline-status";
 
 interface PipelineRowLite {
   id: string;
@@ -139,7 +140,7 @@ export async function POST(
   );
 
   const rowsToVoid = pipelineRows
-    .filter((r) => r.status === "confirmed" && r.qb_txn_id !== null)
+    .filter((r) => pipelineStatusIs("sales", r, "synced") && r.qb_txn_id !== null)
     .map((r) => ({ id: r.id, qb_txn_id: r.qb_txn_id! }));
 
   try {

@@ -12,6 +12,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { INVENTORY_COUNT_MODULE } from "../../../../../../modules/inventory-count";
+import { WRITE, pipelineStatusIs } from "../../../../../../lib/quickbooks/pipeline-status";
 
 interface PipelineRowLite {
   id: string;
@@ -49,15 +50,16 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   let retriedAdd = false;
   let retriedVoid = false;
 
-  if (row.status === "error") {
-    update.status = "waiting";
+  if (pipelineStatusIs("purchase", row, "error")) {
+    update.status = WRITE.purchase.dispatchable;
     update.retries = 0;
     update.last_error = null;
     update.next_retry_at = null;
     retriedAdd = true;
   }
-  if (row.void_status === "error") {
-    update.void_status = "waiting";
+  const voidRow = { status: row.void_status };
+  if (pipelineStatusIs("purchase", voidRow, "error")) {
+    update.void_status = WRITE.purchase.dispatchable;
     update.void_retries = 0;
     update.void_last_error = null;
     update.void_next_retry_at = null;

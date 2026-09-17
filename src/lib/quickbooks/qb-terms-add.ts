@@ -226,11 +226,11 @@ export async function createTermInQuickBooks(
     const op = (polled.data as Record<string, any>)?.operation;
     const status = op?.status;
 
-    if (status === "failed") {
+    if (status === "failed") { // bridge-status
       const message = String(op?.error ?? "Terms add failed on the bridge");
       throw new QbTermsAddError(message, null, false);
     }
-    if (status === "completed") {
+    if (status === "completed") { // bridge-status
       const { statusCode, statusMessage } = parseDirectQueryStatus(polled.data);
       if (statusCode === "0" || statusCode === null) {
         return { created: true, alreadyExisted: false, operationId };

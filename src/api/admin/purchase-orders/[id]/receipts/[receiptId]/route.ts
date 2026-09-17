@@ -30,6 +30,7 @@ import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workfl
 import { reverseReceipt } from "../../../../../../lib/ledger";
 import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
 import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
+import { pipelineStatusIs } from "../../../../../../lib/quickbooks/pipeline-status";
 import { getActorUserId, UnauthenticatedError } from "../../../_lib/auth";
 import { zodErrorToBody } from "../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../_lib/service-resolver";
@@ -126,7 +127,7 @@ export async function DELETE(
     `SELECT DISTINCT vb.id, vb.number, vb.status
        FROM vendor_bill vb
       WHERE vb.deleted_at IS NULL
-        AND vb.status IN ('confirmed', 'synced')
+        AND vb.status IN ('confirmed', 'synced') -- entity-status
         AND (
           vb.purchase_order_receipt_id = ?
           OR EXISTS (
@@ -185,7 +186,7 @@ export async function DELETE(
          JOIN purchase_order_receipt por
            ON por.id = porl.purchase_order_receipt_id
           AND por.deleted_at IS NULL
-          AND por.status IN ('applied', 'synced')
+          AND por.status IN ('applied', 'synced') -- entity-status
         WHERE por.purchase_order_id = ?
           AND por.id <> ?
           AND porl.deleted_at IS NULL
@@ -200,7 +201,7 @@ export async function DELETE(
           AND vb.deleted_at IS NULL
           AND vb.purchase_order_id = ?
           AND vb.bill_type = 'regular'
-          AND vb.status IN ('confirmed', 'synced')
+          AND vb.status IN ('confirmed', 'synced') -- entity-status
         WHERE vbl.deleted_at IS NULL
           AND COALESCE(vbl.line_type, 'product') = 'product'
           AND vbl.purchase_order_line_id IN (
@@ -488,27 +489,24 @@ export async function PATCH(
         code: "missing_pipeline_row",
       });
     }
-    if (pipe.status !== "synced") {
+    if (!pipelineStatusIs("purchase", pipe, "synced")) {
       return res.status(409).json({
-        error: `QB Add pipeline for this receipt is in state '${pipe.status}', not 'synced' — wait for it to settle before editing.`,
+        error: `QB Add pipeline for this receipt is in state '${pipe.status}', not synced — wait for it to settle before editing.`,
         code: "add_not_synced",
       });
     }
+    const pipeVoidRow = { status: pipe.void_status };
     if (
       pipe.void_status &&
-      pipe.void_status !== "completed" &&
-      pipe.void_status !== "failed_permanent"
+      !pipelineStatusIs("purchase", pipeVoidRow, "synced", "failed")
     ) {
       return res.status(409).json({
         error: `Receipt has a QB void in progress (void_status='${pipe.void_status}'). Cannot edit until void resolves.`,
         code: "void_in_progress",
       });
     }
-    if (
-      pipe.mod_status === "waiting" ||
-      pipe.mod_status === "submitted" ||
-      pipe.mod_status === "error"
-    ) {
+    const pipeModRow = { status: pipe.mod_status };
+    if (pipelineStatusIs("purchase", pipeModRow, "waiting", "submitted", "error")) {
       return res.status(409).json({
         error: `A QB Mod is already pending for this receipt (mod_status='${pipe.mod_status}'). Wait for it to finish or retry from the pipeline view.`,
         code: "mod_in_progress",
@@ -545,7 +543,7 @@ export async function PATCH(
     const addPipe = addPipeRes.rows?.[0] ?? null;
     if (
       addPipe &&
-      (addPipe.status === "processing" || addPipe.status === "submitted")
+      pipelineStatusIs("sales", addPipe, "processing", "submitted")
     ) {
       return res.status(409).json({
         error:
@@ -656,7 +654,7 @@ export async function PATCH(
             AND vb.deleted_at IS NULL
             AND vb.purchase_order_id = ?
             AND vb.bill_type = 'regular'
-            AND vb.status IN ('confirmed', 'synced')
+            AND vb.status IN ('confirmed', 'synced') -- entity-status
           WHERE vbl.purchase_order_line_id = ANY(?)
             AND vbl.deleted_at IS NULL
             AND COALESCE(vbl.line_type, 'product') = 'product'
@@ -684,7 +682,7 @@ export async function PATCH(
           WHERE vb.purchase_order_id = ?
             AND vb.bill_type = 'regular'
             AND vb.qb_source = 'adopted'
-            AND vb.status IN ('confirmed', 'synced')
+            AND vb.status IN ('confirmed', 'synced') -- entity-status
             AND vb.deleted_at IS NULL
             AND NOT EXISTS (
               SELECT 1

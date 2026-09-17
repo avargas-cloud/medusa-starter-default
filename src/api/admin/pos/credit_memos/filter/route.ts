@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { SALES_SQL } from "../../../../../lib/quickbooks/pipeline-status";
 
 type SqlClient = {
   raw: (
@@ -65,7 +66,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     bindings.push(to);
   }
   if (!showVoided) {
-    filters.push("cm.status <> 'voided'");
+    filters.push("cm.status <> 'voided'"); // entity-status
   }
   if (query) {
     const searchPredicates = [
@@ -125,7 +126,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             pipeline.qb_ref_number
           FROM qb_order_pipeline pipeline
           WHERE pipeline.step = 'credit_memo'
-            AND pipeline.status = 'confirmed'
+            AND pipeline.status IN (${SALES_SQL.synced})
             AND pipeline.qb_txn_id IS NOT NULL
           ORDER BY pipeline.qb_txn_id, pipeline.updated_at DESC
         )

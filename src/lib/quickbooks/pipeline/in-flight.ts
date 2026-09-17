@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { PipelineStep, PipelineStatus } from "./types";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../pipeline-status";
 
 /**
  * Looks up a submitted pipeline row by bridge_op_id.
@@ -15,7 +16,7 @@ export async function findSubmittedRowByOpId(bridgeOpId: string): Promise<{
   const { rows } = await pool.query(
     `SELECT id, order_id, reference_id, step
          FROM qb_order_pipeline
-         WHERE bridge_op_id = $1 AND status = 'submitted'
+         WHERE bridge_op_id = $1 AND status IN (${SALES_SQL.submitted})
          LIMIT 1`,
     [bridgeOpId]
   );
@@ -50,16 +51,21 @@ export async function pollUntilQbConfirmed(
     );
     const row = rows[0] as { status: string; updated_at: string } | undefined;
     const status = row?.status;
-    if (status === "confirmed") return "confirmed";
-    if (status === "failed") return "failed";
-    if (status === "skipped") return "skipped";
+    const statusRow = { status: status ?? null };
+    if (pipelineStatusIs("sales", statusRow, "synced")) return "confirmed";
+    if (pipelineStatusIs("sales", statusRow, "error", "failed")) return "failed";
+    if (pipelineStatusIs("sales", statusRow, "skipped")) return "skipped";
 
     // Stale detection: if the row has been stuck too long, don't wait forever
     if (row?.updated_at) {
       const updatedAt = new Date(row.updated_at).getTime();
       const ageMs = Date.now() - updatedAt;
-      const isStaleSubmitted = status === "submitted" && ageMs > 15 * 60 * 1000;
-      const isStalePending = status === "pending" && ageMs > 10 * 60 * 1000;
+      const isStaleSubmitted =
+        pipelineStatusIs("sales", statusRow, "submitted") &&
+        ageMs > 15 * 60 * 1000;
+      const isStalePending =
+        pipelineStatusIs("sales", statusRow, "waiting") &&
+        ageMs > 10 * 60 * 1000;
       if (isStaleSubmitted || isStalePending) {
         return "stale";
       }
@@ -86,7 +92,7 @@ export async function findInFlightQbRows(
     `SELECT id, step, status FROM qb_order_pipeline
          WHERE order_id = $1
            AND step IN (${placeholders})
-           AND status IN ('pending', 'processing', 'submitted', 'waiting')
+           AND status IN (${SALES_SQL.inFlight})
          ORDER BY created_at DESC`,
     [orderId, ...steps]
   );
@@ -116,16 +122,16 @@ export async function skipPipelineRowById(
   }
 ): Promise<void> {
   const pool = getDbPool();
-  const statuses = opts?.includeProcessing
-    ? ["waiting", "pending", "processing"]
-    : ["waiting", "pending"];
+  const statusFilter = opts?.includeProcessing
+    ? `${SALES_SQL.blocked}, ${SALES_SQL.dispatchable}, ${SALES_SQL.processing}`
+    : `${SALES_SQL.blocked}, ${SALES_SQL.dispatchable}`;
   await pool.query(
     `UPDATE qb_order_pipeline
-         SET status = 'skipped',
+         SET status = '${WRITE.sales.skipped}',
              error  = $2
          WHERE id = $1
-           AND status = ANY($3::text[])`,
-    [rowId, reason, statuses]
+           AND status IN (${statusFilter})`,
+    [rowId, reason]
   );
 }
 
@@ -149,7 +155,7 @@ export async function findInFlightQbRowsByRef(
          WHERE reference_id = $1
            AND reference_type = $2
            AND step IN (${placeholders})
-           AND status IN ('pending', 'processing', 'submitted', 'waiting')
+           AND status IN (${SALES_SQL.inFlight})
          ORDER BY created_at DESC`,
     [referenceId, referenceType, ...steps]
   );
@@ -173,7 +179,7 @@ export async function findLastInFlightSoToggleRow(
     `SELECT id FROM qb_order_pipeline
          WHERE order_id = $1
            AND step IN ('so_close', 'so_reopen')
-           AND status IN ('pending', 'processing', 'submitted', 'waiting')
+           AND status IN (${SALES_SQL.inFlight})
          ORDER BY created_at DESC
          LIMIT 1`,
     [orderId]
@@ -220,7 +226,7 @@ export async function coalesceIfInFlight(
          SET next_payload = $3::jsonb,
              updated_at   = NOW()
          WHERE step   = $2
-           AND status  = 'submitted'
+           AND status  IN (${SALES_SQL.submitted})
            AND (
              ($1::text IS NOT NULL AND order_id = $1::text
                AND ($4::text IS NULL OR reference_id = $4::text))
@@ -254,7 +260,7 @@ export async function claimAndResetForResubmit(
   const pool = getDbPool();
   const { rows } = await pool.query(
     `UPDATE qb_order_pipeline
-         SET status        = 'pending',
+         SET status        = '${WRITE.sales.dispatchable}',
              next_payload  = NULL,
              bridge_op_id  = NULL,
              qb_result     = NULL,
@@ -308,7 +314,7 @@ export async function findLatestInFlightRow(
          FROM qb_order_pipeline
          WHERE order_id = $1 AND step = ANY($2)
            ${exclusion}
-           AND (status IN ('processing', 'submitted') OR (status = 'pending' AND bridge_op_id IS NOT NULL))
+           AND (status IN (${SALES_SQL.processing}, ${SALES_SQL.submitted}) OR (status IN (${SALES_SQL.dispatchable}) AND bridge_op_id IS NOT NULL))
          ORDER BY created_at DESC
          LIMIT 1`,
     params
@@ -334,7 +340,7 @@ export async function findConfirmedAddTxnId(
     `SELECT qb_txn_id
          FROM qb_order_pipeline
          WHERE order_id = $1 AND step = ANY($2)
-           AND status IN ('confirmed', 'fixed')
+           AND status IN (${SALES_SQL.done})
            AND qb_txn_id IS NOT NULL
          ORDER BY updated_at DESC
          LIMIT 1`,

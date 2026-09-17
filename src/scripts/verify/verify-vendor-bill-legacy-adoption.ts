@@ -6,6 +6,7 @@
  */
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import {
   adoptLegacyVendorBillRow,
@@ -52,7 +53,7 @@ function candidate(input: {
   id: string;
   billId: string;
   poId: string;
-  status: "waiting" | "submitted";
+  status: typeof WRITE.purchase.dispatchable | typeof WRITE.purchase.submitted;
   operationId?: string;
 }): LegacyBillRow {
   return {
@@ -89,13 +90,13 @@ async function main(): Promise<void> {
       id: `qbvbpipe_verify_waiting_${stamp}`,
       billId: `vb_verify_waiting_${stamp}`,
       poId: `po_verify_waiting_${stamp}`,
-      status: "waiting",
+      status: WRITE.purchase.dispatchable,
     });
     const submitted = candidate({
       id: `qbvbpipe_verify_submitted_${stamp}`,
       billId: `vb_verify_submitted_${stamp}`,
       poId: `po_verify_submitted_${stamp}`,
-      status: "submitted",
+      status: WRITE.purchase.submitted,
       operationId: `bridge-op-verify-${stamp}`,
     });
     for (const row of [waiting, submitted]) {
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
       waitingOperationId != null &&
         waitingState?.order_pipeline_id === waitingOperationId &&
         waitingState?.step === "vendor_bill_add" &&
-        waitingState?.status === "pending",
+        waitingState?.status === WRITE.sales.dispatchable,
       waitingState
     );
     assert(
@@ -160,7 +161,7 @@ async function main(): Promise<void> {
       "already-submitted bridge operation is adopted, not re-submitted",
       submittedOperationId != null &&
         submittedState?.order_pipeline_id === submittedOperationId &&
-        submittedState?.status === "submitted" &&
+        submittedState?.status === WRITE.sales.submitted &&
         submittedState?.bridge_op_id === submitted.qb_operation_id,
       submittedState
     );

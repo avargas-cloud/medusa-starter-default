@@ -11,6 +11,8 @@ import {
 import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+import { PipelineStatusBadge } from "./PipelineStatusBadge";
+import { pipelineStatusIs } from "../../../../lib/quickbooks/pipeline-status";
 
 type PipelineStatus = "waiting" | "synced" | "error" | "failed_permanent";
 
@@ -48,31 +50,9 @@ const STATUS_FILTERS = [
   { label: "Failed Permanent", value: "failed_permanent" },
 ];
 
-const StatusBadge = ({ status }: { status: PipelineRow["status"] }) => {
-  if (status === "synced")
-    return (
-      <Badge color="green" size="2xsmall">
-        synced
-      </Badge>
-    );
-  if (status === "failed_permanent")
-    return (
-      <Badge color="red" size="2xsmall">
-        failed permanent
-      </Badge>
-    );
-  if (status === "error")
-    return (
-      <Badge color="red" size="2xsmall">
-        error
-      </Badge>
-    );
-  return (
-    <Badge color="orange" size="2xsmall">
-      waiting
-    </Badge>
-  );
-};
+const StatusBadge = ({ status }: { status: PipelineRow["status"] }) => (
+  <PipelineStatusBadge status={status} family="purchase" />
+);
 
 const ActionBadge = ({ action }: { action: "add" | "mod" | null }) => {
   if (action === "mod")
@@ -306,7 +286,7 @@ export const ItemPipelineSection = () => {
                       ) : "—"}
                     </Table.Cell>
                     <Table.Cell>
-                      {(r.status === "error" || r.status === "failed_permanent") && (
+                      {pipelineStatusIs("purchase", r, "error", "failed") && (
                         <Button
                           size="small"
                           variant="secondary"

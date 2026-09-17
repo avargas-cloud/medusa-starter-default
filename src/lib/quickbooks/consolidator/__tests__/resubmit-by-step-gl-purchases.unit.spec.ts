@@ -6,6 +6,7 @@
  * proving the same for the real short-circuit.
  */
 import type { MedusaContainer } from "@medusajs/framework/types";
+import { WRITE } from "../../pipeline-status";
 
 const mockQuery = jest.fn();
 jest.mock("../../../../api/utils/db-pool", () => ({
@@ -104,7 +105,7 @@ describe("resubmitByStep — vendor_credit_add", () => {
       { idempotencyKey: "vendor-credit-add:row_1" }
     );
     expect(mockQuery).toHaveBeenCalledWith(
-      expect.stringContaining("status = 'submitted'"),
+      expect.stringContaining(`status = '${WRITE.sales.submitted}'`),
       ["row_1", "op_123"]
     );
     expect(mockFailPipelineRow).not.toHaveBeenCalled();

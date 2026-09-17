@@ -22,6 +22,7 @@ process.env.DATABASE_URL =
   "postgresql://postgres:sandbox@localhost:5499/medusa";
 
 import * as fs from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as path from "path";
 import { Client } from "pg";
 
@@ -87,7 +88,10 @@ async function main(): Promise<void> {
         JOIN payment_application pa ON pa.id = qop.reference_id
         WHERE qop.step = 'apply_payment'
           AND pa.invoice_id IS NULL
-          AND qop.status NOT IN ('cancelled', 'failed', 'voided')
+          -- canonical-literal: 'cancelled'/'voided' are defensive extras that
+          -- never actually occur on qb_order_pipeline (sales family) — kept
+          -- verbatim, only 'failed' is a real sales literal here.
+          AND qop.status NOT IN ('cancelled', '${WRITE.sales.failed}', 'voided') -- canonical-literal
         LIMIT 10
       `);
       const offenders = rows.length;

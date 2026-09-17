@@ -15,6 +15,7 @@
  */
 import type { ExecArgs } from "@medusajs/framework/types";
 import { decideRetry } from "../../lib/quickbooks/retry-config";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SAFETY_GUARD = "qb_test_synthetic_v1_5_15";
 
@@ -100,17 +101,17 @@ export default async function verifyRetry({ container }: ExecArgs) {
         );
       }
 
-      if (decision.newStatus === "error") {
+      if (decision.newStatus === WRITE.sales.error) {
         await knex.raw(
           `UPDATE qb_order_pipeline
-              SET status='error', retry_count=?, error=?, next_retry_at=?, updated_at=NOW()
+              SET status='${WRITE.sales.error}', retry_count=?, error=?, next_retry_at=?, updated_at=NOW()
             WHERE id=?`,
           [decision.newRetries, transientErr.message, decision.nextRetryAt, rowId]
         );
       } else {
         await knex.raw(
           `UPDATE qb_order_pipeline
-              SET status='failed', retry_count=?, error=?, failed_at=NOW(),
+              SET status='${WRITE.sales.failed}', retry_count=?, error=?, failed_at=NOW(),
                   next_retry_at=NULL, updated_at=NOW()
             WHERE id=?`,
           [decision.newRetries, transientErr.message, rowId]
@@ -133,7 +134,7 @@ export default async function verifyRetry({ container }: ExecArgs) {
     // Reset row to status=error with next_retry_at in the past.
     await knex.raw(
       `UPDATE qb_order_pipeline
-          SET status='error', retry_count=2,
+          SET status='${WRITE.sales.error}', retry_count=2,
               next_retry_at = NOW() - INTERVAL '1 minute', updated_at=NOW()
         WHERE id=?`,
       [rowId]
@@ -144,8 +145,8 @@ export default async function verifyRetry({ container }: ExecArgs) {
            FROM qb_order_pipeline
           WHERE step = 'customer_data_ext'
             AND (
-              status = 'pending'
-              OR (status = 'error' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+              status = '${WRITE.sales.dispatchable}'
+              OR (status = '${WRITE.sales.error}' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
             )
             AND reference_id = ?`,
         [SAFETY_GUARD]
@@ -153,7 +154,7 @@ export default async function verifyRetry({ container }: ExecArgs) {
       .then((r: any) => r.rows);
     if (picked.length === 0) {
       failures.push(
-        "retry SELECT did not pick up status='error' row with elapsed next_retry_at"
+        "retry SELECT did not pick up an error row with elapsed next_retry_at"
       );
     } else if (picked[0].retry_count !== 2) {
       failures.push(
@@ -171,9 +172,9 @@ export default async function verifyRetry({ container }: ExecArgs) {
       hasNextRetryAt: true,
       hasFailedPermanent: false,
     });
-    if (permDecision.newStatus !== "failed" || !permDecision.exhausted) {
+    if (permDecision.newStatus !== WRITE.sales.failed || !permDecision.exhausted) {
       failures.push(
-        `permanent error should go straight to 'failed' (exhausted), got status=${permDecision.newStatus} exhausted=${permDecision.exhausted}`
+        `permanent error should go straight to terminal failed (exhausted), got status=${permDecision.newStatus} exhausted=${permDecision.exhausted}`
       );
     } else {
       console.log("✓ permanent error → failed immediately (no retry budget consumed)");

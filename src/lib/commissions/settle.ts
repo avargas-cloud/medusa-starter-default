@@ -244,7 +244,7 @@ export async function validateVendorBillForSettlement(
        FROM commission_settlement s
        JOIN order_commission_recipient r ON r.id = s.recipient_id
       WHERE s.vendor_bill_id = $1
-        AND s.status IN ('pending','qb_waiting','confirmed')
+        AND s.status IN ('pending','qb_waiting','confirmed') -- entity-status
       LIMIT 1`,
     [vendorBillId]
   );
@@ -300,14 +300,15 @@ export async function reconcileVendorBillSettlements(client: PoolClient): Promis
        FROM commission_settlement s
        JOIN vendor_bill vb ON vb.id = s.vendor_bill_id AND vb.deleted_at IS NULL
       WHERE s.method = 'vendor_bill'
-        AND s.status IN ('pending', 'qb_waiting')
+        AND s.status IN ('pending', 'qb_waiting') -- entity-status
         AND vb.qb_txn_id IS NOT NULL`
   );
   for (const row of rows) {
     await client.query(
       `UPDATE commission_settlement
-          SET status = 'confirmed', qb_check_txn_id = NULL, updated_at = NOW()
-        WHERE id = $1 AND status IN ('pending', 'qb_waiting')`,
+          SET status = 'confirmed', qb_check_txn_id = NULL, updated_at = NOW() -- entity-status
+        WHERE id = $1 AND status IN ('pending', 'qb_waiting') -- entity-status
+      `,
       [row.id]
     );
     await client.query(

@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../../modules/quickbooks-catalog";
 import { requireBridgeUrl } from "../../../../../../lib/quickbooks/bridge-url";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 const API_KEY = process.env.QB_API_KEY || "";
 
@@ -152,7 +153,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     await catalog.updateQbVendorPipelines({
       id: row.id,
-      status: "waiting",
+      status: WRITE.purchase.dispatchable,
       qb_operation_id: bridgeData.operationId,
       last_error: null,
       retries: (row.retries ?? 0) + 1,
@@ -178,7 +179,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     );
     await catalog.updateQbVendorPipelines({
       id: row.id,
-      status: "error",
+      status: WRITE.purchase.error,
       last_error: err.message,
       retries: (row.retries ?? 0) + 1,
     });

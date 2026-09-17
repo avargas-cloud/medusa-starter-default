@@ -28,6 +28,7 @@
  */
 import { getDbPool } from "../../api/utils/db-pool";
 import { writePipelineRow } from "../../lib/quickbooks/pipeline/row-mutations";
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 const TAG = "order_TEST_APPLY_DEDUP";
 const CP_TAG = "cpay_TEST_APPLY_DEDUP";
@@ -117,7 +118,7 @@ async function main() {
       referenceId: papp,
       referenceType: "payment_application",
       step: "apply_payment",
-      status: "waiting",
+      status: WRITE.sales.blocked,
       medusaRefNumber: "PAY-TEST",
     });
     await writePipelineRow({
@@ -125,7 +126,7 @@ async function main() {
       referenceId: papp,
       referenceType: "payment_application",
       step: "apply_payment",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { payment_id: "cpay_x", invoice_id: "inv_x", application_id: papp },
     });
     const { total, byType } = await countApplyRows(orderId);
@@ -149,7 +150,7 @@ async function main() {
       referenceId: cpay,
       referenceType: "customer_payment",
       step: "apply_payment",
-      status: "waiting",
+      status: WRITE.sales.blocked,
       medusaRefNumber: "PAY-TEST",
       payload: { payment_id: cpay, invoice_id: "inv_x", application_id: papp },
     });
@@ -159,7 +160,7 @@ async function main() {
       referenceId: papp,
       referenceType: "payment_application",
       step: "apply_payment",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { payment_id: cpay, invoice_id: "inv_x", application_id: papp },
     });
     const { total, byType } = await countApplyRows(orderId);
@@ -185,7 +186,7 @@ async function main() {
       referenceId: cpay,
       referenceType: "customer_payment",
       step: "apply_payment",
-      status: "waiting",
+      status: WRITE.sales.blocked,
       medusaRefNumber: "PAY-TEST",
     });
     // handler papp_ row → should dedup in place
@@ -194,7 +195,7 @@ async function main() {
       referenceId: papp,
       referenceType: "payment_application",
       step: "apply_payment",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { payment_id: cpay, invoice_id: `inv_GL_${ts}`, application_id: papp },
     });
     const { total, byType } = await countApplyRows(orderId);
@@ -219,7 +220,7 @@ async function main() {
       referenceId: cpay,
       referenceType: "customer_payment",
       step: "apply_payment",
-      status: "waiting",
+      status: WRITE.sales.blocked,
       medusaRefNumber: "PAY-TEST",
     });
     const { byType } = await countApplyRows(orderId);
@@ -239,7 +240,7 @@ async function main() {
       referenceId: cpay,
       referenceType: "customer_payment",
       step: "apply_payment",
-      status: "waiting",
+      status: WRITE.sales.blocked,
       medusaRefNumber: "PAY-TEST",
     });
     const { total, byType } = await countApplyRows(orderId);
@@ -259,7 +260,7 @@ async function main() {
       referenceId: papp,
       referenceType: "payment_application",
       step: "apply_payment",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
     });
     const pool = getDbPool();
     let rejected = false;
@@ -267,7 +268,7 @@ async function main() {
       const { rows } = await pool.query(
         `INSERT INTO qb_order_pipeline
                 (order_id, reference_id, reference_type, step, status, retry_count)
-             VALUES ($1,$2,'payment_application','apply_payment','pending',0)
+             VALUES ($1,$2,'payment_application','apply_payment','${WRITE.sales.dispatchable}',0)
              ON CONFLICT DO NOTHING
              RETURNING id`,
         [`${orderId}_dup`, papp]
@@ -300,7 +301,7 @@ async function main() {
     await pool.query(
       `INSERT INTO qb_order_pipeline
               (order_id, reference_id, reference_type, step, status, retry_count)
-           VALUES ($1,$2,'payment_application','apply_payment','confirmed',0)
+           VALUES ($1,$2,'payment_application','apply_payment','${WRITE.sales.synced}',0)
            ON CONFLICT DO NOTHING`,
       [orderId, papp]
     );
@@ -310,7 +311,7 @@ async function main() {
          JOIN payment_application pa ON pa.id = p.reference_id
         WHERE p.step = 'apply_payment'
           AND p.reference_type = 'payment_application'
-          AND p.status IN ('processing', 'submitted', 'confirmed')
+          AND p.status IN ('${WRITE.sales.processing}', '${WRITE.sales.submitted}', ${SALES_SQL.synced})
           AND pa.payment_id = $1
           AND pa.invoice_id = $2
         LIMIT 1`,

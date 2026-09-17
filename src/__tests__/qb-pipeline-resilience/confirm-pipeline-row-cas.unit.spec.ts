@@ -9,6 +9,7 @@ jest.mock("../../api/utils/db-pool", () => ({
   getDbPool: () => ({ query: (...args: unknown[]) => query(...args) }),
 }));
 
+import { SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 import { confirmPipelineRow } from "../../lib/quickbooks/pipeline/row-mutations";
 
 beforeEach(() => {
@@ -35,13 +36,13 @@ describe("confirmPipelineRow — CAS contract", () => {
     expect(won).toBe(false);
   });
 
-  it("guards the UPDATE on `status <> 'confirmed'` and uses RETURNING", async () => {
+  it("guards the UPDATE on `status NOT IN (synced…)` and uses RETURNING", async () => {
     query.mockResolvedValue({ rows: [{ id: "row-1" }] });
 
     await confirmPipelineRow("row-1", "TXN-1", "REF-1", null);
 
     const sql = String(query.mock.calls[0][0]);
-    expect(sql).toMatch(/status\s*<>\s*'confirmed'/);
+    expect(sql).toMatch(new RegExp(`status\\s*NOT IN \\(${SALES_SQL.synced}\\)`));
     expect(sql).toMatch(/RETURNING id/);
   });
 

@@ -19,6 +19,7 @@ import {
 } from "../_lib/qb-credit-query";
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { respondQbSyncDisabled } from "../../../../../lib/quickbooks/qb-sync-disabled-response";
+import { SALES_SQL } from "../../../../../lib/quickbooks/pipeline-status";
 import {
   accessFailure,
   assertOwner,
@@ -140,7 +141,7 @@ export async function POST(
     const { rows: existing } = await client.query<ExistingPaymentRow>(
       `SELECT id, status, display_id FROM customer_payment
         WHERE metadata->>'qb_txn_id' = $1
-          AND status <> 'voided'
+          AND status <> 'voided' -- entity-status
           AND deleted_at IS NULL
         LIMIT 1`,
       [txn_id]
@@ -200,10 +201,10 @@ export async function POST(
              ON cp.reference = cm.credit_memo_number
             AND cp.customer_id = $2
             AND cp.type = 'credit_memo'
-            AND cp.status <> 'voided'
+            AND cp.status <> 'voided' -- entity-status
             AND cp.deleted_at IS NULL
           WHERE q.step = 'credit_memo'
-            AND q.status = 'confirmed'
+            AND q.status IN (${SALES_SQL.synced})
             AND q.qb_txn_id = $1
           ORDER BY q.confirmed_at DESC NULLS LAST, q.created_at DESC
           LIMIT 1`,

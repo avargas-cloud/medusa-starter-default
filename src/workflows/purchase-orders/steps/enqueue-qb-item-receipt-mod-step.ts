@@ -30,6 +30,7 @@ import {
 import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
 import { toQbRefNumber } from "../../../lib/quickbooks/qb-ref-number";
 import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
+import { WRITE, normalizePipelineStatus } from "../../../lib/quickbooks/pipeline-status";
 
 export interface EnqueueQbItemReceiptModStepInput {
   receipt_id: string;
@@ -129,9 +130,9 @@ export const enqueueQbItemReceiptModStep = createStep(
       );
     }
 
-    if (header.pipe_status !== "synced") {
+    if (normalizePipelineStatus("purchase", header.pipe_status) !== WRITE.purchase.synced) {
       throw new Error(
-        `enqueueQbItemReceiptMod: pipeline status is '${header.pipe_status}', expected 'synced' — ItemReceipt must be in QB before Mod is enqueued`
+        `enqueueQbItemReceiptMod: pipeline status is '${header.pipe_status}', expected '${WRITE.purchase.synced}' — ItemReceipt must be in QB before Mod is enqueued`
       );
     }
     if (
@@ -235,7 +236,7 @@ export const enqueueQbItemReceiptModStep = createStep(
 
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status        = 'waiting',
+          SET mod_status        = '${WRITE.purchase.dispatchable}',
               mod_payload       = ?::jsonb,
               mod_operation_id  = NULL,
               mod_retries       = 0,

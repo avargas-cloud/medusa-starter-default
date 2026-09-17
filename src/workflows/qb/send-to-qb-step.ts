@@ -4,6 +4,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
 import { upsertItemPipelineRow } from "../../lib/quickbooks/upsert-item-pipeline-row";
 import { isQbSyncEnabled } from "../../lib/quickbooks/sync-enabled";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -121,7 +122,7 @@ export const sendToQbStep = createStep(
             op_action: input.action,
             op_payload: input.data,
             qb_id: input.action === "mod" ? (input.data?.ListID ?? null) : null,
-            status: "waiting",
+            status: WRITE.purchase.dispatchable,
           },
           logger as any
         );
@@ -203,7 +204,7 @@ export const sendToQbStep = createStep(
       if (catalog && pipelineRowId) {
         await catalog.updateQbItemPipelines({
           id: pipelineRowId,
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: error.message,
           retries: 0,
           next_retry_at: new Date(Date.now() + 2 * 60 * 1000), // 2 min backoff

@@ -27,6 +27,7 @@ import {
   coalesceIfInFlight,
   claimAndResetForResubmit,
 } from "../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const PREFIX = "verify_estimate_sequential_";
 
@@ -80,16 +81,16 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}1`;
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "TXN-A" });
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "TXN-A", error: "Bridge 530" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TXN-A" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "TXN-A", error: "Bridge 530" });
     // Second callback also ends in 'failed' — previously would INSERT
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "TXN-A", error: "Bridge 530 again" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "TXN-A", error: "Bridge 530 again" });
 
     const n = await countRows(orderId, "estimate");
     assert("Test 1: pending→failed→failed stays at 1 row", n === 1, `got ${n}`);
 
     const statuses = await getStatus(orderId, "estimate");
-    assert("Test 1: row ends in 'failed' status", statuses[0] === "failed");
+    assert("Test 1: row ends up failed", statuses[0] === WRITE.sales.failed);
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -97,11 +98,11 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}2`;
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "TXN-B" });
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "TXN-B", error: "first fail" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TXN-B" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "TXN-B", error: "first fail" });
     // User retries: reactivation from failed → pending
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "TXN-B" });
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "TXN-B", error: "second fail" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TXN-B" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "TXN-B", error: "second fail" });
 
     const n = await countRows(orderId, "estimate");
     assert("Test 2: reactivate→fail cycle stays at 1 row", n === 1, `got ${n}`);
@@ -113,11 +114,11 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}3`;
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "TXN-C" });
-    await writePipelineRow({ orderId, step: "estimate", status: "submitted", bridgeOpId: "op-123", qbTxnId: "TXN-C" });
-    await writePipelineRow({ orderId, step: "estimate", status: "confirmed", qbTxnId: "TXN-C", qbRefNumber: "E18024XXX" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TXN-C" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.submitted, bridgeOpId: "op-123", qbTxnId: "TXN-C" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.synced, qbTxnId: "TXN-C", qbRefNumber: "E18024XXX" });
     // Second confirm race
-    await writePipelineRow({ orderId, step: "estimate", status: "confirmed", qbTxnId: "TXN-C", qbRefNumber: "E18024XXX" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.synced, qbTxnId: "TXN-C", qbRefNumber: "E18024XXX" });
 
     const n = await countRows(orderId, "estimate");
     assert("Test 3: duplicate confirm stays at 1 row", n === 1, `got ${n}`);
@@ -129,8 +130,8 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}4`;
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "TXN-D" });
-    await writePipelineRow({ orderId, step: "estimate", status: "submitted", bridgeOpId: "op-D-1", qbTxnId: "TXN-D" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TXN-D" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.submitted, bridgeOpId: "op-D-1", qbTxnId: "TXN-D" });
 
     const coalesced = await coalesceIfInFlight(orderId, null, "estimate");
     assert("Test 4: coalesceIfInFlight returns true when submitted", coalesced === true);
@@ -151,7 +152,7 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}5`;
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "TXN-E", error: "boom" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "TXN-E", error: "boom" });
 
     const coalesced = await coalesceIfInFlight(orderId, null, "estimate");
     assert("Test 5: coalesceIfInFlight returns false when no submitted row", coalesced === false);
@@ -163,8 +164,8 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}6`;
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "TXN-F" });
-    await writePipelineRow({ orderId, step: "estimate", status: "submitted", bridgeOpId: "op-F-1", qbTxnId: "TXN-F" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TXN-F" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.submitted, bridgeOpId: "op-F-1", qbTxnId: "TXN-F" });
     await coalesceIfInFlight(orderId, null, "estimate"); // set next_payload
 
     // Simulate confirmation
@@ -177,7 +178,7 @@ async function run(): Promise<void> {
 
     // Update to confirmed (simulate consolidator)
     await pool.query(
-      `UPDATE qb_order_pipeline SET status = 'confirmed', confirmed_at = NOW() WHERE id = $1`,
+      `UPDATE qb_order_pipeline SET status = '${WRITE.sales.synced}', confirmed_at = NOW() WHERE id = $1`,
       [rowId]
     );
 
@@ -188,7 +189,7 @@ async function run(): Promise<void> {
       `SELECT status, next_payload FROM qb_order_pipeline WHERE id = $1`,
       [rowId]
     );
-    assert("Test 6: row reset to pending", after[0].status === "pending");
+    assert("Test 6: row reset to pending", after[0].status === WRITE.sales.dispatchable);
     assert("Test 6: next_payload cleared", after[0].next_payload === null);
   }
 
@@ -198,9 +199,9 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}7a`;
-    await writePipelineRow({ orderId, step: "sales_order", status: "pending", qbTxnId: "SO-TXN-1" });
-    await writePipelineRow({ orderId, step: "sales_order", status: "failed", qbTxnId: "SO-TXN-1", error: "SO bridge fail 1" });
-    await writePipelineRow({ orderId, step: "sales_order", status: "failed", qbTxnId: "SO-TXN-1", error: "SO bridge fail 2" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.dispatchable, qbTxnId: "SO-TXN-1" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.failed, qbTxnId: "SO-TXN-1", error: "SO bridge fail 1" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.failed, qbTxnId: "SO-TXN-1", error: "SO bridge fail 2" });
     const n = await countRows(orderId, "sales_order");
     assert("Test 7a: SO terminal-state idempotency — 1 row after repeated failures", n === 1, `got ${n}`);
   }
@@ -210,8 +211,8 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}7b`;
-    await writePipelineRow({ orderId, step: "sales_order", status: "pending", qbTxnId: "SO-TXN-2" });
-    await writePipelineRow({ orderId, step: "sales_order", status: "submitted", bridgeOpId: "op-SO-1", qbTxnId: "SO-TXN-2" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.dispatchable, qbTxnId: "SO-TXN-2" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.submitted, bridgeOpId: "op-SO-1", qbTxnId: "SO-TXN-2" });
     const coalesced = await coalesceIfInFlight(orderId, null, "sales_order");
     assert("Test 7b: coalesceIfInFlight for sales_order returns true", coalesced === true);
     const n = await countRows(orderId, "sales_order");
@@ -227,18 +228,18 @@ async function run(): Promise<void> {
     const pool = getDbPool();
     await pool.query(
       `INSERT INTO qb_order_pipeline (order_id, step, status, qb_txn_id, qb_ref_number, retry_count, created_at, updated_at, failed_at)
-       VALUES ($1, 'sales_order', 'failed', 'SO-TXN-3', 'S12345', 1, NOW(), NOW(), NOW())`,
+       VALUES ($1, 'sales_order', '${WRITE.sales.failed}', 'SO-TXN-3', 'S12345', 1, NOW(), NOW(), NOW())`,
       [orderId]
     );
     // Simulate retry reactivation via writePipelineRow(pending)
-    await writePipelineRow({ orderId, step: "sales_order", status: "pending", qbTxnId: "SO-TXN-3", qbRefNumber: "S12345" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.dispatchable, qbTxnId: "SO-TXN-3", qbRefNumber: "S12345" });
     const { rows } = await pool.query(
       `SELECT qb_txn_id, qb_ref_number, status FROM qb_order_pipeline WHERE order_id = $1 AND step = 'sales_order'`,
       [orderId]
     );
     assert("Test 7c: qb_txn_id preserved on reactivate", rows[0]?.qb_txn_id === "SO-TXN-3");
     assert("Test 7c: qb_ref_number preserved on reactivate", rows[0]?.qb_ref_number === "S12345");
-    assert("Test 7c: status flipped to pending", rows[0]?.status === "pending");
+    assert("Test 7c: status flipped to pending", rows[0]?.status === WRITE.sales.dispatchable);
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -252,7 +253,7 @@ async function run(): Promise<void> {
     // Seed a 'failed' row directly (no pending/submitted anywhere in history)
     await pool.query(
       `INSERT INTO qb_order_pipeline (order_id, step, status, qb_txn_id, error, retry_count, created_at, updated_at)
-       VALUES ($1, 'estimate', 'failed', 'TXN-G', 'first fail', 0, NOW(), NOW())`,
+       VALUES ($1, 'estimate', '${WRITE.sales.failed}', 'TXN-G', 'first fail', 0, NOW(), NOW())`,
       [orderId]
     );
 
@@ -262,7 +263,7 @@ async function run(): Promise<void> {
     await writePipelineRow({
       orderId,
       step: "estimate",
-      status: "failed",
+      status: WRITE.sales.failed,
       qbTxnId: "TXN-G",
       error: "second fail — SHOULD NOT DUPLICATE",
     });
@@ -292,13 +293,13 @@ async function run(): Promise<void> {
     // Seed two rows manually — simulates invariant violation (manual insert, broken migration)
     const { rows: olderRows } = await pool.query(
       `INSERT INTO qb_order_pipeline (order_id, step, status, qb_txn_id, error, retry_count, created_at, updated_at)
-       VALUES ($1, 'estimate', 'failed', 'OLD-TXN', 'OLDER ERROR', 1, NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour')
+       VALUES ($1, 'estimate', '${WRITE.sales.failed}', 'OLD-TXN', 'OLDER ERROR', 1, NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour')
        RETURNING id`,
       [orderId]
     );
     const { rows: newerRows } = await pool.query(
       `INSERT INTO qb_order_pipeline (order_id, step, status, qb_txn_id, error, retry_count, created_at, updated_at)
-       VALUES ($1, 'estimate', 'failed', 'NEW-TXN', 'NEWER ERROR', 0, NOW(), NOW())
+       VALUES ($1, 'estimate', '${WRITE.sales.failed}', 'NEW-TXN', 'NEWER ERROR', 0, NOW(), NOW())
        RETURNING id`,
       [orderId]
     );
@@ -310,7 +311,7 @@ async function run(): Promise<void> {
     await writePipelineRow({
       orderId,
       step: "estimate",
-      status: "failed",
+      status: WRITE.sales.failed,
       qbTxnId: "NEW-TXN",
       error: "LATEST ERROR",
     });
@@ -342,11 +343,11 @@ async function run(): Promise<void> {
   // ────────────────────────────────────────────────────────────────────────
   {
     const orderId = `${PREFIX}9`;
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "E-TXN" });
-    await writePipelineRow({ orderId, step: "sales_order", status: "confirmed", qbTxnId: "S-TXN", qbRefNumber: "S999" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "E-TXN" });
+    await writePipelineRow({ orderId, step: "sales_order", status: WRITE.sales.synced, qbTxnId: "S-TXN", qbRefNumber: "S999" });
 
     // Now fail the estimate — must not touch sales_order
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "E-TXN", error: "only estimate fails" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "E-TXN", error: "only estimate fails" });
 
     const pool = getDbPool();
     const { rows: estRows } = await pool.query(
@@ -358,8 +359,8 @@ async function run(): Promise<void> {
       [orderId]
     );
 
-    assert("Test 9: estimate → failed", estRows[0]?.status === "failed");
-    assert("Test 9: sales_order row untouched (still confirmed)", soRows[0]?.status === "confirmed");
+    assert("Test 9: estimate → failed", estRows[0]?.status === WRITE.sales.failed);
+    assert("Test 9: sales_order row untouched (still confirmed)", soRows[0]?.status === WRITE.sales.synced);
     assert("Test 9: sales_order error is null (untouched)", soRows[0]?.error === null);
   }
 
@@ -376,18 +377,18 @@ async function run(): Promise<void> {
     // Seed a payment row keyed by reference_id (no order_id)
     await pool.query(
       `INSERT INTO qb_order_pipeline (reference_id, reference_type, step, status, qb_txn_id, retry_count, created_at, updated_at)
-       VALUES ($1, 'customer_payment', 'payment', 'confirmed', 'PAY-TXN', 0, NOW(), NOW())`,
+       VALUES ($1, 'customer_payment', 'payment', '${WRITE.sales.synced}', 'PAY-TXN', 0, NOW(), NOW())`,
       [refId]
     );
 
-    await writePipelineRow({ orderId, step: "estimate", status: "pending", qbTxnId: "E-TXN" });
-    await writePipelineRow({ orderId, step: "estimate", status: "failed", qbTxnId: "E-TXN", error: "fail" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "E-TXN" });
+    await writePipelineRow({ orderId, step: "estimate", status: WRITE.sales.failed, qbTxnId: "E-TXN", error: "fail" });
 
     const { rows: payRows } = await pool.query(
       `SELECT status FROM qb_order_pipeline WHERE reference_id = $1 AND step = 'payment'`,
       [refId]
     );
-    assert("Test 10: reference_id-keyed payment row untouched", payRows[0]?.status === "confirmed");
+    assert("Test 10: reference_id-keyed payment row untouched", payRows[0]?.status === WRITE.sales.synced);
   }
 
   await cleanup();

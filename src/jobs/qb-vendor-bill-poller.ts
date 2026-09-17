@@ -17,6 +17,7 @@ import {
 import { PURCHASE_EXISTENCE_CHECK_KEY } from "../lib/quickbooks/consolidator/purchase-operations";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { PURCHASE_SQL, SALES_SQL, WRITE, pipelineStatusIs } from "../lib/quickbooks/pipeline-status";
 
 export type KnexRaw = PurchaseDependencyKnex;
 
@@ -70,7 +71,7 @@ export async function checkInFlightReceiptFence(
        FROM qb_item_receipt_pipeline
       WHERE purchase_order_id = ?
         AND deleted_at IS NULL
-        AND status IN ('waiting', 'submitted', 'error')
+        AND status IN (${PURCHASE_SQL.dispatchable}, ${PURCHASE_SQL.submitted}, ${PURCHASE_SQL.error})
       LIMIT 5`,
     [purchaseOrderId]
   );
@@ -169,17 +170,17 @@ export async function adoptLegacyVendorBillRow(
     if (!operation) return null;
 
     if (
-      (row.status === "submitted" || row.status === "processing") &&
+      pipelineStatusIs("purchase", row, "submitted", "processing") &&
       row.qb_operation_id
     ) {
       await trx.raw(
         `UPDATE qb_order_pipeline
-            SET status = 'submitted', bridge_op_id = ?,
+            SET status = '${WRITE.sales.submitted}', bridge_op_id = ?,
                 retry_count = ?, error = ?, next_retry_at = NULL,
                 submitted_at = COALESCE(submitted_at, NOW()),
                 updated_at = NOW()
           WHERE id = ?::uuid
-            AND status NOT IN ('confirmed', 'fixed')`,
+            AND status NOT IN (${SALES_SQL.done})`,
         [
           row.qb_operation_id,
           row.retries ?? 0,
@@ -188,23 +189,22 @@ export async function adoptLegacyVendorBillRow(
         ]
       );
     } else if (
-      row.status === "error" ||
-      row.status === "failed_permanent" ||
-      row.status === "processing"
+      pipelineStatusIs("purchase", row, "error", "failed", "processing")
     ) {
+      const rowIsTerminal = pipelineStatusIs("purchase", row, "failed");
       await trx.raw(
         `UPDATE qb_order_pipeline
-            SET status = 'failed', bridge_op_id = NULL,
+            SET status = '${WRITE.sales.failed}', bridge_op_id = NULL,
                 retry_count = GREATEST(?, 1), error = ?,
                 next_retry_at = ?::timestamptz,
                 failed_at = NOW(), updated_at = NOW()
           WHERE id = ?::uuid
-            AND status NOT IN ('confirmed', 'fixed')`,
+            AND status NOT IN (${SALES_SQL.done})`,
         [
           row.retries ?? 0,
           row.last_error ??
             "Adopted legacy Vendor Bill row requires retry",
-          row.status === "failed_permanent" ? null : row.next_retry_at,
+          rowIsTerminal ? null : row.next_retry_at,
           operation.id,
         ]
       );
@@ -253,9 +253,8 @@ export default async function qbVendorBillPoller(container: MedusaContainer) {
   let adopted = 0;
   for (const raw of result.rows) {
     const row = raw as LegacyBillRow;
-    const mustDrainInFlight =
-      row.status === "submitted" || row.status === "processing";
-    const terminalFailure = row.status === "failed_permanent";
+    const mustDrainInFlight = pipelineStatusIs("purchase", row, "submitted", "processing");
+    const terminalFailure = pipelineStatusIs("purchase", row, "failed");
     if (!billModeEnabled && !mustDrainInFlight && !terminalFailure) continue;
 
     try {

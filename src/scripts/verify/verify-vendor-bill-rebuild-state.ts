@@ -10,6 +10,7 @@
  */
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import type { ResubmitRow } from "../../lib/quickbooks/consolidator/resubmit-by-step";
 import {
@@ -169,7 +170,7 @@ async function main(): Promise<void> {
       "missing IsPaid/AmountDue does not advance the destructive chain",
       unknownBlocked &&
         unknownState?.intent === "rebuild_prepare" &&
-        unknownState?.status === "waiting",
+        unknownState?.status === WRITE.purchase.dispatchable,
       unknownState
     );
 
@@ -205,7 +206,7 @@ async function main(): Promise<void> {
     assert(
       "unpaid preflight advances to rebuild_deleting",
       unpaidState?.intent === "rebuild_deleting" &&
-        unpaidState?.status === "waiting",
+        unpaidState?.status === WRITE.purchase.dispatchable,
       unpaidState
     );
     assert(
@@ -253,7 +254,7 @@ async function main(): Promise<void> {
     // Put the row back where the rest of the script expects it.
     await client.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET intent = 'rebuild_deleting', status = 'waiting',
+          SET intent = 'rebuild_deleting', status = '${WRITE.purchase.dispatchable}',
               last_error = NULL, updated_at = NOW()
         WHERE id = $1`,
       [pipelineId]
@@ -344,7 +345,7 @@ async function main(): Promise<void> {
       "paid Bill identity is preserved",
       paidState?.qb_txn_id === paidTxnId &&
         paidState?.intent === "rebuild_prepare" &&
-        paidState?.status === "failed_permanent",
+        paidState?.status === WRITE.purchase.failed,
       paidState
     );
 

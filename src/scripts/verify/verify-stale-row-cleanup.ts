@@ -83,7 +83,7 @@ async function testInventoryAdjustmentConfig() {
   assert(calls.length === 2, "IA: 2 SQL UPDATEs (waiting + processing)");
   assert(
     calls[1].bindings[1] === "processing",
-    "IA: second status binding = 'processing' (not 'submitted')"
+    "IA: second binding is processing, not submitted"
   );
   assert(result.marked === 2, "IA: total marked = 2");
   assert(result.byStatus.waiting === 0, "IA: byStatus.waiting === 0");

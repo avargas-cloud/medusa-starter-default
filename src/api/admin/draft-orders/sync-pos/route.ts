@@ -16,6 +16,7 @@ import {
 import { getDbPool } from "../../../utils/db-pool";
 import { recordPosActivity } from "../../../../lib/pos/order-activity";
 import type { KnexRawConnection } from "../../../../lib/pos/order-activity";
+import { WRITE } from "../../../../lib/quickbooks/pipeline-status";
 
 export async function POST(
   req: MedusaRequest,
@@ -179,7 +180,7 @@ export async function POST(
         writePipelineRow({
           orderId: resolvedId,
           step: "estimate",
-          status: "waiting",
+          status: WRITE.sales.blocked,
           medusaRefNumber: friendlyRef,
         }).catch((e) =>
           logger.warn(
@@ -484,7 +485,7 @@ export async function POST(
             await writePipelineRow({
               orderId: resolvedId,
               step: "estimate",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               // intent:"mod" — estimate already exists (qbTxnId). Without it the
               // QB_CREATE_STEPS guard no-ops a confirmed estimate row and the edit
               // never reaches QB (same bug as the SO post-edit-sync path).
@@ -524,7 +525,7 @@ export async function POST(
                   ? `E${draftOrderModel.display_id}`
                   : null,
                 dependsOn: inFlightAdd.id,
-                status: "waiting",
+                status: WRITE.sales.blocked,
               });
               logger.info(
                 `[sync-pos] ⏸ Estimate CREATE in-flight for ${resolvedId} — edit parked as waiting estimate_mod row ${parked.rowId}`

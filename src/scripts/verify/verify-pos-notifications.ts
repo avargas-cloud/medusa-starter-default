@@ -19,6 +19,7 @@
  * §2 con un INSERT directo en un productor. Las dos ramas ponen rojo.
  */
 import { readdirSync, readFileSync, statSync } from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { join, resolve } from "path";
 
 import { Client } from "pg";
@@ -238,7 +239,7 @@ async function section4(): Promise<void> {
     }
 
     // PO que llega hoy
-    const po = (await client.query(`SELECT id FROM purchase_order WHERE deleted_at IS NULL AND status = 'submitted' LIMIT 1`)).rows[0];
+    const po = (await client.query(`SELECT id FROM purchase_order WHERE deleted_at IS NULL AND status = 'submitted' LIMIT 1`)).rows[0]; // entity-status
     if (po) {
       await client.query(`UPDATE purchase_order SET expected_at = NOW() WHERE id = $1`, [po.id]);
       // El aviso de HOY puede existir ya (job real / runner): se saca dentro de la tx.
@@ -254,7 +255,7 @@ async function section4(): Promise<void> {
 
     // Pago: se recicla un PAGO existente moviéndolo a la ventana
     const pay = (await client.query(
-      `SELECT id FROM customer_payment WHERE deleted_at IS NULL AND type = 'payment' AND status <> 'voided'
+      `SELECT id FROM customer_payment WHERE deleted_at IS NULL AND type = 'payment' AND status <> 'voided' -- entity-status
         AND method IN ('cash','credit_card','debit_card') LIMIT 1`
     )).rows[0];
     if (pay) {
@@ -264,7 +265,7 @@ async function section4(): Promise<void> {
       const r2 = await producePaymentNotifications(client, { windowHours: 1 });
       check("pago: 1ª corrida crea, 2ª no", r1.created >= 1 && r2.created === 0, `${r1.created}/${r2.created}`);
       // Linkear ese pago a OTRA orden crea una aplicación nueva: NO es otro aviso.
-      const other = (await client.query(`SELECT id FROM "order" WHERE deleted_at IS NULL AND status = 'pending' LIMIT 1`)).rows[0];
+      const other = (await client.query(`SELECT id FROM "order" WHERE deleted_at IS NULL AND status = 'pending' LIMIT 1`)).rows[0]; // entity-status
       if (other) {
         await client.query(`INSERT INTO payment_application (id, payment_id, invoice_id, order_id, amount_applied, applied_at, created_at, updated_at, raw_amount_applied)
                             VALUES ('papp_verify', $1, NULL, $2, 100, NOW(), NOW(), NOW(), '{"value":"100","precision":20}'::jsonb)`, [pay.id, other.id]);
@@ -283,7 +284,7 @@ async function section4(): Promise<void> {
     }
 
     // Fila QB en failed
-    const failed = (await client.query(`SELECT id::text AS id, error FROM qb_order_pipeline WHERE status = 'failed' LIMIT 1`)).rows[0];
+    const failed = (await client.query(`SELECT id::text AS id, error FROM qb_order_pipeline WHERE status = '${WRITE.sales.failed}' LIMIT 1`)).rows[0];
     if (failed) {
       await client.query(`DELETE FROM pos_notification WHERE dedupe_key LIKE $1`, [`qb_failed:${failed.id}:%`]);
       await client.query(`UPDATE qb_order_pipeline SET failed_at = NOW() WHERE id::text = $1`, [failed.id]);
@@ -324,7 +325,7 @@ function section5static(): void {
     { id: "ev1", summary: "Meet", start: { dateTime: "2026-09-20T10:00:00-04:00" }, organizer: { email: "Boss@ecopowertech.com", self: false }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] },
     { id: "ev2", summary: "Done", start: { date: "2026-09-21" }, attendees: [{ email: "me@x", self: true, responseStatus: "accepted" }] },
     { id: "ev3", summary: "Mine", start: { date: "2026-09-22" }, organizer: { self: true }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] },
-    { id: "ev4", summary: "Cancelled", status: "cancelled", start: { date: "2026-09-23" }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] },
+    { id: "ev4", summary: "Cancelled", status: "cancelled", start: { date: "2026-09-23" }, attendees: [{ email: "me@x", self: true, responseStatus: "needsAction" }] }, // entity-status
   ]);
   check("invitaciones: sólo self+needsAction, no propias ni canceladas", invites.length === 1 && invites[0].id === "ev1" && invites[0].organizer_email === "boss@ecopowertech.com" && !invites[0].all_day);
   const body = rsvpPatchBody("me@ecopowertech.com", "accepted");
@@ -365,7 +366,7 @@ async function section5db(): Promise<void> {
     const items = (await client.query<{ inventory_item_id: string }>(
       `SELECT DISTINCT ri.inventory_item_id FROM reservation_item ri
          JOIN order_item oi ON oi.item_id = ri.line_item_id AND oi.deleted_at IS NULL
-         JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version AND o.status = 'pending' AND o.is_draft_order = false
+         JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version AND o.status = 'pending' AND o.is_draft_order = false -- entity-status
         WHERE ri.deleted_at IS NULL LIMIT 40`
     )).rows.map((r) => r.inventory_item_id);
     const candidates = await candidateOrdersForItems(raw, items);
@@ -399,8 +400,8 @@ async function section5db(): Promise<void> {
     const cr = (await client.query(`SELECT id FROM commission_request WHERE deleted_at IS NULL LIMIT 1`)).rows[0];
     const pb = (await client.query(`SELECT id FROM price_change_batch WHERE deleted_at IS NULL LIMIT 1`)).rows[0];
     const rf = (await client.query(`SELECT id FROM customer_payment WHERE deleted_at IS NULL AND type = 'payment' AND status = 'applied' LIMIT 1`)).rows[0];
-    if (cr) await client.query(`UPDATE commission_request SET status = 'pending', requested_at = NOW() WHERE id = $1`, [cr.id]);
-    if (pb) await client.query(`UPDATE price_change_batch SET status = 'submitted', submitted_at = NOW(), updated_at = NOW() WHERE id = $1`, [pb.id]);
+    if (cr) await client.query(`UPDATE commission_request SET status = 'pending', requested_at = NOW() WHERE id = $1`, [cr.id]); // entity-status
+    if (pb) await client.query(`UPDATE price_change_batch SET status = 'submitted', submitted_at = NOW(), updated_at = NOW() WHERE id = $1`, [pb.id]); // entity-status
     if (rf) await client.query(`UPDATE customer_payment SET status = 'refunded', updated_at = NOW() WHERE id = $1`, [rf.id]);
     const payBefore = (await client.query(`SELECT COUNT(*)::int AS n FROM pos_notification WHERE kind = 'payment_received' AND resolved_at IS NULL`)).rows[0].n as number;
     const acc1 = await produceAccountingNotifications(client, { windowHours: 1 });

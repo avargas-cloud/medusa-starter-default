@@ -17,6 +17,7 @@ import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../modules/finance";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { SALES_SQL, WRITE } from "../lib/quickbooks/pipeline-status";
 // 1.5.4: handleDraftOrderCreated import removed — POS wake-up now flips
 // pipeline row status 'waiting'→'pending' instead of calling the handler.
 
@@ -95,7 +96,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
           `SELECT id FROM qb_order_pipeline
                      WHERE order_id = $1
                        AND step IN ('invoice', 'sales_receipt')
-                       AND status IN ('waiting', 'pending', 'submitted', 'confirmed')
+                       AND status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable}, ${SALES_SQL.submitted}, ${SALES_SQL.synced})
                      LIMIT 1`,
           [row.id]
         );
@@ -130,7 +131,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         await enqueueSo({
           orderId: row.id,
           step: "sales_order",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
         });
         processedOrders++;
       }
@@ -209,10 +210,10 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       // exists for the order.
       await client.query(
         `UPDATE qb_order_pipeline
-            SET status = 'pending', updated_at = NOW()
+            SET status = '${WRITE.sales.dispatchable}', updated_at = NOW()
           WHERE id = (
             SELECT id FROM qb_order_pipeline
-             WHERE order_id = $1 AND step = 'estimate' AND status = 'waiting'
+             WHERE order_id = $1 AND step = 'estimate' AND status IN (${SALES_SQL.blocked})
              ORDER BY created_at DESC, seq DESC
              LIMIT 1
           )`,
@@ -226,7 +227,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
             SELECT id, reference_id, order_id, retry_count
             FROM qb_order_pipeline
             WHERE step = 'payment'
-              AND status = 'failed'
+              AND status IN (${SALES_SQL.failedAny})
               AND retry_count < 3
             ORDER BY failed_at ASC
             LIMIT 10
@@ -245,7 +246,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         );
         if (payment?.metadata?.qb_sync_status === "synced") {
           await client.query(
-            `UPDATE qb_order_pipeline SET status='confirmed', confirmed_at=NOW(), error=NULL WHERE id=$1`,
+            `UPDATE qb_order_pipeline SET status='${WRITE.sales.synced}', confirmed_at=NOW(), error=NULL WHERE id=$1`,
             [payRow.id]
           );
           logger.info(
@@ -258,7 +259,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       // Reset pipeline row to pending and increment retry count
       await client.query(
         `UPDATE qb_order_pipeline
-                 SET status='pending', error=NULL, failed_at=NULL, confirmed_at=NULL,
+                 SET status='${WRITE.sales.dispatchable}', error=NULL, failed_at=NULL, confirmed_at=NULL,
                      submitted_at=NULL, bridge_op_id=NULL, qb_txn_id=NULL,
                      updated_at=NOW(), retry_count=retry_count+1
                  WHERE id=$1`,
@@ -274,7 +275,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         // The pending-dispatch pass calls handlePosPaymentCreated next tick.
         await client.query(
           `UPDATE qb_order_pipeline
-              SET status = 'pending', error = NULL, failed_at = NULL,
+              SET status = '${WRITE.sales.dispatchable}', error = NULL, failed_at = NULL,
                   updated_at = NOW(),
                   retry_count = COALESCE(retry_count, 0) + 1
             WHERE id = $1`,

@@ -26,6 +26,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-bill-settlements-sandbox.ts
  */
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const BACKEND = process.env.E2E_BACKEND_URL ?? "http://localhost:9188";
 
@@ -132,7 +133,7 @@ async function main(): Promise<void> {
 
     const openBills = (
       await db.query<{ id: string; number: string }>(
-        `SELECT id, number FROM vendor_bill WHERE vendor_id = $1 AND deleted_at IS NULL AND status IN ('confirmed','synced') ORDER BY number LIMIT 6`,
+        `SELECT id, number FROM vendor_bill WHERE vendor_id = $1 AND deleted_at IS NULL AND status IN ('confirmed','synced') ORDER BY number LIMIT 6`, // entity-status
         [V]
       )
     ).rows;
@@ -208,7 +209,7 @@ async function main(): Promise<void> {
       // the un-apply guard would wait forever: stage the same state QB
       // refusing the link would leave — a `failed` pipeline row.
       await db.query(
-        `UPDATE qb_order_pipeline SET status = 'failed', error = 'e2e: simulated QB refusal' WHERE step = 'vendor_credit_apply' AND reference_id = $1`,
+        `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = 'e2e: simulated QB refusal' WHERE step = 'vendor_credit_apply' AND reference_id = $1`,
         [stepA.application_id]
       );
       const unapply = await api<any>("POST", `/admin/vendor-credits/${stepA.vendor_credit_id}/applications/${stepA.application_id}/void`, { reason: "e2e" });
@@ -256,7 +257,7 @@ async function main(): Promise<void> {
       prepayment_allocations: [{ gl_check_line_id: seededLine!.gl_check_line_id, vendor_bill_id: B1.id, amount_cents: 1 }], cash: null,
     });
     assert(seeded.status === 409 && seeded.json.code === "prepayment_exceeds_remaining", "[C2] a qb_backfill-consumed line cannot be consumed again", `${seeded.status} ${seeded.json.code}`);
-    const other = (await db.query<{ id: string }>(`SELECT id FROM vendor_bill WHERE vendor_id <> $1 AND deleted_at IS NULL AND status IN ('confirmed','synced') LIMIT 1`, [V])).rows[0];
+    const other = (await db.query<{ id: string }>(`SELECT id FROM vendor_bill WHERE vendor_id <> $1 AND deleted_at IS NULL AND status IN ('confirmed','synced') LIMIT 1`, [V])).rows[0]; // entity-status
     const cross = await api<any>("POST", "/admin/bill-settlements", {
       vendor_id: V, settlement_date: today(), credit_allocations: [],
       prepayment_allocations: [{ gl_check_line_id: line.gl_check_line_id, vendor_bill_id: other.id, amount_cents: 1 }], cash: null,

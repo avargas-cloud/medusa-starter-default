@@ -14,6 +14,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as fs from "fs";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
@@ -60,7 +61,7 @@ function testStaticChecks() {
     "complete does NOT call createCreditMemoInQb"
   );
   assert(
-    /step:\s*"credit_memo"/.test(c) && /status:\s*"pending"/.test(c),
+    /step:\s*"credit_memo"/.test(c) && /status:\s*WRITE\.sales\.dispatchable/.test(c),
     "complete enqueues 'credit_memo' as 'pending'"
   );
 
@@ -71,7 +72,7 @@ function testStaticChecks() {
     "void route does NOT call voidCreditMemoInQb"
   );
   assert(
-    /step:\s*"void_credit_memo"/.test(v) && /status:\s*"pending"/.test(v),
+    /step:\s*"void_credit_memo"/.test(v) && /status:\s*WRITE\.sales\.dispatchable/.test(v),
     "void route enqueues 'void_credit_memo' as 'pending'"
   );
 
@@ -82,7 +83,7 @@ function testStaticChecks() {
     "patch-meta does NOT call updateCreditMemoInQb"
   );
   assert(
-    /step:\s*"credit_memo_mod"/.test(pm) && /status:\s*"pending"/.test(pm),
+    /step:\s*"credit_memo_mod"/.test(pm) && /status:\s*WRITE\.sales\.dispatchable/.test(pm),
     "patch-meta enqueues 'credit_memo_mod' as 'pending'"
   );
 
@@ -113,7 +114,7 @@ function testStaticChecks() {
     "retry CM case does NOT call createCreditMemoInQb"
   );
   assert(
-    /SET status = 'pending'/.test(cmRetryBlock),
+    /SET status = '\$\{WRITE\.sales\.dispatchable\}'/.test(cmRetryBlock),
     "retry CM case resets row to 'pending'"
   );
 
@@ -193,7 +194,7 @@ async function testEnqueueAndPickup(client: Client) {
   const dispatch = await client.query(`
     SELECT id, step FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = ANY($1::uuid[])
   `, [TEST_ROW_IDS]);
   assert(

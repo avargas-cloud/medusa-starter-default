@@ -59,6 +59,7 @@ import {
 import { getFiniteMoney, getNum } from "./payment-balance";
 import { registerMedusaPayment } from "./register-medusa-payment";
 import { findFraudWriteoffVariantIds } from "../../../lib/reports/fraud-writeoff";
+import { SALES_SQL, WRITE } from "../../../lib/quickbooks/pipeline-status";
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 /**
@@ -150,7 +151,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           ON f.id = i.fulfillment_id
          AND f.deleted_at IS NULL
        WHERE i.deleted_at IS NULL
-         AND i.status != 'voided'
+         AND i.status != 'voided' -- entity-status
          AND ${unfulfilledSql({
            fulfillmentId: "i.fulfillment_id",
            canceledAt: "f.canceled_at",
@@ -602,7 +603,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     try {
       const pbPool = req.scope.resolve("__pg_connection__") as any;
       const pbCheck = await pbPool.raw(
-        `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status IN ('submitted','confirmed') LIMIT 1`,
+        `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status IN (${SALES_SQL.submitted}, ${SALES_SQL.synced}) LIMIT 1`,
         [body.order_id]
       );
       hasPendingSoInPipeline = (pbCheck.rows?.length ?? 0) > 0;
@@ -1633,7 +1634,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: (invoice as any).id,
           referenceType: "pos_invoice",
           step: "sales_receipt",
-          status: "waiting",
+          status: WRITE.sales.blocked,
           medusaRefNumber: `INV-${invoice_number}`,
         });
       } else {
@@ -1644,7 +1645,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: (invoice as any).id,
           referenceType: "pos_invoice",
           step: "invoice",
-          status: "waiting",
+          status: WRITE.sales.blocked,
           medusaRefNumber: `INV-${invoice_number}`,
         });
 
@@ -1655,7 +1656,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: paymentIdToEmit,
             referenceType: "customer_payment",
             step: "payment",
-            status: "waiting",
+            status: WRITE.sales.blocked,
             medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
           });
         }
@@ -1702,7 +1703,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: applyRefId,
             referenceType: applyRefType,
             step: "apply_payment",
-            status: "waiting",
+            status: WRITE.sales.blocked,
             dependsOn: invoicePipelineRowId,
             medusaRefNumber: applyMedusaRef,
           });
@@ -1748,7 +1749,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: (invoice as any).id,
             referenceType: "invoice",
             step: "sales_receipt",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             payload: {
               invoice_id: (invoice as any).id,
               items: body.items,
@@ -1772,7 +1773,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: (invoice as any).id,
             referenceType: "invoice",
             step: "invoice",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             payload: {
               invoice_id: (invoice as any).id,
               items: body.items,

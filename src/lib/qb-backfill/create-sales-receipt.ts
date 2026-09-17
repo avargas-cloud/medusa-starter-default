@@ -20,6 +20,7 @@ import { mapQbPaymentMethod } from "./sales-derive";
 import { allocatePaymentDisplayId } from "./sales-numbering";
 import { BACKFILL_ACTOR, backdateRows, firstId, seedPipelineRow, type SalesApplyContext } from "./sales-context";
 import type { QbSalesReceipt } from "./sales-types";
+import { WRITE } from "../quickbooks/pipeline-status";
 
 export async function createSalesReceiptFromQb(ctx: SalesApplyContext, sr: QbSalesReceipt): Promise<SalesCreateResult> {
   const plan = planSalesLines(sr.lines, ctx.itemIndex, sr.sales_tax_total_cents, sr.total_amount_cents);
@@ -121,17 +122,17 @@ export async function createSalesReceiptFromQb(ctx: SalesApplyContext, sr: QbSal
 
   // ── Pipeline: customer skipped · sales_order skipped · sales_receipt confirmed ──
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: ids.order_id, referenceId: ids.customer_id, referenceType: "customer", step: "customer", status: "skipped",
+    orderId: ids.order_id, referenceId: ids.customer_id, referenceType: "customer", step: "customer", status: WRITE.sales.skipped,
     qbTxnId: customerRef.list_id, qbRefNumber: null, medusaRefNumber: null,
     payload: { txn_type: "SalesReceipt" }, error: "backfill: el cliente ya existe en QuickBooks",
   });
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: ids.order_id, referenceId: null, referenceType: null, step: "sales_order", status: "skipped",
+    orderId: ids.order_id, referenceId: null, referenceType: null, step: "sales_order", status: WRITE.sales.skipped,
     qbTxnId: null, qbRefNumber: null, medusaRefNumber: ids.document_number,
     payload: { txn_type: "SalesReceipt" }, error: `Superseded by Sales Receipt ${sr.ref_number ?? sr.txn_id} (backfill from QB)`,
   });
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: ids.order_id, referenceId: ids.invoice_id, referenceType: "pos_invoice", step: "sales_receipt", status: "confirmed",
+    orderId: ids.order_id, referenceId: ids.invoice_id, referenceType: "pos_invoice", step: "sales_receipt", status: WRITE.sales.synced,
     qbTxnId: sr.txn_id, qbRefNumber: sr.ref_number, medusaRefNumber: `SR-${ids.invoice_number}`,
     payload: { txn_type: "SalesReceipt", edit_sequence: sr.edit_sequence, source: `QB SalesReceipt ${sr.ref_number ?? sr.txn_id}` },
   });

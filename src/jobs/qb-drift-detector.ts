@@ -27,6 +27,7 @@ import {
 } from "../lib/purchase-orders/item-receipt-mod-payload";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { PURCHASE_SQL } from "../lib/quickbooks/pipeline-status";
 
 const TAG = "[qb-drift-detector]";
 
@@ -57,9 +58,9 @@ export default async function qbDriftDetector(container: MedusaContainer) {
            FROM qb_item_receipt_pipeline p
            JOIN purchase_order_receipt pr ON pr.id = p.purchase_order_receipt_id
           WHERE p.deleted_at IS NULL
-            AND (p.status = 'failed_permanent'
-                 OR p.mod_status = 'failed_permanent'
-                 OR p.void_status = 'failed_permanent')`
+            AND (p.status IN (${PURCHASE_SQL.failed})
+                 OR p.mod_status IN (${PURCHASE_SQL.failed})
+                 OR p.void_status IN (${PURCHASE_SQL.failed}))`
       )
     ).rows as Array<{
       number: string;
@@ -76,7 +77,7 @@ export default async function qbDriftDetector(container: MedusaContainer) {
            FROM qb_purchase_order_pipeline p
            JOIN purchase_order po ON po.id = p.purchase_order_id
           WHERE p.deleted_at IS NULL
-            AND p.status = 'failed_permanent'`
+            AND p.status IN (${PURCHASE_SQL.failed})`
       )
     ).rows as Array<{ number: string; err: string }>;
 

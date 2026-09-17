@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../../modules/quickbooks-catalog";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 /**
  * Force a pipeline row to `failed_permanent` — the manual kill-switch for a row
@@ -42,7 +43,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     await catalog.updateQbItemPipelines({
       id: row.id,
-      status: "failed_permanent",
+      status: WRITE.purchase.failed,
       recovery_mode: "none",
       qb_operation_id: null,
       next_retry_at: null,

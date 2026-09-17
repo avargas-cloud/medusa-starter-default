@@ -27,6 +27,7 @@
  * dispatches — the consolidator is not involved.
  */
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { PURCHASE_PIPELINE_FEED_SQL } from "../../api/admin/purchase-orders/qb-pipeline/_lib/feed-sql";
 import {
@@ -203,7 +204,7 @@ async function main(): Promise<void> {
     // ── C · once it is in flight, a new edit can no longer touch it ─────────
     await db.query(
       `UPDATE qb_order_pipeline
-          SET status = 'submitted', bridge_op_id = 'op_sandbox',
+          SET status = '${WRITE.sales.submitted}', bridge_op_id = 'op_sandbox',
               submitted_at = NOW()
         WHERE id = $1`,
       [first.id]
@@ -219,7 +220,7 @@ async function main(): Promise<void> {
     );
     check(
       "C · and the new one waits behind it",
-      fourth.status === "waiting" && fourth.dependsOn === first.id,
+      fourth.status === WRITE.sales.blocked && fourth.dependsOn === first.id,
       `status ${fourth.status}, depends_on ${
         fourth.dependsOn === first.id ? "the in-flight mod" : fourth.dependsOn
       }`
@@ -252,7 +253,7 @@ async function main(): Promise<void> {
     const token = await login();
     await db.query(
       `UPDATE qb_order_pipeline
-          SET status = 'failed', error = 'QB 3060 sandbox', failed_at = NOW(),
+          SET status = '${WRITE.sales.failed}', error = 'QB 3060 sandbox', failed_at = NOW(),
               next_retry_at = NULL, bridge_op_id = 'op_failed'
         WHERE id = $1`,
       [fifth.id]
@@ -268,7 +269,7 @@ async function main(): Promise<void> {
     check(
       "E · Retry re-arms the chained mod row",
       retryRes.ok &&
-        ["pending", "waiting"].includes(String(afterRetry[0]?.status)) &&
+        ([WRITE.sales.dispatchable, WRITE.sales.blocked] as string[]).includes(String(afterRetry[0]?.status)) &&
         afterRetry[0]?.bridge_op_id === null,
       `HTTP ${retryRes.status}, status ${afterRetry[0]?.status}`
     );
@@ -283,7 +284,7 @@ async function main(): Promise<void> {
     );
     check(
       "E · Mark Fixed settles it",
-      fixRes.ok && afterFix[0]?.status === "fixed",
+      fixRes.ok && afterFix[0]?.status === WRITE.sales.fixed,
       `HTTP ${fixRes.status}, status ${afterFix[0]?.status}`
     );
 

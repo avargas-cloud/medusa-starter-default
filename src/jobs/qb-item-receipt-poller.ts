@@ -41,6 +41,7 @@ import {
 } from "../lib/purchase-orders/item-receipt-mod-payload";
 import { checkPoQbSyncGate } from "../lib/purchase-orders/po-qb-sync-gate";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
+import { PURCHASE_SQL, WRITE } from "../lib/quickbooks/pipeline-status";
 
 const bridgeUrl = (): string =>
   requireBridgeUrl();
@@ -56,7 +57,7 @@ const backoffMs = (retryNum: number): number =>
 
 type BridgeStatus = {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed" | "expired";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired"; // bridge-status
     error?: string;
     txnId?: string;
     listId?: string;
@@ -419,7 +420,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, purchase_order_id, payload
        FROM qb_item_receipt_pipeline
-      WHERE status = 'waiting'
+      WHERE status IN (${PURCHASE_SQL.dispatchable})
         AND qb_operation_id IS NULL
         AND add_order_pipeline_id IS NULL
         AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'
@@ -464,7 +465,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     } catch (err: any) {
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET status = 'error',
+            SET status = '${WRITE.purchase.error}',
                 last_error = ?,
                 next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                 updated_at = NOW()
@@ -481,7 +482,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, purchase_order_id, qb_operation_id
        FROM qb_item_receipt_pipeline
-      WHERE status = 'waiting'
+      WHERE status IN (${PURCHASE_SQL.dispatchable})
         AND qb_operation_id IS NOT NULL
         AND add_order_pipeline_id IS NULL
         AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'
@@ -506,7 +507,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       if (opStatus === "expired") {
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-           SET status = 'error',
+            SET status = '${WRITE.purchase.error}',
                last_error = ?,
                qb_operation_id = NULL,
                next_retry_at = NOW() + INTERVAL '2 minutes',
@@ -521,7 +522,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         const errMsg = data.operation?.error ?? "Bridge returned failed";
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-              SET status = 'error',
+              SET status = '${WRITE.purchase.error}',
                   last_error = ?,
                   next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at = NOW()
@@ -546,7 +547,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         }
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-              SET status = 'error',
+            SET status = '${WRITE.purchase.error}',
                   last_error = ?,
                   next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at = NOW()
@@ -566,7 +567,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       // Mark pipeline row synced
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET status = 'synced',
+                SET status = '${WRITE.purchase.synced}',
                 qb_list_id = ?,
                 qb_txn_number = COALESCE(?, qb_txn_number),
                 last_error = NULL,
@@ -587,7 +588,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
                 qb_item_receipt_txn_number = COALESCE(?, qb_item_receipt_txn_number),
                 qb_edit_sequence = COALESCE(?, qb_edit_sequence),
                 qb_synced_at = NOW(),
-                status = CASE WHEN status = 'pending' THEN 'applied' ELSE status END,
+                status = CASE WHEN status = 'pending' THEN 'applied' ELSE status END, -- entity-status
                 updated_at = NOW()
           WHERE id = ?`,
         [txnId, refNumber, editSequence, row.purchase_order_receipt_id]
@@ -630,7 +631,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, purchase_order_id, payload, retries, last_error
        FROM qb_item_receipt_pipeline
-      WHERE status = 'error'
+      WHERE status IN (${PURCHASE_SQL.error})
         AND (next_retry_at IS NULL OR next_retry_at <= NOW())
         AND add_order_pipeline_id IS NULL
         AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'
@@ -668,7 +669,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     if (exhausted) {
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET status = 'failed_permanent',
+                SET status = '${WRITE.purchase.failed}',
                 retries = ?,
                 updated_at = NOW()
           WHERE id = ?`,
@@ -691,7 +692,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       const operationId = await submitAddToBridge(freshPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET status = 'waiting',
+                SET status = '${WRITE.purchase.dispatchable}',
                 qb_operation_id = ?,
                 retries = ?,
                 last_error = NULL,
@@ -727,7 +728,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
               qbp.purchase_order_receipt_id,
               qbp.qb_list_id
          FROM qb_item_receipt_pipeline qbp
-        WHERE qbp.void_status = 'waiting'
+          WHERE qbp.void_status IN (${PURCHASE_SQL.dispatchable})
           AND qbp.void_operation_id IS NULL
           AND qbp.qb_list_id IS NOT NULL
           AND qbp.deleted_at IS NULL
@@ -748,7 +749,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET void_operation_id = ?,
-                void_status = 'processing',
+          void_status = '${WRITE.purchase.processing}',
                 updated_at = NOW()
           WHERE id = ?`,
         [operationId, row.id]
@@ -757,7 +758,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     } catch (err: any) {
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET void_status = 'error',
+            SET void_status = '${WRITE.purchase.error}',
                 void_last_error = ?,
                 void_next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                 updated_at = NOW()
@@ -775,7 +776,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, void_operation_id
        FROM qb_item_receipt_pipeline
-      WHERE void_status = 'processing'
+      WHERE void_status IN (${PURCHASE_SQL.processing})
         AND void_operation_id IS NOT NULL
         AND deleted_at IS NULL
       LIMIT ?`,
@@ -794,7 +795,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       if (opStatus === "expired") {
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-           SET void_status = 'error',
+           SET void_status = '${WRITE.purchase.error}',
                void_last_error = ?,
                void_operation_id = NULL,
                void_next_retry_at = NOW() + INTERVAL '2 minutes',
@@ -808,7 +809,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       if (opStatus === "failed") {
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-              SET void_status = 'error',
+              SET void_status = '${WRITE.purchase.error}',
                   void_last_error = ?,
                   void_next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at = NOW()
@@ -824,7 +825,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       // filtered out of receipt list queries.
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET void_status = 'voided',
+            SET void_status = '${WRITE.purchase.synced}',
                 void_synced_at = NOW(),
                 void_last_error = NULL,
                 void_next_retry_at = NULL,
@@ -849,7 +850,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, purchase_order_id, mod_payload, mod_retries
          FROM qb_item_receipt_pipeline
-        WHERE mod_status = 'waiting'
+          WHERE mod_status IN (${PURCHASE_SQL.dispatchable})
           AND mod_operation_id IS NULL
           AND mod_payload IS NOT NULL
           AND mod_order_pipeline_id IS NULL
@@ -883,7 +884,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       const operationId = await submitModToBridge(freshModPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET mod_status        = 'submitted',
+            SET mod_status        = '${WRITE.purchase.submitted}',
                 mod_operation_id  = ?,
                 mod_last_error    = NULL,
                 mod_next_retry_at = NULL,
@@ -895,7 +896,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     } catch (err: any) {
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET mod_status        = 'error',
+                SET mod_status        = '${WRITE.purchase.error}',
                 mod_last_error    = ?,
                 mod_next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                 updated_at        = NOW()
@@ -914,7 +915,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, mod_operation_id
          FROM qb_item_receipt_pipeline
-        WHERE mod_status = 'submitted'
+        WHERE mod_status IN (${PURCHASE_SQL.submitted})
           AND mod_operation_id IS NOT NULL
           AND mod_order_pipeline_id IS NULL
           AND COALESCE(mod_payload->>'delegated_to_consolidator', 'false') <> 'true'
@@ -935,7 +936,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       if (opStatus === "expired") {
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-              SET mod_status        = 'error',
+              SET mod_status        = '${WRITE.purchase.error}',
                   mod_last_error    = ?,
                   mod_operation_id  = NULL,
                   mod_next_retry_at = NOW() + INTERVAL '2 minutes',
@@ -954,7 +955,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
           : errMsg;
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-              SET mod_status        = 'error',
+              SET mod_status        = '${WRITE.purchase.error}',
                   mod_last_error    = ?,
                   mod_next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at        = NOW()
@@ -977,7 +978,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET mod_status        = 'completed',
+            SET mod_status        = '${WRITE.purchase.synced}',
                 mod_synced_at     = NOW(),
                 mod_payload       = NULL,
                 mod_last_error    = NULL,
@@ -1012,7 +1013,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       `SELECT id, purchase_order_receipt_id, mod_payload, mod_retries,
               mod_last_error
          FROM qb_item_receipt_pipeline
-        WHERE mod_status = 'error'
+        WHERE mod_status IN (${PURCHASE_SQL.error})
           AND mod_payload IS NOT NULL
           AND mod_next_retry_at <= NOW()
           AND mod_order_pipeline_id IS NULL
@@ -1030,7 +1031,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     if (exhausted) {
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET mod_status        = 'failed_permanent',
+            SET mod_status        = '${WRITE.purchase.failed}',
                 mod_retries       = ?,
                 mod_next_retry_at = NULL,
                 updated_at        = NOW()
@@ -1051,7 +1052,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       const operationId = await submitModToBridge(freshModPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET mod_status        = 'submitted',
+            SET mod_status        = '${WRITE.purchase.submitted}',
                 mod_operation_id  = ?,
                 mod_retries       = ?,
                 mod_last_error    = NULL,

@@ -43,6 +43,7 @@
 
 import { loadClearingSiblings } from "./load-clearing-siblings";
 import { enqueueQbVendorBillAdd } from "./qb-vendor-bill-enqueue";
+import { PURCHASE_SQL } from "../quickbooks/pipeline-status";
 import { VENDOR_IS_CHINA_AGENT_SQL } from "../../api/admin/purchase-orders/_lib/china-transfer";
 
 export interface SiblingDispatchKnex {
@@ -76,15 +77,15 @@ export const REGULAR_GREEN_LIGHT_STATUSES: ReadonlySet<string> = new Set([
  * CLOSED — defer — rather than authorise a charge into A/P.
  */
 export const REGULAR_LIVE_DOCUMENT_STATUSES: ReadonlySet<string> = new Set([
-  "draft",
-  "confirmed",
-  "synced",
+  "draft", // entity-status (vendor_bill.status)
+  "confirmed", // entity-status
+  "synced", // entity-status
 ]);
 
 /** Statuses in which a SECONDARY bill is a finished document worth sending. */
 export const SECONDARY_SENDABLE_STATUSES: ReadonlySet<string> = new Set([
-  "confirmed",
-  "synced",
+  "confirmed", // entity-status (vendor_bill.status)
+  "synced", // entity-status
 ]);
 
 export interface ParentRegularFacts {
@@ -354,7 +355,7 @@ async function hasLivePipelineRow(
        FROM qb_vendor_bill_pipeline
       WHERE vendor_bill_id = ?
         AND deleted_at IS NULL
-        AND status NOT IN ('error', 'failed_permanent')
+        AND status NOT IN (${PURCHASE_SQL.failedAny})
       LIMIT 1`,
     [vendorBillId]
   );

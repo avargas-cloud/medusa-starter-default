@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * QuickBooks PurchaseOrder sync queue.
@@ -28,7 +29,7 @@ export const QbPurchaseOrderPipeline = model.define(
 
     purchase_order_id: model.text(),
 
-    status: model.text().default("waiting"),
+    status: model.text().default(WRITE.purchase.dispatchable),
 
     // Bridge / QB identifiers
     qb_operation_id: model.text().nullable(),

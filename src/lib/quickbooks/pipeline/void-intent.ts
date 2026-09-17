@@ -42,6 +42,7 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 
 import { writePipelineRow } from "./row-mutations";
+import { WRITE } from "../pipeline-status";
 
 /** Los steps de void que este módulo puede materializar. */
 export const MATERIALIZABLE_VOID_STEPS = [
@@ -102,7 +103,7 @@ async function resolvePosInvoiceIntent(keys: {
        FROM pos_invoice WHERE id = $1`,
     [keys.referenceId]
   );
-  if (row?.status !== "voided") return null;
+  if (row?.status !== "voided") return null; // entity-status: pos_invoice.status
   return {
     voidStep: (row.is_sr === "true"
       ? "void_sales_receipt"
@@ -124,7 +125,7 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
         `SELECT status, voided_at FROM pos_credit_memo WHERE id = $1`,
         [referenceId]
       );
-      if (row?.status !== "voided" && !row?.voided_at) return null;
+      if (row?.status !== "voided" && !row?.voided_at) return null; // entity-status: pos_credit_memo.status
       return {
         voidStep: "void_credit_memo" as const,
         referenceId,
@@ -155,7 +156,7 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
       );
       if (!cm) return null;
 
-      const isVoided = cm.status === "voided" || !!cm.voided_at;
+      const isVoided = cm.status === "voided" || !!cm.voided_at; // entity-status: pos_credit_memo.status
       let hasDamage = false;
       if (!isVoided) {
         const live = await queryOne(
@@ -235,7 +236,7 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
       // `qb_void_operation_id` es la prueba de que el TxnDel sí salió: el camino
       // directo lo estampa al confirmar. Sin esa key, el pago quedó voideado
       // acá y vivo en QuickBooks — que es exactamente la carrera.
-      if (row.status !== "voided") return null;
+      if (row.status !== "voided") return null; // entity-status: customer_payment.status
       if (row.void_op) return null;
       // Un pago embebido en un Sales Receipt no es un ReceivePayment propio: se
       // quita voideando el SR, nunca borrando un documento que no existe.
@@ -342,7 +343,7 @@ export async function enqueueVoidIfAlreadyVoided(
       referenceId: intent.referenceId,
       referenceType: intent.referenceType,
       step: intent.voidStep,
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: input.qbTxnId,
       qbRefNumber: input.qbRefNumber ?? null,
       medusaRefNumber: input.medusaRefNumber ?? null,

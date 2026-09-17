@@ -10,6 +10,7 @@ import {
 import { receivePaymentInQb } from "../client/payments";
 import { ensureCustomerInQb } from "../order-flow-core";
 import { confirmPipelineRow, failOrRetryPipelineRow } from "../qb-pipeline";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-PAYMENT-TRANSFER]";
 
@@ -120,15 +121,15 @@ export async function handlePaymentCustomerTransfer(
             `WITH RECURSIVE chain AS (
                SELECT id, payload->>'transfer_id' AS transfer_id
                  FROM qb_order_pipeline
-                WHERE depends_on=$1 AND step='transfer_payment' AND status='waiting'
+                WHERE depends_on=$1 AND step='transfer_payment' AND status IN (${SALES_SQL.blocked})
                UNION ALL
                SELECT p.id, p.payload->>'transfer_id'
                  FROM qb_order_pipeline p
                  JOIN chain c ON p.depends_on=c.id
-                WHERE p.step='transfer_payment' AND p.status='waiting'
+                WHERE p.step='transfer_payment' AND p.status IN (${SALES_SQL.blocked})
              ),
              fp AS (
-               UPDATE qb_order_pipeline SET status='failed', failed_at=NOW(), updated_at=NOW(),
+               UPDATE qb_order_pipeline SET status='${WRITE.sales.failed}', failed_at=NOW(), updated_at=NOW(),
                       error='Prior transfer in chain failed — resolve it first'
                 WHERE id IN (SELECT id FROM chain)
              )

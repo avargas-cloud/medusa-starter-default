@@ -25,6 +25,7 @@ process.env.DATABASE_URL =
 import { Client } from "pg";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `t154-${Date.now()}`;
@@ -108,10 +109,11 @@ function testStaticChecks() {
     !/await\s+handleDraftOrderCreated\(/.test(posSync),
     "qb-pos-sync does NOT call handleDraftOrderCreated"
   );
+  // Source-text check of src/jobs/qb-pos-sync.ts: the hold→dispatch flip goes
+  // through the vocabulary helper (WRITE.sales.dispatchable / SALES_SQL.blocked).
+  const posSyncFlipRx = /SET status = '\$\{WRITE\.sales\.dispatchable\}'.*WHERE order_id = \$1 AND step = 'estimate' AND status IN \(\$\{SALES_SQL\.blocked\}\)/s;
   assert(
-    /SET status = 'pending'.*WHERE order_id = \$1 AND step = 'estimate' AND status = 'waiting'/s.test(
-      posSync
-    ),
+    posSyncFlipRx.test(posSync),
     "qb-pos-sync flips waiting → pending via SQL UPDATE"
   );
 
@@ -169,7 +171,7 @@ async function testEnqueueAndPickup(client: Client) {
   const picked = await client.query(`
     SELECT id, step FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = $1
   `, [rowId]);
   assert(
@@ -200,8 +202,8 @@ async function testPosWaitingWakeup(client: Client) {
   // Run the same UPDATE qb-pos-sync now uses
   const result = await client.query(
     `UPDATE qb_order_pipeline
-        SET status = 'pending', updated_at = NOW()
-      WHERE order_id = $1 AND step = 'estimate' AND status = 'waiting'`,
+        SET status = '${WRITE.sales.dispatchable}', updated_at = NOW()
+      WHERE order_id = $1 AND step = 'estimate' AND status IN (${SALES_SQL.blocked})`,
     [orderId]
   );
   assert(
@@ -213,7 +215,7 @@ async function testPosWaitingWakeup(client: Client) {
     `SELECT status FROM qb_order_pipeline WHERE id = $1`,
     [rowId]
   );
-  assert(final.rows[0].status === "pending", "row → 'pending'");
+  assert(final.rows[0].status === WRITE.sales.dispatchable, "row went to dispatchable");
 }
 
 async function cleanup(client: Client) {

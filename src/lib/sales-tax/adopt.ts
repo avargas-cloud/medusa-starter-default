@@ -10,6 +10,7 @@ import type { QbImportSnapshot } from "../ledger/qb-import/types";
 import { periodOfPaymentDay } from "./due-dates";
 import { ALLOWANCE_MAX_CENTS } from "./remittance";
 import type { SalesTaxSettings } from "./settings";
+import { SALES_SQL, WRITE } from "../quickbooks/pipeline-status";
 
 /**
  * Adopción de los documentos de sales tax que el importador del General Ledger
@@ -178,8 +179,8 @@ async function adoptedPipelineRow(client: PoolClient, table: string, id: string,
   });
   if (!op) throw new Error("QB_SYNC_ENABLED=false: no se puede registrar la fila adoptada del pipeline");
   await client.query(
-    `UPDATE qb_order_pipeline SET status='confirmed', qb_txn_id=$2, confirmed_at=now(), error=NULL, qb_result=$3::jsonb, updated_at=now()
-      WHERE id=$1::uuid AND status IN ('pending','waiting')`,
+    `UPDATE qb_order_pipeline SET status='${WRITE.sales.synced}', qb_txn_id=$2, confirmed_at=now(), error=NULL, qb_result=$3::jsonb, updated_at=now()
+      WHERE id=$1::uuid AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked})`,
     [op.id, txnId, JSON.stringify({ adopted: true, qb_txn_id: txnId, note: "documento creado en QuickBooks; el POS adopta el TxnID, no manda ADD" })]
   );
 }
@@ -316,8 +317,8 @@ export async function revertSalesTaxAdoption(client: PoolClient, range: { from: 
         );
         if (rowCount !== 1) throw new Error(`revert falló para ${doc.id}`);
         await client.query(
-          `UPDATE qb_order_pipeline SET status = 'skipped', error = 'adopción revertida', updated_at = now()
-            WHERE step = $1 AND reference_type = $2 AND reference_id = $3 AND status = 'confirmed'`,
+          `UPDATE qb_order_pipeline SET status = '${WRITE.sales.skipped}', error = 'adopción revertida', updated_at = now()
+            WHERE step = $1 AND reference_type = $2 AND reference_id = $3 AND status IN (${SALES_SQL.synced})`,
           [GL_DOCUMENT_ADD_STEP, table, doc.id]
         );
         reverted += 1;

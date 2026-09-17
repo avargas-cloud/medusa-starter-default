@@ -17,6 +17,7 @@
  */
 
 import { getDbPool } from "../../../api/utils/db-pool";
+import { SALES_SQL } from "../pipeline-status";
 
 /**
  * Ventana hacia atrás. Los huérfanos históricos anteriores a esto ya fueron
@@ -55,16 +56,16 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
       FROM qb_order_pipeline p
       JOIN pos_invoice d ON d.id = p.reference_id
      WHERE p.step IN ('invoice', 'sales_receipt')
-       AND p.status = 'confirmed'
+       AND p.status IN (${SALES_SQL.synced})
        AND p.qb_txn_id IS NOT NULL
-       AND d.status = 'voided'
+       AND d.status = 'voided' -- entity-status: pos_invoice.status
        AND p.confirmed_at > NOW() - ($1 || ' days')::interval
        AND p.confirmed_at < NOW() - ($2 || ' minutes')::interval
        AND NOT EXISTS (
              SELECT 1 FROM qb_order_pipeline v
               WHERE v.reference_id = p.reference_id
                 AND v.step IN ('void_invoice', 'void_sales_receipt')
-                AND v.status <> 'skipped'
+                AND v.status NOT IN (${SALES_SQL.skipped})
            )
 
     UNION ALL
@@ -75,16 +76,16 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
       FROM qb_order_pipeline p
       JOIN pos_credit_memo d ON d.id = p.reference_id
      WHERE p.step = 'credit_memo'
-       AND p.status = 'confirmed'
+       AND p.status IN (${SALES_SQL.synced})
        AND p.qb_txn_id IS NOT NULL
-       AND (d.status = 'voided' OR d.voided_at IS NOT NULL)
+       AND (d.status = 'voided' OR d.voided_at IS NOT NULL) -- entity-status: pos_credit_memo.status
        AND p.confirmed_at > NOW() - ($1 || ' days')::interval
        AND p.confirmed_at < NOW() - ($2 || ' minutes')::interval
        AND NOT EXISTS (
              SELECT 1 FROM qb_order_pipeline v
               WHERE v.reference_id = p.reference_id
                 AND v.step = 'void_credit_memo'
-                AND v.status <> 'skipped'
+                AND v.status NOT IN (${SALES_SQL.skipped})
            )
 
     UNION ALL
@@ -96,7 +97,7 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
       FROM qb_order_pipeline p
       JOIN "order" o ON o.id = p.order_id
      WHERE p.step IN ('sales_order', 'estimate')
-       AND p.status = 'confirmed'
+       AND p.status IN (${SALES_SQL.synced})
        AND p.qb_txn_id IS NOT NULL
        AND p.reference_id IS NULL
        AND o.status = 'canceled'
@@ -108,7 +109,7 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
                 AND v.reference_id IS NULL
                 AND v.step IN ('void_sales_order', 'void_estimate',
                                'estimate_deactivate', 'estimate_cancel')
-                AND v.status <> 'skipped'
+                AND v.status NOT IN (${SALES_SQL.skipped})
            )
 
     UNION ALL
@@ -120,7 +121,7 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
       FROM qb_order_pipeline p
       JOIN inventory_count d ON d.id = COALESCE(p.reference_id, p.order_id)
      WHERE p.step = 'inventory_adjustment'
-       AND p.status = 'confirmed'
+       AND p.status IN (${SALES_SQL.synced})
        AND p.qb_txn_id IS NOT NULL
        AND d.voided_at IS NOT NULL
        AND p.confirmed_at > NOW() - ($1 || ' days')::interval
@@ -129,7 +130,7 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
              SELECT 1 FROM qb_order_pipeline v
               WHERE v.reference_id = COALESCE(p.reference_id, p.order_id)
                 AND v.step = 'void_inventory_adjustment'
-                AND v.status <> 'skipped'
+                AND v.status NOT IN (${SALES_SQL.skipped})
            )
 
     UNION ALL
@@ -145,9 +146,9 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
       FROM qb_order_pipeline p
       JOIN customer_payment d ON d.id = p.reference_id
      WHERE p.step = 'payment'
-       AND p.status = 'confirmed'
+       AND p.status IN (${SALES_SQL.synced})
        AND p.qb_txn_id IS NOT NULL
-       AND d.status = 'voided'
+       AND d.status = 'voided' -- entity-status: customer_payment.status
        AND d.metadata->>'qb_void_operation_id' IS NULL
        AND COALESCE(d.metadata->>'qb_source', '') <> 'sales_receipt'
        AND p.confirmed_at > NOW() - ($1 || ' days')::interval
@@ -156,7 +157,7 @@ export async function scanVoidOrphans(): Promise<VoidOrphanRow[]> {
              SELECT 1 FROM qb_order_pipeline v
               WHERE v.reference_id = p.reference_id
                 AND v.step = 'void_payment'
-                AND v.status <> 'skipped'
+                AND v.status NOT IN (${SALES_SQL.skipped})
            )
     `,
     [String(VOID_ORPHAN_LOOKBACK_DAYS), String(VOID_ORPHAN_SETTLE_MINUTES)]

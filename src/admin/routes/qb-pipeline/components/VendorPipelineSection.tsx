@@ -11,6 +11,11 @@ import {
 import React, { useCallback, useEffect, useState } from "react";
 
 import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+import { PipelineStatusBadge } from "./PipelineStatusBadge";
+import {
+  pipelineStatusIs,
+  type PipelineStatus,
+} from "../../../../lib/quickbooks/pipeline-status";
 
 type VendorPipelineRow = {
   id: string;
@@ -18,7 +23,7 @@ type VendorPipelineRow = {
   vendor_id: string;
   vendor_name: string;
   op_type: "create" | "update" | string;
-  status: "waiting" | "synced" | "error";
+  status: PipelineStatus;
   qb_list_id: string | null;
   qb_operation_id: string | null;
   last_error: string | null;
@@ -37,25 +42,9 @@ const STATUS_FILTERS = [
   { label: "Error", value: "error" },
 ];
 
-const StatusBadge = ({ status }: { status: VendorPipelineRow["status"] }) => {
-  if (status === "synced")
-    return (
-      <Badge color="green" size="2xsmall">
-        synced
-      </Badge>
-    );
-  if (status === "error")
-    return (
-      <Badge color="red" size="2xsmall">
-        error
-      </Badge>
-    );
-  return (
-    <Badge color="orange" size="2xsmall">
-      waiting
-    </Badge>
-  );
-};
+const StatusBadge = ({ status }: { status: VendorPipelineRow["status"] }) => (
+  <PipelineStatusBadge status={status} family="purchase" />
+);
 
 export const VendorPipelineSection = () => {
   const [rows, setRows] = useState<VendorPipelineRow[]>([]);
@@ -264,7 +253,7 @@ export const VendorPipelineSection = () => {
                         )}
                       </Table.Cell>
                       <Table.Cell>
-                        {r.status === "error" && (
+                        {pipelineStatusIs("purchase", r, "error") && (
                           <Button
                             size="small"
                             variant="secondary"

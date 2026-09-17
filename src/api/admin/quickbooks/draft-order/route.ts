@@ -13,6 +13,7 @@ import {
   processDeactivateEstimateInQb,
 } from "../../../../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
+import { SALES_SQL } from "../../../../lib/quickbooks/pipeline-status";
 import {
   buildEstimatePatch,
   getEstimateTxnId,
@@ -138,7 +139,7 @@ export async function POST(
         const pool = getDbPool();
         const { rows: pipelineRows } = await pool.query(
           `SELECT id, qb_txn_id, qb_ref_number FROM qb_order_pipeline
-                     WHERE order_id = $1 AND step = 'estimate' AND status IN ('submitted','confirmed')
+                     WHERE order_id = $1 AND step = 'estimate' AND status IN (${SALES_SQL.submitted}, ${SALES_SQL.synced})
                      LIMIT 1`,
           [orderId]
         );

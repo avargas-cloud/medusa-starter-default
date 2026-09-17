@@ -22,6 +22,7 @@ process.env.QB_ORDER_FLOW_ENABLED = "true";
 process.env.QB_DRY_RUN = "true";
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `e2eGuard-${Date.now()}`;
@@ -173,7 +174,7 @@ async function main() {
       referenceId: POS_INVOICE_ID,
       referenceType: "pos_invoice",
       step: "sales_receipt",
-      status: "waiting",
+      status: WRITE.sales.blocked,
       medusaRefNumber: "INV-SANDBOX-TEST",
     });
 

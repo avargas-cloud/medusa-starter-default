@@ -12,6 +12,7 @@ import { Modules } from "@medusajs/utils";
 
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { getAppliedInvoiceTotal, getNum } from "../../payment-balance";
@@ -215,7 +216,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: customerPayment.id,
           referenceType: "customer_payment",
           step: "payment",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
         });
 
@@ -224,7 +225,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: paymentApplication.id,
           referenceType: "payment_application",
           step: "apply_payment",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
           payload: {
             payment_id: customerPayment.id,

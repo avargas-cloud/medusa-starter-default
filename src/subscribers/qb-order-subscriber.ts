@@ -26,6 +26,7 @@ import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-can
 import { handlePaymentCaptured } from "../lib/quickbooks/handlers/handle-payment-captured";
 import { isPosOrder } from "../lib/quickbooks/handlers/utils";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { WRITE } from "../lib/quickbooks/pipeline-status";
 
 export default async function qbOrderSubscriber({
   event: { name, data },
@@ -77,7 +78,7 @@ export default async function qbOrderSubscriber({
         await writePipelineRow({
           orderId,
           step: "sales_order",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
         });
         logger.info(
           `[QB-ORDER] 📥 Enqueued sales_order for ${orderId} (consolidator will process)`
@@ -138,7 +139,7 @@ export default async function qbOrderSubscriber({
           referenceId: (data as any).fulfillment_id ?? (data as any).invoice_id ?? null,
           referenceType: (data as any).fulfillment_id ? "fulfillment" : "invoice",
           step: "invoice",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           payload: invPayload1,
         });
         logger.info(
@@ -177,7 +178,7 @@ export default async function qbOrderSubscriber({
           referenceId: (data as any).invoice_id ?? null,
           referenceType: "invoice",
           step: "invoice",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
         });
         logger.info(
           `[QB-ORDER] 📥 Enqueued POS invoice for ${(data as any).order_id ?? (data as any).id} (payload preserved from route)`

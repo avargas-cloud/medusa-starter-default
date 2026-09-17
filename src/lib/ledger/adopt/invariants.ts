@@ -12,6 +12,7 @@
  *      (día, created_at del asiento) y el contador está en el máximo; sin `tmp:`.
  */
 import type { PoolClient } from "pg";
+import { SALES_SQL } from "../../quickbooks/pipeline-status";
 
 export interface AdoptionInvariants {
   checks: number;
@@ -50,7 +51,7 @@ export async function checkAdoptionInvariants(client: PoolClient): Promise<Adopt
   const counts = await one<{ checks: string; transfers: string; rows: string; twins: string }>(client, `
     SELECT (SELECT count(*) FROM gl_check WHERE qb_source='adopted' AND deleted_at IS NULL)::text AS checks,
            (SELECT count(*) FROM gl_transfer WHERE qb_source='adopted' AND deleted_at IS NULL)::text AS transfers,
-           (SELECT count(*) FROM qb_order_pipeline p WHERE p.step='gl_document_add' AND p.status='confirmed' AND p.qb_result->>'adopted'='true'
+           (SELECT count(*) FROM qb_order_pipeline p WHERE p.step='gl_document_add' AND p.status IN (${SALES_SQL.synced}) AND p.qb_result->>'adopted'='true'
               AND EXISTS (SELECT 1 FROM gl_check c WHERE c.id=p.reference_id AND c.deleted_at IS NULL UNION SELECT 1 FROM gl_transfer t WHERE t.id=p.reference_id AND t.deleted_at IS NULL))::text AS rows,
            (SELECT count(*) FROM bank_journal_entry e WHERE e.source_kind='qb_import' AND e.kind='document' AND e.day>='2026-01-01'
               AND NOT EXISTS (SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=e.id)

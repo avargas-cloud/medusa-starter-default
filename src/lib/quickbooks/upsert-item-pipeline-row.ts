@@ -16,6 +16,7 @@
 import { randomUUID } from "crypto";
 
 import { isQbSyncEnabled } from "./sync-enabled";
+import { WRITE } from "./pipeline-status";
 
 export type CatalogPipelineService = {
   listQbItemPipelines: (
@@ -34,7 +35,7 @@ export type CatalogPipelineService = {
 type MinimalLogger = { info: (m: string) => void; warn: (m: string) => void };
 
 /** Pipeline statuses that still represent an in-flight add. */
-const OPEN_STATUSES = ["waiting", "error"] as const;
+const OPEN_STATUSES = [WRITE.purchase.dispatchable, WRITE.purchase.error] as const;
 
 export type UpsertItemPipelineInput = {
   variant_id: string;
@@ -111,7 +112,7 @@ export async function upsertItemPipelineRow(
     item_type: input.item_type,
     op_action: "add",
     op_payload: input.op_payload ?? null,
-    status: input.status ?? "waiting",
+    status: input.status ?? WRITE.purchase.dispatchable,
     qb_id: input.qb_id ?? null,
     qb_operation_id: input.qb_operation_id ?? null,
     last_error: input.last_error ?? null,

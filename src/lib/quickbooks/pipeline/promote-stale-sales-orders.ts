@@ -20,6 +20,8 @@
  * Idempotent: WHERE status='waiting' guarantees rows already claimed are skipped.
  */
 
+import { SALES_SQL, WRITE } from "../pipeline-status";
+
 export type DbQueryRunner = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 };
@@ -35,11 +37,11 @@ export async function promoteStaleWaitingSalesOrders(
 ): Promise<RescuedSalesOrderRow[]> {
   const { rows } = await db.query(
     `UPDATE qb_order_pipeline so
-        SET status = 'pending', updated_at = NOW()
+        SET status = '${WRITE.sales.dispatchable}', updated_at = NOW()
        FROM "order" o
       WHERE so.order_id = o.id
         AND so.step = 'sales_order'
-        AND so.status = 'waiting'
+        AND so.status IN (${SALES_SQL.blocked})
         AND so.depends_on IS NULL
         AND so.created_at <= NOW() - INTERVAL '1 hour'
         AND o.canceled_at IS NULL
@@ -47,7 +49,7 @@ export async function promoteStaleWaitingSalesOrders(
           SELECT 1 FROM qb_order_pipeline inv
            WHERE inv.order_id = so.order_id
              AND inv.step IN ('invoice', 'sales_receipt')
-             AND inv.status IN ('waiting', 'pending', 'processing', 'submitted', 'confirmed')
+             AND inv.status IN (${SALES_SQL.inFlight}, ${SALES_SQL.synced})
         )
       RETURNING so.id, so.order_id, so.medusa_ref_number`
   );

@@ -39,6 +39,7 @@
 
 import { randomUUID } from "crypto";
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SB_DB =
   process.env.SANDBOX_DATABASE_URL ??
@@ -331,7 +332,7 @@ async function main(): Promise<void> {
     );
     check(
       "el bill queda confirmed",
-      ["confirmed", "synced"].includes(String(statusRow.rows[0]?.status)),
+      ["confirmed", "synced"].includes(String(statusRow.rows[0]?.status)), // entity-status
       `status=${statusRow.rows[0]?.status}`
     );
 
@@ -399,7 +400,7 @@ async function main(): Promise<void> {
         addOp.rows.length === 1 &&
         addOp.rows[0].order_id === bill.id &&
         addOp.rows[0].depends_on === null &&
-        addOp.rows[0].status === "pending",
+        addOp.rows[0].status === WRITE.sales.dispatchable,
       JSON.stringify(addOp.rows[0] ?? {})
     );
 
@@ -448,7 +449,7 @@ async function main(): Promise<void> {
       [bill.id, `TXN-EXP-${n}`]
     );
     await db.query(
-      `UPDATE qb_vendor_bill_pipeline SET status = 'synced' WHERE vendor_bill_id = $1`,
+      `UPDATE qb_vendor_bill_pipeline SET status = '${WRITE.purchase.synced}' WHERE vendor_bill_id = $1`,
       [bill.id]
     );
     const { enqueueVendorBillModSingle } = await import(
@@ -472,7 +473,7 @@ async function main(): Promise<void> {
         // addOp guarded: if the ADD never queued (the very defect this suite
         // hunts), this check must go RED, not throw away the ones already run.
         modOp.rows[0].depends_on === (addOp.rows[0]?.id ?? "MISSING-ADD") &&
-        modOp.rows[0].status === "waiting",
+        modOp.rows[0].status === WRITE.sales.blocked,
       JSON.stringify(modOp.rows[0] ?? {})
     );
   } finally {

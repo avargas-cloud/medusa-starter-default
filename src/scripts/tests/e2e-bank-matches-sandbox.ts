@@ -94,7 +94,7 @@ async function main() {
         count(*) OVER(PARTITION BY p.amount::numeric,upper(p.currency))::int AS matching_count,
         EXISTS(SELECT 1 FROM payment_application pa JOIN pos_invoice i ON i.id=pa.invoice_id
           WHERE pa.payment_id=p.id AND pa.deleted_at IS NULL AND pa.voided_at IS NULL AND pa.amount_applied::numeric>0
-            AND i.customer_id=p.customer_id AND i.deleted_at IS NULL AND i.status NOT IN('draft','voided')) AS has_invoice
+            AND i.customer_id=p.customer_id AND i.deleted_at IS NULL AND i.status NOT IN('draft','voided')) AS has_invoice -- entity-status
       FROM customer_payment p JOIN customer c ON c.id=p.customer_id AND c.deleted_at IS NULL
       WHERE p.type='payment' AND p.method IN('ach','zelle','check') AND p.status IN('available','partially_applied','applied')
         AND p.amount::numeric>0 AND upper(p.currency)='USD' AND p.deleted_at IS NULL AND COALESCE(p.metadata->>'qb_import','false')='false'
@@ -162,7 +162,7 @@ async function main() {
       const expected = (await client.query(`SELECT i.id,i.invoice_number AS number,i.status,(SUM(pa.amount_applied::numeric)/100)::text AS applied_amount
         FROM payment_application pa JOIN pos_invoice i ON i.id=pa.invoice_id WHERE pa.payment_id=$1 AND pa.deleted_at IS NULL
         AND pa.voided_at IS NULL AND pa.amount_applied::numeric>0 AND i.deleted_at IS NULL AND i.customer_id=$2
-        AND i.status NOT IN('draft','voided') GROUP BY i.id,i.invoice_number,i.status ORDER BY i.invoice_number,i.id`, [control.invoice.id, control.invoice.customer_id])).rows;
+        AND i.status NOT IN('draft','voided') GROUP BY i.id,i.invoice_number,i.status ORDER BY i.invoice_number,i.id`, [control.invoice.id, control.invoice.customer_id])).rows; // entity-status
       same(context.invoices.map(({ id, number, status, applied_amount }) => ({ id, number, status, applied_amount })), expected, "Invoice context equals current read-only applications in major units");
     }
     const daily = (await api(`/admin/banking/match-suggestions?date=${day}`)).suggestions as MatchSuggestion[];

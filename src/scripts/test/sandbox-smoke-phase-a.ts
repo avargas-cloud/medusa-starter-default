@@ -31,6 +31,7 @@
  */
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import http from "http";
 import knexFactory from "knex";
 
@@ -166,14 +167,14 @@ async function testB1_BridgeFetch404(client: Client) {
     [purchaseOrderId, fakeOpId]
   );
   assert(
-    insertRes.rows[0].status === "submitted",
+    insertRes.rows[0].status === WRITE.purchase.submitted,
     "B1 setup: row inserted as submitted"
   );
 
   // Run the same UPDATE the poller does on expired status
   const updRes = await client.query(
     `UPDATE qb_purchase_order_pipeline
-     SET status = 'error',
+     SET status = '${WRITE.purchase.error}',
          last_error = 'Bridge operation expired (HTTP 404). Op no longer in bridge queue.',
          qb_operation_id = NULL,
          next_retry_at = NOW() + INTERVAL '2 minutes',
@@ -182,7 +183,7 @@ async function testB1_BridgeFetch404(client: Client) {
      RETURNING status, last_error, qb_operation_id, next_retry_at`
   );
   const row = updRes.rows[0];
-  assert(row.status === "error", "B1 row transitions submitted → error");
+  assert(row.status === WRITE.purchase.error, "B1 row transitions submitted → error");
   assert(
     row.last_error?.includes("expired"),
     "B1 last_error mentions 'expired'",
@@ -345,8 +346,8 @@ async function testB3_StaleRowCleanup(client: Client) {
   );
   for (const row of verify.rows) {
     assert(
-      row.status === "error",
-      `B3 row ${row.id} → error (got ${row.status})`
+      row.status === WRITE.purchase.error,
+      `B3 row ${row.id} went to error (got ${row.status})`
     );
     assert(
       row.last_error?.includes("Timeout"),

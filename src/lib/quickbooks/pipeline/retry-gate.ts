@@ -29,7 +29,7 @@ import { decideAddRetrySafety } from "./add-retry-safety";
 
 export type RetryGateInput = {
   step: string;
-  status: string; // 'failed' | 'waiting' | other
+  status: string; // canonical pipeline vocabulary — see pipeline-status.ts
   error: string | null;
   bridgeOpId: string | null;
   qbTxnId: string | null;

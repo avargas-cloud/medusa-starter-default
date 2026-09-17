@@ -3,6 +3,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 // 1.5.4: handler import removed — test-sync now enqueues 'pending' for
 // the consolidator to process via the same handler.
 import { writePipelineRow } from "../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const logs: string[] = [];
@@ -11,7 +12,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     await writePipelineRow({
       orderId: req.params.id,
       step: "estimate",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
     });
     logs.push(`[INFO] 📥 Enqueued estimate for ${req.params.id}`);
     return res.json({ success: true, logs });

@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { writePipelineRow } from "./row-mutations";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 /**
  * After an order's Sales Order is confirmed in QuickBooks, deactivate the
@@ -29,7 +30,7 @@ export async function enqueueEstimateDeactivateIfNeeded(
        FROM qb_order_pipeline
       WHERE order_id = $1
         AND step = 'estimate'
-        AND status = 'confirmed'
+        AND status IN (${SALES_SQL.synced})
         AND qb_txn_id IS NOT NULL
       LIMIT 1`,
     [orderId]
@@ -41,7 +42,7 @@ export async function enqueueEstimateDeactivateIfNeeded(
     `SELECT 1 FROM qb_order_pipeline
       WHERE order_id = $1
         AND step = 'estimate_deactivate'
-        AND status IN ('pending', 'processing', 'submitted', 'confirmed')
+        AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.processing}, ${SALES_SQL.submitted}, ${SALES_SQL.synced})
       LIMIT 1`,
     [orderId]
   );
@@ -50,7 +51,7 @@ export async function enqueueEstimateDeactivateIfNeeded(
   const rowId = await writePipelineRow({
     orderId,
     step: "estimate_deactivate",
-    status: "pending",
+    status: WRITE.sales.dispatchable,
     qbTxnId: est.qb_txn_id,
     qbRefNumber: est.qb_ref_number ?? null,
     medusaRefNumber: est.medusa_ref_number ?? null,

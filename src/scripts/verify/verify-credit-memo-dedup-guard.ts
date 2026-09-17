@@ -13,6 +13,7 @@
  */
 import { getDbPool } from "../../api/utils/db-pool";
 import { writePipelineRow } from "../../lib/quickbooks/pipeline/row-mutations";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const REF = `cmtest_${Date.now()}`;
 let failures = 0;
@@ -55,12 +56,12 @@ async function main() {
       referenceId: REF,
       referenceType: "credit_memo",
       step: "credit_memo",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { customerId: "X", items: [] },
     });
     // simulate dispatch → submitted with a bridge op id (like op1 → 18939)
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='submitted', bridge_op_id='op1-18939', submitted_at=NOW() WHERE id=$1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.submitted}', bridge_op_id='op1-18939', submitted_at=NOW() WHERE id=$1`,
       [id1]
     );
     // the bug trigger: a manual resync re-enqueues the SAME create
@@ -68,49 +69,49 @@ async function main() {
       referenceId: REF,
       referenceType: "credit_memo",
       step: "credit_memo",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { customerId: "X", items: [] },
     });
     const s1 = await rowState(pool, id1);
     check("returns the existing row id (no new row)", id2 === id1, `${id2}`);
-    check("row stays 'submitted' (not reset to pending)", s1.status === "submitted", s1.status);
+    check("row stays submitted (not reset to dispatchable)", s1.status === WRITE.sales.submitted, s1.status);
     check("bridge_op_id preserved (op1 not wiped)", s1.bridge_op_id === "op1-18939", s1.bridge_op_id);
     check("exactly ONE credit_memo row exists", (await countRows(pool, "credit_memo")) === 1);
 
     // ── Scenario 2: create step re-enqueued while 'confirmed' → NO-OP ─────────
     console.log("Scenario 2: credit_memo re-enqueue after 'confirmed'");
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='confirmed', confirmed_at=NOW() WHERE id=$1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.synced}', confirmed_at=NOW() WHERE id=$1`,
       [id1]
     );
     const id3 = await writePipelineRow({
       referenceId: REF,
       referenceType: "credit_memo",
       step: "credit_memo",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { customerId: "X", items: [] },
     });
     const s2 = await rowState(pool, id1);
     check("returns the existing row id (no new row)", id3 === id1);
-    check("row stays 'confirmed'", s2.status === "confirmed", s2.status);
+    check("row stays synced", s2.status === WRITE.sales.synced, s2.status);
     check("still ONE credit_memo row", (await countRows(pool, "credit_memo")) === 1);
 
     // ── Scenario 3: genuinely FAILED create CAN still be retried ──────────────
     console.log("Scenario 3: failed create is still reactivatable (legit retry)");
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='failed', failed_at=NOW(), bridge_op_id=NULL WHERE id=$1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.failed}', failed_at=NOW(), bridge_op_id=NULL WHERE id=$1`,
       [id1]
     );
     const id4 = await writePipelineRow({
       referenceId: REF,
       referenceType: "credit_memo",
       step: "credit_memo",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: { customerId: "X", items: [] },
     });
     const s3 = await rowState(pool, id1);
     check("reactivates the failed row (same id)", id4 === id1);
-    check("failed → pending (retry allowed)", s3.status === "pending", s3.status);
+    check("failed → pending (retry allowed)", s3.status === WRITE.sales.dispatchable, s3.status);
 
     // ── Scenario 4: idempotent MOD step still reactivates from submitted ──────
     console.log("Scenario 4: credit_memo_mod (idempotent) unaffected by guard");
@@ -118,22 +119,22 @@ async function main() {
       referenceId: REF,
       referenceType: "credit_memo",
       step: "credit_memo_mod",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: {},
     });
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='submitted', bridge_op_id='modop' WHERE id=$1`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.submitted}', bridge_op_id='modop' WHERE id=$1`,
       [mid1]
     );
     const mid2 = await writePipelineRow({
       referenceId: REF,
       referenceType: "credit_memo",
       step: "credit_memo_mod",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: {},
     });
     const ms = await rowState(pool, mid1);
-    check("mod row reactivated to pending (idempotent, expected)", ms.status === "pending", ms.status);
+    check("mod row reactivated to pending (idempotent, expected)", ms.status === WRITE.sales.dispatchable, ms.status);
     check("mod returns same row id", mid2 === mid1);
   } finally {
     await pool.query(`DELETE FROM qb_order_pipeline WHERE reference_id = $1`, [REF]);

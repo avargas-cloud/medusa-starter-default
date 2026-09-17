@@ -14,6 +14,7 @@
  */
 
 import type { Db } from "../types";
+import { SALES_SQL } from "../../quickbooks/pipeline-status";
 
 const RULES: Array<{ name: string; sql: string }> = [
   {
@@ -44,28 +45,28 @@ const RULES: Array<{ name: string; sql: string }> = [
     sql: `UPDATE pos_notification n SET resolved_at = NOW(), updated_at = NOW()
             FROM customer_payment cp
            WHERE n.resolved_at IS NULL AND n.kind = 'payment_received' AND n.entity_type = 'customer_payment'
-             AND cp.id = n.entity_id AND (cp.status = 'voided' OR cp.deleted_at IS NOT NULL)`,
+             AND cp.id = n.entity_id AND (cp.status = 'voided' OR cp.deleted_at IS NOT NULL)`, // entity-status
   },
   {
     name: "qb_row_recovered",
     sql: `UPDATE pos_notification n SET resolved_at = NOW(), updated_at = NOW()
             FROM qb_order_pipeline p
            WHERE n.resolved_at IS NULL AND n.kind = 'qb_pipeline_failed' AND n.entity_type = 'qb_order_pipeline' AND p.id::text = n.entity_id
-             AND p.status <> 'failed'`,
+             AND p.status NOT IN (${SALES_SQL.failed})`,
   },
   {
     name: "commission_request_reviewed",
     sql: `UPDATE pos_notification n SET resolved_at = NOW(), updated_at = NOW()
             FROM commission_request cr
            WHERE n.resolved_at IS NULL AND n.kind = 'commission_request_pending' AND cr.id = n.entity_id
-             AND (cr.status <> 'pending' OR cr.deleted_at IS NOT NULL)`,
+             AND (cr.status <> 'pending' OR cr.deleted_at IS NOT NULL)`, // entity-status
   },
   {
     name: "price_batch_reviewed",
     sql: `UPDATE pos_notification n SET resolved_at = NOW(), updated_at = NOW()
             FROM price_change_batch b
            WHERE n.resolved_at IS NULL AND n.kind = 'price_batch_submitted' AND b.id = n.entity_id
-             AND (b.status <> 'submitted' OR b.deleted_at IS NOT NULL)`,
+             AND (b.status <> 'submitted' OR b.deleted_at IS NOT NULL)`, // entity-status
   },
   {
     name: "refund_settled",

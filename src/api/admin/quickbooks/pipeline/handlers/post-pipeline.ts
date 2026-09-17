@@ -6,6 +6,7 @@ import { pollOperationResult } from "../../../../../lib/quickbooks/client/core";
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { evaluateRetryGate } from "../../../../../lib/quickbooks/pipeline/retry-gate";
+import { SALES_SQL, WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 
 export async function POST(
   req: MedusaRequest,
@@ -34,14 +35,14 @@ export async function POST(
       await client.connect();
       const { rows } = await client.query(
         `UPDATE qb_order_pipeline
-            SET status = 'fixed', updated_at = NOW()
-          WHERE id = $1 AND status IN ('failed', 'manual')
+            SET status = '${WRITE.sales.fixed}', updated_at = NOW()
+          WHERE id = $1 AND status IN (${SALES_SQL.failed}, 'manual')
           RETURNING id, step, order_id, medusa_ref_number, qb_ref_number`,
         [rowId]
       );
       if (!rows.length) {
         res.status(404).json({
-          error: "Row not found or not in 'failed'/'manual' status",
+          error: "Row not found or not in failed/manual status",
         });
         return;
       }
@@ -137,7 +138,7 @@ export async function POST(
     //    instead of CREATE (which would produce duplicate QB documents).
     const { rows } = await client.query(
       `UPDATE qb_order_pipeline
-             SET status       = 'pending',
+             SET status       = '${WRITE.sales.dispatchable}',
                  updated_at   = NOW(),
                  error        = NULL,
                  failed_at    = NULL,
@@ -153,7 +154,7 @@ export async function POST(
                    ELSE NULL
                  END,
                  retry_count  = retry_count + 1
-             WHERE id = $1 AND status IN ('failed', 'waiting')
+             WHERE id = $1 AND status IN (${SALES_SQL.failedAny}, ${SALES_SQL.blocked})
              RETURNING id, step, order_id, reference_id, reference_type, retry_count, bridge_op_id, qb_txn_id, qb_ref_number`,
       [rowId]
     );
@@ -182,7 +183,7 @@ export async function POST(
             await writePipelineRow({
               orderId: row.order_id,
               step: row.step,
-              status: "confirmed",
+              status: WRITE.sales.synced,
               bridgeOpId: row.bridge_op_id,
               qbTxnId: pollResult.txnId,
               qbRefNumber: pollResult.refNumber ?? null,
@@ -278,7 +279,7 @@ export async function POST(
             await enqueueEst({
               orderId: row.order_id,
               step: "estimate",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
             });
             logger.info(
               `[qb-pipeline-retry] 📥 Re-enqueued estimate for ${row.order_id}`
@@ -295,7 +296,7 @@ export async function POST(
             await enqueueSoRetry({
               orderId: row.order_id,
               step: "sales_order",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
             });
             logger.info(
               `[qb-pipeline-retry] 📥 Re-enqueued sales_order for ${row.order_id}`
@@ -312,7 +313,7 @@ export async function POST(
               referenceId: row.reference_id,
               referenceType: "invoice",
               step: "invoice",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               payload: {
                 invoice_id: row.reference_id,
                 fulfillment_id: row.reference_id,
@@ -333,7 +334,7 @@ export async function POST(
               referenceId: row.reference_id,
               referenceType: "invoice",
               step: "sales_receipt",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               payload: {
                 invoice_id: row.reference_id,
                 fulfillment_id: row.reference_id,
@@ -406,7 +407,7 @@ export async function POST(
                 `SELECT qb_txn_id FROM qb_order_pipeline
                  WHERE order_id = $1
                    AND step IN ('estimate', 'sales_order')
-                   AND status = 'confirmed'
+                   AND status IN (${SALES_SQL.synced})
                    AND qb_txn_id IS NOT NULL
                  ORDER BY confirmed_at DESC LIMIT 1`,
                 [row.order_id]
@@ -426,7 +427,7 @@ export async function POST(
               const voidPool =
                 require("../../../../../api/utils/db-pool").getDbPool();
               await voidPool.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [
                   row.id,
                   "Cannot retry: no confirmed estimate/sales_order TxnID found",
@@ -448,7 +449,7 @@ export async function POST(
                 `${LOG_PREFIX} void_sales_order failed: ${closeResult.error}`
               );
               await voidPool2.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW(), qb_txn_id = $3 WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW(), qb_txn_id = $3 WHERE id = $1`,
                 [row.id, closeResult.error ?? "SO close failed", soTxnId]
               );
             } else {
@@ -457,7 +458,7 @@ export async function POST(
                 `${LOG_PREFIX} void_sales_order queued (op: ${soOpId})`
               );
               await voidPool2.query(
-                `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), qb_txn_id = $3, updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), qb_txn_id = $3, updated_at = NOW() WHERE id = $1`,
                 [row.id, soOpId, soTxnId]
               );
             }
@@ -472,7 +473,7 @@ export async function POST(
               const voidPool =
                 require("../../../../../api/utils/db-pool").getDbPool();
               await voidPool.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, "Cannot retry: missing qb_txn_id"]
               );
               break;
@@ -496,7 +497,7 @@ export async function POST(
                 `${LOG_PREFIX} ${row.step} failed: ${voidResult.error}`
               );
               await voidPool2.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, voidResult.error ?? `${row.step} failed`]
               );
             } else {
@@ -505,7 +506,7 @@ export async function POST(
                 `${LOG_PREFIX} ${row.step} queued (op: ${voidOpId})`
               );
               await voidPool2.query(
-                `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, voidOpId]
               );
             }
@@ -519,7 +520,7 @@ export async function POST(
               const vcPool =
                 require("../../../../../api/utils/db-pool").getDbPool();
               await vcPool.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, "Cannot retry: missing qb_txn_id"]
               );
               break;
@@ -535,14 +536,14 @@ export async function POST(
                 `${LOG_PREFIX} void_check failed: ${checkResult.error}`
               );
               await vcPool2.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, checkResult.error ?? "void_check failed"]
               );
             } else {
               const opId = checkResult.data?.operationId ?? null;
               logger.info(`${LOG_PREFIX} void_check queued (op: ${opId})`);
               await vcPool2.query(
-                `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, opId]
               );
             }
@@ -560,7 +561,7 @@ export async function POST(
                   [row.reference_id]
                 );
                 await retryPool.query(
-                  `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), confirmed_at = NULL, updated_at = NOW() WHERE id = $1`,
+                  `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), confirmed_at = NULL, updated_at = NOW() WHERE id = $1`,
                   [
                     row.id,
                     "Retry: re-process from Accounting page — bank account selection required",
@@ -647,7 +648,7 @@ export async function POST(
               );
             } catch {
               await cmPool.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, `Customer not found: ${cm.customer_id}`]
               );
               break;
@@ -666,7 +667,7 @@ export async function POST(
             );
             if (!custResult.success || !custResult.qbCustomerId) {
               await cmPool.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
                 [row.id, `Customer not in QB: ${custResult.error ?? "unknown"}`]
               );
               break;
@@ -700,7 +701,7 @@ export async function POST(
             };
             await cmPool.query(
               `UPDATE qb_order_pipeline
-               SET status = 'pending', payload = $2::jsonb, error = NULL,
+               SET status = '${WRITE.sales.dispatchable}', payload = $2::jsonb, error = NULL,
                    failed_at = NULL, updated_at = NOW()
                WHERE id = $1`,
               [row.id, JSON.stringify(cmRetryPayload)]

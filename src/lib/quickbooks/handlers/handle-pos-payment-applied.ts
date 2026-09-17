@@ -28,6 +28,7 @@ import {
   hasWaitedTooLong,
 } from "../pipeline/document-quiescence";
 import { getDbPool } from "../../../api/utils/db-pool";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 /**
  * Resolves the source pipeline row id for a customer_payment:
@@ -48,7 +49,7 @@ async function resolveSourcePipelineRowId(
          JOIN pos_credit_memo cm ON cm.id = q.reference_id
         WHERE cm.credit_memo_number = $1
           AND q.step = 'credit_memo'
-          AND q.status NOT IN ('skipped')
+          AND q.status NOT IN (${SALES_SQL.skipped})
         ORDER BY q.created_at DESC LIMIT 1`,
       [cpay.reference]
     );
@@ -58,7 +59,7 @@ async function resolveSourcePipelineRowId(
     `SELECT id FROM qb_order_pipeline
       WHERE step = 'payment'
         AND reference_id = $1
-        AND status NOT IN ('skipped')
+        AND status NOT IN (${SALES_SQL.skipped})
       ORDER BY created_at DESC LIMIT 1`,
     [cpay.id]
   );
@@ -76,7 +77,7 @@ async function resolveInvoicePipelineRowId(
     `SELECT id FROM qb_order_pipeline
       WHERE step IN ('invoice', 'sales_receipt')
         AND reference_id = $1
-        AND status NOT IN ('skipped')
+        AND status NOT IN (${SALES_SQL.skipped})
       ORDER BY created_at DESC LIMIT 1`,
     [invoiceId]
   );
@@ -135,9 +136,9 @@ export async function claimApplyPaymentRow(
 
   const { rows: claimed } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'processing', updated_at = NOW()
+        SET status = '${WRITE.sales.processing}', updated_at = NOW()
       WHERE id = $1
-        AND status IN ('waiting', 'pending', 'failed')
+        AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked}, ${SALES_SQL.failedAny})
      RETURNING id`,
     [row.id]
   );
@@ -270,7 +271,7 @@ export async function handlePosPaymentApplied({
         referenceId: applyReferenceId,
         referenceType: applyReferenceType,
         step: "apply_payment",
-        status: "failed",
+        status: WRITE.sales.failed,
         medusaRefNumber: medusaPayRef,
         error:
           "Payment not yet synced to QB and no source pipeline row found — investigate the source payment/credit-memo",
@@ -297,7 +298,7 @@ export async function handlePosPaymentApplied({
       referenceId: applyReferenceId,
       referenceType: applyReferenceType,
       step: "apply_payment",
-      status: "failed",
+      status: WRITE.sales.failed,
       medusaRefNumber: medusaPayRef,
       error: `Invoice ${invoice_id} not found in DB`,
     }).catch(() => {});
@@ -317,7 +318,7 @@ export async function handlePosPaymentApplied({
         `SELECT qb_txn_id, qb_ref_number FROM qb_order_pipeline
           WHERE reference_id = $1
             AND step IN ('invoice', 'sales_receipt')
-            AND status = 'confirmed'
+            AND status IN (${SALES_SQL.synced})
             AND qb_txn_id IS NOT NULL
           ORDER BY confirmed_at DESC LIMIT 1`,
         [invoice_id]
@@ -382,7 +383,7 @@ export async function handlePosPaymentApplied({
       referenceId: applyReferenceId,
       referenceType: applyReferenceType,
       step: "apply_payment",
-      status: "failed",
+      status: WRITE.sales.failed,
       medusaRefNumber: medusaPayRef,
       error:
         "Invoice not yet synced to QB and no invoice pipeline row found — investigate the source invoice",
@@ -397,7 +398,7 @@ export async function handlePosPaymentApplied({
       referenceId: applyReferenceId,
       referenceType: applyReferenceType,
       step: "apply_payment",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       medusaRefNumber: medusaPayRef,
     });
   } catch (pErr: any) {
@@ -456,7 +457,7 @@ export async function handlePosPaymentApplied({
           referenceId: applyReferenceId,
           referenceType: applyReferenceType,
           step: "apply_payment",
-          status: "skipped",
+          status: WRITE.sales.skipped,
           medusaRefNumber: medusaPayRef,
           error:
             "apply_payment: no active payment_application remains for this payment+invoice (aggregate <= 0) — auto-skipped",
@@ -568,7 +569,7 @@ export async function handlePosPaymentApplied({
       referenceId: applyReferenceId,
       referenceType: applyReferenceType,
       step: "apply_payment",
-      status: "failed",
+      status: WRITE.sales.failed,
       medusaRefNumber: medusaPayRef,
       error: `Customer ${payment.customer_id} not synced to QB — no qb_list_id`,
     }).catch(() => {});
@@ -593,7 +594,7 @@ export async function handlePosPaymentApplied({
       referenceId: applyReferenceId,
       referenceType: applyReferenceType,
       step: "apply_payment",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       medusaRefNumber: medusaPayRef,
       bridgeOpId: opId,
     }).catch((e: any) =>
@@ -712,7 +713,7 @@ export async function handlePosPaymentApplied({
             referenceId: applyReferenceId,
             referenceType: applyReferenceType,
             step: "apply_payment",
-            status: "failed",
+            status: WRITE.sales.failed,
             medusaRefNumber: medusaPayRef,
             error: failure,
           });
@@ -758,7 +759,7 @@ export async function handlePosPaymentApplied({
         referenceId: applyReferenceId,
         referenceType: applyReferenceType,
         step: "apply_payment",
-        status: "confirmed",
+        status: WRITE.sales.synced,
         medusaRefNumber: medusaPayRef,
         bridgeOpId: opId,
         qbTxnId: paymentTxnId!,
@@ -770,7 +771,7 @@ export async function handlePosPaymentApplied({
         referenceId: applyReferenceId,
         referenceType: applyReferenceType,
         step: "apply_payment",
-        status: "confirmed",
+        status: WRITE.sales.synced,
         medusaRefNumber: medusaPayRef,
       }).catch(() => {});
     }

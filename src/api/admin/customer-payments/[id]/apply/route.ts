@@ -17,6 +17,7 @@ import {
   getNum,
 } from "../../../invoices/payment-balance";
 import { registerMedusaPayment } from "../../../invoices/register-medusa-payment";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../../../../../lib/quickbooks/pipeline-status";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
@@ -59,7 +60,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const { rows: pendingXfer } = await xferPool.query(
       `SELECT id FROM qb_order_pipeline
         WHERE reference_id = $1 AND step = 'transfer_payment'
-          AND status NOT IN ('confirmed', 'cancelled', 'skipped')
+          AND status NOT IN (${SALES_SQL.done}, ${SALES_SQL.skipped}, 'cancelled') -- entity-status
         LIMIT 1`,
       [id]
     );
@@ -222,16 +223,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           );
           const needsPromotion =
             existing.length === 0 ||
-            existing[0].status === "waiting" ||
-            existing[0].status === "failed" ||
-            existing[0].status === "skipped";
+            pipelineStatusIs("sales", existing[0], "blocked", "error", "failed", "skipped");
           if (needsPromotion) {
             await writePipelineRow({
               orderId: invoice.order_id,
               referenceId: id,
               referenceType: "customer_payment",
               step: "payment",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               medusaRefNumber,
             });
             console.info(
@@ -251,7 +250,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: applicationId,
           referenceType: "payment_application",
           step: "apply_payment",
-          status: "waiting",
+          status: WRITE.sales.blocked,
           medusaRefNumber,
         });
       } catch (rowErr: any) {

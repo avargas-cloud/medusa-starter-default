@@ -21,6 +21,7 @@ import {
   getEstimateTxnId,
   getLatestInvoiceTxnId,
 } from "../../lib/quickbooks/qb-metadata-types";
+import { SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -258,12 +259,12 @@ async function getSoRepairFlag(orderId: string): Promise<boolean> {
     `SELECT 1 FROM qb_order_pipeline
      WHERE order_id = $1 AND step = 'sales_order'
        AND (
-         status = 'waiting'
+         status IN (${SALES_SQL.blocked})
          OR (
-           status = 'skipped'
+           status IN (${SALES_SQL.skipped})
            AND EXISTS (
              SELECT 1 FROM pos_invoice pi
-             WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+             WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL -- entity-status
            )
          )
        )
@@ -276,14 +277,14 @@ async function getSoRepairFlag(orderId: string): Promise<boolean> {
 async function getActiveInvoiceStatus(orderId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM qb_order_pipeline p
-     WHERE p.order_id = $1 AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+     WHERE p.order_id = $1 AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
        AND NOT EXISTS (
          SELECT 1 FROM qb_order_pipeline v
-         WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status = 'confirmed'
+         WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
        )
        AND NOT EXISTS (
          SELECT 1 FROM pos_invoice pi
-         WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+         WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL -- entity-status
        )
      LIMIT 1`,
     [orderId]
@@ -322,9 +323,9 @@ const DB_CASES: DbCase[] = [
              OR o.metadata->'qb_sales_order'->>'txn_id' IS NOT NULL)
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
-            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed')
-            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL)
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
+            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced}))
+            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL) -- entity-status
         )
       ORDER BY o.created_at DESC LIMIT 3`,
   },
@@ -341,9 +342,9 @@ const DB_CASES: DbCase[] = [
              OR o.metadata->'qb_sales_order'->>'txn_id' IS NOT NULL)
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
-            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed')
-            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL)
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
+            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced}))
+            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL) -- entity-status
         )
       ORDER BY o.created_at DESC LIMIT 3`,
   },
@@ -362,12 +363,12 @@ const DB_CASES: DbCase[] = [
         AND o.created_at <= NOW() - INTERVAL '1 hour'
         AND EXISTS (
           SELECT 1 FROM pos_invoice pi
-          WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL
+          WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL -- entity-status
         )
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline qp
           WHERE qp.order_id = o.id AND qp.step = 'sales_order'
-            AND qp.status IN ('skipped', 'waiting')
+            AND qp.status IN (${SALES_SQL.skipped}, ${SALES_SQL.blocked})
         )
       ORDER BY o.created_at DESC LIMIT 3`,
   },
@@ -384,9 +385,9 @@ const DB_CASES: DbCase[] = [
         AND (o.metadata->'qb_sales_order'->>'txn_id') IS NULL
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
-            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed')
-            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL)
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
+            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced}))
+            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL) -- entity-status
         )
       ORDER BY o.created_at DESC LIMIT 3`,
   },
@@ -407,7 +408,7 @@ const DB_CASES: DbCase[] = [
              OR jsonb_array_length(COALESCE(o.metadata->'qb_invoices','[]'::jsonb)) > 0)
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline v
-          WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+          WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
         )
       ORDER BY o.created_at DESC LIMIT 3`,
   },
@@ -424,9 +425,9 @@ const DB_CASES: DbCase[] = [
              OR o.metadata->'qb_estimate'->>'txn_id' IS NOT NULL)
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
-            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed')
-            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL)
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
+            AND NOT EXISTS (SELECT 1 FROM qb_order_pipeline v WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced}))
+            AND NOT EXISTS (SELECT 1 FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status = 'voided' AND pi.deleted_at IS NULL) -- entity-status
         )
       ORDER BY o.created_at DESC LIMIT 2`,
   },

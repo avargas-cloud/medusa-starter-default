@@ -8,14 +8,14 @@
 
 /**
  * Standard exponential-ish backoff (minutes) for QB pipeline retries.
- * After exhausting this list, rows transition to `failed_permanent`.
+ * After exhausting this list, rows transition to `failed` (terminal).
  *
  * Total tolerance: ~106 minutes across 5 attempts.
  */
 export const STANDARD_BACKOFF_MINUTES = [2, 4, 10, 30, 60] as const;
 
 /**
- * Maximum number of retries before a row is marked `failed_permanent`.
+ * Maximum number of retries before a row is marked `failed` (terminal).
  * Equals the length of the backoff schedule.
  */
 export const MAX_RETRIES = STANDARD_BACKOFF_MINUTES.length;
@@ -38,7 +38,7 @@ export function computeNextRetryDate(
 
 /**
  * Returns true if the given retry count has exhausted the schedule.
- * Use this to decide whether to mark a row as `failed_permanent`.
+ * Use this to decide whether to mark a row as terminally `failed`.
  */
 export function isRetryExhausted(
   retriesSoFar: number,
@@ -55,8 +55,12 @@ import { classifyQbError, type QbErrorClassification } from "./error-classifier"
  * coexist with both knex.raw (`?`-style) and pg Pool (`$1`-style) call sites.
  */
 export interface RetryDecision {
-  /** New status to write on the pipeline row. */
-  newStatus: "error" | "failed_permanent" | "failed";
+  /**
+   * New status to write on the pipeline row — canonical vocabulary
+   * (`lib/quickbooks/pipeline-status.ts`): `error` = retry scheduled
+   * (`nextRetryAt` set), `failed` = terminal.
+   */
+  newStatus: "error" | "failed";  // canonical-literal
   /** Backoff target. null = either permanent failure or feature-flagged off. */
   nextRetryAt: Date | null;
   /** True if the error budget is spent (transient → permanent). */
@@ -74,14 +78,15 @@ export interface DecideRetryArgs {
    * Schema feature flag: does the target table have `next_retry_at`?
    * - `qb_item_pipeline`           → true
    * - `qb_purchase_order_pipeline` → true
-   * - `qb_order_pipeline`          → false in Phase 1 (true after Phase 2 migration)
+   * - `qb_order_pipeline`          → true (has had it since 1776200000000)
    */
   hasNextRetryAt: boolean;
   /**
-   * Schema feature flag: does the target table accept `failed_permanent`?
-   * Same Phase-1/Phase-2 split as `hasNextRetryAt`.
+   * Legacy flag (pre vocab-20260917): purchases tables spelled the terminal
+   * status `failed_permanent`. Every table now writes `failed`; the flag is
+   * accepted so old callers keep compiling and has no effect.
    */
-  hasFailedPermanent: boolean;
+  hasFailedPermanent?: boolean;
   /** Optional override for the backoff schedule (defaults to STANDARD_BACKOFF_MINUTES). */
   schedule?: readonly number[];
 }
@@ -101,10 +106,8 @@ export interface DecideRetryArgs {
  * Behavior matrix:
  *   transient & not exhausted & hasNextRetryAt    → "error"            + backoff
  *   transient & not exhausted & !hasNextRetryAt   → "failed"           + null   (Phase-1 compat)
- *   transient & exhausted     & hasFailedPermanent → "failed_permanent" + null
- *   transient & exhausted     & !hasFailedPermanent → "failed"          + null
- *   !transient                & hasFailedPermanent → "failed_permanent" + null
- *   !transient                & !hasFailedPermanent → "failed"          + null
+ *   transient & exhausted                          → "failed"           + null
+ *   !transient                                     → "failed"           + null
  */
 export function decideRetry(args: DecideRetryArgs): RetryDecision {
   const classification = classifyQbError(args.error);
@@ -112,9 +115,7 @@ export function decideRetry(args: DecideRetryArgs): RetryDecision {
   const schedule = args.schedule ?? STANDARD_BACKOFF_MINUTES;
   const exhausted = isRetryExhausted(newRetries - 1, schedule);
 
-  const finalFailureStatus: RetryDecision["newStatus"] = args.hasFailedPermanent
-    ? "failed_permanent"
-    : "failed";
+  const finalFailureStatus: RetryDecision["newStatus"] = "failed";  // canonical-literal
 
   if (!classification.isTransient) {
     return {
@@ -139,7 +140,7 @@ export function decideRetry(args: DecideRetryArgs): RetryDecision {
     // Caller will mark `failed` (legacy behavior). Phase 2 migration removes
     // this branch by setting hasNextRetryAt=true on qb_order_pipeline callers.
     return {
-      newStatus: "failed",
+      newStatus: "failed",  // canonical-literal
       nextRetryAt: null,
       exhausted: false,
       classification,
@@ -147,7 +148,7 @@ export function decideRetry(args: DecideRetryArgs): RetryDecision {
     };
   }
   return {
-    newStatus: "error",
+    newStatus: "error",  // canonical-literal
     nextRetryAt: computeNextRetryDate(newRetries - 1, schedule),
     exhausted: false,
     classification,

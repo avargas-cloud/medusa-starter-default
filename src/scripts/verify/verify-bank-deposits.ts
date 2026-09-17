@@ -217,7 +217,7 @@ async function main() {
     truth(grouped.status==="draft" && grouped.counterparty_id===null,"Linking a grouped deposit remains draft without assigning all receipts to one customer");
     const confirmed = (await confirmTransactionReview(txPrefix+"group",actor,randomUUID(), {
       expected_revision:grouped.revision,expected_source_version:1 })).review;
-    truth(confirmed.status==="confirmed","Real confirmation revalidates the linked deposit evidence");
+    truth(confirmed.status==="confirmed","Real confirmation revalidates the linked deposit evidence"); // entity-status
     const snapshot = { date:day,accounts:[{ account:{ id:account },transactions:[{ id:txPrefix+"group",review:confirmed,deposit:ready }] }] };
     await mutate(client,async () => { await client.query(`INSERT INTO bank_day_close
       (id,day,status,snapshot,input_hash,closed_by,closed_at) VALUES('bdc_v7verify_deposit',$1,'closed',$2::jsonb,$3,$4,now())`,

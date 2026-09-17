@@ -41,6 +41,7 @@ import {
 } from "../../../../../../lib/quickbooks/purchase-order-line-order";
 import { PURCHASE_EXISTENCE_CHECK_KEY } from "../../../../../../lib/quickbooks/consolidator/purchase-operations";
 import { isGlDocumentKind, type GlDocumentKind } from "../../../../../../lib/quickbooks/gl-documents/types";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../../../../../../lib/quickbooks/pipeline-status";
 
 async function rearmDelegatedOperation(
   knex: any,
@@ -62,10 +63,10 @@ async function rearmDelegatedOperation(
                 OR EXISTS (
                   SELECT 1 FROM qb_order_pipeline parent
                    WHERE parent.id = operation.depends_on
-                     AND parent.status IN ('confirmed', 'fixed')
+                     AND parent.status IN (${SALES_SQL.done})
                 )
-              THEN 'pending'
-              ELSE 'waiting'
+              THEN '${WRITE.sales.dispatchable}'
+              ELSE '${WRITE.sales.blocked}'
             END,
             payload = CASE WHEN ?::boolean
               THEN COALESCE(operation.payload, '{}'::jsonb) ||
@@ -76,7 +77,7 @@ async function rearmDelegatedOperation(
             retry_count = 0, error = NULL, next_retry_at = NULL,
             failed_at = NULL, updated_at = NOW()
       WHERE operation.id = ?::uuid
-        AND operation.status NOT IN ('confirmed', 'fixed')`,
+        AND operation.status NOT IN (${SALES_SQL.done})`,
     [
       requireExistenceCheck,
       PURCHASE_EXISTENCE_CHECK_KEY,
@@ -125,7 +126,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (!row) {
       return res.status(404).json({ error: "Pipeline entry not found" });
     }
-    if (!["pending", "waiting", "failed"].includes(String(row.status))) {
+    if (!pipelineStatusIs("sales", row, "waiting", "blocked", "error", "failed")) {
       return res.status(409).json({
         error: `Cannot retry rebuild step in status '${row.status}'`,
       });
@@ -133,7 +134,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     await rearmDelegatedOperation(knex, orderPipelineId);
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET intent = ?, status = 'waiting', qb_operation_id = NULL,
+          SET intent = ?, status = '${WRITE.purchase.dispatchable}', qb_operation_id = NULL,
               retries = 0, last_error = NULL, next_retry_at = NULL,
               updated_at = NOW()
         WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
@@ -204,7 +205,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (!["pending", "waiting", "failed"].includes(String(row.status))) {
+    if (!pipelineStatusIs("sales", row, "waiting", "blocked", "error", "failed")) {
       return res
         .status(409)
         .json({ error: `Cannot retry ${glChainStep} in status '${row.status}'` });
@@ -243,7 +244,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // 'skipped' is excluded on purpose: it is a terminal decision (usually the
     // dependency was abandoned), and re-dispatching the same payload that was
     // set aside is a new decision, not a retry.
-    if (!["pending", "waiting", "failed"].includes(String(row.status))) {
+    if (!pipelineStatusIs("sales", row, "waiting", "blocked", "error", "failed")) {
       return res
         .status(409)
         .json({ error: `Cannot retry ${chainedModStep} in status '${row.status}'` });
@@ -292,14 +293,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         error: "The original BillAdd is historical and cannot be retried",
       });
     }
-    if (!["waiting", "error", "failed_permanent"].includes(row.status)) {
+    if (!pipelineStatusIs("purchase", row, "waiting", "error", "failed")) {
       return res
         .status(409)
         .json({ error: `Cannot retry add lane in status '${row.status}'` });
     }
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'waiting', qb_operation_id = NULL, retries = 0,
+          SET status = '${WRITE.purchase.dispatchable}', qb_operation_id = NULL, retries = 0,
               last_error = NULL, next_retry_at = NULL, updated_at = NOW()
         WHERE id = ?`,
       [vendorBillId]
@@ -323,14 +324,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (!["pending", "failed"].includes(row.status)) {
+    if (!pipelineStatusIs("sales", row, "waiting", "blocked", "error", "failed")) {
       return res
         .status(409)
         .json({ error: `Cannot retry BillMod in status '${row.status}'` });
     }
     await knex.raw(
       `UPDATE qb_order_pipeline
-          SET status = 'pending', bridge_op_id = NULL, retry_count = 0,
+          SET status = '${WRITE.sales.dispatchable}', bridge_op_id = NULL, retry_count = 0,
               error = NULL, next_retry_at = NULL, failed_at = NULL,
               updated_at = NOW()
         WHERE id = ?::uuid`,
@@ -338,7 +339,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'waiting', intent = 'mod', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.dispatchable}', intent = 'mod', qb_operation_id = NULL,
               retries = 0, last_error = NULL, next_retry_at = NULL,
               updated_at = NOW()
         WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
@@ -361,14 +362,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (!["waiting", "error", "failed_permanent"].includes(row.void_status)) {
+    const deleteLaneRow = { status: row.void_status };
+    if (!pipelineStatusIs("purchase", deleteLaneRow, "waiting", "error", "failed")) {
       return res.status(409).json({
         error: `Cannot retry delete lane in status '${row.void_status}'`,
       });
     }
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET void_status = 'waiting', void_operation_id = NULL,
+          SET void_status = '${WRITE.purchase.dispatchable}', void_operation_id = NULL,
               void_retries = 0, void_last_error = NULL,
               void_next_retry_at = NULL, updated_at = NOW()
         WHERE id = ?`,
@@ -398,7 +400,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (row.mod_status !== "error" && row.mod_status !== "failed_permanent") {
+    const modLaneRow = { status: row.mod_status };
+    if (!pipelineStatusIs("purchase", modLaneRow, "error", "failed")) {
       return res.status(409).json({
         error: `Cannot retry mod lane in status '${row.mod_status}'`,
       });
@@ -406,7 +409,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // Manual retry = fresh budget, same as the ADD lane.
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status        = 'waiting',
+          SET mod_status        = '${WRITE.purchase.dispatchable}',
               mod_operation_id  = NULL,
               mod_retries       = 0,
               mod_last_error    = NULL,
@@ -431,14 +434,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (row.void_status !== "error") {
+    const voidLaneRow = { status: row.void_status };
+    if (!pipelineStatusIs("purchase", voidLaneRow, "error")) {
       return res.status(409).json({
         error: `Cannot retry void/delete lane in status '${row.void_status}'`,
       });
     }
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET void_status         = 'waiting',
+          SET void_status         = '${WRITE.purchase.dispatchable}',
               void_operation_id   = NULL,
               void_last_error     = NULL,
               void_next_retry_at  = NULL,
@@ -462,7 +466,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (row.status !== "error" && row.status !== "failed_permanent") {
+    if (!pipelineStatusIs("purchase", row, "error", "failed")) {
       return res.status(409).json({
         error: `Cannot retry entry with status '${row.status}'`,
       });
@@ -471,7 +475,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // row isn't kicked straight back to failed_permanent on the next attempt.
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET status          = 'waiting',
+          SET status          = '${WRITE.purchase.dispatchable}',
               qb_operation_id = NULL,
               retries         = 0,
               last_error      = NULL,
@@ -507,13 +511,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const row = rows[0];
   if (!row) return res.status(404).json({ error: "Pipeline entry not found" });
-  const retryableStatuses = [
-    "error",
-    "failed_permanent",
-    "waiting",
-    "submitted",
-  ];
-  if (!retryableStatuses.includes(row.status)) {
+  if (!pipelineStatusIs("purchase", row, "error", "failed", "waiting", "submitted")) {
     return res
       .status(409)
       .json({ error: `Cannot retry entry with status '${row.status}'` });
@@ -546,7 +544,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   await knex.raw(
     `UPDATE qb_purchase_order_pipeline
-        SET status          = 'waiting',
+        SET status          = '${WRITE.purchase.dispatchable}',
             qb_operation_id = NULL,
             payload         = ?,
             last_error      = NULL,

@@ -16,6 +16,7 @@ import {
   writePipelineRow,
   requireQbCustomer,
 } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
@@ -143,7 +144,7 @@ export async function POST(
       throw new Error("Cannot find updatePosCreditMemo* method on service");
     await (creditMemoService as any)[updateMethodName]({
       id,
-      status: "completed",
+      status: "completed", // entity-status
       completed_at: new Date(),
       refund_method: refundMethod,
       // Medusa DEEP-MERGEA metadata jsonb, así que esto agrega la clave sin
@@ -439,7 +440,7 @@ export async function POST(
               referenceId: id,
               referenceType: "credit_memo",
               step: "credit_memo",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               medusaRefNumber: creditMemo.credit_memo_number ?? null,
               qbRefNumber: creditMemo.credit_memo_number ?? null,
               payload: {

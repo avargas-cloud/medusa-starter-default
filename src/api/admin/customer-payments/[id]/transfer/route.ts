@@ -14,6 +14,7 @@ import {
 } from "../../../../../lib/pos/supervisor-pin-guard";
 import { pgAsPinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import { isQbSyncEnabled } from "../../../../../lib/quickbooks/sync-enabled";
+import { SALES_SQL, pipelineStatusIs } from "../../../../../lib/quickbooks/pipeline-status";
 
 /**
  * POST /admin/customer-payments/:id/transfer
@@ -197,13 +198,13 @@ export async function POST(
         `SELECT id, status, payload->>'transfer_id' AS transfer_id
            FROM qb_order_pipeline
           WHERE reference_id = $1 AND step = 'transfer_payment'
-            AND status NOT IN ('confirmed', 'cancelled', 'skipped')
+            AND status NOT IN (${SALES_SQL.synced}, 'cancelled', ${SALES_SQL.skipped}) -- entity-status
           ORDER BY created_at DESC`,
         [paymentId]
       );
       // Any failed link means the chain is stuck (dependents wait forever) — block
       // until an operator resolves it rather than extending a dead chain.
-      if (unresolved.some((r) => r.status === "failed")) {
+      if (unresolved.some((r) => pipelineStatusIs("sales", r, "error", "failed"))) {
         await client.query("ROLLBACK");
         return res.status(409).json({
           error: "PRIOR_TRANSFER_FAILED",
@@ -252,14 +253,14 @@ export async function POST(
     // momentarily has no qb_txn_id, so the existing link is retargeted rather than
     // left pointing at the old customer.
     if (needsQbTransfer || latest) {
-      if (latest && (latest.status === "pending" || latest.status === "waiting")) {
+      if (latest && pipelineStatusIs("sales", latest, "waiting", "blocked")) {
         const { rows: did } = await client.query(
           `UPDATE qb_order_pipeline
               SET payload = jsonb_set(
                     jsonb_set(COALESCE(payload, '{}'::jsonb), '{target_customer_id}', to_jsonb($2::text)),
                     '{transfer_id}', to_jsonb($3::text)),
                   updated_at = NOW()
-            WHERE id = $1 AND status IN ('pending', 'waiting')
+            WHERE id = $1 AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked})
             RETURNING id`,
           [latest.id, target_customer_id, transferId]
         );

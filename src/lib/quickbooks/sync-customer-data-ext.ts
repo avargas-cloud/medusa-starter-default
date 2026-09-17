@@ -63,7 +63,7 @@ async function enqueueDataExt(
 }
 
 interface PollResult {
-  status: "completed" | "failed";
+  status: "completed" | "failed";  // bridge-status
   error?: string;
   statusCode?: string;
 }
@@ -74,7 +74,7 @@ async function pollOperation(operationId: string): Promise<PollResult> {
     const polled = await pollBridgeStatus(operationId);
     if (polled.status === "expired") {
       return {
-        status: "failed",
+        status: "failed",  // bridge-status
         error: `DataExt op ${operationId} expired (bridge returned 404)`,
       };
     }
@@ -90,25 +90,25 @@ async function pollOperation(operationId: string): Promise<PollResult> {
       const msg = rs?.statusMessage ?? rs?.["$"]?.statusMessage;
       if (code && String(code) !== "0") {
         return {
-          status: "failed",
+          status: "failed",  // bridge-status
           error: msg || `QB status ${code}`,
           statusCode: String(code),
         };
       }
-      return { status: "completed" };
+      return { status: "completed" };  // bridge-status
     }
     if (op.status === "failed") {
       // op.error may be "QB status 3200: ..." — capture for fallback logic
       const msg = typeof op.error === "string" ? op.error : "Unknown QB error";
       const codeMatch = msg.match(/\b(3\d{3})\b/);
       return {
-        status: "failed",
+        status: "failed",  // bridge-status
         error: msg,
         statusCode: codeMatch ? codeMatch[1] : undefined,
       };
     }
   }
-  return { status: "failed", error: "Timeout waiting for bridge operation" };
+  return { status: "failed", error: "Timeout waiting for bridge operation" };  // bridge-status
 }
 
 // Códigos QB que indican "ya existe" (Add) o "no existe" (Mod).
@@ -148,7 +148,7 @@ export async function syncCustomerDataExtToQb(params: {
       `[data-ext] Add enqueued op=${opId} for ${qbListId} (${dataExtName}="${dataExtValue}")`
     );
     const result = await pollOperation(opId);
-    if (result.status === "completed") {
+    if (result.status === "completed") {  // bridge-status
       return { success: true, action: "add" };
     }
     if (isAlreadyExistsError(result.statusCode, result.error)) {
@@ -172,7 +172,7 @@ export async function syncCustomerDataExtToQb(params: {
     );
     log(`[data-ext] Mod enqueued op=${opId} for ${qbListId}`);
     const result = await pollOperation(opId);
-    if (result.status === "completed") {
+    if (result.status === "completed") {  // bridge-status
       return { success: true, action: "mod" };
     }
     return { success: false, action: "mod", error: result.error };

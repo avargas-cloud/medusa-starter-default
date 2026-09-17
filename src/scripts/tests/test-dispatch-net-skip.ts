@@ -19,6 +19,7 @@
  */
 import { getDbPool } from "../../api/utils/db-pool";
 import { resubmitByStep } from "../../lib/quickbooks/consolidator/resubmit-by-step";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const TAG = "order_TEST_DISPATCH_NET";
 const CP = "cpay_TEST_DISPATCH_NET";
@@ -125,7 +126,7 @@ async function main() {
   const errorText: string = after[0]?.error ?? "";
 
   const pass =
-    status === "skipped" && /superseded by payment_application/.test(errorText);
+    status === WRITE.sales.skipped && /superseded by payment_application/.test(errorText);
 
   console.log(`\n  cpay_ row after dispatch: status=${status}`);
   console.log(

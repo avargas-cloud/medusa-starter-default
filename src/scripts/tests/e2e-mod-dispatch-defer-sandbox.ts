@@ -26,6 +26,7 @@ import * as http from "http";
 
 import { getDbPool } from "../../api/utils/db-pool";
 import { resubmitByStep, type ResubmitRow } from "../../lib/quickbooks/consolidator/resubmit-by-step";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const DB = process.env.DATABASE_URL ?? "";
 if (!DB.includes(":5499/")) {
@@ -75,7 +76,7 @@ function startMockBridge(state: { opQueue: string[]; putCalls: PutCall[] }): Pro
     }
     if (req.method === "GET" && url.startsWith("/api/sync/status/")) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: true, operation: { status: "pending" } }));
+      res.end(JSON.stringify({ success: true, operation: { status: "pending" } })); // bridge-status
       return;
     }
     res.writeHead(404, { "Content-Type": "application/json" });
@@ -112,7 +113,7 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
         AND c.line_ids IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-           WHERE p.order_id = o.id AND p.status IN ('processing', 'submitted', 'pending')
+           WHERE p.order_id = o.id AND p.status IN ('${WRITE.sales.processing}', '${WRITE.sales.submitted}', '${WRITE.sales.dispatchable}')
         )
       ORDER BY o.updated_at DESC LIMIT 1`
   );
@@ -152,7 +153,7 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
     const { rows } = await pool.query(
       `INSERT INTO qb_order_pipeline
            (id, order_id, step, status, qb_txn_id, created_at, updated_at, medusa_ref_number, payload)
-       VALUES (gen_random_uuid(), $1, 'sales_order_mod', 'processing', $2,
+       VALUES (gen_random_uuid(), $1, 'sales_order_mod', '${WRITE.sales.processing}', $2,
                ${createdAtExpr}, NOW(), $3, $4::jsonb)
        RETURNING id, order_id, qb_txn_id, payload`,
       [orderId, txnId, medusaRef, JSON.stringify({ e2e: E2E_TAG, label })]
@@ -185,7 +186,7 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
     const elapsed1 = Date.now() - t0;
     const afterA = await fetchRow(rowA.id);
     check(`elapsed < 15000ms (${elapsed1}ms)`, elapsed1 < 15000);
-    check(`A.status === 'submitted'`, afterA.status === "submitted", `got '${afterA.status}'`);
+    check(`A.status is submitted`, afterA.status === WRITE.sales.submitted, `got '${afterA.status}'`);
     check(`A.bridge_op_id === 'e2e-op-A'`, afterA.bridge_op_id === "e2e-op-A", `got '${afterA.bridge_op_id}'`);
     check(`mock saw exactly 1 PUT`, state.putCalls.length === 1, `got ${state.putCalls.length}`);
 
@@ -202,7 +203,7 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
     const nextRetryMs = afterB.next_retry_at ? new Date(afterB.next_retry_at).getTime() : NaN;
     const deltaSec = (nextRetryMs - nowMs) / 1000;
     check(`elapsed < 5000ms (${elapsed2}ms)`, elapsed2 < 5000);
-    check(`B.status === 'pending'`, afterB.status === "pending", `got '${afterB.status}'`);
+    check(`B.status is pending`, afterB.status === WRITE.sales.dispatchable, `got '${afterB.status}'`);
     check(`B.next_retry_at within [+45s,+75s] (Δ=${deltaSec.toFixed(1)}s)`, deltaSec >= 45 && deltaSec <= 75);
     const bDeferReasonOk = !!afterB.error && afterB.error.includes("deferred") && afterB.error.includes(rowA.id);
     check(`B.error mentions 'deferred' and A.id`, bDeferReasonOk, `error='${afterB.error}'`);
@@ -210,14 +211,14 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
 
     // ── Step 3: confirm A the way the poller would (direct SQL) ────────────
     console.log("\n── Step 3: confirm A (poller-equivalent SQL)");
-    await pool.query(`UPDATE qb_order_pipeline SET status = 'confirmed', confirmed_at = NOW(), updated_at = NOW() WHERE id = $1`, [rowA.id]);
+    await pool.query(`UPDATE qb_order_pipeline SET status = '${WRITE.sales.synced}', confirmed_at = NOW(), updated_at = NOW() WHERE id = $1`, [rowA.id]);
     const confirmedA = await fetchRow(rowA.id);
-    check(`A.status === 'confirmed'`, confirmedA.status === "confirmed");
+    check(`A.status is confirmed`, confirmedA.status === WRITE.sales.synced);
 
     // ── Step 4: re-claim B, dispatches now that nothing is in flight ───────
     console.log("\n── Step 4: B re-claimed, dispatches");
     await pool.query(
-      `UPDATE qb_order_pipeline SET status = 'processing', next_retry_at = NULL, updated_at = NOW() WHERE id = $1`,
+      `UPDATE qb_order_pipeline SET status = '${WRITE.sales.processing}', next_retry_at = NULL, updated_at = NOW() WHERE id = $1`,
       [rowB.id]
     );
     state.opQueue.push("e2e-op-B");
@@ -226,12 +227,12 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
     const elapsed4 = Date.now() - t2;
     const afterB2 = await fetchRow(rowB.id);
     check(`elapsed < 15000ms (${elapsed4}ms)`, elapsed4 < 15000);
-    check(`B.status === 'submitted'`, afterB2.status === "submitted", `got '${afterB2.status}'`);
+    check(`B.status is submitted`, afterB2.status === WRITE.sales.submitted, `got '${afterB2.status}'`);
     check(`B.bridge_op_id === 'e2e-op-B'`, afterB2.bridge_op_id === "e2e-op-B", `got '${afterB2.bridge_op_id}'`);
 
     // ── Step 5: tie-break — C (older) wins, D (younger) defers behind C ────
     console.log("\n── Step 5: tie-break C vs D, in parallel");
-    await pool.query(`UPDATE qb_order_pipeline SET status = 'confirmed', confirmed_at = NOW(), updated_at = NOW() WHERE id = $1`, [rowB.id]);
+    await pool.query(`UPDATE qb_order_pipeline SET status = '${WRITE.sales.synced}', confirmed_at = NOW(), updated_at = NOW() WHERE id = $1`, [rowB.id]);
     const rowC = await insertRow("C", "NOW() - interval '30 seconds'");
     const rowD = await insertRow("D", "NOW()");
     state.opQueue.push("e2e-op-C", "e2e-op-D");
@@ -250,12 +251,12 @@ export default async function e2eModDispatchDefer({ container }: ExecArgs) {
     // a row that had already gone back to 'pending'. The cap makes the worst
     // case ~5 s; the check fails well before the old 5-minute wait.
     check(`elapsed < 15000ms (${elapsed5}ms) — same-tick siblings must not stall the tick`, elapsed5 < 15000);
-    check(`C.status === 'submitted'`, afterC.status === "submitted", `got '${afterC.status}'`);
+    check(`C.status is submitted`, afterC.status === WRITE.sales.submitted, `got '${afterC.status}'`);
     check(`C.bridge_op_id === 'e2e-op-C'`, afterC.bridge_op_id === "e2e-op-C", `got '${afterC.bridge_op_id}'`);
-    check(`D.status === 'pending'`, afterD.status === "pending", `got '${afterD.status}'`);
+    check(`D.status is pending`, afterD.status === WRITE.sales.dispatchable, `got '${afterD.status}'`);
     check(`D.next_retry_at is set`, !!afterD.next_retry_at);
     check(`D.error mentions C.id`, !!afterD.error && afterD.error.includes(rowC.id), `error='${afterD.error}'`);
-    check(`exactly one of C/D submitted, and it's C`, afterC.status === "submitted" && afterD.status !== "submitted");
+    check(`exactly one of C/D submitted, and it's C`, afterC.status === WRITE.sales.submitted && afterD.status !== WRITE.sales.submitted);
     const newPuts5 = state.putCalls.length - putsBefore5;
     check(`mock saw exactly 1 new PUT (${newPuts5})`, newPuts5 === 1, `got ${newPuts5}`);
   } finally {

@@ -19,6 +19,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-qb-retry-gate-sandbox.ts
  */
 import { Pool } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const BASE = process.env.SANDBOX_URL ?? "http://localhost:9099";
 const ADMIN_EMAIL = process.env.SANDBOX_ADMIN_EMAIL ?? "";
@@ -177,7 +178,7 @@ async function main(): Promise<void> {
     const r = rows[0];
     check(
       "NO-DAÑO: la fila quedó INTACTA (status/bridge_op_id/retry_count sin tocar)",
-      r?.status === "failed" && r?.bridge_op_id === "op-e2e-ambiguo" && Number(r?.retry_count) === 0,
+      r?.status === WRITE.sales.failed && r?.bridge_op_id === "op-e2e-ambiguo" && Number(r?.retry_count) === 0,
       `status=${r?.status} bridge_op_id=${r?.bridge_op_id} retry_count=${r?.retry_count}`
     );
 

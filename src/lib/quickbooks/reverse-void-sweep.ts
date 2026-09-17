@@ -31,6 +31,7 @@
 import type { Pool } from "pg";
 
 import { bridgeFetch, pollBridgeStatus } from "./bridge-fetch";
+import { SALES_SQL } from "./pipeline-status";
 
 export const REVERSE_VOID_LOOKBACK_DAYS = Number(
   process.env.QB_REVERSE_VOID_LOOKBACK_DAYS || "7"
@@ -232,12 +233,12 @@ export async function loadAliveCandidates(
            FROM qb_order_pipeline
           WHERE reference_id = d.id
             AND step IN ('invoice', 'sales_receipt')
-            AND status IN ('confirmed', 'fixed')
+            AND status IN (${SALES_SQL.done})
             AND qb_txn_id IS NOT NULL
           ORDER BY confirmed_at DESC NULLS LAST, seq DESC
           LIMIT 1
        ) p ON true
-      WHERE d.status <> 'voided'
+      WHERE d.status <> 'voided' -- entity-status
         AND d.voided_at IS NULL
         AND d.deleted_at IS NULL
         AND COALESCE(NULLIF(d.metadata->>'qb_txn_id', ''), p.qb_txn_id) IS NOT NULL`
@@ -249,7 +250,7 @@ export async function loadAliveCandidates(
             ROUND(d.total)::bigint AS pos_total_cents,
             d.qb_txn_id, NULL::text AS qb_ref_number
        FROM pos_credit_memo d
-      WHERE d.status <> 'voided'
+      WHERE d.status <> 'voided' -- entity-status
         AND d.voided_at IS NULL
         AND d.deleted_at IS NULL
         AND d.qb_txn_id IS NOT NULL`
@@ -273,7 +274,7 @@ export async function loadAliveCandidates(
            FROM qb_order_pipeline
           WHERE reference_id = cp.id
             AND step = 'payment'
-            AND status IN ('confirmed', 'fixed')
+            AND status IN (${SALES_SQL.done})
             AND qb_txn_id IS NOT NULL
           ORDER BY confirmed_at DESC NULLS LAST, seq DESC
           LIMIT 1
@@ -385,8 +386,8 @@ async function runBridgeQuery(qbxml: string): Promise<unknown> {
     if (polled.status === "expired") {
       throw new Error(`bridge op ${submit.operationId} expired`);
     }
-    if (polled.status === "completed") return polled.data;
-    if (polled.status === "failed") {
+    if (polled.status === "completed") return polled.data; // bridge-status
+    if (polled.status === "failed") { // bridge-status
       const err = (polled.data as any)?.operation?.error;
       // An early poll can transiently report "failed" with no error attached.
       if (err) {

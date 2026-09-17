@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { getDbPool } from "../../api/utils/db-pool";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import {
   findLatestInFlightRow,
   pollUntilQbConfirmed,
@@ -84,7 +85,7 @@ async function test2(): Promise<void> {
   try {
     await insertFakeRow("submitted");
     const result = await findLatestInFlightRow(TEST_ORDER_ID, [TEST_STEP]);
-    if (result !== null && result.status === "submitted") {
+    if (result !== null && result.status === WRITE.sales.submitted) {
       pass(name);
     } else if (result === null) {
       fail(name, "expected submitted row but got null");
@@ -110,7 +111,7 @@ async function test3(): Promise<void> {
     await pool.query(
       `UPDATE qb_order_pipeline
              SET updated_at = NOW() - INTERVAL '20 minutes'
-             WHERE order_id = $1 AND step = $2 AND status = 'submitted'`,
+             WHERE order_id = $1 AND step = $2 AND status = '${WRITE.sales.submitted}'`,
       [TEST_ORDER_ID, TEST_STEP]
     );
     await pool.query(
@@ -154,7 +155,7 @@ async function test4(): Promise<void> {
       const pool = getDbPool();
       await pool.query(
         `UPDATE qb_order_pipeline
-                 SET status = 'confirmed', updated_at = NOW(), confirmed_at = NOW()
+                 SET status = '${WRITE.sales.synced}', updated_at = NOW(), confirmed_at = NOW()
                  WHERE id = $1`,
         [rowId]
       );

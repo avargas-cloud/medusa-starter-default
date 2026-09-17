@@ -50,6 +50,7 @@ import {
   validateVendorBillForSettlement,
 } from "../../../../../../../lib/commissions/settle";
 import { writePipelineRow } from "../../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../../../lib/quickbooks/pipeline-status";
 import { getBusinessDateString } from "../../../../../../../lib/quickbooks/order-flow-core";
 import { FINANCE_MODULE } from "../../../../../../../modules/finance";
 import { assertAccounting, requireSupervisorPin } from "../../../../_lib/guard";
@@ -370,7 +371,7 @@ async function handleSettle(
         referenceId: staged.settlementId,
         referenceType: "commission_settlement",
         step: COMMISSION_CHECK_STEP,
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         orderId: ctx.orderId,
         medusaRefNumber: staged.refNumber,
         payload: payloads.check,
@@ -379,7 +380,7 @@ async function handleSettle(
         referenceId: staged.settlementId,
         referenceType: "commission_settlement",
         step: COMMISSION_PAYMENT_STEP,
-        status: "waiting",
+        status: WRITE.sales.blocked,
         dependsOn: checkRowId,
         orderId: ctx.orderId,
         medusaRefNumber: staged.refNumber,
@@ -407,7 +408,7 @@ async function handleSettle(
       await pool
         .query(
           `UPDATE commission_settlement
-              SET status = 'failed', failure_reason = $2, updated_at = NOW()
+              SET status = 'failed', failure_reason = $2, updated_at = NOW()  -- entity-status
             WHERE id = $1`,
           [staged.settlementId, message.slice(0, 500)]
         )

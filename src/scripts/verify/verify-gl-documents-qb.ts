@@ -83,7 +83,7 @@ const VOID = "gl_document_void";
       "resubmit-by-step.ts: el case ADD re-evalúa los facts y despacha por direct-query");
     check(addBody.includes("deferPipelineRow(") && addBody.includes("failPipelineRow("),
       "resubmit-by-step.ts: el case ADD difiere lo transitorio y falla lo estructural");
-    check(addBody.includes("'skipped'"), "resubmit-by-step.ts: el case ADD sabe marcar skipped (deposit con partida de apertura)");
+    check(addBody.includes("WRITE.sales.skipped"), "resubmit-by-step.ts: el case ADD sabe marcar skipped (deposit con partida de apertura)");
     check(addBody.includes("idempotencyKey: `gl-document-add:${row.id}`"), "resubmit-by-step.ts: Idempotency-Key 1:1 con la fila (gl-document-add:<rowId>)");
     check(voidBody.includes("loadGlDocumentQbLink(") && voidBody.includes("buildTxnVoidQbxml("),
       "resubmit-by-step.ts: el case VOID lee TxnID/tipo del DOCUMENTO y construye TxnVoidRq");

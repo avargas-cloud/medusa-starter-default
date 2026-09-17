@@ -16,6 +16,7 @@ import {
   enqueueSalesMutation,
 } from "../../lib/quickbooks/pipeline/enqueue-sales-mutation";
 import { writePipelineRow } from "../../lib/quickbooks/pipeline/row-mutations";
+import { WRITE, pipelineStatusIs } from "../../lib/quickbooks/pipeline-status";
 
 const DB = process.env.DATABASE_URL ?? "";
 if (!/localhost|127\.0\.0\.1/.test(DB)) {
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   const { rows: seeded } = await pool.query(
     `INSERT INTO qb_order_pipeline
        (order_id, step, status, qb_txn_id, qb_result, confirmed_at, created_at)
-     VALUES ($1, 'estimate', 'confirmed', $2, '{"EstimateRet":{"TxnID":"E2E-TXN-0001"}}'::jsonb,
+     VALUES ($1, 'estimate', '${WRITE.sales.synced}', $2, '{"EstimateRet":{"TxnID":"E2E-TXN-0001"}}'::jsonb,
              NOW() - interval '1 hour', NOW() - interval '1 hour')
      RETURNING id`,
     [ORDER_ID, TXN_ID]
@@ -57,7 +58,7 @@ async function main(): Promise<void> {
   const redirectedRowId = await writePipelineRow({
     orderId: ORDER_ID,
     step: "estimate",
-    status: "pending",
+    status: WRITE.sales.dispatchable,
     intent: "mod",
     qbTxnId: TXN_ID,
     payload: { items: [{ sku: "A", qty: 1 }] },
@@ -69,12 +70,12 @@ async function main(): Promise<void> {
   );
   check("a second row exists", afterFirst.length === 2);
   const modRow = afterFirst.find((r) => r.step === "estimate_mod");
-  check("the new row is estimate_mod / pending", modRow?.status === "pending");
+  check("the new row is estimate_mod / pending", modRow?.status === WRITE.sales.dispatchable);
   check("redirect returned the mod row id", redirectedRowId === modRow?.id);
   const addRow = afterFirst.find((r) => r.id === addRowId);
   check(
     "ADD row keeps status confirmed",
-    addRow?.status === "confirmed",
+    addRow?.status === WRITE.sales.synced,
     `status=${addRow?.status}`
   );
   check(
@@ -157,14 +158,14 @@ async function main(): Promise<void> {
   );
   check(
     "processing row untouched",
-    processingRow[0].status === "processing" &&
+    processingRow[0].status === WRITE.sales.processing &&
       itemsAre(processingRow[0].payload as Record<string, unknown>, "A", 5)
   );
 
   // ── 6. a failed tail absorbs the next edit (repair flow) ─────────────────
   console.log("6. failed tail reactivates on coalesce");
   await pool.query(
-    `UPDATE qb_order_pipeline SET status = 'failed', error = 'QB 3200 stale' WHERE id = $1`,
+    `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = 'QB 3200 stale' WHERE id = $1`,
     [third.rowId]
   );
   const fourth = await enqueueSalesMutation({
@@ -178,7 +179,7 @@ async function main(): Promise<void> {
     `SELECT status, error FROM qb_order_pipeline WHERE id = $1`,
     [third.rowId]
   );
-  check("failed → pending", revived[0].status === "pending");
+  check("failed → pending", revived[0].status === WRITE.sales.dispatchable);
   check("error kept as record of the attempt", revived[0].error === "QB 3200 stale");
 
   // ── 7. edit while ADD in flight parks WAITING behind it ──────────────────
@@ -186,7 +187,7 @@ async function main(): Promise<void> {
   await cleanup();
   const { rows: subm } = await pool.query(
     `INSERT INTO qb_order_pipeline (order_id, step, status, created_at)
-     VALUES ($1, 'estimate', 'submitted', NOW()) RETURNING id`,
+     VALUES ($1, 'estimate', '${WRITE.sales.submitted}', NOW()) RETURNING id`,
     [ORDER_ID]
   );
   const parked = await enqueueSalesMutation({
@@ -194,14 +195,14 @@ async function main(): Promise<void> {
     orderId: ORDER_ID,
     qbTxnId: null,
     payload: {},
-    status: "waiting",
+    status: WRITE.sales.blocked, // parked behind the in-flight ADD
     dependsOn: subm[0].id as string,
   });
   const { rows: parkedRow } = await pool.query(
     `SELECT status, depends_on FROM qb_order_pipeline WHERE id = $1`,
     [parked.rowId]
   );
-  check("row is waiting", parkedRow[0].status === "waiting");
+  check("row is waiting", pipelineStatusIs("sales", parkedRow[0], "blocked"));
   check("depends_on the ADD row", parkedRow[0].depends_on === subm[0].id);
 
   // ── 8. NEGATIVE CONTROL: pending mod without TxnID is rejected ───────────
@@ -241,7 +242,7 @@ async function main(): Promise<void> {
     const noRefRowId = await writePipelineRow({
       orderId: realOrder.id,
       step: "sales_order",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       intent: "mod",
       qbTxnId: "E2E-REF-FALLBACK",
     });
@@ -259,7 +260,7 @@ async function main(): Promise<void> {
     const withRefRowId = await writePipelineRow({
       orderId: realOrder.id,
       step: "estimate",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       intent: "mod",
       qbTxnId: "E2E-REF-FALLBACK",
       medusaRefNumber: "CALLER-REF",

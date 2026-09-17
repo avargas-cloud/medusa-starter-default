@@ -13,6 +13,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as fs from "fs";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
@@ -112,7 +113,7 @@ function testStaticChecks() {
     "pending-dispatch claims rows atomically"
   );
   assert(
-    /SET status = 'processing'/.test(dispatch),
+    /SET status = 'processing'/.test(dispatch), // canonical-literal
     "pending-dispatch marks claimed rows processing"
   );
   const srCaseBlock = resubmit.match(/case "sales_receipt":[\s\S]+?break;\s*\}/);
@@ -154,7 +155,7 @@ async function testEnqueueAndPickup(client: Client) {
   const picked = await client.query(`
     SELECT id, step, payload FROM qb_order_pipeline
      WHERE step = 'sales_receipt'
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = $1
   `, [rowId]);
   assert(picked.rows.length === 1, "row inserted and queryable");
@@ -171,7 +172,7 @@ async function testEnqueueAndPickup(client: Client) {
   const dispatch = await client.query(`
     SELECT id FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = $1
   `, [rowId]);
   assert(

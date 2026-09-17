@@ -4,6 +4,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
@@ -157,7 +158,7 @@ export async function PATCH(
       referenceId: id,
       referenceType: "credit_memo",
       step: "credit_memo_mod",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       medusaRefNumber: cmNumber ?? null,
       qbTxnId,
     })
@@ -170,7 +171,7 @@ export async function PATCH(
           referenceId: id,
           referenceType: "credit_memo",
           step: "credit_memo_mod",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           medusaRefNumber: cmNumber ?? null,
           qbTxnId,
           // MERGE, don't replace: this route only knows about sales rep + tax,
@@ -207,7 +208,7 @@ export async function PATCH(
           referenceId: id,
           referenceType: "credit_memo",
           step: "credit_memo_mod",
-          status: "failed",
+          status: WRITE.sales.failed,
           medusaRefNumber: cmNumber ?? null,
           qbTxnId,
           error: err.message,

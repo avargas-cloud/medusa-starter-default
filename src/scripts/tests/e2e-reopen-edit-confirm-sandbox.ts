@@ -340,7 +340,7 @@ async function main(): Promise<void> {
     );
     check(
       "y quedó intacto",
-      adoptedAfter.rows[0]?.status === "synced",
+      adoptedAfter.rows[0]?.status === "synced", // entity-status
       String(adoptedAfter.rows[0]?.status)
     );
 

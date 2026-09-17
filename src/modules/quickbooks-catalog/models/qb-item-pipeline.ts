@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * Tracks the QuickBooks sync state of every product variant operation
@@ -29,7 +30,7 @@ export const QbItemPipeline = model.define("qb_item_pipeline", {
   qb_list_id: model.text().nullable(), // ListID once resolved
   qb_edit_sequence: model.text().nullable(),
   item_type: model.text().default("Inventory"), // Inventory | Service | NonInventory
-  status: model.text().default("waiting"), // waiting | synced | error | failed_permanent
+  status: model.text().default(WRITE.purchase.dispatchable), // waiting | synced | error | failed_permanent
   last_error: model.text().nullable(),
   last_error_code: model.text().nullable(), // structured QB/bridge error code (e.g. "3200")
   retries: model.number().default(0), // increments on resubmit FAILURE only

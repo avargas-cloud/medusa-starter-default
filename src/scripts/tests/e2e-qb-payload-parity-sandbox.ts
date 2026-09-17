@@ -42,6 +42,7 @@
  *     ./node_modules/.bin/medusa exec ./src/scripts/tests/e2e-qb-payload-parity-sandbox.ts
  */
 import { readFileSync } from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
@@ -123,10 +124,10 @@ export default async function e2eQbPayloadParity({ container }: ExecArgs) {
       .raw(
         `SELECT o.id,
                 ARRAY(SELECT p.qb_txn_id FROM qb_order_pipeline p
-                       WHERE p.order_id = o.id AND p.status = 'confirmed'
+                       WHERE p.order_id = o.id AND p.status = '${WRITE.sales.synced}'
                          AND p.step IN ('invoice','sales_receipt','sales_order')) AS txn_ids,
                 (SELECT SUM(i.discount)::text FROM pos_invoice i
-                  WHERE i.order_id = o.id AND i.status <> 'voided'
+                  WHERE i.order_id = o.id AND i.status <> 'voided' -- entity-status
                     AND i.deleted_at IS NULL) AS invoice_discount_cents,
                 -- Parcialmente facturada: su invoice cubre PARTE del pedido, así
                 -- que ni su total ni su descuento son el patrón de la orden. El

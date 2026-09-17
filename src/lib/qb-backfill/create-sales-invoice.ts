@@ -39,6 +39,7 @@ import {
   type SalesApplyContext,
 } from "./sales-context";
 import { isQbLineTaxable, patchOrderSummaryFromPosInvoice, planSalesOrderMoney, toMedusaItemMoney } from "./sales-order-money";
+import { WRITE } from "../quickbooks/pipeline-status";
 import type { QbInvoice, QbSalesReceipt } from "./sales-types";
 import type { QbRef } from "./types";
 
@@ -130,7 +131,7 @@ export async function createSalesOrderAndInvoice(ctx: SalesApplyContext, input: 
     customer_id: customerId,
     email,
     currency_code: "usd",
-    status: "completed",
+    status: "completed", // entity-status
     is_draft_order: false,
     items: input.lines.map((l, i) => ({
       variant_id: l.variant_id,
@@ -287,12 +288,12 @@ export async function createInvoiceFromQb(ctx: SalesApplyContext, inv: QbInvoice
   });
 
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: ids.order_id, referenceId: ids.customer_id, referenceType: "customer", step: "customer", status: "skipped",
+    orderId: ids.order_id, referenceId: ids.customer_id, referenceType: "customer", step: "customer", status: WRITE.sales.skipped,
     qbTxnId: customerRef.list_id, qbRefNumber: null, medusaRefNumber: null,
     payload: { txn_type: "Invoice" }, error: "backfill: el cliente ya existe en QuickBooks",
   });
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: ids.order_id, referenceId: ids.invoice_id, referenceType: "pos_invoice", step: "invoice", status: "confirmed",
+    orderId: ids.order_id, referenceId: ids.invoice_id, referenceType: "pos_invoice", step: "invoice", status: WRITE.sales.synced,
     qbTxnId: inv.txn_id, qbRefNumber: inv.ref_number, medusaRefNumber: `INV-${ids.invoice_number}`,
     payload: { txn_type: "Invoice", edit_sequence: inv.edit_sequence, source: `QB Invoice ${inv.ref_number ?? inv.txn_id}` },
   });

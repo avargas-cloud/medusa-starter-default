@@ -4,6 +4,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
 import type { WritePipelineRowInput } from "./types";
 import { decideRetry, type RetryDecision } from "../retry-config";
 import { isQbSyncEnabled } from "../sync-enabled";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 import {
   CREATE_STEP_TO_MOD_STEP,
   enqueueSalesMutation,
@@ -170,7 +171,7 @@ export async function writePipelineRow(
   // an ADD's confirm again. Only 'pending'/'waiting' enqueues redirect: the
   // terminal-status branches (submitted/confirmed/failed bookkeeping) stay
   // reachable for legacy rows until every caller threads row ids.
-  if (input.status === "pending" || input.status === "waiting") {
+  if (input.status === WRITE.sales.dispatchable || input.status === WRITE.sales.blocked) {
     const redirectStep =
       input.intent === "mod"
         ? (CREATE_STEP_TO_MOD_STEP[input.step] ?? input.step)
@@ -207,7 +208,7 @@ export async function writePipelineRow(
   // Prevents duplicate waiting rows when upfront pipeline rows are written on invoice creation.
   // Supports orderId-only, referenceId-only, or both matches (null-safe).
   if (
-    input.status === "waiting" &&
+    input.status === WRITE.sales.blocked &&
     (input.orderId || input.referenceId) &&
     input.step
   ) {
@@ -216,7 +217,7 @@ export async function writePipelineRow(
              SET medusa_ref_number = COALESCE($3, medusa_ref_number),
                  depends_on        = COALESCE($4, depends_on),
                  payload           = ${payloadAssignment('$6')}
-             WHERE step = $2 AND status = 'waiting'
+             WHERE step = $2 AND status IN (${SALES_SQL.blocked})
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($5::text IS NULL OR reference_id = $5::text))
                  OR ($1::text IS NULL AND $5::text IS NOT NULL AND reference_id = $5::text)
@@ -238,7 +239,7 @@ export async function writePipelineRow(
   // Matches "waiting" (POS 1h-delay cron) and "pending" (retry endpoint already reset the row).
   // Supports orderId-only, referenceId-only, or both matches (null-safe).
   if (
-    input.status === "pending" &&
+    input.status === WRITE.sales.dispatchable &&
     (input.orderId || input.referenceId) &&
     input.step
   ) {
@@ -262,7 +263,7 @@ export async function writePipelineRow(
         `SELECT id
            FROM qb_order_pipeline
           WHERE step = $2
-            AND status IN ('processing', 'submitted', 'confirmed')
+            AND status IN (${SALES_SQL.processing}, ${SALES_SQL.submitted}, ${SALES_SQL.synced})
             AND (
               ($1::text IS NOT NULL AND order_id = $1::text AND ($3::text IS NULL OR reference_id = $3::text))
               OR ($1::text IS NULL AND $3::text IS NOT NULL AND reference_id = $3::text)
@@ -276,12 +277,12 @@ export async function writePipelineRow(
 
     const { rows: fromWaiting } = await pool.query(
       `UPDATE qb_order_pipeline
-             SET status            = 'pending',
+             SET status            = '${WRITE.sales.dispatchable}',
                  updated_at        = NOW(),
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  qb_ref_number     = COALESCE($4, qb_ref_number),
                  payload           = ${payloadAssignment('$6')}
-             WHERE step = $2 AND status IN ('waiting', 'pending')
+             WHERE step = $2 AND status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable})
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($5::text IS NULL OR reference_id = $5::text))
                  OR ($1::text IS NULL AND $5::text IS NOT NULL AND reference_id = $5::text)
@@ -304,7 +305,7 @@ export async function writePipelineRow(
     // Preserves qb_txn_id (needed for Mod operations). Increments retry_count on failed.
     const { rows: reactivated } = await pool.query(
       `UPDATE qb_order_pipeline
-             SET status            = 'pending',
+             SET status            = '${WRITE.sales.dispatchable}',
                  updated_at        = NOW(),
                  error             = NULL,
                  failed_at         = NULL,
@@ -321,8 +322,8 @@ export async function writePipelineRow(
                  qb_txn_id         = COALESCE($6, qb_txn_id),
                  qb_ref_number     = COALESCE($7, qb_ref_number),
                  payload           = ${payloadAssignment('$5')},
-                 retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
-             WHERE step = $2 AND status IN ('submitted', 'confirmed', 'failed', 'skipped')
+                 retry_count       = CASE WHEN status IN (${SALES_SQL.failedAny}) THEN retry_count + 1 ELSE retry_count END
+             WHERE step = $2 AND status IN (${SALES_SQL.submitted}, ${SALES_SQL.synced}, ${SALES_SQL.failedAny}, ${SALES_SQL.skipped})
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($4::text IS NULL OR reference_id = $4::text))
                  OR ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)
@@ -347,15 +348,15 @@ export async function writePipelineRow(
   // consolidator race to confirm the same row (e.g. payment step confirmed by consolidator first).
   // Supports orderId-only, referenceId-only, or both matches (null-safe).
   if (
-    input.status !== "pending" &&
-    input.status !== "waiting" &&
+    input.status !== WRITE.sales.dispatchable &&
+    input.status !== WRITE.sales.blocked &&
     (input.orderId || input.referenceId) &&
     input.step
   ) {
     const matchStatuses =
-      input.status === "confirmed"
-        ? `'processing', 'pending', 'submitted', 'confirmed'`
-        : `'processing', 'pending', 'submitted'`;
+      input.status === WRITE.sales.synced
+        ? `${SALES_SQL.processing}, ${SALES_SQL.dispatchable}, ${SALES_SQL.submitted}, ${SALES_SQL.synced}`
+        : `${SALES_SQL.processing}, ${SALES_SQL.dispatchable}, ${SALES_SQL.submitted}`;
     const { rows: updated } = await pool.query(
       `UPDATE qb_order_pipeline
              SET status            = $3,
@@ -365,9 +366,9 @@ export async function writePipelineRow(
                  qb_ref_number     = COALESCE($6, qb_ref_number),
                  medusa_ref_number  = COALESCE($7, medusa_ref_number),
                  error             = $8,
-                 submitted_at  = CASE WHEN $3 = 'submitted' THEN NOW() ELSE submitted_at END,
-                 confirmed_at  = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END,
-                 failed_at     = CASE WHEN $3 = 'failed'    THEN NOW() ELSE failed_at    END
+                 submitted_at  = CASE WHEN $3 = '${WRITE.sales.submitted}' THEN NOW() ELSE submitted_at END,
+                 confirmed_at  = CASE WHEN $3 = '${WRITE.sales.synced}' THEN NOW() ELSE confirmed_at END,
+                 failed_at     = CASE WHEN $3 IN (${SALES_SQL.failedAny}) THEN NOW() ELSE failed_at    END
              WHERE step = $2 AND status IN (${matchStatuses})
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($9::text IS NULL OR reference_id = $9::text))
@@ -404,9 +405,9 @@ export async function writePipelineRow(
                  qb_ref_number     = COALESCE($6, qb_ref_number),
                  medusa_ref_number  = COALESCE($7, medusa_ref_number),
                  error             = $8,
-                 submitted_at  = CASE WHEN $3 = 'submitted' THEN NOW() ELSE submitted_at END,
-                 confirmed_at  = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END,
-                 failed_at     = CASE WHEN $3 = 'failed'    THEN NOW() ELSE failed_at    END
+                 submitted_at  = CASE WHEN $3 = '${WRITE.sales.submitted}' THEN NOW() ELSE submitted_at END,
+                 confirmed_at  = CASE WHEN $3 = '${WRITE.sales.synced}' THEN NOW() ELSE confirmed_at END,
+                 failed_at     = CASE WHEN $3 IN (${SALES_SQL.failedAny}) THEN NOW() ELSE failed_at    END
              WHERE id = (
                SELECT id FROM qb_order_pipeline
                  WHERE step = $2
@@ -437,7 +438,7 @@ export async function writePipelineRow(
   // of inserting. This catches edge cases where the status-based checks above missed the row
   // (e.g. race conditions, unexpected status transitions, or status values not covered above).
   if (
-    input.status === "pending" &&
+    input.status === WRITE.sales.dispatchable &&
     (input.orderId || input.referenceId) &&
     input.step
   ) {
@@ -445,7 +446,7 @@ export async function writePipelineRow(
       `SELECT id
          FROM qb_order_pipeline
         WHERE step = $2
-          AND status = 'processing'
+          AND status IN (${SALES_SQL.processing})
           AND (
             ($1::text IS NOT NULL AND order_id = $1::text AND ($3::text IS NULL OR reference_id = $3::text))
             OR ($1::text IS NULL AND $3::text IS NOT NULL AND reference_id = $3::text)
@@ -458,7 +459,7 @@ export async function writePipelineRow(
 
     const { rows: anyExisting } = await pool.query(
       `UPDATE qb_order_pipeline
-             SET status            = 'pending',
+             SET status            = '${WRITE.sales.dispatchable}',
                  updated_at        = NOW(),
                  error             = NULL,
                  failed_at         = NULL,
@@ -466,9 +467,9 @@ export async function writePipelineRow(
                  bridge_op_id      = NULL,
                  qb_result         = NULL,
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
-                 retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
+                 retry_count       = CASE WHEN status IN (${SALES_SQL.failedAny}) THEN retry_count + 1 ELSE retry_count END
              WHERE step = $2
-               AND status <> 'processing'
+               AND status NOT IN (${SALES_SQL.processing})
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($4::text IS NULL OR reference_id = $4::text))
                  OR ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)
@@ -492,9 +493,9 @@ export async function writePipelineRow(
              qb_result, payload, error,
              submitted_at, confirmed_at, failed_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-             CASE WHEN $5 = 'submitted' THEN NOW() ELSE NULL END,
-             CASE WHEN $5 = 'confirmed' THEN NOW() ELSE NULL END,
-             CASE WHEN $5 = 'failed'    THEN NOW() ELSE NULL END)
+             CASE WHEN $5 = '${WRITE.sales.submitted}' THEN NOW() ELSE NULL END,
+             CASE WHEN $5 = '${WRITE.sales.synced}' THEN NOW() ELSE NULL END,
+             CASE WHEN $5 IN (${SALES_SQL.failedAny}) THEN NOW() ELSE NULL END)
          ON CONFLICT DO NOTHING
          RETURNING id`,
     [
@@ -544,11 +545,11 @@ export async function skipSalesOrderPipelineRow(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-         SET status = 'skipped',
+         SET status = '${WRITE.sales.skipped}',
              error  = 'Superseded by Invoice/Sales Receipt — Sales Order not needed'
          WHERE order_id = $1
            AND step     = 'sales_order'
-           AND status IN ('waiting', 'pending')`,
+           AND status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable})`,
     [orderId]
   );
 }
@@ -570,14 +571,14 @@ export async function skipPendingPaymentRows(
   // the invoice route only runs skipPendingPaymentRows at T+1300ms.
   const res = await pool.query(
     `UPDATE qb_order_pipeline
-         SET status     = 'skipped',
+         SET status     = '${WRITE.sales.skipped}',
              error      = $2,
              updated_at = NOW()
          WHERE order_id = $1
            AND step IN ('payment', 'apply_payment')
            AND (
-             status IN ('waiting', 'pending')
-             OR (status = 'submitted' AND confirmed_at IS NULL)
+             status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable})
+             OR (status IN (${SALES_SQL.submitted}) AND confirmed_at IS NULL)
            )`,
     [orderId, reason]
   );
@@ -610,7 +611,7 @@ export async function requeueApplyPaymentWaiting(input: {
   const pool = getDbPool();
   const { rows: updated } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status            = 'waiting',
+        SET status            = '${WRITE.sales.blocked}',
             depends_on        = $3,
             updated_at        = NOW(),
             error             = NULL,
@@ -621,7 +622,7 @@ export async function requeueApplyPaymentWaiting(input: {
       WHERE step = 'apply_payment'
         AND order_id = $1
         AND reference_id = $2
-        AND status NOT IN ('confirmed', 'skipped')
+        AND status NOT IN (${SALES_SQL.synced}, ${SALES_SQL.skipped})
       RETURNING id`,
     [
       input.orderId,
@@ -640,7 +641,7 @@ export async function requeueApplyPaymentWaiting(input: {
        WHERE step = 'apply_payment'
          AND order_id = $1
          AND reference_id = $2
-         AND status IN ('confirmed', 'skipped')
+         AND status IN (${SALES_SQL.synced}, ${SALES_SQL.skipped})
        LIMIT 1`,
     [input.orderId, input.referenceId]
   );
@@ -651,7 +652,7 @@ export async function requeueApplyPaymentWaiting(input: {
   const { rows: inserted } = await pool.query(
     `INSERT INTO qb_order_pipeline
         (order_id, reference_id, reference_type, step, status, depends_on, medusa_ref_number)
-       VALUES ($1, $2, $5, 'apply_payment', 'waiting', $3, $4)
+       VALUES ($1, $2, $5, 'apply_payment', '${WRITE.sales.blocked}', $3, $4)
        ON CONFLICT DO NOTHING
        RETURNING id`,
     [
@@ -745,13 +746,13 @@ export async function skipPaymentRowByReference(
   const pool = getDbPool();
   const res = await pool.query(
     `UPDATE qb_order_pipeline
-         SET status     = 'skipped',
+         SET status     = '${WRITE.sales.skipped}',
              error      = $2,
              updated_at = NOW()
          WHERE reference_id = $1
            AND reference_type = 'customer_payment'
            AND step IN ('payment', 'apply_payment')
-           AND status IN ('waiting', 'pending')`,
+           AND status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable})`,
     [paymentId, reason]
   );
   return res.rowCount ?? 0;
@@ -778,14 +779,14 @@ export async function confirmPipelineRow(
   const pool = getDbPool();
   const { rows } = await pool.query(
     `UPDATE qb_order_pipeline
-         SET status        = 'confirmed',
+         SET status        = '${WRITE.sales.synced}',
              updated_at    = NOW(),
              confirmed_at  = NOW(),
              qb_txn_id     = COALESCE($2, qb_txn_id),
              qb_ref_number = COALESCE($3, qb_ref_number),
              qb_result     = COALESCE($4::jsonb, qb_result),
              error         = NULL
-         WHERE id = $1 AND status <> 'confirmed'
+         WHERE id = $1 AND status NOT IN (${SALES_SQL.synced})
          RETURNING id`,
     [rowId, qbTxnId, qbRefNumber, qbResult ? JSON.stringify(qbResult) : null]
   );
@@ -825,7 +826,7 @@ export async function deferPipelineRow(
          WHERE id = $1
      )
      UPDATE qb_order_pipeline
-        SET status        = 'pending',
+        SET status        = '${WRITE.sales.dispatchable}',
             next_retry_at = NOW() + make_interval(secs => $3::float),
             error         = $2,
             failed_at     = NULL,
@@ -874,11 +875,15 @@ export async function failPipelineRow(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-         SET status       = 'failed',
-             updated_at   = NOW(),
-             failed_at    = NOW(),
-             confirmed_at = NULL,
-             error        = $2
+         SET status        = '${WRITE.sales.failed}',
+             updated_at    = NOW(),
+             failed_at     = NOW(),
+             confirmed_at  = NULL,
+             -- Terminal by definition: a stale backoff left from an earlier
+             -- transient failure would read as "retry due" and the dispatcher
+             -- would re-claim the row every tick (vocab-20260917 §3 caught it).
+             next_retry_at = NULL,
+             error         = $2
          WHERE id = $1`,
     [rowId, error]
   );
@@ -911,7 +916,7 @@ export async function failOrRetryPipelineRow(
   if (decision.nextRetryAt) {
     await pool.query(
       `UPDATE qb_order_pipeline
-           SET status        = 'failed',
+           SET status        = '${WRITE.sales.error}',
                retry_count   = $2,
                error         = $3,
                next_retry_at = $4,
@@ -924,7 +929,7 @@ export async function failOrRetryPipelineRow(
   } else {
     await pool.query(
       `UPDATE qb_order_pipeline
-           SET status        = 'failed',
+           SET status        = '${WRITE.sales.failed}',
                retry_count   = $2,
                error         = $3,
                failed_at     = NOW(),
@@ -935,5 +940,5 @@ export async function failOrRetryPipelineRow(
       [rowId, decision.newRetries, error]
     );
   }
-  return { ...decision, newStatus: "failed" as const };
+  return { ...decision, newStatus: WRITE.sales.failed };
 }

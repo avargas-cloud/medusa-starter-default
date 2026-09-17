@@ -95,7 +95,7 @@ export async function bridgeFetch<T = unknown>(
 export type BridgeStatusResult =
   | { status: "expired" }
   | {
-      status: "queued" | "processing" | "completed" | "failed";
+      status: "queued" | "processing" | "completed" | "failed";  // bridge-status
       data: Record<string, unknown>;
     };
 

@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { isQbSyncEnabled } from "../sync-enabled";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 /**
  * Reclama el derecho a emitir UN `CheckAdd` para un refund, ANTES de tocar el bridge.
@@ -48,7 +49,7 @@ export async function claimWriteCheckAttempt(input: {
   //    incrementa para que la fila cuente su historia como cualquier otra.
   const { rows: reused } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status        = 'processing',
+        SET status        = '${WRITE.sales.processing}',
             updated_at    = NOW(),
             error         = NULL,
             failed_at     = NULL,
@@ -62,7 +63,7 @@ export async function claimWriteCheckAttempt(input: {
         SELECT id FROM qb_order_pipeline
          WHERE step = 'write_check'
            AND reference_id = $1
-           AND status = 'failed'
+           AND status IN (${SALES_SQL.failedAny})
          ORDER BY COALESCE(updated_at, created_at) DESC
          LIMIT 1
       )
@@ -79,7 +80,7 @@ export async function claimWriteCheckAttempt(input: {
   const { rows: inserted } = await pool.query(
     `INSERT INTO qb_order_pipeline
        (reference_id, reference_type, step, status, medusa_ref_number, payload)
-     VALUES ($1, 'customer_payment', 'write_check', 'processing', $2, $3::jsonb)
+     VALUES ($1, 'customer_payment', 'write_check', '${WRITE.sales.processing}', $2, $3::jsonb)
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [input.referenceId, input.medusaRefNumber, payloadJson]
@@ -107,7 +108,7 @@ export async function releaseWriteCheckClaim(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW()
+        SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW(), updated_at = NOW()
       WHERE id = $1`,
     [rowId, error.slice(0, 500)]
   );

@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { isQbSyncEnabled } from "../sync-enabled";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 /**
  * Reclama el derecho a emitir UN `SalesReceiptAdd` para una orden/invoice,
@@ -50,7 +51,7 @@ export async function claimSalesReceiptAttempt(input: {
   //    (⇒ la idempotency key) y limpia el estado del fallo anterior.
   const { rows: reused } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status        = 'processing',
+        SET status        = '${WRITE.sales.processing}',
             updated_at    = NOW(),
             error         = NULL,
             failed_at     = NULL,
@@ -65,7 +66,7 @@ export async function claimSalesReceiptAttempt(input: {
          WHERE step = 'sales_receipt'
            AND order_id = $1
            AND reference_id = $2
-           AND status = 'failed'
+           AND status IN (${SALES_SQL.failedAny})
          ORDER BY COALESCE(updated_at, created_at) DESC
          LIMIT 1
       )
@@ -82,7 +83,7 @@ export async function claimSalesReceiptAttempt(input: {
   const { rows: inserted } = await pool.query(
     `INSERT INTO qb_order_pipeline
        (order_id, reference_id, reference_type, step, status, medusa_ref_number, payload)
-     VALUES ($1, $2, 'pos_invoice', 'sales_receipt', 'processing', $3, $4::jsonb)
+     VALUES ($1, $2, 'pos_invoice', 'sales_receipt', '${WRITE.sales.processing}', $3, $4::jsonb)
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [input.orderId, input.referenceId, input.medusaRefNumber ?? null, payloadJson]
@@ -142,7 +143,7 @@ export async function adoptSalesReceiptClaim(
         AND step = 'sales_receipt'
         AND order_id = $2
         AND reference_id = $3
-        AND status = 'processing'
+        AND status IN (${SALES_SQL.processing})
       RETURNING id`,
     [rowId, input.orderId, input.referenceId]
   );
@@ -165,7 +166,7 @@ export async function releaseSalesReceiptClaim(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status        = 'failed',
+        SET status        = '${WRITE.sales.error}',
             error         = $2,
             failed_at     = NOW(),
             updated_at    = NOW(),
@@ -188,7 +189,7 @@ export async function markSalesReceiptSubmitted(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status       = 'submitted',
+        SET status       = '${WRITE.sales.submitted}',
             bridge_op_id = $2,
             submitted_at = NOW(),
             updated_at   = NOW()
@@ -208,7 +209,7 @@ export async function confirmSalesReceiptRow(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status        = 'confirmed',
+        SET status        = '${WRITE.sales.synced}',
             qb_txn_id     = $2,
             qb_ref_number = $3,
             bridge_op_id  = COALESCE($4, bridge_op_id),

@@ -23,6 +23,7 @@ import {
   writePipelineRow,
   requireQbCustomer,
 } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 import {
   CM_SYNTHETIC_LINE_IDS_META_KEY,
   applyQbSyntheticLineIds,
@@ -106,7 +107,7 @@ export async function PATCH(
       return;
     }
 
-    if (creditMemo.status !== "completed") {
+    if (creditMemo.status !== "completed") { // entity-status
       res
         .status(400)
         .json({ message: "Only completed credit memos can be edited" });
@@ -434,7 +435,7 @@ export async function PATCH(
       try {
         const payRow = await pgConnection("customer_payment")
           .where({ reference: cmNumber, type: "credit_memo" })
-          .whereNot({ status: "voided" })
+          .whereNot({ status: "voided" }) // entity-status
           .whereNull("deleted_at")
           .first();
 
@@ -834,7 +835,7 @@ export async function PATCH(
               referenceId: id,
               referenceType: "credit_memo",
               step: oldQbTxnId ? "credit_memo_mod" : "credit_memo",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               qbTxnId: oldQbTxnId ?? undefined,
               qbRefNumber: oldQbRefNumber ?? cmNumber ?? null,
               medusaRefNumber: cmNumber ?? null,

@@ -26,6 +26,7 @@
  */
 import { runPendingDispatchPass } from "../../lib/quickbooks/consolidator/dispatch-pass";
 import { runOrphanedProcessingRecovery } from "../../lib/quickbooks/consolidator/recovery-pass";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 // Real sandbox row: credit_card/visa, qb_txn_id on file, not SR-embedded.
 const TEST_PAYMENT_ID = "cpay_01KX43VZWQSXY07PRJAC8GZ1MJ";
@@ -119,7 +120,7 @@ export default async function verifyPaymentMethodChangeRetry({
       [failedRowId]
     );
     const after = afterDispatch[0];
-    if (after.status === "failed" && after.error === "synthetic: prior stuck failure") {
+    if (after.status === WRITE.sales.failed && after.error === "synthetic: prior stuck failure") {
       failures++;
       log(
         `❌ Row ${failedRowId} was NOT claimed by dispatch-pass — still shows the original stuck state`
@@ -151,7 +152,7 @@ export default async function verifyPaymentMethodChangeRetry({
       [orphanRowId]
     );
     const recovered = afterRecovery[0];
-    if (recovered.status === "pending" && recovered.next_retry_at) {
+    if (recovered.status === WRITE.sales.dispatchable && recovered.next_retry_at) {
       log(
         `✅ Orphaned processing row ${orphanRowId} was reset to 'pending' by recovery-pass (retry_count=${recovered.retry_count})`
       );

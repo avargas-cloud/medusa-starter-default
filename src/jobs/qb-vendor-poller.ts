@@ -15,10 +15,11 @@ import {
   computeNextRetryDate,
 } from "../lib/quickbooks/retry-config";
 const BACKOFF_MINUTES = STANDARD_BACKOFF_MINUTES;
+import { WRITE } from "../lib/quickbooks/pipeline-status";
 
 type BridgeStatusResponse = {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed";
+    status?: "queued" | "processing" | "completed" | "failed"; // bridge-status
     result?: any;
     error?: string;
     listId?: string;
@@ -191,24 +192,24 @@ export default async function qbVendorPoller(container: MedusaContainer) {
       const data = polled.data as BridgeStatusResponse;
       const status = data.operation?.status;
 
-      if (status === "failed") {
+      if (status === "failed") { // bridge-status
         const errMsg = data.operation?.error ?? "Bridge returned failed";
         await markError(catalog, row, errMsg);
         await pipelineSync(row.qb_operation_id, {
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: errMsg,
         });
         failed++;
         continue;
       }
 
-      if (status !== "completed") continue;
+      if (status !== "completed") continue; // bridge-status
 
       const listId = extractListId(data);
       if (!listId) {
         await markError(catalog, row, "Completed but no ListID in response");
         await pipelineSync(row.qb_operation_id, {
-          status: "error",
+          status: WRITE.purchase.error,
           last_error: "Completed but no ListID in response",
         });
         failed++;
@@ -225,7 +226,7 @@ export default async function qbVendorPoller(container: MedusaContainer) {
         next_retry_at: null,
       });
       await pipelineSync(row.qb_operation_id, {
-        status: "synced",
+        status: WRITE.purchase.synced,
         qb_list_id: listId,
         resolved_at: resolvedAt,
         last_error: null,
@@ -234,7 +235,7 @@ export default async function qbVendorPoller(container: MedusaContainer) {
     } catch (err: any) {
       await markError(catalog, row, err.message);
       await pipelineSync(row.qb_operation_id, {
-        status: "error",
+        status: WRITE.purchase.error,
         last_error: err.message,
       });
       logger.warn(

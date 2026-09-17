@@ -21,6 +21,7 @@
  */
 
 import { Client } from "pg";
+import { WRITE, pipelineStatusIs } from "../../lib/quickbooks/pipeline-status";
 import {
   checkPoQbSyncGate,
   type KnexLike,
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
     console.log("\n=== 2. A synced PO → not blocked ===");
     const syncedRow = await client.query<{ purchase_order_id: string }>(
       `SELECT purchase_order_id FROM qb_purchase_order_pipeline
-        WHERE status = 'synced' AND deleted_at IS NULL LIMIT 1`
+        WHERE status = '${WRITE.purchase.synced}' AND deleted_at IS NULL LIMIT 1`
     );
     if (syncedRow.rowCount) {
       const poId = syncedRow.rows[0].purchase_order_id;
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
       `SELECT p.purchase_order_id, p.status, po.number
          FROM qb_purchase_order_pipeline p
          LEFT JOIN purchase_order po ON po.id = p.purchase_order_id
-        WHERE p.status <> 'synced' AND p.deleted_at IS NULL
+        WHERE p.status <> '${WRITE.purchase.synced}' AND p.deleted_at IS NULL
         LIMIT 1`
     );
     if (stuck.rowCount) {
@@ -104,9 +105,10 @@ async function main(): Promise<void> {
         JSON.stringify(gate)
       );
       if (gate.blocked) {
+        const rowForNormalization = { status };
         assert(
           "terminal flag matches failed_permanent",
-          gate.terminal === (status === "failed_permanent")
+          gate.terminal === pipelineStatusIs("purchase", rowForNormalization, "failed")
         );
         assert(
           "reason names the PO and the pipeline status",
@@ -139,8 +141,8 @@ async function main(): Promise<void> {
           AND pop.deleted_at IS NULL
          LEFT JOIN purchase_order_receipt r ON r.id = irp.purchase_order_receipt_id
          LEFT JOIN purchase_order po ON po.id = irp.purchase_order_id
-        WHERE irp.status <> 'synced'
-          AND pop.status <> 'synced'
+        WHERE irp.status <> '${WRITE.purchase.synced}'
+          AND pop.status <> '${WRITE.purchase.synced}'
           AND irp.deleted_at IS NULL`
     );
     if (wouldHold.rowCount) {

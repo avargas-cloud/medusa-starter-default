@@ -23,6 +23,7 @@ process.env.DATABASE_URL =
 import { Client } from "pg";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `t153-${Date.now()}`;
@@ -130,7 +131,7 @@ async function testSubmitFlowSql(client: Client) {
   const picked = await client.query(`
     SELECT id, step FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = $1
   `, [rowId]);
   assert(
@@ -153,7 +154,7 @@ async function testSubmitFlowSql(client: Client) {
   const fakeOpId = `mock-op-${rowId}`;
   await client.query(
     `UPDATE qb_order_pipeline
-       SET status = 'submitted',
+       SET status = '${WRITE.sales.submitted}',
            bridge_op_id = $2,
            qb_txn_id = $3,
            submitted_at = NOW(),
@@ -167,7 +168,7 @@ async function testSubmitFlowSql(client: Client) {
     [rowId]
   );
   const r = final.rows[0];
-  assert(r.status === "submitted", "row → 'submitted'");
+  assert(r.status === WRITE.sales.submitted, "row went to submitted");
   assert(r.bridge_op_id === fakeOpId, "bridge_op_id stored");
   assert(r.qb_txn_id === txnId, "qb_txn_id stored");
 }
@@ -210,7 +211,7 @@ async function testIncompletePayloadFails(client: Client) {
     [rowId]
   );
   const r = final.rows[0];
-  assert(r.status === "failed", "row → 'failed'");
+  assert(r.status === WRITE.sales.failed, "row went to failed");
   assert(
     r.error?.includes("payload incomplete"),
     "error mentions 'payload incomplete'",

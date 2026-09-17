@@ -667,7 +667,7 @@ async function main(): Promise<void> {
     // el regular + PO en los hermanos. Después confirma el regular.
     await db.query(
       `UPDATE vendor_bill SET service_vendor_bill_id = $2, freight_vendor_bill_id = $3,
-              status = 'confirmed' WHERE id = $1`,
+              status = 'confirmed' WHERE id = $1`, // entity-status
       [j.regularId, j.serviceId, j.freightId]
     );
     await db.query(

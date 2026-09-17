@@ -22,6 +22,8 @@
  * which the QB pipeline UI renders under the row.
  */
 
+import { normalizePipelineStatus, WRITE } from "../quickbooks/pipeline-status";
+
 export type KnexLike = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
 };
@@ -75,9 +77,9 @@ export async function checkPoQbSyncGate(
   if (!row) return NOT_BLOCKED;
 
   const status = row.status ?? "";
-  if (status === "synced") return NOT_BLOCKED;
+  if (normalizePipelineStatus("purchase", status) === WRITE.purchase.synced) return NOT_BLOCKED;
 
-  const terminal = status === "failed_permanent";
+  const terminal = normalizePipelineStatus("purchase", status) === WRITE.purchase.failed;
   const label = row.po_number ?? purchaseOrderId;
 
   return {

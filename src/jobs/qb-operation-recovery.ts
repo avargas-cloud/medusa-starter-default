@@ -18,6 +18,7 @@ import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { WRITE } from "../lib/quickbooks/pipeline-status";
 const LOG_PREFIX = "[QB-RECOVERY]";
 
 interface StuckLog {
@@ -238,7 +239,7 @@ export default async function qbOperationRecovery(container: MedusaContainer) {
     const { rows: stuckLogs } = await client.query<StuckLog>(`
             SELECT id, operation, order_id, draft_order_id, qb_operation_id, metadata
             FROM qb_sync_log
-            WHERE status = 'processing'
+            WHERE status = 'processing' -- canonical-literal
               AND qb_operation_id IS NOT NULL
               AND initiated_at < NOW() - INTERVAL '3 minutes'
               AND initiated_at > NOW() - INTERVAL '24 hours'
@@ -273,7 +274,7 @@ export default async function qbOperationRecovery(container: MedusaContainer) {
           await client.query(
             `
                         UPDATE qb_sync_log SET
-                            status = 'completed',
+                            status = '${WRITE.log.synced}',
                             completed_at = NOW(),
                             duration_ms = EXTRACT(EPOCH FROM (NOW() - initiated_at)) * 1000,
                             qb_txn_id = COALESCE($2, qb_txn_id),
@@ -297,7 +298,7 @@ export default async function qbOperationRecovery(container: MedusaContainer) {
           await client.query(
             `
                         UPDATE qb_sync_log SET
-                            status = 'failed',
+                            status = '${WRITE.log.failed}',
                             completed_at = NOW(),
                             error = $2
                         WHERE id = $1

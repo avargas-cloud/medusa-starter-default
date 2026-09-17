@@ -7,6 +7,7 @@ import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
 import { syncCustomerToMeili } from "../../../../lib/meilisearch/sync-customer";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
+import { SALES_SQL, WRITE } from "../../../../lib/quickbooks/pipeline-status";
 import {
   accessFailure,
   assertOwner,
@@ -953,7 +954,7 @@ export async function PUT(
       let idx = 2;
       if (qb_txn_id !== undefined)      { updates.push(`qb_list_id = $${idx++}`);    vals.push(qb_txn_id); }
       if (qb_ref_number !== undefined)  { updates.push(`qb_txn_number = $${idx++}`); vals.push(qb_ref_number); }
-      if (qb_txn_id || qb_ref_number)  { updates.push(`status = 'synced'`, `synced_at = NOW()`); }
+      if (qb_txn_id || qb_ref_number)  { updates.push(`status = '${WRITE.purchase.synced}'`, `synced_at = NOW()`); }
 
       await client.query(
         `UPDATE qb_purchase_order_pipeline SET ${updates.join(", ")}
@@ -971,7 +972,7 @@ export async function PUT(
       let idx = 2;
       if (qb_txn_id !== undefined)     { updates.push(`qb_list_id = $${idx++}`);    vals.push(qb_txn_id); }
       if (qb_ref_number !== undefined) { updates.push(`qb_txn_number = $${idx++}`); vals.push(qb_ref_number); }
-      if (qb_txn_id || qb_ref_number) { updates.push(`status = 'synced'`, `synced_at = NOW()`); }
+      if (qb_txn_id || qb_ref_number) { updates.push(`status = '${WRITE.purchase.synced}'`, `synced_at = NOW()`); }
 
       await client.query(
         `UPDATE qb_inventory_adjustment_pipeline SET ${updates.join(", ")}
@@ -1003,7 +1004,7 @@ export async function PUT(
           let pIdx = 2;
           if (qb_txn_id !== undefined)     { pipeUpdates.push(`qb_list_id = $${pIdx++}`);    pVals.push(qb_txn_id); }
           if (qb_ref_number !== undefined) { pipeUpdates.push(`qb_txn_number = $${pIdx++}`); pVals.push(qb_ref_number); }
-          if (qb_txn_id || qb_ref_number) { pipeUpdates.push(`status = 'synced'`, `synced_at = NOW()`); }
+          if (qb_txn_id || qb_ref_number) { pipeUpdates.push(`status = '${WRITE.purchase.synced}'`, `synced_at = NOW()`); }
           await client.query(
             `UPDATE qb_item_receipt_pipeline SET ${pipeUpdates.join(", ")}
               WHERE purchase_order_receipt_id = $1 AND deleted_at IS NULL`,
@@ -1053,7 +1054,7 @@ export async function PUT(
             SET ${pipelineUpdates.join(", ")}
             WHERE (order_id = $1 OR reference_id = $1)
               AND ${stepFilter[type as keyof typeof stepFilter]}
-              AND status NOT IN ('waiting')
+              AND status NOT IN (${SALES_SQL.blocked})
         `,
       pipelineValues
     );

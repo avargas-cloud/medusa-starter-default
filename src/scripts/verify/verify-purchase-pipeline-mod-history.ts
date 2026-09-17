@@ -20,6 +20,7 @@
  */
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { PURCHASE_PIPELINE_FEED_SQL } from "../../api/admin/purchase-orders/qb-pipeline/_lib/feed-sql";
 
@@ -186,7 +187,7 @@ async function main(): Promise<void> {
          AND pipe.order_pipeline_id IS NOT NULL
          AND pipe.qb_list_id IS NOT NULL
          AND (pipe.payload->>'is_void')::boolean IS NOT TRUE
-         AND (f.step <> 'purchase_order' OR f.status <> 'synced')
+         AND (f.step <> 'purchase_order' OR f.status <> '${WRITE.purchase.synced}')
     `);
     check(
       "delegated legacy PO rows render as the ADD, not as the mod",

@@ -2,6 +2,7 @@ import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import {
   accessFailure,
@@ -54,7 +55,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       referenceId: id,
       referenceType: "customer_payment",
       step: "void_check",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: checkTxnId,
     });
     queued = true;
@@ -63,8 +64,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   await financeService.updateCustomerPayments(
     { id },
     {
-      status: "voided",
-      qb: { ...(qb ?? {}), status: "voided" },
+      status: "voided", // entity-status
+      qb: { ...(qb ?? {}), status: "voided" }, // entity-status
     }
   );
 

@@ -83,9 +83,11 @@ const RETRY_GATE_REL = "src/lib/quickbooks/pipeline/retry-gate.ts";
   // QuickBooks" de "nunca salió de Medusa": el gate quedaría ciego justo en
   // el dato que existe para proteger.
   const gateCallIdx = src.indexOf("evaluateRetryGate(");
-  const claimUpdateIdx = src.indexOf("SET status       = 'pending'");
+  // El literal vive en el helper de vocabulario (vocab-20260917): el claim
+  // escribe `WRITE.sales.dispatchable`, no un string.
+  const claimUpdateIdx = src.indexOf("SET status       = '${WRITE.sales.dispatchable}'");
   check(
-    "el claim UPDATE ('SET status = pending') existe en post-pipeline",
+    "el claim UPDATE ('SET status = ${WRITE.sales.dispatchable}') existe en post-pipeline",
     claimUpdateIdx >= 0
   );
   check(
@@ -147,6 +149,11 @@ const RETRY_GATE_REL = "src/lib/quickbooks/pipeline/retry-gate.ts";
     // gl-purchases-v2 (2026-09-11): VendorCreditAdd / BillPaymentCheckAdd.
     "vendor_credit_add",
     "bill_payment_add",
+    // vc-apply-qb-20260915: un $0 BillPaymentCreditCardAdd + SetCredit es un
+    // ADD no idempotente (re-despacho = crédito aplicado dos veces). Estaba en
+    // retry-gate.ts desde el 09/15 y este gate quedó rojo sin que nadie lo
+    // corriera — destapado por vocab-20260917.
+    "vendor_credit_apply",
     // gl-docs-to-qb-20260914: CheckAdd / CreditCardChargeAdd / DepositAdd /
     // JournalEntryAdd for the POS bank documents.
     "gl_document_add",

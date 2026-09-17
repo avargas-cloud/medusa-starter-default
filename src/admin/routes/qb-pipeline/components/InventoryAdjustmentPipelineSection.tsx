@@ -12,6 +12,8 @@ import {
 import { useCallback, useEffect, useState } from "react";
 
 import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+import { PipelineStatusBadge } from "./PipelineStatusBadge";
+import { pipelineStatusIs } from "../../../../lib/quickbooks/pipeline-status";
 
 type AddStatus = "waiting" | "processing" | "synced" | "error";
 type VoidStatus = null | "waiting" | "processing" | "voided" | "error";
@@ -48,57 +50,13 @@ const STATUS_FILTERS = [
   { label: "Error", value: "error" },
 ];
 
-const StatusBadge = ({ status }: { status: AddStatus }) => {
-  if (status === "synced")
-    return (
-      <Badge color="green" size="2xsmall">
-        synced
-      </Badge>
-    );
-  if (status === "error")
-    return (
-      <Badge color="red" size="2xsmall">
-        error
-      </Badge>
-    );
-  if (status === "processing")
-    return (
-      <Badge color="blue" size="2xsmall">
-        processing
-      </Badge>
-    );
-  return (
-    <Badge color="orange" size="2xsmall">
-      waiting
-    </Badge>
-  );
-};
+const StatusBadge = ({ status }: { status: AddStatus }) => (
+  <PipelineStatusBadge status={status} family="purchase" />
+);
 
 const VoidStatusBadge = ({ status }: { status: VoidStatus }) => {
   if (!status) return <span className="text-ui-fg-muted text-xs">—</span>;
-  if (status === "voided")
-    return (
-      <Badge color="purple" size="2xsmall">
-        voided
-      </Badge>
-    );
-  if (status === "error")
-    return (
-      <Badge color="red" size="2xsmall">
-        void-err
-      </Badge>
-    );
-  if (status === "processing")
-    return (
-      <Badge color="blue" size="2xsmall">
-        voiding
-      </Badge>
-    );
-  return (
-    <Badge color="orange" size="2xsmall">
-      void-pending
-    </Badge>
-  );
+  return <PipelineStatusBadge status={status} family="purchase" />;
 };
 
 const truncate = (s: string | null, n = 16): string => {
@@ -286,8 +244,10 @@ export const InventoryAdjustmentPipelineSection = () => {
                 {rows.map((r) => {
                   const error = r.last_error ?? r.void_last_error;
                   const totalRetries = (r.retries ?? 0) + (r.void_retries ?? 0);
+                  const voidRow = { status: r.void_status };
                   const canRetry =
-                    r.status === "error" || r.void_status === "error";
+                    pipelineStatusIs("purchase", r, "error") ||
+                    pipelineStatusIs("purchase", voidRow, "error");
                   return (
                     <Table.Row key={r.id}>
                       <Table.Cell className="font-mono text-sm text-ui-fg-subtle">

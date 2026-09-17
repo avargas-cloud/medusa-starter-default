@@ -31,6 +31,7 @@ import {
   type SalesApplyContext,
 } from "./sales-context";
 import type { QbReceivePayment, QbReceivePaymentApplication } from "./sales-types";
+import { WRITE } from "../quickbooks/pipeline-status";
 
 export interface UnlinkedApplication {
   payment_txn_id: string;
@@ -187,7 +188,7 @@ export async function createReceivePaymentFromQb(ctx: SalesApplyContext, rp: QbR
 
   await backdateRows(ctx.client, "customer_payment", [paymentId], at);
   await seedPipelineRow(ctx.client, ctx.runId, {
-    orderId: firstOrderId, referenceId: paymentId, referenceType: "customer_payment", step: "payment", status: "confirmed",
+    orderId: firstOrderId, referenceId: paymentId, referenceType: "customer_payment", step: "payment", status: WRITE.sales.synced,
     qbTxnId: rp.txn_id, qbRefNumber: rp.ref_number, medusaRefNumber: `PAY-${displayId}`,
     payload: { txn_type: "ReceivePayment", edit_sequence: rp.edit_sequence, source: `QB ReceivePayment ${rp.ref_number ?? rp.txn_id}` },
   });
@@ -204,7 +205,7 @@ export async function createReceivePaymentFromQb(ctx: SalesApplyContext, rp: QbR
   for (const { applicationId, inv, application } of applications) {
     await backdateRows(ctx.client, "payment_application", [applicationId], at);
     await seedPipelineRow(ctx.client, ctx.runId, {
-      orderId: inv.order_id, referenceId: applicationId, referenceType: "payment_application", step: "apply_payment", status: "confirmed",
+      orderId: inv.order_id, referenceId: applicationId, referenceType: "payment_application", step: "apply_payment", status: WRITE.sales.synced,
       qbTxnId: rp.txn_id, qbRefNumber: rp.ref_number, medusaRefNumber: `PAY-${displayId}`,
       payload: {
         txn_type: "ReceivePayment",

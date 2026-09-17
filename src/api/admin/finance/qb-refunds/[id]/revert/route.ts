@@ -16,6 +16,7 @@ import {
 } from "../../../../../../lib/pos/supervisor-pin-guard";
 import type { PinConn } from "../../../../../../lib/pos/verify-supervisor-pin";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE, pipelineStatusIs } from "../../../../../../lib/quickbooks/pipeline-status";
 import {
   accessFailure,
   assertAccounting,
@@ -159,7 +160,15 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   // ── EASY: no confirmed check in QB ─────────────────────────────────────────
   if (!checkConfirmed) {
-    if (wc && [...IN_FLIGHT, "confirmed"].includes(wc.status)) {
+    const wcInFlight = !!wc && IN_FLIGHT.includes(wc.status);
+    const wcDone =
+      !!wc &&
+      pipelineStatusIs(
+        "sales",
+        wc,
+        "synced"
+      );
+    if (wcInFlight || wcDone) {
       // 'confirmed' row with qb.status not yet 'yes' = poller about to land it.
       return res.status(409).json({
         error: "The QB Write Check is in flight — wait ~2 min for it to confirm, then revert.",
@@ -216,7 +225,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   // $0 apply never reached QB (waiting/failed/absent-but-unconfirmed) → the
   // credit was never consumed in QB. Skip the row, revert now, void the check.
-  const rpConfirmed = rp?.status === "confirmed";
+  const rpConfirmed = !!rp && pipelineStatusIs("sales", rp, "synced");
   if (rp && !rpConfirmed) {
     await skipOpenRefundPipelineRows(
       id,
@@ -227,7 +236,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       referenceId: id,
       referenceType: "customer_payment",
       step: "void_check",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: checkTxnId,
       medusaRefNumber: `Revert ${label}`,
     });
@@ -267,7 +276,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     referenceId: id,
     referenceType: "customer_payment",
     step: "refund_apply_del",
-    status: "pending",
+    status: WRITE.sales.dispatchable,
     qbTxnId: applyTxnId,
     medusaRefNumber: `Revert ${label}`,
     ...(applyTxnId
@@ -283,7 +292,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     referenceId: id,
     referenceType: "customer_payment",
     step: "void_check",
-    status: "waiting",
+    status: WRITE.sales.blocked,
     dependsOn: delRowId,
     qbTxnId: checkTxnId,
     medusaRefNumber: `Revert ${label}`,

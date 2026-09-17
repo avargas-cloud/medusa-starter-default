@@ -21,6 +21,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-sales-receipt-claim-adoption-sandbox.ts
  */
 import { getDbPool } from "../../api/utils/db-pool";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import {
   claimSalesReceiptAttempt,
   adoptSalesReceiptClaim,
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
     );
 
     await pool.query(
-      `UPDATE qb_order_pipeline SET status='submitted', bridge_op_id='op-fake'
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.submitted}', bridge_op_id='op-fake'
         WHERE id = $1`,
       [rowId]
     );

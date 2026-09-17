@@ -31,6 +31,7 @@ import type { Server } from "node:http";
 import { Client } from "pg";
 
 import { startStubBridge, type StubState } from "./_stub-qb-bridge";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const STUB_PORT = Number(process.env.E2E_STUB_PORT ?? 19997);
 const JOURNAL = `/tmp/e2e_vcapply_stub-bridge.jsonl`;
@@ -109,7 +110,7 @@ async function rowById(client: Client, id: string): Promise<Row> {
 async function claim(client: Client, id: string): Promise<Row> {
   return (
     await client.query<Row>(
-      `UPDATE qb_order_pipeline SET status='processing', updated_at=NOW(), error=NULL WHERE id=$1 RETURNING ${ROW_COLS}`,
+      `UPDATE qb_order_pipeline SET status='${WRITE.sales.processing}', updated_at=NOW(), error=NULL WHERE id=$1 RETURNING ${ROW_COLS}`,
       [id]
     )
   ).rows[0]!;
@@ -127,11 +128,11 @@ async function application(client: Client, id: string) {
 async function dispatchAndConfirm(client: Client, rowId: string): Promise<Row> {
   const { resubmitByStep } = await import("../../lib/quickbooks/consolidator/resubmit-by-step");
   const { pollSubmittedRows } = await import("../../lib/quickbooks/consolidator/poll-submitted-rows");
-  await client.query(`UPDATE qb_order_pipeline SET status='pending' WHERE id=$1 AND status='waiting'`, [rowId]);
+  await client.query(`UPDATE qb_order_pipeline SET status='${WRITE.sales.dispatchable}' WHERE id=$1 AND status='${WRITE.sales.blocked}'`, [rowId]);
   const claimed = await claim(client, rowId);
   await resubmitByStep(claimed, stubContainer, logger);
   let after = await rowById(client, rowId);
-  if (after.status === "submitted" && after.bridge_op_id) {
+  if (after.status === WRITE.sales.submitted && after.bridge_op_id) {
     await pollSubmittedRows([{ ...after, bridge_op_id: after.bridge_op_id }], stubContainer, logger);
     after = await rowById(client, rowId);
   }
@@ -190,7 +191,7 @@ async function main(): Promise<void> {
     const one = await applyAndEnqueue(PAIRS.ok);
     assert(one.qb.queued === true, "enqueue devuelve queued:true", JSON.stringify(one.qb));
     const [row1] = await rowsFor(client, one.appId);
-    assert(row1?.status === "pending", "fila pending (bill y crédito ya tienen TxnID)", row1?.status);
+    assert(row1?.status === WRITE.sales.dispatchable, "fila pending (bill y crédito ya tienen TxnID)", row1?.status);
     const qbxml1 = String(row1?.payload?.qbxml ?? "");
     assert(qbxml1.includes("<PaymentAmount>0.00</PaymentAmount>"), "qbxml: PaymentAmount 0.00");
     assert(qbxml1.includes("<SetCredit><CreditTxnID>1CF4FC-1788790462</CreditTxnID><AppliedAmount>197.16</AppliedAmount>"), "qbxml: SetCredit con el TxnID y monto del crédito");
@@ -202,7 +203,7 @@ async function main(): Promise<void> {
     // ── 2 · dispatch + readback → confirmed + estampa ──────────────────────
     console.log("\n── 2. dispatch → statusCode 0 sin TxnID → readback → confirmed");
     const after1 = await dispatchAndConfirm(client, row1!.id);
-    assert(after1.status === "confirmed", "fila confirmed por readback", `${after1.status} ${after1.error ?? ""}`);
+    assert(after1.status === WRITE.sales.synced, "fila confirmed por readback", `${after1.status} ${after1.error ?? ""}`);
     assert(after1.qb_txn_id === null, "qb_txn_id null (QB no creó documento)", String(after1.qb_txn_id));
     const app1 = await application(client, one.appId);
     assert(app1.qb_applied_at !== null && app1.qb_bill_txn_id === "1CB72E-1785290311" && app1.qb_credit_txn_id === "1CF4FC-1788790462" && app1.qb_payment_txn_id === null, "aplicación estampada (qb_applied_at, bill/credit txn, payment null)", JSON.stringify(app1));
@@ -221,7 +222,7 @@ async function main(): Promise<void> {
     const [row2] = await rowsFor(client, two.appId);
     state.billQueryMode = "no_links";
     const after2 = await dispatchAndConfirm(client, row2!.id);
-    assert(after2.status === "failed" && after2.next_retry_at === null, "fila failed sin next_retry_at", `${after2.status} retry=${String(after2.next_retry_at)}`);
+    assert(after2.status === WRITE.sales.failed && after2.next_retry_at === null, "fila failed sin next_retry_at", `${after2.status} retry=${String(after2.next_retry_at)}`);
     assert(/no LinkedTxn/.test(after2.error ?? ""), "error nombra el readback", after2.error ?? "");
     assert((await application(client, two.appId)).qb_applied_at === null, "la aplicación NO se estampó");
     assert((await voidCode(client, two.appId)) === "ok", "void permitido (fila failed no bloquea)");
@@ -231,18 +232,18 @@ async function main(): Promise<void> {
     await client.query(`UPDATE vendor_bill SET qb_txn_id=NULL WHERE id=$1`, [PAIRS.waiting.bill]);
     const three = await applyAndEnqueue(PAIRS.waiting);
     const [row3] = await rowsFor(client, three.appId);
-    assert(row3?.status === "waiting", "fila waiting", row3?.status);
+    assert(row3?.status === WRITE.sales.blocked, "fila waiting", row3?.status);
     assert(Array.isArray(row3?.payload?.blocking_reference_ids) && (row3!.payload!.blocking_reference_ids as string[]).includes(PAIRS.waiting.bill), "blocking_reference_ids lleva el bill");
     const facts3 = await loadVendorCreditApplyFacts(knex, three.appId);
     assert(facts3.ready === false, "facts: no ready mientras el bill no tenga TxnID");
     const after3 = await dispatchAndConfirm(client, row3!.id);
-    assert(after3.status === "pending" && after3.next_retry_at !== null, "despachar difiere: pending + next_retry_at", `${after3.status} ${String(after3.next_retry_at)}`);
+    assert(after3.status === WRITE.sales.dispatchable && after3.next_retry_at !== null, "despachar difiere: pending + next_retry_at", `${after3.status} ${String(after3.next_retry_at)}`);
     // ── 6 · fila viva → void 409 ───────────────────────────────────────────
     console.log("\n── 6. fila viva (pending diferida) → void 409 applying_in_quickbooks");
     assert((await voidCode(client, three.appId)) === "applying_in_quickbooks", "void → applying_in_quickbooks");
     await client.query(`UPDATE vendor_bill SET qb_txn_id=$2 WHERE id=$1`, [PAIRS.waiting.bill, "1CB73B-1785290435"]);
     const after3b = await dispatchAndConfirm(client, row3!.id);
-    assert(after3b.status === "confirmed", "con el TxnID del bill de vuelta, confirma", `${after3b.status} ${after3b.error ?? ""}`);
+    assert(after3b.status === WRITE.sales.synced, "con el TxnID del bill de vuelta, confirma", `${after3b.status} ${after3b.error ?? ""}`);
 
     // ── 7 · rechazo de QB → failed terminal ────────────────────────────────
     console.log("\n── 7. QB rechaza (3140) → failed terminal");
@@ -250,7 +251,7 @@ async function main(): Promise<void> {
     const [row4] = await rowsFor(client, four.appId);
     state.directQueryMode = "reject";
     const after4 = await dispatchAndConfirm(client, row4!.id);
-    assert(after4.status === "failed" && after4.next_retry_at === null, "fila failed terminal", `${after4.status} ${after4.error ?? ""}`);
+    assert(after4.status === WRITE.sales.failed && after4.next_retry_at === null, "fila failed terminal", `${after4.status} ${after4.error ?? ""}`);
     assert((await application(client, four.appId)).qb_applied_at === null, "aplicación sin estampar");
 
     // ── 8 · feed del Purchase pipeline ─────────────────────────────────────
@@ -261,7 +262,7 @@ async function main(): Promise<void> {
       [[row1!.id, row2!.id, row3!.id, row4!.id].map((id) => `${id}__vendor_credit_apply`)]
     );
     assert(feed.rows.length === 4 && feed.rows.every((r) => r.step === "apply_vendor_credit"), "4 filas visibles con lane apply_vendor_credit", JSON.stringify(feed.rows));
-    assert(feed.rows.some((r) => r.status === "synced" && r.qb_list_id === "1CB72E-1785290311"), "la confirmada muestra el TxnID del bill enlazado", JSON.stringify(feed.rows));
+    assert(feed.rows.some((r) => r.status === WRITE.sales.synced && r.qb_list_id === "1CB72E-1785290311"), "la confirmada muestra el TxnID del bill enlazado", JSON.stringify(feed.rows));
   } finally {
     await cleanup(client);
     server?.close();

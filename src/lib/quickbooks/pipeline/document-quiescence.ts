@@ -33,6 +33,8 @@
  * That residual risk is covered by the retry policy on the apply itself.
  */
 
+import { pipelineStatusIs, literalsOf, SALES_SQL } from "../pipeline-status";
+
 /** Steps that can change a Credit Memo in QuickBooks. */
 export const CREDIT_MEMO_MUTATION_STEPS = [
   "credit_memo",
@@ -58,13 +60,15 @@ export const PAYMENT_MUTATION_STEPS = [
   "transfer_payment",
 ] as const;
 
-/** Statuses in which an operation may still change the document. */
-export const LIVE_STATUSES = [
-  "waiting",
-  "pending",
-  "processing",
-  "submitted",
-] as const;
+/**
+ * Statuses (per `pipeline-status.ts`) in which an operation may still change
+ * the document: dispatchable (canonical `WRITE.sales.dispatchable`, plus the
+ * pre-conversion legacy `waiting` spelling of BLOCKED), the canonical
+ * `blocked`, claimed, or in flight at the bridge. `error` (failed WITH a
+ * scheduled retry) is handled separately in `isLiveOperation` — it depends on
+ * `next_retry_at`, not the bare status.
+ */
+export const LIVE_STATUSES = literalsOf(SALES_SQL.inFlight);
 
 /**
  * Every step that can mutate a document an apply depends on. Used as a
@@ -104,7 +108,7 @@ export type QuiescenceBlocker = {
  */
 export function isLiveOperation(row: PipelineOperationRow): boolean {
   if ((LIVE_STATUSES as readonly string[]).includes(row.status)) return true;
-  return row.status === "failed" && row.next_retry_at != null;
+  return pipelineStatusIs("sales", row, "error");
 }
 
 /** Minimal shape of a `pg` pool/client, so tests can pass a fake. */

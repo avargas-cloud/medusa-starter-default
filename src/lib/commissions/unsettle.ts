@@ -75,7 +75,7 @@ export async function unsettleRecipient(
   const { rows: settlements } = await client.query<SettlementRow>(
     `SELECT id, method, status, vendor_bill_id
        FROM commission_settlement
-      WHERE recipient_id = $1 AND status IN ('pending', 'qb_waiting', 'confirmed')
+      WHERE recipient_id = $1 AND status IN ('pending', 'qb_waiting', 'confirmed') -- entity-status
       ORDER BY created_at DESC
       FOR UPDATE`,
     [recipientId]
@@ -144,7 +144,8 @@ export async function unsettleRecipient(
         await client.query(
           `UPDATE vendor_bill_revision
               SET status = 'superseded', superseded_at = NOW(), updated_at = NOW()
-            WHERE vendor_bill_id = $1 AND status = 'confirmed'`,
+            WHERE vendor_bill_id = $1 AND status = 'confirmed' -- entity-status
+            `,
           [bill.id]
         );
         if (bill.status === "synced" && isQbSyncEnabled()) {

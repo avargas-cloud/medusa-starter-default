@@ -55,6 +55,7 @@ import {
   purchaseOperationKey,
 } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../../../../lib/quickbooks/sync-enabled";
+import { WRITE } from "../../../../lib/quickbooks/pipeline-status";
 
 interface QbVendorLike {
   id: string;
@@ -267,7 +268,7 @@ export async function GET(
        JOIN vendor_bill vb
          ON vb.id = vbl.vendor_bill_id
         AND vb.deleted_at IS NULL
-        AND vb.status NOT IN ('cancelled', 'voided', 'deleted')
+        AND vb.status NOT IN ('cancelled', 'voided', 'deleted') -- entity-status
        WHERE porl.id = ANY(?)`,
       [receiptLineIds]
     ).then((r: any) => r.rows);
@@ -293,7 +294,7 @@ export async function GET(
         AND vb.deleted_at IS NULL
         AND vb.purchase_order_id = ?
         AND vb.bill_type = 'regular'
-        AND vb.status IN ('draft', 'confirmed', 'synced')
+        AND vb.status IN ('draft', 'confirmed', 'synced') -- entity-status
       WHERE vbl.deleted_at IS NULL
         AND COALESCE(vbl.line_type, 'product') = 'product'
         AND vbl.purchase_order_line_id IS NOT NULL
@@ -580,7 +581,7 @@ export async function GET(
           `SELECT id, number, status
              FROM inventory_transfer
             WHERE linked_purchase_order_id = ?
-              AND status <> 'voided'
+              AND status <> 'voided' -- entity-status
               AND deleted_at IS NULL
             ORDER BY created_at DESC
             LIMIT 1`,
@@ -999,7 +1000,7 @@ export async function PATCH(
                 COALESCE(SUM(vbl.qty), 0)::int AS billed_qty,
                 COALESCE(
                   SUM(vbl.qty) FILTER (
-                    WHERE vb.status IN ('confirmed', 'synced')
+                    WHERE vb.status IN ('confirmed', 'synced') -- entity-status
                   ), 0
                 )::int AS posted_billed_qty,
                 -- Whether a Bill that LIVES IN QUICKBOOKS carries this line is
@@ -1026,7 +1027,7 @@ export async function PATCH(
             AND COALESCE(vbl.line_type, 'product') = 'product'
           WHERE vb.purchase_order_id = ?
             AND vb.bill_type = 'regular'
-            AND vb.status IN ('draft', 'confirmed', 'synced')
+            AND vb.status IN ('draft', 'confirmed', 'synced') -- entity-status
             AND vb.deleted_at IS NULL
             AND vbl.purchase_order_line_id = ANY(?)
           GROUP BY vbl.purchase_order_line_id`,
@@ -1081,7 +1082,7 @@ export async function PATCH(
           WHERE vb.purchase_order_id = ?
             AND vb.bill_type = 'regular'
             AND vb.qb_source = 'adopted'
-            AND vb.status IN ('confirmed', 'synced')
+            AND vb.status IN ('confirmed', 'synced') -- entity-status
             AND vb.deleted_at IS NULL
             AND NOT EXISTS (
               SELECT 1 FROM vendor_bill_line vbl
@@ -1294,7 +1295,7 @@ export async function PATCH(
         const transferResult = await knex.raw(
           `SELECT id FROM inventory_transfer
             WHERE linked_purchase_order_id = ?
-              AND status IN ('draft', 'confirmed', 'shipped', 'received')
+              AND status IN ('draft', 'confirmed', 'shipped', 'received') -- entity-status
               AND deleted_at IS NULL
             LIMIT 1`,
           [id]
@@ -1628,7 +1629,7 @@ export async function PATCH(
       const knex = (req.scope as any).resolve("__pg_connection__");
       const updatedPipeline = await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status          = 'waiting',
+            SET status          = '${WRITE.purchase.dispatchable}',
                 qb_operation_id = NULL,
                 payload         = ?,
                 retries         = 0,
@@ -1653,7 +1654,7 @@ export async function PATCH(
       );
       if ((updatedPipeline.rowCount ?? 0) === 0) {
         const createdPipeline = await service.createQbPurchaseOrderPipelines([
-          { purchase_order_id: id, status: "waiting", payload: modPayload },
+          { purchase_order_id: id, status: WRITE.purchase.dispatchable, payload: modPayload },
         ]);
         const createdRows = Array.isArray(createdPipeline)
           ? createdPipeline
@@ -1760,7 +1761,7 @@ export async function DELETE(
   await service.updatePurchaseOrders([
     {
       id,
-      status: "cancelled",
+      status: "cancelled", // entity-status
       cancelled_at: new Date(),
       cancelled_by_user_id: userId,
       cancel_reason: "Draft cancelled by user",

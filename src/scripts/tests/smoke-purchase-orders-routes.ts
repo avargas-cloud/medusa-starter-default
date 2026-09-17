@@ -363,13 +363,13 @@ export default async function smoke({
     )) as Array<{ id: string; qty_ordered: number; qty_received: number; qty_cancelled: number; status: string }>;
 
     const lineUpdates = currentLines
-      .filter((l) => l.status !== "cancelled" && l.status !== "complete")
+      .filter((l) => l.status !== "cancelled" && l.status !== "complete") // entity-status
       .map((l) => {
         const remaining = l.qty_ordered - l.qty_received - l.qty_cancelled;
         return {
           id: l.id,
           qty_cancelled: l.qty_cancelled + Math.max(0, remaining),
-          status: (l.qty_received > 0 ? "partial" : "cancelled") as
+          status: (l.qty_received > 0 ? "partial" : "cancelled") as // entity-status
             | "partial"
             | "cancelled",
         };

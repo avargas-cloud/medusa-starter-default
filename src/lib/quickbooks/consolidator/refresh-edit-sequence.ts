@@ -14,6 +14,7 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { bridgeFetch, pollRawOperationResult } from "../client/core";
 import { cacheEditSequence } from "../qb-pipeline";
+import { SALES_SQL } from "../pipeline-status";
 
 type PipelineStep = string;
 
@@ -143,7 +144,7 @@ export async function refreshEditSequenceForRow(
         `UPDATE qb_order_pipeline
             SET next_retry_at = NOW(),
                 updated_at    = NOW()
-          WHERE id = $1 AND status = 'failed'`,
+          WHERE id = $1 AND status IN (${SALES_SQL.failedAny})`,
         [pipelineRowId]
       );
       logger.info(
@@ -309,7 +310,7 @@ async function refreshTransferCustomerEditSequence(
           SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{editSequence}', to_jsonb($2::text)),
               next_retry_at = NOW(),
               updated_at = NOW()
-        WHERE id = $1 AND status = 'failed'`,
+        WHERE id = $1 AND status IN (${SALES_SQL.failedAny})`,
       [pipelineRowId, freshEditSeq]
     );
     logger.info(`${LOG_PREFIX} ✅ transfer_customer: refreshed payload.editSequence on row ${pipelineRowId} → ${freshEditSeq}`);

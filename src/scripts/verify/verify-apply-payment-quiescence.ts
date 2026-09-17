@@ -26,6 +26,7 @@
  *     ./node_modules/.bin/tsx src/scripts/verify/verify-apply-payment-quiescence.ts
  */
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import {
   CREDIT_MEMO_MUTATION_STEPS,
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
           WHERE m.id <> $1
             AND m.created_at < $2
             AND (m.confirmed_at IS NULL OR m.confirmed_at > $2)
-            AND m.status <> 'skipped'
+            AND m.status <> '${WRITE.sales.skipped}'
             AND (
                   (m.step = ANY($3::text[]) AND m.reference_id = $4)
                OR ($5::text IS NOT NULL
@@ -116,14 +117,14 @@ async function main(): Promise<void> {
         const detail = blockers
           .map((b) => `${b.step}[${b.status}]`)
           .join(", ");
-        if (a.status === "failed") {
+        if (a.status === WRITE.sales.failed) {
           blockedAndFailed++;
           console.log(`  ✅ WOULD HAVE PREVENTED  ${label} — blocked by ${detail}`);
         } else {
           blockedButSucceeded++;
           console.log(`  ⏳ would have delayed    ${label} — blocked by ${detail}`);
         }
-      } else if (a.status === "failed") {
+      } else if (a.status === WRITE.sales.failed) {
         allowedAndFailed++;
         console.log(
           `  ⚠️  gate would NOT have caught ${a.medusa_ref_number ?? a.id} (failed for another reason)`

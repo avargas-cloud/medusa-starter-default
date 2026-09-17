@@ -17,6 +17,7 @@ process.env.DATABASE_URL =
 import { Client } from "pg";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `t157-${Date.now()}`;
@@ -178,7 +179,7 @@ async function testEnqueueAndPickup(client: Client) {
   const dispatch = await client.query(`
     SELECT id, payload FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id = $1
   `, [rowId]);
   assert(dispatch.rows.length === 1, "row picked by pending-dispatch SQL");

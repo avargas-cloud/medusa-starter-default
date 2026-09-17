@@ -1,4 +1,5 @@
 import { getDbPool } from "../../../api/utils/db-pool";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 /**
  * "The QuickBooks Bill this row points at no longer exists."
@@ -116,13 +117,13 @@ export async function settleBillMissingInQb(
     await client.query("BEGIN");
     const rowRes = await client.query(
       `UPDATE qb_order_pipeline
-          SET status        = 'skipped',
+          SET status        = '${WRITE.sales.skipped}',
               error         = $2,
               next_retry_at = NULL,
               failed_at     = NULL,
               updated_at    = NOW()
         WHERE id = $1
-          AND status <> 'confirmed'`,
+          AND status NOT IN (${SALES_SQL.synced})`,
       [rowId, reason]
     );
     let billMarked = false;

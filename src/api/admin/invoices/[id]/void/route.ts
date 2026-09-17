@@ -30,6 +30,7 @@ import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
 import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
 import { reverseInvoice } from "../../../../../lib/ledger";
+import { SALES_SQL, WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 import {
   listAssignedDeliveries,
   reverseAssignedDelivery,
@@ -652,7 +653,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     tax: 0,
     total: 0,
     balance_due: 0,
-    status: "voided",
+    status: "voided", // entity-status
     voided_at: new Date(),
     void_reason: void_reason ?? null,
   });
@@ -856,8 +857,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             // Too new — bump pipeline back to waiting; cron/next-Save will pick it up
             await pool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'waiting', error = NULL, updated_at = NOW()
-                WHERE order_id = $1 AND step = 'sales_order' AND status = 'skipped'`,
+                  SET status = '${WRITE.sales.blocked}', error = NULL, updated_at = NOW()
+                WHERE order_id = $1 AND step = 'sales_order' AND status IN (${SALES_SQL.skipped})`,
               [invoice.order_id]
             );
             console.log(
@@ -908,7 +909,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               await writePipelineRow({
                 orderId: invoice.order_id,
                 step: "sales_order",
-                status: "pending",
+                status: WRITE.sales.dispatchable,
                 medusaRefNumber: friendlyRef,
               });
 
@@ -930,7 +931,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     await writePipelineRow({
                       orderId: invoice.order_id,
                       step: "sales_order",
-                      status: "submitted",
+                      status: WRITE.sales.submitted,
                       bridgeOpId: soRes.data.operationId,
                       medusaRefNumber: friendlyRef,
                     });

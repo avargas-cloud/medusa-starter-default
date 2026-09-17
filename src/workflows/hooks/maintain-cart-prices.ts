@@ -1,3 +1,4 @@
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { StepResponse } from "@medusajs/framework/workflows-sdk";
 import { completeCartWorkflow } from "@medusajs/medusa/core-flows";
 import { Modules } from "@medusajs/utils";
@@ -307,7 +308,7 @@ hooks.orderCreated(
                   referenceId: _qbCpayId,
                   referenceType: "customer_payment",
                   step: "payment",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                   medusaRefNumber: _qbRefNum,
                 })
                   .then(() =>
@@ -323,7 +324,7 @@ hooks.orderCreated(
                           referenceId: _qbCpayId,
                           referenceType: "customer_payment",
                           step: "payment",
-                          status: "submitted",
+                          status: WRITE.sales.submitted,
                           bridgeOpId: operationId,
                         });
                       },
@@ -339,7 +340,7 @@ hooks.orderCreated(
                           orderId: _qbOrderId,
                           referenceId: _qbCpayId,
                           step: "payment",
-                          status: "failed",
+                          status: WRITE.sales.failed,
                           error: qbResult.error,
                         }),
                         financeService
@@ -361,7 +362,7 @@ hooks.orderCreated(
                           referenceId: _qbCpayId,
                           referenceType: "customer_payment",
                           step: "payment",
-                          status: "confirmed",
+                          status: WRITE.sales.synced,
                           // El TxnID faltaba en la fila: sólo se estampaba en el
                           // metadata del pago. Una fila `confirmed` sin el
                           // documento que confirmó no le sirve a nadie que la
@@ -418,7 +419,7 @@ hooks.orderCreated(
                       orderId: _qbOrderId,
                       referenceId: _qbCpayId,
                       step: "payment",
-                      status: "failed",
+                      status: WRITE.sales.failed,
                       error: err.message,
                     }).catch(() => {});
                     financeService

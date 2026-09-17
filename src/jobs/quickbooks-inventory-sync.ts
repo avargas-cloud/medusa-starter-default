@@ -80,7 +80,7 @@ export default async function qbInventorySyncHandler(
     const { rows: inProgress } = await client.query(
       `SELECT id FROM qb_sync_log
              WHERE operation = 'inventory_sync'
-               AND status = 'processing'
+               AND status = 'processing' -- canonical-literal
                AND initiated_at > NOW() - ($1 || ' minutes')::INTERVAL
              LIMIT 1`,
       [guardWindowMin]

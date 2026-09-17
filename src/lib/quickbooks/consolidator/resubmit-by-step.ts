@@ -78,6 +78,7 @@ import { loadVendorCreditApplyFacts } from "../../purchase-orders/qb-vendor-cred
 import { buildTxnVoidQbxml, type VoidableTxnType } from "../txn-void-add";
 import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "../gl-documents/facts";
 import { isGlDocumentKind } from "../gl-documents/types";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../pipeline-status";
 import type { GlQbTxnType } from "../gl-documents/qbxml-builders";
 // Confirmation write-back for these 4 steps (VendorCreditRet/BillPaymentRet/
 // TxnVoidRs parsing → handle-*-add/void.ts) lives in poll-submitted-rows.ts,
@@ -442,7 +443,7 @@ export async function resubmitByStep(
         if (modResult.success && modResult.data?.operationId) {
           await updatePool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted',
+                SET status = '${WRITE.sales.submitted}',
                     bridge_op_id = $2,
                     qb_txn_id = $3,
                     submitted_at = NOW(),
@@ -517,7 +518,7 @@ export async function resubmitByStep(
           if (voidedApp.length > 0) {
             await applyPool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'skipped',
+                  SET status = '${WRITE.sales.skipped}',
                       error = 'apply_payment: payment_application voided (nothing to apply) — auto-skipped',
                       updated_at = NOW()
                 WHERE id = $1`,
@@ -554,7 +555,7 @@ export async function resubmitByStep(
                  JOIN payment_application pa ON pa.id = p.reference_id
                 WHERE p.step = 'apply_payment'
                   AND p.reference_type = 'payment_application'
-                  AND p.status IN ('processing', 'submitted', 'confirmed')
+                  AND p.status IN (${SALES_SQL.processing}, ${SALES_SQL.submitted}, ${SALES_SQL.synced})
                   AND pa.payment_id = $1
                   AND pa.invoice_id = $2
                 LIMIT 1`,
@@ -563,7 +564,7 @@ export async function resubmitByStep(
             if (papSibling.length > 0) {
               await applyPool.query(
                 `UPDATE qb_order_pipeline
-                    SET status = 'skipped',
+                    SET status = '${WRITE.sales.skipped}',
                         error = 'apply_payment: superseded by payment_application (papp_) sibling row — dual-key duplicate suppressed',
                         updated_at = NOW()
                   WHERE id = $1`,
@@ -626,7 +627,7 @@ export async function resubmitByStep(
           const cancelPool = getDbPool();
           await cancelPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       qb_txn_id = $3,
                       submitted_at = NOW(),
@@ -666,7 +667,7 @@ export async function resubmitByStep(
                FROM qb_order_pipeline
               WHERE order_id = $1
                 AND step = 'estimate'
-                AND status = 'confirmed'
+                AND status IN (${SALES_SQL.synced})
                 AND qb_txn_id IS NOT NULL
               ORDER BY confirmed_at DESC
               LIMIT 1`,
@@ -690,7 +691,7 @@ export async function resubmitByStep(
           const deactPool = getDbPool();
           await deactPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       qb_txn_id = $3,
                       submitted_at = NOW(),
@@ -767,7 +768,7 @@ export async function resubmitByStep(
         if (modResult.success && modResult.data?.operationId) {
           await cmModPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       qb_txn_id = $3,
                       submitted_at = NOW(),
@@ -831,7 +832,7 @@ export async function resubmitByStep(
         if (cmCreateResult.success && cmCreateResult.data?.operationId) {
           await cmCreatePool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       submitted_at = NOW(),
                       updated_at = NOW()
@@ -875,7 +876,7 @@ export async function resubmitByStep(
         if (vcResult.success && vcResult.data?.operationId) {
           await voidCmPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       submitted_at = NOW(),
                       updated_at = NOW()
@@ -916,7 +917,7 @@ export async function resubmitByStep(
           const voidPool = getDbPool();
           await voidPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       submitted_at = NOW(),
                       updated_at = NOW()
@@ -946,7 +947,7 @@ export async function resubmitByStep(
                FROM qb_order_pipeline
               WHERE order_id = $1
                 AND step IN ('estimate', 'sales_order')
-                AND status = 'confirmed'
+                AND status IN (${SALES_SQL.synced})
                 AND qb_txn_id IS NOT NULL
               ORDER BY confirmed_at DESC
               LIMIT 1`,
@@ -970,7 +971,7 @@ export async function resubmitByStep(
           const soPool = getDbPool();
           await soPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       qb_txn_id = $3,
                       submitted_at = NOW(),
@@ -1003,7 +1004,7 @@ export async function resubmitByStep(
           const checkPool = getDbPool();
           await checkPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       submitted_at = NOW(),
                       updated_at = NOW()
@@ -1052,7 +1053,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, voidOpId]
@@ -1111,7 +1112,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, opId]
@@ -1186,7 +1187,7 @@ export async function resubmitByStep(
           if (!opId) throw new Error("Bridge did not return an operationId for VendorCreditMod");
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object('edit_sequence', $3::text),
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
@@ -1226,7 +1227,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, opId]
@@ -1274,7 +1275,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, opId]
@@ -1324,7 +1325,7 @@ export async function resubmitByStep(
           // went out, because the poller's readback keys on them (E2E §6).
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     payload = COALESCE(payload, '{}'::jsonb) || $3::jsonb,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
@@ -1384,7 +1385,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, opId]
@@ -1419,7 +1420,7 @@ export async function resubmitByStep(
             logger.info(`${LOG_PREFIX} ⏳ gl_document_add ${row.id} not ready yet: ${facts.reason}`);
           } else if (facts.skip) {
             await getDbPool().query(
-              `UPDATE qb_order_pipeline SET status = 'skipped', error = $2, updated_at = NOW() WHERE id = $1`,
+              `UPDATE qb_order_pipeline SET status = '${WRITE.sales.skipped}', error = $2, updated_at = NOW() WHERE id = $1`,
               [row.id, facts.reason]
             );
             logger.info(`${LOG_PREFIX} ⤼ gl_document_add ${row.id} skipped: ${facts.reason}`);
@@ -1445,7 +1446,7 @@ export async function resubmitByStep(
           // elegir `<Tipo>AddRs` y lo que el void va a tener que nombrar.
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object('qb_txn_type', $3::text, 'ready', true),
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
@@ -1494,7 +1495,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, opId, qbTxnId]
@@ -1534,7 +1535,7 @@ export async function resubmitByStep(
           }
           await getDbPool().query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                     submitted_at = NOW(), updated_at = NOW(), error = NULL
               WHERE id = $1`,
             [row.id, opId, qbTxnId]
@@ -1600,7 +1601,7 @@ export async function resubmitByStep(
             const skipPool = getDbPool();
             await skipPool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'skipped',
+                  SET status = '${WRITE.sales.skipped}',
                       error = 'no $0 apply ReceivePayment doc exists in QB (zero-amount credit apply) — check void alone frees the credit',
                       updated_at = NOW()
                 WHERE id = $1`,
@@ -1608,8 +1609,8 @@ export async function resubmitByStep(
             );
             await skipPool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'pending', updated_at = NOW()
-                WHERE depends_on = $1 AND step = 'void_check' AND status = 'waiting'`,
+                  SET status = '${WRITE.sales.dispatchable}', updated_at = NOW()
+                WHERE depends_on = $1 AND step = 'void_check' AND status IN (${SALES_SQL.blocked})`,
               [row.id]
             );
             logger.info(
@@ -1639,7 +1640,7 @@ export async function resubmitByStep(
           const delPool = getDbPool();
           await delPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       submitted_at = NOW(),
                       updated_at = NOW()
@@ -1681,7 +1682,7 @@ export async function resubmitByStep(
           const closePool = getDbPool();
           await closePool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       qb_txn_id = $3,
                       submitted_at = NOW(),
@@ -1737,7 +1738,7 @@ export async function resubmitByStep(
         if (transferResult.success && transferResult.data?.operationId) {
           await transferPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       qb_txn_id = $3,
                       submitted_at = NOW(),
@@ -1804,7 +1805,7 @@ export async function resubmitByStep(
         const skipTxnDateRow = async (reason: string) => {
           await txnDatePool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'skipped', error = $2, updated_at = NOW()
+                SET status = '${WRITE.sales.skipped}', error = $2, updated_at = NOW()
               WHERE id = $1`,
             [row.id, reason]
           );
@@ -1817,7 +1818,7 @@ export async function resubmitByStep(
           await skipTxnDateRow("payment missing or has no batch_day");
           break;
         }
-        if (pay.status === "voided") {
+        if (pay.status === "voided") { // entity-status: customer_payment.status
           await skipTxnDateRow("payment is voided — no QB doc to move");
           break;
         }
@@ -1839,7 +1840,7 @@ export async function resubmitByStep(
           }
           const { rows: srRows } = await txnDatePool.query(
             `SELECT qb_txn_id FROM qb_order_pipeline
-              WHERE order_id = $1 AND step = 'sales_receipt' AND status = 'confirmed'
+              WHERE order_id = $1 AND step = 'sales_receipt' AND status IN (${SALES_SQL.synced})
               ORDER BY created_at DESC LIMIT 1`,
             [srOrderId]
           );
@@ -1859,7 +1860,7 @@ export async function resubmitByStep(
           if (srMod.success && srMod.data?.operationId) {
             await txnDatePool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                  SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                       submitted_at = NOW(), updated_at = NOW()
                 WHERE id = $1`,
               [row.id, srMod.data.operationId, srTxnId]
@@ -1892,7 +1893,7 @@ export async function resubmitByStep(
         if (payMod.success && payMod.data?.operationId) {
           await txnDatePool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                     submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, payMod.data.operationId, payTxnId]
@@ -1926,7 +1927,7 @@ export async function resubmitByStep(
         const skipPmcRow = async (reason: string) => {
           await pmcPool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'skipped', error = $2, updated_at = NOW()
+                SET status = '${WRITE.sales.skipped}', error = $2, updated_at = NOW()
               WHERE id = $1`,
             [row.id, reason]
           );
@@ -1954,7 +1955,7 @@ export async function resubmitByStep(
           await skipPmcRow("customer_payment not found");
           break;
         }
-        if (pmcPay.status === "voided") {
+        if (pmcPay.status === "voided") { // entity-status: customer_payment.status
           await skipPmcRow("payment is voided — no QB doc to move");
           break;
         }
@@ -1983,7 +1984,7 @@ export async function resubmitByStep(
           }
           const { rows: srRows } = await pmcPool.query(
             `SELECT qb_txn_id FROM qb_order_pipeline
-              WHERE order_id = $1 AND step = 'sales_receipt' AND status = 'confirmed'
+              WHERE order_id = $1 AND step = 'sales_receipt' AND status IN (${SALES_SQL.synced})
               ORDER BY created_at DESC LIMIT 1`,
             [srOrderId]
           );
@@ -2003,7 +2004,7 @@ export async function resubmitByStep(
           if (srMod.success && srMod.data?.operationId) {
             await pmcPool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                  SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                       submitted_at = NOW(), updated_at = NOW()
                 WHERE id = $1`,
               [row.id, srMod.data.operationId, srTxnId]
@@ -2039,7 +2040,7 @@ export async function resubmitByStep(
         if (payMod.success && payMod.data?.operationId) {
           await pmcPool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                     submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, payMod.data.operationId, payTxnId]
@@ -2076,7 +2077,7 @@ export async function resubmitByStep(
         const skipRcmRow = async (reason: string) => {
           await rcmPool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'skipped', error = $2, updated_at = NOW()
+                SET status = '${WRITE.sales.skipped}', error = $2, updated_at = NOW()
               WHERE id = $1`,
             [row.id, reason]
           );
@@ -2102,7 +2103,7 @@ export async function resubmitByStep(
           await skipRcmRow("customer_payment not found");
           break;
         }
-        if (rcmCp.status === "voided") {
+        if (rcmCp.status === "voided") { // entity-status: customer_payment.status
           await skipRcmRow("refund is voided — nothing to edit in QB");
           break;
         }
@@ -2121,7 +2122,7 @@ export async function resubmitByStep(
           const { rows: wcTxnRows } = await rcmPool.query(
             `SELECT qb_txn_id FROM qb_order_pipeline
               WHERE step = 'write_check' AND reference_id = $1
-                AND status = 'confirmed' AND qb_txn_id IS NOT NULL
+                AND status IN (${SALES_SQL.synced}) AND qb_txn_id IS NOT NULL
               ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
             [row.reference_id]
           );
@@ -2169,7 +2170,7 @@ export async function resubmitByStep(
         if (checkMod.success && checkMod.data?.operationId) {
           await rcmPool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                     submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, checkMod.data.operationId, checkTxnId]
@@ -2203,7 +2204,7 @@ export async function resubmitByStep(
         const skipRptRow = async (reason: string) => {
           await rptPool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'skipped', error = $2, updated_at = NOW()
+                SET status = '${WRITE.sales.skipped}', error = $2, updated_at = NOW()
               WHERE id = $1`,
             [row.id, reason]
           );
@@ -2229,7 +2230,7 @@ export async function resubmitByStep(
           await skipRptRow("customer_payment not found");
           break;
         }
-        if (rptCp.status === "voided") {
+        if (rptCp.status === "voided") { // entity-status: customer_payment.status
           await skipRptRow("refund is voided — nothing to move");
           break;
         }
@@ -2255,7 +2256,7 @@ export async function resubmitByStep(
           await skipRptRow("no refund_payment row for this refund");
           break;
         }
-        if (rptRp.status === "waiting") {
+        if (pipelineStatusIs("sales", rptRp, "blocked")) {
           await rptPool.query(
             `UPDATE qb_order_pipeline
                 SET payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb,
@@ -2268,7 +2269,7 @@ export async function resubmitByStep(
           );
           break;
         }
-        if (rptRp.status === "confirmed" && !rptRp.qb_txn_id) {
+        if (pipelineStatusIs("sales", rptRp, "synced") && !rptRp.qb_txn_id) {
           // Legacy confirms didn't store the $0 ReceivePayment TxnID — nothing
           // to target. Skip (NOT fail: retrying can never resolve it → churn).
           await skipRptRow(
@@ -2276,7 +2277,7 @@ export async function resubmitByStep(
           );
           break;
         }
-        if (rptRp.status !== "confirmed" || !rptRp.qb_txn_id) {
+        if (!pipelineStatusIs("sales", rptRp, "synced") || !rptRp.qb_txn_id) {
           await failPipelineRow(
             row.id,
             `refund_payment_txndate_change: apply ReceivePayment not confirmed yet (status=${rptRp.status})`
@@ -2292,7 +2293,7 @@ export async function resubmitByStep(
         if (rptMod.success && rptMod.data?.operationId) {
           await rptPool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
                     submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, rptMod.data.operationId, rptRp.qb_txn_id]
@@ -2332,7 +2333,7 @@ export async function resubmitByStep(
         if (iaResult.success) {
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, iaResult.operationId]
           );
@@ -2370,7 +2371,7 @@ export async function resubmitByStep(
           const vpPool = getDbPool();
           await vpPool.query(
             `UPDATE qb_order_pipeline
-                  SET status = 'submitted',
+                  SET status = '${WRITE.sales.submitted}',
                       bridge_op_id = $2,
                       submitted_at = NOW(),
                       updated_at = NOW()
@@ -2413,7 +2414,7 @@ export async function resubmitByStep(
         if (addResult.success) {
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, addResult.operationId]
           );
@@ -2459,7 +2460,7 @@ export async function resubmitByStep(
           );
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'skipped',
+                SET status = '${WRITE.sales.skipped}',
                     error = $2,
                     next_retry_at = NULL,
                     updated_at = NOW()
@@ -2492,7 +2493,7 @@ export async function resubmitByStep(
         if (modResult.success && "noop" in modResult && modResult.noop) {
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'skipped',
+                SET status = '${WRITE.sales.skipped}',
                     error = 'sin cambios contra QuickBooks',
                     next_retry_at = NULL,
                     updated_at = NOW()
@@ -2504,7 +2505,7 @@ export async function resubmitByStep(
         if (modResult.success && "operationId" in modResult) {
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2,
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                     qb_edit_sequence = $3,
                     submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
@@ -2539,7 +2540,7 @@ export async function resubmitByStep(
           const pool = getDbPool();
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, vdResult.operationId]
           );
@@ -2566,7 +2567,7 @@ export async function resubmitByStep(
           const pool = getDbPool();
           await pool.query(
             `UPDATE qb_order_pipeline
-                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
               WHERE id = $1`,
             [row.id, viaResult.operationId]
           );
@@ -2639,7 +2640,7 @@ export async function resubmitByStep(
         const pool = getDbPool();
         await pool.query(
           `UPDATE qb_order_pipeline
-              SET status = 'submitted',
+              SET status = '${WRITE.sales.submitted}',
                   bridge_op_id = $2,
                   submitted_at = NOW(),
                   updated_at = NOW()
@@ -2676,7 +2677,7 @@ export async function resubmitByStep(
         const pool = getDbPool();
         await pool.query(
           `UPDATE qb_order_pipeline
-              SET status = 'submitted', bridge_op_id = $2,
+              SET status = '${WRITE.sales.submitted}', bridge_op_id = $2,
                   payload = $3::jsonb,
                   submitted_at = NOW(), updated_at = NOW()
             WHERE id = $1`,
@@ -2684,7 +2685,7 @@ export async function resubmitByStep(
         );
         await pool.query(
           `UPDATE qb_vendor_bill_pipeline
-              SET status = 'submitted', qb_operation_id = $2,
+              SET status = '${WRITE.purchase.submitted}', qb_operation_id = $2,
                   payload = $3::jsonb, edit_sequence = $4,
                   last_error = NULL, next_retry_at = NULL, updated_at = NOW()
             WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
@@ -2731,7 +2732,7 @@ export async function resubmitByStep(
       const pool = getDbPool();
       await pool.query(
         `UPDATE qb_vendor_bill_pipeline
-            SET status = 'error', qb_operation_id = NULL,
+            SET status = '${WRITE.purchase.error}', qb_operation_id = NULL,
                 last_error = $2, updated_at = NOW()
           WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
         [row.reference_id, message]

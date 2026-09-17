@@ -400,7 +400,7 @@ async function main(): Promise<void> {
     );
     check(
       "header del PO: 0 recibidas → submitted",
-      hdrA[0]?.total_units_received === 0 && hdrA[0]?.status === "submitted",
+      hdrA[0]?.total_units_received === 0 && hdrA[0]?.status === "submitted", // entity-status
       JSON.stringify(hdrA[0])
     );
 

@@ -239,8 +239,8 @@ describe("pos-transfer — invoice guard", () => {
     installPool({ liveListId: "LIST-B" });
     const req = buildReq({
       invoices: [
-        { invoice_number: "20188", status: "voided", voided_at: null },
-        { invoice_number: "20189", status: "paid", voided_at: "2026-08-01" },
+        { invoice_number: "20188", status: "voided", voided_at: null }, // entity-status
+        { invoice_number: "20189", status: "paid", voided_at: "2026-08-01" }, // entity-status
       ],
     });
     const res = buildRes();

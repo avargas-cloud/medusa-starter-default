@@ -334,12 +334,12 @@ async function dbChecks(): Promise<void> {
     const { rows: doubleClaim } = await pool.query<{ vendor_bill_id: string }>(
       `SELECT s.vendor_bill_id
          FROM outsourced_service_settlement s
-        WHERE s.status IN ('pending','qb_waiting','confirmed')
+        WHERE s.status IN ('pending','qb_waiting','confirmed') -- entity-status
           AND s.vendor_bill_id IS NOT NULL
           AND EXISTS (
                 SELECT 1 FROM commission_settlement c
                  WHERE c.vendor_bill_id = s.vendor_bill_id
-                   AND c.status IN ('pending','qb_waiting','confirmed'))`
+                   AND c.status IN ('pending','qb_waiting','confirmed'))` // entity-status
     );
     check(
       "ningún vendor bill está reclamado a la vez por un servicio y una comisión",
@@ -352,7 +352,7 @@ async function dbChecks(): Promise<void> {
       `SELECT s.id, o.state
          FROM outsourced_service_settlement s
          JOIN order_outsourced_service o ON o.id = s.service_id
-        WHERE s.status IN ('pending','qb_waiting')
+        WHERE s.status IN ('pending','qb_waiting') -- entity-status
           AND o.state NOT IN ('settling','posted')`
     );
     check(

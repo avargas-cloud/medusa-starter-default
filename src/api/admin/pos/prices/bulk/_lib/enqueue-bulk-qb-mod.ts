@@ -13,6 +13,7 @@
 import { roundCostDollarsOpt } from "../../../../../../lib/cost/avco";
 import { upsertItemPipelineRow } from "../../../../../../lib/quickbooks/upsert-item-pipeline-row";
 import type { CatalogPipelineService } from "../../../../../../lib/quickbooks/upsert-item-pipeline-row";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 interface MinimalLogger {
   info: (m: string) => void;
@@ -57,7 +58,7 @@ export async function enqueueBulkQbMod(
       op_action: "mod",
       op_payload: data,
       qb_id: input.qb_id,
-      status: "waiting",
+      status: WRITE.purchase.dispatchable,
     },
     logger
   );

@@ -82,9 +82,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
               NULL::text AS medusa_ref_number,
               last_error AS error,
               created_at,
-              CASE WHEN status = 'processing' THEN updated_at ELSE NULL END AS submitted_at,
+              CASE WHEN status = 'processing' THEN updated_at ELSE NULL END AS submitted_at, -- canonical-literal
               synced_at AS confirmed_at,
-              CASE WHEN status = 'error' THEN updated_at ELSE NULL END AS failed_at
+              CASE WHEN status = 'error' THEN updated_at ELSE NULL END AS failed_at -- canonical-literal
          FROM qb_purchase_order_pipeline
         WHERE purchase_order_id = $1
           AND deleted_at IS NULL

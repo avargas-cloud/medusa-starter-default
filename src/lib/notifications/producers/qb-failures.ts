@@ -13,6 +13,7 @@ import { publishNotification } from "../publish";
 import type { Db, PublishResult } from "../types";
 
 import { truncate } from "./format";
+import { SALES_SQL } from "../../quickbooks/pipeline-status";
 
 export const QB_FAILURE_WINDOW_HOURS_DEFAULT = 24;
 
@@ -41,7 +42,7 @@ export const QB_FAILED_SCAN_SQL = `
   SELECT p.id::text AS id, p.order_id, p.step, p.reference_type, p.reference_id,
          p.medusa_ref_number, p.qb_ref_number, p.error, p.failed_at, p.retry_count
     FROM qb_order_pipeline p
-   WHERE p.status = 'failed'
+   WHERE p.status IN (${SALES_SQL.failed})
      AND p.failed_at > NOW() - ($1::int * INTERVAL '1 hour')
      AND NOT EXISTS (
        SELECT 1 FROM pos_notification n

@@ -5,6 +5,7 @@ import { buildPrefVendorRef } from "../../../lib/quickbooks/pref-vendor-ref";
 import { upsertItemPipelineRow } from "../../../lib/quickbooks/upsert-item-pipeline-row";
 import { requireBridgeUrl } from "../../../lib/quickbooks/bridge-url";
 import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
+import { WRITE, type PipelineStatus } from "../../../lib/quickbooks/pipeline-status";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -115,7 +116,7 @@ export const enqueueQbItemsStep = createStep(
       sku: string;
       pipeline_id: string | null;
       operation_id: string | null;
-      status: "waiting" | "error";
+      status: PipelineStatus;
       error?: string;
     }> = [];
 
@@ -133,7 +134,7 @@ export const enqueueQbItemsStep = createStep(
               sku: item.sku,
               item_type: item.item_type,
               op_action: "add",
-              status: "error",
+              status: WRITE.purchase.error,
               last_error: bridge.error ?? "Bridge returned no operationId",
               op_payload: payload,
             },
@@ -147,7 +148,7 @@ export const enqueueQbItemsStep = createStep(
             sku: item.sku,
             pipeline_id: row.id,
             operation_id: null,
-            status: "error",
+            status: WRITE.purchase.error,
             error: bridge.error,
           });
           continue;
@@ -160,7 +161,7 @@ export const enqueueQbItemsStep = createStep(
             sku: item.sku,
             item_type: item.item_type,
             op_action: "add",
-            status: "waiting",
+            status: WRITE.purchase.dispatchable,
             op_payload: payload,
             qb_operation_id: bridge.operationId,
           },
@@ -172,7 +173,7 @@ export const enqueueQbItemsStep = createStep(
           sku: item.sku,
           pipeline_id: row.id,
           operation_id: bridge.operationId,
-          status: "waiting",
+          status: WRITE.purchase.dispatchable,
         });
       } catch (err: any) {
         logger.error(
@@ -185,7 +186,7 @@ export const enqueueQbItemsStep = createStep(
             sku: item.sku,
             item_type: item.item_type,
             op_action: "add",
-            status: "error",
+            status: WRITE.purchase.error,
             last_error: err.message,
             op_payload: payload,
           },
@@ -196,7 +197,7 @@ export const enqueueQbItemsStep = createStep(
           sku: item.sku,
           pipeline_id: row.id,
           operation_id: null,
-          status: "error",
+          status: WRITE.purchase.error,
           error: err.message,
         });
       }

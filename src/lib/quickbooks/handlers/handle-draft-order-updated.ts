@@ -18,6 +18,7 @@ import {
   gateModDispatch,
   MOD_DISPATCH_SERIALIZER_WAIT_MS,
 } from "../pipeline/mod-dispatch-gate";
+import { WRITE } from "../pipeline-status";
 import { withQbSerialized } from "../qb-serializer";
 
 /**
@@ -142,7 +143,7 @@ export async function handleDraftOrderUpdated(
         payload: {},
         medusaRefNumber: medusaRef,
         dependsOn: inFlightAdd.id,
-        status: "waiting",
+        status: WRITE.sales.blocked,
       });
       logger.info(
         `${LOG_PREFIX} ⏸ Estimate CREATE in-flight for ${draftOrderId} — edit parked as waiting estimate_mod row ${parked.rowId}`

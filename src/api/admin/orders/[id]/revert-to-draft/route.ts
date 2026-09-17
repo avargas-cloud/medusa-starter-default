@@ -3,6 +3,7 @@ import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { assertWebOrderAuthorized } from "../_lib/assert-web-order-authorized";
 import { getEstimateTxnId } from "../../../../../lib/quickbooks/qb-metadata-types";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { SALES_SQL, WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -41,7 +42,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     // Validate that there are no invoices generated for this order yet to safely revert it
     const invoiceCheck = await pgConnection.raw(
-      `SELECT count(*) as count FROM pos_invoice WHERE order_id = ? AND status != 'voided'`,
+      `SELECT count(*) as count FROM pos_invoice WHERE order_id = ? AND status != 'voided'`, // entity-status
       [order.id]
     );
     if (parseInt(invoiceCheck.rows[0].count, 10) > 0) {
@@ -57,7 +58,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // If any pipeline row for this order is already in-flight (pending/submitted/confirmed),
     // the order has been sent to QuickBooks and cannot be safely reverted — close it instead.
     const qbCheck = await pgConnection.raw(
-      `SELECT COUNT(*) AS count FROM qb_order_pipeline WHERE order_id = ? AND status IN ('pending', 'submitted', 'confirmed')`,
+      `SELECT COUNT(*) AS count FROM qb_order_pipeline WHERE order_id = ? AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.submitted}, ${SALES_SQL.synced})`,
       [order.id]
     );
     const qbInFlight = parseInt(qbCheck.rows[0].count, 10) > 0;
@@ -157,12 +158,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     try {
       await pgConnection.raw(
         `UPDATE qb_order_pipeline
-            SET status     = 'skipped',
+            SET status     = '${WRITE.sales.skipped}',
                 error      = 'Order reverted to draft — Sales Order superseded',
                 updated_at = NOW()
           WHERE order_id   = ?
             AND step       = 'sales_order'
-            AND status IN ('waiting', 'pending', 'failed')`,
+            AND status IN (${SALES_SQL.blocked}, ${SALES_SQL.dispatchable}, ${SALES_SQL.failedAny})`,
         [order.id]
       );
     } catch (cleanupErr: any) {
@@ -191,7 +192,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         await writePipelineRow({
           orderId: order.id,
           step: "estimate",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           medusaRefNumber: newDocNumber,
         });
         console.log(

@@ -10,6 +10,7 @@ import {
   UnauthenticatedError,
 } from "../../../purchase-orders/_lib/auth";
 import { isQbSyncEnabled } from "../../../../../lib/quickbooks/sync-enabled";
+import { SALES_SQL } from "../../../../../lib/quickbooks/pipeline-status";
 
 type KnexLike = {
   raw: (
@@ -87,7 +88,7 @@ export async function POST(
       WHERE reference_id = ?
         AND reference_type = 'vendor_bill'
         AND step = 'vendor_bill_payment_check'
-        AND status IN ('pending', 'processing', 'submitted', 'waiting')
+        AND status IN (${SALES_SQL.inFlight})
       ORDER BY created_at DESC
       LIMIT 1`,
     [id]

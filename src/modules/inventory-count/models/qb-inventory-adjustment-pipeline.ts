@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * QuickBooks InventoryAdjustment sync queue.
@@ -26,7 +27,7 @@ export const QbInventoryAdjustmentPipeline = model.define(
     inventory_count_id: model.text(),
     qb_account_list_id: model.text(),
 
-    status: model.text().default("waiting"),
+    status: model.text().default(WRITE.purchase.dispatchable),
 
     // Bridge / QB identifiers
     qb_operation_id: model.text().nullable(),

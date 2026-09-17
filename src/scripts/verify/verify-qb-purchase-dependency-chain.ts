@@ -1,4 +1,5 @@
 import knexFactory from "knex";
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 import {
   enqueuePurchaseQbOperation,
@@ -75,10 +76,10 @@ async function verifyOrderedChain(
       )
     );
   }
-  assert(inserted[0]?.status === "pending", `${poId}: first row not pending`);
+  assert(inserted[0]?.status === WRITE.sales.dispatchable, `${poId}: first row not pending`);
   for (let index = 1; index < inserted.length; index++) {
     assert(
-      inserted[index]?.status === "waiting",
+      inserted[index]?.status === WRITE.sales.blocked,
       `${poId}: child ${index} not waiting: ${JSON.stringify(inserted)}`
     );
     assert(
@@ -141,7 +142,7 @@ async function main() {
 
     await db.raw(
       `UPDATE qb_order_pipeline
-          SET status = 'failed', next_retry_at = NULL
+          SET status = '${WRITE.sales.failed}', next_retry_at = NULL
         WHERE id = ?`,
       [increase[0]?.id]
     );
@@ -150,8 +151,8 @@ async function main() {
           SET error = 'Blocked by failed dependency ' || parent.id::text
          FROM qb_order_pipeline parent
         WHERE child.depends_on = parent.id
-          AND child.status = 'waiting'
-          AND parent.status = 'failed'
+          AND child.status = '${WRITE.sales.blocked}'
+          AND parent.status = '${WRITE.sales.failed}'
           AND parent.next_retry_at IS NULL`
     );
     const blocked = await db.raw(
@@ -159,7 +160,7 @@ async function main() {
       [increase[1]?.id]
     );
     assert(
-      blocked.rows[0]?.status === "waiting",
+      blocked.rows[0]?.status === WRITE.sales.blocked,
       "blocked child was dispatched"
     );
     assert(
@@ -167,23 +168,23 @@ async function main() {
       "blocked child has no visible parent error"
     );
 
-    await db.raw(`UPDATE qb_order_pipeline SET status = 'fixed' WHERE id = ?`, [
+    await db.raw(`UPDATE qb_order_pipeline SET status = '${WRITE.sales.fixed}' WHERE id = ?`, [
       increase[0]?.id,
     ]);
     await db.raw(
       `UPDATE qb_order_pipeline child
-          SET status = 'pending', error = NULL
+          SET status = '${WRITE.sales.dispatchable}', error = NULL
          FROM qb_order_pipeline parent
         WHERE child.depends_on = parent.id
-          AND child.status = 'waiting'
-          AND parent.status IN ('confirmed', 'fixed')`
+          AND child.status = '${WRITE.sales.blocked}'
+          AND parent.status IN (${SALES_SQL.done})`
     );
     const awakened = await db.raw(
       `SELECT status FROM qb_order_pipeline WHERE id = ?`,
       [increase[1]?.id]
     );
     assert(
-      awakened.rows[0]?.status === "pending",
+      awakened.rows[0]?.status === WRITE.sales.dispatchable,
       "fixed parent did not make its child eligible"
     );
 
@@ -240,7 +241,7 @@ async function main() {
         ),
       });
       assert(
-        nested.status === "pending" && nested.dependsOn === null,
+        nested.status === WRITE.sales.dispatchable && nested.dependsOn === null,
         "nested caller transaction did not create the chain root"
       );
     } finally {

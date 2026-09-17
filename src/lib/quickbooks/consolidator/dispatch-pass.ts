@@ -9,6 +9,7 @@ import {
   type PurchaseDependencyKnex,
 } from "../../purchase-orders/qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../sync-enabled";
+import { SALES_SQL, WRITE, PURCHASE_SQL, pipelineStatusIs, salesRetryDue } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -34,7 +35,7 @@ export async function runPurchaseDelegationRepairPass(
        FROM qb_purchase_order_pipeline
       WHERE order_pipeline_id IS NULL
         AND deleted_at IS NULL
-        AND status IN ('waiting', 'error')
+        AND status IN (${PURCHASE_SQL.open})
         AND COALESCE(payload->>'is_mod', 'false') = 'true'
         AND COALESCE(
           payload->>'delegated_to_consolidator',
@@ -72,7 +73,7 @@ export async function runPurchaseDelegationRepairPass(
       if (!operation) continue;
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET order_pipeline_id = ?, status = 'waiting',
+            SET order_pipeline_id = ?, status = '${WRITE.purchase.dispatchable}',
                 last_error = NULL, next_retry_at = NULL,
                 updated_at = NOW()
           WHERE id = ?`,
@@ -86,7 +87,7 @@ export async function runPurchaseDelegationRepairPass(
         error instanceof Error ? error.message : String(error);
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'error', last_error = ?,
+            SET status = '${WRITE.purchase.error}', last_error = ?,
                 next_retry_at = NOW() + INTERVAL '2 minutes',
                 updated_at = NOW()
           WHERE id = ?`,
@@ -106,7 +107,7 @@ export async function runPurchaseDelegationRepairPass(
         AND (
           (
             add_order_pipeline_id IS NULL
-            AND status IN ('waiting', 'error')
+            AND status IN (${PURCHASE_SQL.open})
             AND COALESCE(
               payload->>'delegated_to_consolidator',
               'false'
@@ -114,7 +115,7 @@ export async function runPurchaseDelegationRepairPass(
           )
           OR (
             mod_order_pipeline_id IS NULL
-            AND mod_status IN ('waiting', 'error')
+            AND mod_status IN (${PURCHASE_SQL.open})
             AND COALESCE(
               mod_payload->>'delegated_to_consolidator',
               'false'
@@ -137,7 +138,12 @@ export async function runPurchaseDelegationRepairPass(
     try {
       if (
         !row.payload ||
-        !["waiting", "error"].includes(String(row.status))
+        !pipelineStatusIs(
+          "purchase",
+          { status: row.status },
+          "waiting",
+          "error"
+        )
       ) {
         // Nothing to repair in the ADD lane.
       } else {
@@ -165,7 +171,7 @@ export async function runPurchaseDelegationRepairPass(
         } else {
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
-              SET add_order_pipeline_id = ?, status = 'waiting',
+              SET add_order_pipeline_id = ?, status = '${WRITE.purchase.dispatchable}',
                   last_error = NULL, next_retry_at = NULL,
                   updated_at = NOW()
             WHERE id = ?`,
@@ -179,7 +185,12 @@ export async function runPurchaseDelegationRepairPass(
 
       if (
         !row.mod_payload ||
-        !["waiting", "error"].includes(String(row.mod_status))
+        !pipelineStatusIs(
+          "purchase",
+          { status: row.mod_status },
+          "waiting",
+          "error"
+        )
       ) {
         continue;
       }
@@ -207,7 +218,7 @@ export async function runPurchaseDelegationRepairPass(
       if (!modOperation) continue;
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET mod_order_pipeline_id = ?, mod_status = 'waiting',
+            SET mod_order_pipeline_id = ?, mod_status = '${WRITE.purchase.dispatchable}',
                 mod_last_error = NULL, mod_next_retry_at = NULL,
                 updated_at = NOW()
           WHERE id = ?`,
@@ -270,15 +281,15 @@ export async function runPendingDispatchPass(
              -- (see deferPipelineRow: apply_payment waiting for a document to
              -- go quiescent). Honouring it here lets a deferral be expressed
              -- without the row masquerading as 'failed' in the UI badges.
-             (status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
-             OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
+             (status IN (${SALES_SQL.dispatchable}) AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+             OR ${salesRetryDue()}
            )
          ORDER BY COALESCE(updated_at, created_at) ASC
          LIMIT 20
          FOR UPDATE SKIP LOCKED
       )
       UPDATE qb_order_pipeline p
-         SET status = 'processing',
+         SET status = '${WRITE.sales.processing}',
              updated_at = NOW(),
              error = NULL
         FROM claim
@@ -326,7 +337,7 @@ export async function runWakeDependentsPass(
   try {
     const { rows: awakenedRows } = await pool.query(
       `UPDATE qb_order_pipeline w
-          SET status       = 'processing',
+          SET status       = '${WRITE.sales.processing}',
               updated_at   = NOW(),
               error        = NULL,
               failed_at    = NULL,
@@ -334,8 +345,8 @@ export async function runWakeDependentsPass(
               bridge_op_id = NULL
          FROM qb_order_pipeline d
         WHERE w.depends_on = d.id
-          AND w.status     = 'waiting'
-          AND d.status     IN ('confirmed', 'fixed')
+          AND w.status     IN (${SALES_SQL.blocked})
+          AND d.status     IN (${SALES_SQL.done})
         RETURNING w.id, w.order_id, w.reference_id, w.reference_type, w.step,
                   w.qb_txn_id, w.retry_count, w.payload`
     );
@@ -389,8 +400,8 @@ export async function runBlockedDependentsPass(logger: any): Promise<void> {
               updated_at = NOW()
          FROM qb_order_pipeline parent
         WHERE child.depends_on = parent.id
-          AND child.status = 'waiting'
-          AND parent.status IN ('failed', 'skipped')
+          AND child.status IN (${SALES_SQL.blocked})
+          AND parent.status IN (${SALES_SQL.failedAny}, ${SALES_SQL.skipped})
           AND parent.next_retry_at IS NULL
           AND child.error IS DISTINCT FROM
               ('Blocked by ' || parent.status || ' dependency ' ||
@@ -430,10 +441,10 @@ export async function runOrphanedWaitingPass(logger: any): Promise<void> {
   try {
     const { rows: promoted } = await pool.query(
       `UPDATE qb_order_pipeline
-          SET status     = 'pending',
+          SET status     = '${WRITE.sales.dispatchable}',
               updated_at = NOW(),
               error      = NULL
-        WHERE status      = 'waiting'
+        WHERE status      IN (${SALES_SQL.blocked})
           AND depends_on  IS NULL
           AND step        = 'payment'
           AND created_at  < NOW() - INTERVAL '3 minutes'

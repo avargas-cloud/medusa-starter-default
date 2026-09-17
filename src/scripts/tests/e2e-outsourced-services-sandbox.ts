@@ -554,7 +554,7 @@ async function main(): Promise<void> {
       `SELECT status FROM outsourced_service_settlement WHERE service_id = $1`,
       [approvedId]
     );
-    check("el settlement quedó confirmed", sset[0]?.status === "confirmed", String(sset[0]?.status));
+    check("el settlement quedó confirmed", sset[0]?.status === "confirmed", String(sset[0]?.status)); // entity-status
 
     const voidPosted = await api(
       token,

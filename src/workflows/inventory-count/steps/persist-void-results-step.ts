@@ -50,7 +50,7 @@ export const persistVoidResultsStep = createStep(
     await service.updateInventoryCounts([
       {
         id: input.count_id,
-        status: "voided",
+        status: "voided", // entity-status
         voided_at: new Date(),
         voided_by_user_id: input.voided_by_user_id,
         void_reason: input.void_reason,
@@ -60,7 +60,7 @@ export const persistVoidResultsStep = createStep(
     // 2. Transition lines: only the ones that actually moved stock
     if (input.affected_line_ids.length > 0) {
       await service.updateInventoryCountLines(
-        input.affected_line_ids.map((id) => ({ id, status: "voided" }))
+        input.affected_line_ids.map((id) => ({ id, status: "voided" })) // entity-status
       );
     }
 

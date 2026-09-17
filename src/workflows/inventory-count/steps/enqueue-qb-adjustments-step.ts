@@ -19,6 +19,7 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { getBusinessDateString } from "../../../lib/date/et";
 import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
+import { SALES_SQL, WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 import type { AppliedDelta } from "./apply-stock-deltas-step";
 import type { ClassifiedLine } from "./classify-lines-step";
@@ -104,10 +105,10 @@ export const enqueueQbAdjustmentsStep = createStep(
       // retry), reset it to pending with a fresh payload. Otherwise INSERT new.
       const { rows: updated } = await pool.query(
         `UPDATE qb_order_pipeline
-            SET status = 'pending', payload = $2::jsonb, error = NULL,
+            SET status = '${WRITE.sales.dispatchable}', payload = $2::jsonb, error = NULL,
                 next_retry_at = NULL, updated_at = NOW()
           WHERE reference_id = $1 AND step = 'inventory_adjustment'
-            AND status IN ('pending', 'failed')
+            AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.failedAny})
           RETURNING id`,
         [referenceId, JSON.stringify(payload)]
       );

@@ -24,6 +24,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `t152-${Date.now()}`;
@@ -126,7 +127,7 @@ async function testInsertReadDelete(client: Client) {
     [rowId]
   );
   const r = got.rows[0];
-  assert(r.status === "waiting", `inserted row has status='waiting'`);
+  assert(r.status === WRITE.purchase.dispatchable, "inserted row has the dispatchable status");
   assert(r.payload?.test === TEST_RUN_ID, `payload jsonb roundtrip works`);
   assert(r.payload?.lines?.length === 1, `payload nested array preserved`);
   assert(r.retries === 0, `retries default to 0`);

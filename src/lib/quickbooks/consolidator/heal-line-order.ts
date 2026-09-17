@@ -27,6 +27,7 @@
 
 import { getDbPool } from "../../../api/utils/db-pool";
 import { bridgeFetch, pollRawOperationResult } from "../client/core";
+import { SALES_SQL } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-LINE-ORDER-HEAL]";
 
@@ -192,7 +193,7 @@ export async function healLineOrderForRow(
               retry_count   = 0,
               next_retry_at = NOW(),
               updated_at    = NOW()
-        WHERE id = $1 AND status = 'failed'`,
+        WHERE id = $1 AND status IN (${SALES_SQL.failedAny})`,
       [pipelineRowId, JSON.stringify(orderedLineIds)]
     );
     logger.info(

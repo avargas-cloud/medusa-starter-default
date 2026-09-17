@@ -23,6 +23,7 @@ import {
 } from "../../../../../lib/pos/access-level";
 import { getDbPool } from "../../../../utils/db-pool";
 import { recordCardRefundJournal } from "../../../../../lib/ledger/documents/card-refund";
+import { WRITE } from "../../../../../lib/quickbooks/pipeline-status";
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -264,7 +265,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       referenceId: customer_payment_id,
       referenceType: "customer_payment",
       step: "write_check",
-      status: "confirmed",
+      status: WRITE.sales.synced,
       qbTxnId: "DRY-RUN-CHECK-TXN",
       medusaRefNumber: refLabel,
       payload: { bankAccountId: qb_bank_account_id, txnDate: refundDate },
@@ -353,7 +354,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     referenceId: customer_payment_id,
     referenceType: "customer_payment",
     step: "write_check",
-    status: "submitted",
+    status: WRITE.sales.submitted,
     bridgeOpId: enqueueRes.operation_id,
     medusaRefNumber: medusaRef,
     payload: { bankAccountId: qb_bank_account_id, txnDate: refundDate },
@@ -376,7 +377,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     referenceId: customer_payment_id,
     referenceType: "customer_payment",
     step: "refund_payment",
-    status: "waiting",
+    status: WRITE.sales.blocked,
     dependsOn: writeCheckRowId,
     medusaRefNumber: medusaRef,
     payload: isCreditMemoRefund
@@ -424,7 +425,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   // 8. Mark as processing
   await financeService.updateCustomerPayments(
     { id: customer_payment_id },
-    { qb: { status: "processing", operation_id: enqueueRes.operation_id } }
+    { qb: { status: "processing", operation_id: enqueueRes.operation_id } } // qb_sync_status
   );
 
   return res.json({

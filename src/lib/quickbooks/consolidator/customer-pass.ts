@@ -5,6 +5,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
 import { ensureCustomerInQb } from "../order-flow-core";
 import { syncCustomerDataExtToQb } from "../sync-customer-data-ext";
 import { decideRetry, type RetryDecision } from "../retry-config";
+import { SALES_SQL, WRITE, salesRetryDue } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -34,7 +35,7 @@ async function applyCustomerPipelineFailure(
     await pool
       .query(
         `UPDATE qb_order_pipeline
-            SET status        = 'failed',
+            SET status        = '${WRITE.sales.error}',
                 retry_count   = $2,
                 error         = $3,
                 next_retry_at = $4,
@@ -48,7 +49,7 @@ async function applyCustomerPipelineFailure(
     await pool
       .query(
         `UPDATE qb_order_pipeline
-            SET status        = 'failed',
+            SET status        = '${WRITE.sales.failed}',
                 retry_count   = $2,
                 error         = $3,
                 failed_at     = NOW(),
@@ -64,17 +65,17 @@ async function applyCustomerPipelineFailure(
     await pool
       .query(
         `UPDATE qb_order_pipeline
-            SET status     = 'failed',
+            SET status     = '${WRITE.sales.failed}',
                 failed_at  = NOW(),
                 updated_at = NOW(),
                 error      = 'Customer QB sync permanently failed — retry customer creation first'
           WHERE depends_on = $1
-            AND status     = 'waiting'`,
+            AND status     IN (${SALES_SQL.blocked})`,
         [rowId]
       )
       .catch(() => {});
   }
-  return { ...decision, newStatus: "failed" as const };
+  return { ...decision, newStatus: WRITE.sales.failed };
 }
 
 export async function processCustomerPipelineRow(
@@ -115,7 +116,7 @@ export async function processCustomerPipelineRow(
     // Mark row 'submitted' so UI shows progress while the bridge call is in flight.
     await pool.query(
       `UPDATE qb_order_pipeline
-          SET status = 'submitted', submitted_at = NOW(), updated_at = NOW(), error = NULL
+          SET status = '${WRITE.sales.submitted}', submitted_at = NOW(), updated_at = NOW(), error = NULL
         WHERE id = $1`,
       [row.id]
     );
@@ -129,7 +130,7 @@ export async function processCustomerPipelineRow(
     if (result.success && result.qbCustomerId) {
       await pool.query(
         `UPDATE qb_order_pipeline
-            SET status       = 'confirmed',
+            SET status       = '${WRITE.sales.synced}',
                 qb_txn_id    = $2,
                 confirmed_at = NOW(),
                 updated_at   = NOW(),
@@ -199,7 +200,7 @@ export async function processCustomerDataExtPipelineRow(
     if (!channel) {
       await pool.query(
         `UPDATE qb_order_pipeline
-            SET status='confirmed', confirmed_at=NOW(), updated_at=NOW(),
+            SET status='${WRITE.sales.synced}', confirmed_at=NOW(), updated_at=NOW(),
                 error=NULL
           WHERE id=$1`,
         [row.id]
@@ -209,7 +210,7 @@ export async function processCustomerDataExtPipelineRow(
 
     await pool.query(
       `UPDATE qb_order_pipeline
-          SET status='submitted', submitted_at=NOW(), updated_at=NOW(), error=NULL
+          SET status='${WRITE.sales.submitted}', submitted_at=NOW(), updated_at=NOW(), error=NULL
         WHERE id=$1`,
       [row.id]
     );
@@ -227,7 +228,7 @@ export async function processCustomerDataExtPipelineRow(
     if (result.success) {
       await pool.query(
         `UPDATE qb_order_pipeline
-            SET status='confirmed', confirmed_at=NOW(), updated_at=NOW(),
+            SET status='${WRITE.sales.synced}', confirmed_at=NOW(), updated_at=NOW(),
                 error=NULL
           WHERE id=$1`,
         [row.id]
@@ -272,8 +273,8 @@ export async function runCustomerPass(
         FROM qb_order_pipeline
        WHERE step = 'customer'
          AND (
-           status = 'pending'
-           OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
+           status IN (${SALES_SQL.dispatchable})
+           OR ${salesRetryDue()}
          )
          AND reference_id IS NOT NULL
        ORDER BY COALESCE(updated_at, created_at) ASC
@@ -315,8 +316,8 @@ export async function runCustomerDataExtPass(
         FROM qb_order_pipeline
        WHERE step = 'customer_data_ext'
          AND (
-           status = 'pending'
-           OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
+           status IN (${SALES_SQL.dispatchable})
+           OR ${salesRetryDue()}
          )
          AND reference_id IS NOT NULL
        ORDER BY COALESCE(updated_at, created_at) ASC

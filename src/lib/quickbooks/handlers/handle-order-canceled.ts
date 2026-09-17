@@ -11,6 +11,7 @@ import {
   skipPipelineRowById,
 } from "../qb-pipeline";
 import { QbSyncLogger } from "../qb-sync-logger";
+import { WRITE, pipelineStatusIs } from "../pipeline-status";
 
 import { LOG_PREFIX } from "./utils";
 
@@ -61,7 +62,7 @@ export async function handleOrderCanceled(
         "sales_receipt",
       ]);
       for (const inFlightRow of inFlight) {
-        if (inFlightRow.status === "waiting") {
+        if (pipelineStatusIs("sales", inFlightRow, "blocked")) {
           // Document never reached QB — skip the row, no void needed.
           // Also stamp qb_sync_status=voided so the POS QB SYNCED badge shows VOIDED.
           await skipPipelineRowById(
@@ -170,7 +171,7 @@ export async function handleOrderCanceled(
       const { rows } = await pool.query(
         `SELECT id FROM pos_invoice
                  WHERE order_id = $1
-                   AND status = 'voided'
+                   AND status = 'voided' -- entity-status
                    AND metadata @> '{"is_sales_receipt": true}'
                  LIMIT 1`,
         [orderId]
@@ -191,7 +192,7 @@ export async function handleOrderCanceled(
       await writePipelineRow({
         orderId: orderId,
         step: "void_invoice",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         qbTxnId: invoiceTxnId,
         qbRefNumber: invoiceRef ?? null,
         medusaRefNumber: invoiceRef ?? null,
@@ -205,7 +206,7 @@ export async function handleOrderCanceled(
     await writePipelineRow({
       orderId: orderId,
       step: "void_sales_order",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: soTxnId,
       qbRefNumber: soRef ?? null,
       medusaRefNumber: soMedusaRef,

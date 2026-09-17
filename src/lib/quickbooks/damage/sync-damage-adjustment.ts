@@ -55,6 +55,7 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { getBusinessDateString } from "../../date/et";
 import { writePipelineRow } from "../pipeline/row-mutations";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../pipeline-status";
 
 export const CM_DAMAGE_ADD_STEP = "cm_damage_adjustment" as const;
 export const CM_DAMAGE_MOD_STEP = "cm_damage_adjustment_mod" as const;
@@ -286,15 +287,15 @@ export async function syncCreditMemoDamageAdjustment(input: {
          FROM qb_order_pipeline
         WHERE reference_id = $1
           AND step = $2
-          AND status IN ('waiting', 'pending', 'processing', 'submitted')
+          AND status IN (${SALES_SQL.inFlight})
         ORDER BY created_at DESC`,
       [creditMemoId, CM_DAMAGE_VOID_STEP]
     );
-    const dispatchedVoid = liveVoids.find(
-      (v: any) => v.status === "processing" || v.status === "submitted"
+    const dispatchedVoid = liveVoids.find((v: any) =>
+      pipelineStatusIs("sales", v, "processing", "submitted")
     );
-    const queuedVoids = liveVoids.filter(
-      (v: any) => v.status === "waiting" || v.status === "pending"
+    const queuedVoids = liveVoids.filter((v: any) =>
+      pipelineStatusIs("sales", v, "blocked", "waiting")
     );
 
     let hasAdjustment = !!cm.adj_txn_id;
@@ -308,7 +309,7 @@ export async function syncCreditMemoDamageAdjustment(input: {
     // Un credit memo voideado no tiene defectuosos vivos, sin importar lo que
     // digan sus líneas: el void ya revirtió el restock en Medusa.
     const target =
-      forceEmpty || cm.status === "voided"
+      forceEmpty || cm.status === "voided" // entity-status
         ? { lines: [] as DamageTargetLine[], skipped: [] }
         : await resolveDamageTarget(creditMemoId);
 
@@ -350,7 +351,7 @@ export async function syncCreditMemoDamageAdjustment(input: {
         referenceId: creditMemoId,
         referenceType: "credit_memo",
         step: CM_DAMAGE_VOID_STEP,
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         qbTxnId: cm.adj_txn_id,
         medusaRefNumber: cm.credit_memo_number,
         payload: {
@@ -392,11 +393,11 @@ export async function syncCreditMemoDamageAdjustment(input: {
       for (const v of queuedVoids) {
         await pool.query(
           `UPDATE qb_order_pipeline
-              SET status = 'skipped',
+              SET status = '${WRITE.sales.skipped}',
                   error = 'los defectuosos volvieron antes de despachar el void — el ajuste se mantiene y se edita',
                   next_retry_at = NULL,
                   updated_at = NOW()
-            WHERE id = $1 AND status IN ('waiting', 'pending')`,
+            WHERE id = $1 AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked})`,
           [v.id]
         );
         logger.info(
@@ -408,7 +409,7 @@ export async function syncCreditMemoDamageAdjustment(input: {
         referenceId: creditMemoId,
         referenceType: "credit_memo",
         step: CM_DAMAGE_MOD_STEP,
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         qbTxnId: cm.adj_txn_id,
         medusaRefNumber: cm.credit_memo_number,
         payload,
@@ -425,7 +426,7 @@ export async function syncCreditMemoDamageAdjustment(input: {
       referenceId: creditMemoId,
       referenceType: "credit_memo",
       step: CM_DAMAGE_ADD_STEP,
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       medusaRefNumber: cm.credit_memo_number,
       payload,
     });

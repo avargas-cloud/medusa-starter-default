@@ -31,6 +31,7 @@
 import { readFileSync, writeFileSync } from "fs";
 
 import { Pool } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB =
   process.env.SANDBOX_DATABASE_URL ??
@@ -175,7 +176,7 @@ async function loadRecipes(docs: string[]): Promise<Recipe[]> {
                            AND COALESCE(oi.fulfilled_quantity, 0) < oi.quantity)
                   AS partial,
                 ARRAY(SELECT p.qb_txn_id FROM qb_order_pipeline p
-                       WHERE p.order_id = o.id AND p.status = 'confirmed'
+                       WHERE p.order_id = o.id AND p.status = '${WRITE.sales.synced}'
                          AND p.step IN ('invoice','sales_receipt','sales_order')) AS txn_ids
            FROM "order" o
           WHERE o.metadata->>'document_number' = $1

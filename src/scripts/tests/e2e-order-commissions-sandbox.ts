@@ -30,6 +30,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-order-commissions-sandbox.ts
  */
 import { Pool } from "pg";
+import { WRITE, pipelineStatusIs } from "../../lib/quickbooks/pipeline-status";
 
 const BASE = process.env.SANDBOX_URL ?? "http://localhost:9099";
 const ADMIN_EMAIL = process.env.SANDBOX_ADMIN_EMAIL ?? "";
@@ -135,7 +136,7 @@ async function main(): Promise<void> {
        FROM "order" o
        JOIN order_money_projection omp ON omp.order_id = o.id
        JOIN pos_invoice pi ON pi.order_id = o.id
-        AND pi.deleted_at IS NULL AND pi.status NOT IN ('draft','voided')
+        AND pi.deleted_at IS NULL AND pi.status NOT IN ('draft','voided') -- entity-status
       WHERE o.deleted_at IS NULL
         AND o.customer_id IS NOT NULL
         AND omp.order_total_cents > 0
@@ -150,7 +151,7 @@ async function main(): Promise<void> {
   }
   await pool.query(
     `UPDATE pos_invoice SET created_at = NOW() - INTERVAL '31 days'
-      WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`,
+      WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`, // entity-status
     [fixture.order_id]
   );
   console.log(`Fixture: orden ${fixture.display_id} (${fixture.order_id})\n`);
@@ -724,10 +725,10 @@ async function main(): Promise<void> {
     );
     const checkRow = pipeRows.find((r) => r.step === "commission_check");
     const payRow = pipeRows.find((r) => r.step === "commission_payment");
-    check("fila commission_check pending", checkRow?.status === "pending", String(checkRow?.status));
+    check("fila commission_check pending", checkRow?.status === WRITE.sales.dispatchable, String(checkRow?.status));
     check(
       "fila commission_payment waiting con depends_on del check",
-      payRow?.status === "waiting" && payRow?.depends_on === checkRow?.id,
+      payRow?.status === WRITE.sales.blocked && payRow?.depends_on === checkRow?.id,
       `status=${payRow?.status}`
     );
     const cp = (checkRow?.payload ?? {}) as Record<string, unknown>;
@@ -790,9 +791,10 @@ async function main(): Promise<void> {
       `SELECT status, next_retry_at, error FROM qb_order_pipeline WHERE id = $1`,
       [checkRow?.id]
     );
+    const afterDispatchRow = afterDispatch[0] ?? { status: null };
     check(
       "bridge muerto → failed con next_retry_at (transporte reintenta)",
-      afterDispatch[0]?.status === "failed" && afterDispatch[0]?.next_retry_at != null,
+      pipelineStatusIs("sales", afterDispatchRow, "error"),
       `status=${afterDispatch[0]?.status} err=${String(afterDispatch[0]?.error).slice(0, 60)}`
     );
   }
@@ -848,14 +850,14 @@ async function main(): Promise<void> {
   {
     const { rows: liveS } = await pool.query<{ id: string; vendor_bill_id: string; status: string }>(
       `SELECT id, vendor_bill_id, status FROM commission_settlement
-        WHERE recipient_id = $1 AND status IN ('pending','qb_waiting','confirmed')
+        WHERE recipient_id = $1 AND status IN ('pending','qb_waiting','confirmed') -- entity-status
         ORDER BY created_at DESC LIMIT 1`,
       [recipientVendorId]
     );
     const s17 = liveS[0];
     check("17: hay un settlement vivo por vendor_bill para revertir", !!s17?.vendor_bill_id, JSON.stringify(s17));
     const billId17 = String(s17?.vendor_bill_id ?? "");
-    await pool.query(`UPDATE vendor_bill SET status = 'synced' WHERE id = $1`, [billId17]);
+    await pool.query(`UPDATE vendor_bill SET status = 'synced' WHERE id = $1`, [billId17]); // entity-status
 
     // Negativas primero (el orden importa: después del unsettle ya no hay settlement vivo).
     const noReason = await api(
@@ -921,7 +923,7 @@ async function main(): Promise<void> {
       token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
       { action: "unsettle", reason: "e2e 17: beneficiario pidió store credit" }, E2E_PIN
     );
-    check("17: unsettle OK → billOutcome=voided", un.status === 200 && un.body.billOutcome === "voided", JSON.stringify(un.body).slice(0, 140));
+    check("17: unsettle OK → billOutcome=voided", un.status === 200 && un.body.billOutcome === "voided", JSON.stringify(un.body).slice(0, 140)); // entity-status
 
     const { rows: after } = await pool.query<{
       state: string; approved_at: Date | null; settled_at: Date | null; sstatus: string; bstatus: string; voidrows: string;
@@ -930,7 +932,7 @@ async function main(): Promise<void> {
               (SELECT status FROM commission_settlement WHERE id = $2) AS sstatus,
               (SELECT status FROM vendor_bill WHERE id = $3) AS bstatus,
               (SELECT COUNT(*)::text FROM qb_order_pipeline
-                WHERE step = 'vendor_bill_void' AND reference_id = $3 AND status = 'pending'
+                WHERE step = 'vendor_bill_void' AND reference_id = $3 AND status = '${WRITE.sales.dispatchable}'
                   AND qb_txn_id = 'E2E-QB-TXN') AS voidrows
          FROM order_commission_recipient r WHERE r.id = $1`,
       [recipientVendorId, String(s17?.id), billId17]
@@ -971,9 +973,10 @@ async function main(): Promise<void> {
       `SELECT status, next_retry_at, error FROM qb_order_pipeline WHERE id = $1`,
       [voidRow[0]?.id]
     );
+    const dispatchedRow = dispatched[0] ?? { status: null };
     check(
       "17: vendor_bill_void se DESPACHA (bridge muerto → failed con next_retry_at, no 'Unsupported step')",
-      dispatched[0]?.status === "failed" && dispatched[0]?.next_retry_at != null &&
+      pipelineStatusIs("sales", dispatchedRow, "error") &&
         !String(dispatched[0]?.error ?? "").includes("Unsupported"),
       `status=${dispatched[0]?.status} err=${String(dispatched[0]?.error).slice(0, 80)}`
     );
@@ -1025,7 +1028,7 @@ async function main(): Promise<void> {
     // Limpiar el settlement de la sección 5 para poder liquidar de nuevo con fecha.
     await pool.query(
       `UPDATE commission_settlement SET status = 'reversed', updated_at = NOW()
-        WHERE recipient_id = $1 AND status IN ('pending','qb_waiting','confirmed')`,
+        WHERE recipient_id = $1 AND status IN ('pending','qb_waiting','confirmed')`, // entity-status
       [recipientCustomerId]
     );
     await pool.query(
@@ -1097,7 +1100,7 @@ async function main(): Promise<void> {
          FROM "order" o
          JOIN order_money_projection omp ON omp.order_id = o.id
          JOIN pos_invoice pi ON pi.order_id = o.id
-          AND pi.deleted_at IS NULL AND pi.status NOT IN ('draft','voided')
+          AND pi.deleted_at IS NULL AND pi.status NOT IN ('draft','voided') -- entity-status
         WHERE o.deleted_at IS NULL
           AND o.customer_id IS NOT NULL
           AND o.id <> $1
@@ -1122,7 +1125,7 @@ async function main(): Promise<void> {
     } else {
       await pool.query(
         `UPDATE pos_invoice SET created_at = NOW() - INTERVAL '31 days'
-          WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`,
+          WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`, // entity-status
         [other.order_id]
       );
       const otherPath = `/admin/commissions/orders/${other.order_id}`;
@@ -1537,7 +1540,7 @@ async function main(): Promise<void> {
       `SELECT status FROM "order" WHERE id = $1`,
       [fixture.order_id]
     );
-    const originalStatus = statusRows[0]?.status ?? "completed";
+    const originalStatus = statusRows[0]?.status ?? "completed"; // entity-status
 
     const assigned12 = await api(
       token, "POST", orderPath,
@@ -1741,7 +1744,7 @@ async function main(): Promise<void> {
     await pool.query(
       `CREATE TEMP TABLE tmp_e2e_inv_14 AS
         SELECT * FROM pos_invoice
-         WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')
+         WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided') -- entity-status
          ORDER BY created_at ASC LIMIT 1`,
       [fixture.order_id]
     );
@@ -1782,7 +1785,7 @@ async function main(): Promise<void> {
     await resetCommission(fixture.order_id);
     await pool.query(
       `UPDATE pos_invoice SET created_at = NOW() - INTERVAL '5 days'
-        WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`,
+        WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`, // entity-status
       [fixture.order_id]
     );
     try {
@@ -1876,7 +1879,7 @@ async function main(): Promise<void> {
       // Repetibilidad: el fixture vuelve a su forma canónica (-31d) pase lo que pase.
       await pool.query(
         `UPDATE pos_invoice SET created_at = NOW() - INTERVAL '31 days'
-          WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`,
+          WHERE order_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','voided')`, // entity-status
         [fixture.order_id]
       );
     }

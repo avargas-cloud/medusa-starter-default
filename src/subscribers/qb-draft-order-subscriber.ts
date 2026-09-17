@@ -39,6 +39,7 @@ import {
   requireQbCustomer,
 } from "../lib/quickbooks/qb-pipeline";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { SALES_SQL, WRITE } from "../lib/quickbooks/pipeline-status";
 
 const LOG_PREFIX = "[QB-DRAFT]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -110,7 +111,7 @@ async function qbDraftOrderSubscriber({
       await writePipelineRow({
         orderId: draftOrderId,
         step: "estimate",
-        status: isPos ? "waiting" : "pending",
+        status: isPos ? WRITE.sales.blocked : WRITE.sales.dispatchable,
         medusaRefNumber: friendlyRef,
       });
       logger.info(
@@ -172,7 +173,7 @@ export async function handleDraftOrderCreated(
       const { rows: existing } = await pool.query(
         `SELECT status FROM qb_order_pipeline
                WHERE order_id = $1 AND step = 'estimate'
-                 AND status IN ('submitted', 'confirmed')
+                 AND status IN (${SALES_SQL.submitted}, ${SALES_SQL.synced})
                LIMIT 1`,
         [draftOrderId]
       );
@@ -248,7 +249,7 @@ export async function handleDraftOrderCreated(
       await writePipelineRow({
         orderId: draftOrderId,
         step: "estimate",
-        status: "waiting",
+        status: WRITE.sales.blocked,
         medusaRefNumber: friendlyRef ?? null,
       });
       logger.info(
@@ -349,7 +350,7 @@ export async function handleDraftOrderCreated(
     await writePipelineRow({
       orderId: draftOrderId,
       step: "estimate",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       medusaRefNumber: friendlyEstRef ?? null,
     });
   } catch (pErr: any) {
@@ -384,7 +385,7 @@ export async function handleDraftOrderCreated(
       await writePipelineRow({
         orderId: draftOrderId,
         step: "estimate",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: result.error,
       });
     } catch (pErr: any) {
@@ -411,7 +412,7 @@ export async function handleDraftOrderCreated(
       await writePipelineRow({
         orderId: draftOrderId,
         step: "estimate",
-        status: result.operationId && !result.txnId ? "submitted" : "confirmed",
+        status: result.operationId && !result.txnId ? WRITE.sales.submitted : WRITE.sales.synced,
         bridgeOpId: result.operationId || null,
         qbTxnId: result.txnId || null,
         qbRefNumber: result.refNumber || null,
@@ -473,7 +474,7 @@ export async function handleDraftOrderCreated(
 
       await orderModule.updateOrders(draftOrderId, { metadata: patch });
       logger.info(
-        `${LOG_PREFIX} ✅ Saved estimate metadata to draft order ${draftOrderId} (status=${isAsync ? "pending" : "synced"})`
+        `${LOG_PREFIX} ✅ Saved estimate metadata to draft order ${draftOrderId} (status=${isAsync ? "pending" : "synced"})`  // qb_sync_status
       );
     } catch (metaErr: any) {
       logger.error(

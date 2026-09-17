@@ -234,7 +234,7 @@ for (const step of uniqueMaterializable) {
 // nombre.
 const poPoller = read("jobs/qb-purchase-order-poller.ts");
 if (
-  !/status\s*=\s*'voided'/.test(poPoller) ||
+  !/status\s*=\s*'voided'/.test(poPoller) || // entity-status (purchase_order.status)
   !/is_void:\s*true/.test(poPoller)
 ) {
   failures.push(

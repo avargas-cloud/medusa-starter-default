@@ -4,6 +4,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
 import type { PipelineStep } from "./types";
 import { writePipelineRow } from "./row-mutations";
 import { isQbSyncEnabled } from "../sync-enabled";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../pipeline-status";
 
 /**
  * Idempotent upsert of a step='customer' pipeline row keyed by customer_id.
@@ -40,10 +41,10 @@ export async function ensureCustomerPipelineRow(
 
   if (existing.length > 0) {
     const row = existing[0];
-    if (row.status === "failed") {
+    if (pipelineStatusIs("sales", row, "error", "failed")) {
       await pool.query(
         `UPDATE qb_order_pipeline
-            SET status       = 'pending',
+            SET status       = '${WRITE.sales.dispatchable}',
                 error        = NULL,
                 failed_at    = NULL,
                 submitted_at = NULL,
@@ -63,7 +64,7 @@ export async function ensureCustomerPipelineRow(
   const { rows } = await pool.query(
     `INSERT INTO qb_order_pipeline
         (reference_id, reference_type, step, status, medusa_ref_number)
-     VALUES ($1, 'customer', 'customer', 'pending', $2)
+     VALUES ($1, 'customer', 'customer', '${WRITE.sales.dispatchable}', $2)
      RETURNING id`,
     [customerId, customerEmail]
   );
@@ -123,7 +124,7 @@ export async function requireQbCustomer(input: {
     referenceId: input.selfReferenceId ?? null,
     referenceType: input.selfReferenceType ?? null,
     step: input.step,
-    status: "waiting",
+    status: WRITE.sales.blocked,
     dependsOn: customerRowId,
     medusaRefNumber: input.selfMedusaRefNumber ?? null,
   });
@@ -144,7 +145,7 @@ export async function wakeDependentsOfConfirmed(): Promise<number> {
   const pool = getDbPool();
   const { rowCount } = await pool.query(
     `UPDATE qb_order_pipeline w
-        SET status       = 'pending',
+        SET status       = '${WRITE.sales.dispatchable}',
             updated_at   = NOW(),
             error        = NULL,
             failed_at    = NULL,
@@ -152,8 +153,8 @@ export async function wakeDependentsOfConfirmed(): Promise<number> {
             bridge_op_id = NULL
       FROM qb_order_pipeline d
      WHERE w.depends_on = d.id
-       AND w.status     = 'waiting'
-       AND d.status     = 'confirmed'`
+       AND w.status     IN (${SALES_SQL.blocked})
+       AND d.status     IN (${SALES_SQL.synced})`
   );
   return rowCount ?? 0;
 }

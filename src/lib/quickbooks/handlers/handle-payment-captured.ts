@@ -31,6 +31,7 @@ import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client";
 import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types";
 import { writePipelineRow } from "../qb-pipeline";
+import { WRITE } from "../pipeline-status";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 
 import { LOG_PREFIX, isPosOrder } from "./utils";
@@ -109,7 +110,7 @@ export async function handlePaymentCaptured(
 
   // Write "pending" pipeline row immediately so it appears in the UI before polling starts
   try {
-    await writePipelineRow({ orderId, step: "payment", status: "pending" });
+    await writePipelineRow({ orderId, step: "payment", status: WRITE.sales.dispatchable });
   } catch (pErr: any) {
     logger.warn(
       `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`
@@ -126,7 +127,7 @@ export async function handlePaymentCaptured(
       await writePipelineRow({
         orderId,
         step: "payment",
-        status: "submitted",
+        status: WRITE.sales.submitted,
         bridgeOpId: operationId,
       });
     },
@@ -144,7 +145,7 @@ export async function handlePaymentCaptured(
       await writePipelineRow({
         orderId,
         step: "payment",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: result.error,
       });
     } catch (pErr: any) {
@@ -161,7 +162,7 @@ export async function handlePaymentCaptured(
       await writePipelineRow({
         orderId,
         step: "payment",
-        status: result.operationId && !result.txnId ? "submitted" : "confirmed",
+        status: result.operationId && !result.txnId ? WRITE.sales.submitted : WRITE.sales.synced,
         bridgeOpId: result.operationId || null,
         qbTxnId: result.txnId || null,
         qbRefNumber: result.refNumber || null,

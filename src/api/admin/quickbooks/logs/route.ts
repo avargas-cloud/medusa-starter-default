@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+import { WRITE } from "../../../../lib/quickbooks/pipeline-status";
 
 /**
  * GET /admin/quickbooks/logs
@@ -31,11 +32,11 @@ export async function GET(
     await client.query(`
             UPDATE qb_sync_log
             SET
-                status       = 'failed',
+                status       = '${WRITE.log.failed}',
                 completed_at = NOW(),
                 duration_ms  = EXTRACT(EPOCH FROM (NOW() - initiated_at)) * 1000,
                 error        = 'Job timed out — process may have crashed or restarted'
-            WHERE status = 'processing'
+            WHERE status = 'processing' -- canonical-literal
               AND initiated_at < NOW() - INTERVAL '5 minutes'
         `);
 

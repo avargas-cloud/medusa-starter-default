@@ -2,6 +2,7 @@ import {
   writePipelineRow,
   findLastInFlightSoToggleRow,
 } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 const LOG_PREFIX = "[toggle-close/qb]";
 
@@ -48,7 +49,7 @@ export async function enqueueSoToggle(opts: {
         referenceId: orderId,
         referenceType: "order",
         step: pipelineStep,
-        status: "skipped",
+        status: WRITE.sales.skipped,
         qbTxnId: null,
         qbRefNumber: soRefNumber ?? null,
         medusaRefNumber,
@@ -74,7 +75,7 @@ export async function enqueueSoToggle(opts: {
         referenceId: orderId,
         referenceType: "order",
         step: pipelineStep,
-        status: "waiting",
+        status: WRITE.sales.blocked,
         dependsOn: dependsOnRowId,
         qbTxnId: soTxnId,
         qbRefNumber: soRefNumber ?? null,
@@ -97,7 +98,7 @@ export async function enqueueSoToggle(opts: {
       referenceId: orderId,
       referenceType: "order",
       step: pipelineStep,
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: soTxnId,
       qbRefNumber: soRefNumber ?? null,
       medusaRefNumber,

@@ -3,6 +3,8 @@ import { Badge, Button, Container, Heading, Table, Text, toast } from "@medusajs
 import { useCallback, useEffect, useState } from "react";
 
 import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+import { PipelineStatusBadge } from "./PipelineStatusBadge";
+import { pipelineStatusIs } from "../../../../lib/quickbooks/pipeline-status";
 
 /**
  * Commissions Pipeline tab — el lane propio de las comisiones por orden
@@ -41,14 +43,9 @@ const STATUS_FILTERS = [
   { label: "Skipped", value: "skipped" },
 ];
 
-const StatusBadge = ({ status }: { status: string }) => {
-  if (status === "confirmed") return <Badge color="green" size="2xsmall">confirmed</Badge>;
-  if (status === "failed") return <Badge color="red" size="2xsmall">failed</Badge>;
-  if (status === "submitted") return <Badge color="blue" size="2xsmall">submitted</Badge>;
-  if (status === "waiting") return <Badge color="grey" size="2xsmall">waiting</Badge>;
-  if (status === "skipped") return <Badge color="grey" size="2xsmall">skipped</Badge>;
-  return <Badge color="orange" size="2xsmall">{status}</Badge>;
-};
+const StatusBadge = ({ status }: { status: string }) => (
+  <PipelineStatusBadge status={status} family="sales" />
+);
 
 const StepBadge = ({ step }: { step: string }) =>
   step === "commission_check" ? (
@@ -204,7 +201,7 @@ export const CommissionsPipelineSection = () => {
                   {new Date(r.updated_at ?? r.created_at).toLocaleString()}
                 </Table.Cell>
                 <Table.Cell>
-                  {r.status === "failed" && (
+                  {pipelineStatusIs("sales", r, "error", "failed") && (
                     <Button
                       size="small"
                       variant="secondary"

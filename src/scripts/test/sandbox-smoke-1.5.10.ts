@@ -18,6 +18,7 @@ process.env.DATABASE_URL =
 
 import { Client } from "pg";
 import { randomUUID } from "crypto";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as fs from "fs";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
@@ -113,7 +114,7 @@ async function testDbContract(client: Client) {
     result.rows.length === 1 && result.rows[0].step === "payment",
     "DB query by step='payment' returns the pending row"
   );
-  assert(result.rows[0].status === "pending", "status reflects 'pending'");
+  assert(result.rows[0].status === WRITE.sales.dispatchable, "status reflects the dispatchable literal");
 }
 
 async function cleanup(client: Client) {

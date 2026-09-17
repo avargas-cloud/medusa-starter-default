@@ -88,7 +88,7 @@ describe("pollSubmittedRows — vendor_credit_add confirmation", () => {
   it("writes qb_txn_id via the handler on a successful VendorCreditRet", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -116,7 +116,7 @@ describe("pollSubmittedRows — vendor_credit_add confirmation", () => {
   it("fails terminally (never auto-retries) when QuickBooks rejects the ADD", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -143,7 +143,7 @@ describe("pollSubmittedRows — vendor_credit_void confirmation", () => {
   it("calls the void handler on a successful TxnVoidRs", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: { QBXMLMsgsRs: { TxnVoidRs: { statusCode: "0" } } },
         },
@@ -160,7 +160,7 @@ describe("pollSubmittedRows — vendor_credit_void confirmation", () => {
   it("routes a rejected void through the normal retry path (TxnVoid can't duplicate)", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -184,7 +184,7 @@ describe("pollSubmittedRows — bill_payment_add confirmation", () => {
   it("writes qb_txn_id via the handler on a successful BillPaymentCheckRet", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -214,7 +214,7 @@ describe("pollSubmittedRows — bill_payment_add confirmation", () => {
   it("writes qb_txn_id via the handler on a successful BillPaymentCreditCardRet", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -245,7 +245,7 @@ describe("pollSubmittedRows — bill_payment_void confirmation", () => {
   it("calls the void handler on a successful TxnVoidRs", async () => {
     mockBridgeFetch.mockResolvedValue({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: { QBXMLMsgsRs: { TxnVoidRs: { statusCode: "0" } } },
         },
@@ -280,7 +280,7 @@ describe("pollSubmittedRows — vendor_credit_apply confirmation (readback, not 
       .mockResolvedValueOnce({
         // GET /api/sync/status/<bridge_op_id> — the original $0 apply dispatch
         operation: {
-          status: "completed",
+          status: "completed", // bridge-status
           result: {
             QBXML: {
               QBXMLMsgsRs: {
@@ -317,7 +317,7 @@ describe("pollSubmittedRows — vendor_credit_apply confirmation (readback, not 
     mockBridgeFetch
       .mockResolvedValueOnce({
         operation: {
-          status: "completed",
+          status: "completed", // bridge-status
           result: {
             QBXML: {
               QBXMLMsgsRs: {
@@ -345,7 +345,7 @@ describe("pollSubmittedRows — vendor_credit_apply confirmation (readback, not 
   it("fails terminally when QuickBooks rejects the $0 apply (statusCode != 0)", async () => {
     mockBridgeFetch.mockResolvedValueOnce({
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -367,7 +367,7 @@ describe("pollSubmittedRows — vendor_credit_apply confirmation (readback, not 
     mockBridgeFetch
       .mockResolvedValueOnce({
         operation: {
-          status: "completed",
+          status: "completed", // bridge-status
           result: {
             QBXML: {
               QBXMLMsgsRs: {

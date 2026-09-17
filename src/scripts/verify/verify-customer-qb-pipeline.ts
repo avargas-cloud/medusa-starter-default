@@ -1,5 +1,6 @@
 import { ExecArgs } from "@medusajs/framework/types";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { getDbPool } from "../../api/utils/db-pool";
 import {
@@ -119,7 +120,7 @@ export default async function verifyCustomerQbPipeline({ container }: ExecArgs) 
     );
     const custOk =
       custRows.length === 1 &&
-      custRows[0].status === "pending" &&
+      custRows[0].status === WRITE.sales.dispatchable &&
       custRows[0].reference_id === targetCustomerId;
     logResult(
       "B customer row",
@@ -135,7 +136,7 @@ export default async function verifyCustomerQbPipeline({ container }: ExecArgs) 
     );
     const depOk =
       depRows.length === 1 &&
-      depRows[0].status === "waiting" &&
+      depRows[0].status === WRITE.sales.blocked &&
       depRows[0].depends_on === customerRowId;
     logResult(
       "B dependent row",
@@ -145,19 +146,19 @@ export default async function verifyCustomerQbPipeline({ container }: ExecArgs) 
 
     // ── Scenario C — simulate customer confirming, verify wake-pass ────────
     await pool.query(
-      `UPDATE qb_order_pipeline SET status = 'confirmed', confirmed_at = NOW(), qb_txn_id = 'TEST-LISTID-123' WHERE id = $1`,
+      `UPDATE qb_order_pipeline SET status = '${WRITE.sales.synced}', confirmed_at = NOW(), qb_txn_id = 'TEST-LISTID-123' WHERE id = $1`,
       [customerRowId]
     );
 
     // Run wake-pass (same query the consolidator uses)
     await pool.query(
       `UPDATE qb_order_pipeline w
-          SET status = 'pending', updated_at = NOW(),
+          SET status = '${WRITE.sales.dispatchable}', updated_at = NOW(),
               error = NULL, failed_at = NULL, submitted_at = NULL, bridge_op_id = NULL
          FROM qb_order_pipeline d
         WHERE w.depends_on = d.id
-          AND w.status = 'waiting'
-          AND d.status = 'confirmed'`
+          AND w.status = '${WRITE.sales.blocked}'
+          AND d.status = '${WRITE.sales.synced}'`
     );
 
     const { rows: afterRows } = await pool.query(
@@ -165,7 +166,7 @@ export default async function verifyCustomerQbPipeline({ container }: ExecArgs) 
         WHERE step = 'sales_receipt' AND reference_id = $1`,
       [bSelfRef]
     );
-    const wakeOk = afterRows.length === 1 && afterRows[0].status === "pending";
+    const wakeOk = afterRows.length === 1 && afterRows[0].status === WRITE.sales.dispatchable;
     logResult(
       "C wake-pass",
       wakeOk,

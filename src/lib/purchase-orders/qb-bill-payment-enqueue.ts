@@ -40,6 +40,7 @@ import {
 import { buildTxnVoidQbxml } from "../quickbooks/txn-void-add";
 import { toQbRefNumber } from "../quickbooks/qb-ref-number";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { SALES_SQL, WRITE } from "../quickbooks/pipeline-status";
 
 export type EnqueueKnex = PurchaseDependencyKnex;
 
@@ -359,8 +360,8 @@ export async function enqueueBillPaymentAdd(
     );
     await knex.raw(
       `UPDATE qb_order_pipeline
-          SET status = 'waiting', depends_on = ?::uuid, updated_at = NOW()
-        WHERE id = ?::uuid AND status NOT IN ('confirmed', 'fixed')`,
+          SET status = '${WRITE.sales.blocked}', depends_on = ?::uuid, updated_at = NOW()
+        WHERE id = ?::uuid AND status NOT IN (${SALES_SQL.done})`,
       [blockerOpId, operation.id]
     );
   }

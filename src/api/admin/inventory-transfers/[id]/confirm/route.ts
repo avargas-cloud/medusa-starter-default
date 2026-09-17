@@ -318,7 +318,7 @@ export async function POST(
   // 8. Update transfer to confirmed
   await knex.raw(
     `UPDATE inventory_transfer
-     SET status = 'confirmed',
+     SET status = 'confirmed', -- entity-status
          confirmed_at = NOW(),
          confirmed_by_user_id = ?,
          linked_purchase_order_id = ?,

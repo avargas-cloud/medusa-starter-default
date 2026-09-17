@@ -362,7 +362,7 @@ async function main(): Promise<void> {
     );
     check(
       "el bill sigue synced y sus líneas guardadas no se tocaron — el Mod todavía no llegó a QB",
-      stillSynced.rows[0]?.status === "synced",
+      stillSynced.rows[0]?.status === "synced", // entity-status
       String(stillSynced.rows[0]?.status)
     );
 

@@ -3,6 +3,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
+import { SALES_SQL, WRITE, pipelineStatusIs } from "../../../../../lib/quickbooks/pipeline-status";
 import {
   accessFailure,
   assertAccounting,
@@ -89,7 +90,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const wc = wcRows?.[0] as
     | { id: string; status: string; qb_txn_id: string | null }
     | undefined;
-  if (!wc || wc.status !== "confirmed" || !wc.qb_txn_id) {
+  if (!wc || !pipelineStatusIs("sales", wc, "synced") || !wc.qb_txn_id) {
     return res.status(409).json({
       error:
         "The QB Write Check is not confirmed yet — the refund date/bank can only be edited after it lands in QuickBooks. Use the process flow instead.",
@@ -136,7 +137,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const { rows: activeMod } = await pgConnection.raw(
     `SELECT id, status FROM qb_order_pipeline
       WHERE step = 'refund_check_mod' AND reference_id = ?
-        AND status IN ('pending', 'processing', 'submitted')
+        AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.processing}, ${SALES_SQL.submitted})
       ORDER BY COALESCE(updated_at, created_at) DESC
       LIMIT 1`,
     [customer_payment_id]
@@ -158,7 +159,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       referenceId: customer_payment_id,
       referenceType: "customer_payment",
       step: "refund_check_mod",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       qbTxnId: wc.qb_txn_id,
       medusaRefNumber: `Refund edit ${payment.reference ?? customer_payment_id.slice(-8)}`,
       payload: modPayload,
@@ -179,7 +180,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const rp = rpRows?.[0] as
       | { id: string; status: string; qb_txn_id: string | null }
       | undefined;
-    if (rp?.status === "waiting") {
+    if (rp && pipelineStatusIs("sales", rp, "blocked")) {
       // Not in QB yet — it will be created with the new date.
       await pgConnection.raw(
         `UPDATE qb_order_pipeline
@@ -195,7 +196,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       const { rows: activeRpMod } = await pgConnection.raw(
         `SELECT id FROM qb_order_pipeline
           WHERE step = 'refund_payment_txndate_change' AND reference_id = ?
-            AND status IN ('pending', 'processing', 'submitted')
+            AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.processing}, ${SALES_SQL.submitted})
           LIMIT 1`,
         [customer_payment_id]
       );
@@ -204,7 +205,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           referenceId: customer_payment_id,
           referenceType: "customer_payment",
           step: "refund_payment_txndate_change",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           qbTxnId: rp.qb_txn_id ?? undefined,
           medusaRefNumber: `Refund apply date ${payment.reference ?? customer_payment_id.slice(-8)}`,
         });

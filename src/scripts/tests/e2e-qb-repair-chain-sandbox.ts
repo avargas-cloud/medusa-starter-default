@@ -19,6 +19,7 @@
 import { randomUUID } from "crypto";
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SB_DB =
   process.env.SANDBOX_DATABASE_URL ??
@@ -170,7 +171,7 @@ async function main(): Promise<void> {
     });
     check(
       "el TxnDel es la CABEZA de la cadena y se despacha ya",
-      del.status === "pending" && del.dependsOn === null,
+      del.status === WRITE.sales.dispatchable && del.dependsOn === null,
       `status=${del.status} depends_on=${del.dependsOn}`
     );
 
@@ -185,7 +186,7 @@ async function main(): Promise<void> {
     });
     check(
       "el PO Mod ESPERA, colgado del TxnDel",
-      poMod.status === "waiting" && poMod.dependsOn === del.id,
+      poMod.status === WRITE.sales.blocked && poMod.dependsOn === del.id,
       `status=${poMod.status} depends_on=${poMod.dependsOn} (esperado ${del.id})`
     );
 
@@ -224,8 +225,8 @@ async function main(): Promise<void> {
     );
     check(
       "exactamente UNA está despachable; las otras dos esperan",
-      chain.rows.filter((r) => r.status === "pending").length === 1 &&
-        chain.rows.filter((r) => r.status === "waiting").length === 2,
+      chain.rows.filter((r) => r.status === WRITE.sales.dispatchable).length === 1 &&
+        chain.rows.filter((r) => r.status === WRITE.sales.blocked).length === 2,
       chain.rows.map((r) => `${r.step}:${r.status}`).join(", ")
     );
 
@@ -277,9 +278,9 @@ async function main(): Promise<void> {
     });
     check(
       "el PO Mod queda ADELANTE y se despacharía primero — por eso el Save no debe encolarlo",
-      early.status === "pending" &&
+      early.status === WRITE.sales.dispatchable &&
         early.dependsOn === null &&
-        lateDel.status === "waiting" &&
+        lateDel.status === WRITE.sales.blocked &&
         lateDel.dependsOn === early.id,
       `po_mod=${early.status} del=${lateDel.status}`
     );

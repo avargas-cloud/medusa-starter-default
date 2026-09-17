@@ -13,6 +13,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-void-race-sandbox.ts
  */
 import { Pool } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const URL = process.env.DATABASE_URL ?? "";
 if (!URL.includes(":5499/")) {
@@ -97,7 +98,7 @@ async function main() {
   const invStatusBefore = (
     await q(`SELECT status FROM pos_invoice WHERE id = $1`, [invoiceId])
   ).rows[0].status;
-  await q(`UPDATE pos_invoice SET status = 'voided' WHERE id = $1`, [invoiceId]);
+  await q(`UPDATE pos_invoice SET status = 'voided' WHERE id = $1`, [invoiceId]); // entity-status
 
   const rowId = await enqueueVoidIfAlreadyVoided({
     createStep: "invoice",
@@ -118,7 +119,7 @@ async function main() {
     "invoice voideada → se encola void_invoice con el TxnID recién conocido",
     !!rowId &&
       invVoid?.step === "void_invoice" &&
-      invVoid?.status === "pending" &&
+      invVoid?.status === WRITE.sales.dispatchable &&
       invVoid?.qb_txn_id === "TXN-E2E-INVOICE",
     JSON.stringify(invVoid)
   );
@@ -175,7 +176,7 @@ async function main() {
     const srBefore = (
       await q(`SELECT status FROM pos_invoice WHERE id = $1`, [srId])
     ).rows[0].status;
-    await q(`UPDATE pos_invoice SET status = 'voided' WHERE id = $1`, [srId]);
+    await q(`UPDATE pos_invoice SET status = 'voided' WHERE id = $1`, [srId]); // entity-status
     const srRowId = await enqueueVoidIfAlreadyVoided({
       createStep: "sales_receipt",
       referenceId: srId,
@@ -201,7 +202,7 @@ async function main() {
   const cmBefore = (
     await q(`SELECT status FROM pos_credit_memo WHERE id = $1`, [cmId])
   ).rows[0].status;
-  await q(`UPDATE pos_credit_memo SET status = 'voided' WHERE id = $1`, [cmId]);
+  await q(`UPDATE pos_credit_memo SET status = 'voided' WHERE id = $1`, [cmId]); // entity-status
   const cmRowId = await enqueueVoidIfAlreadyVoided({
     createStep: "credit_memo",
     referenceId: cmId,

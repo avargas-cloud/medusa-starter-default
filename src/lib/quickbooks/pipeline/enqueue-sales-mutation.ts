@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { isQbSyncEnabled } from "../sync-enabled";
 import type { PipelineStep } from "./types";
+import { SALES_SQL, WRITE, type PipelineStatus } from "../pipeline-status";
 
 /**
  * Append-only lane for SALES document mutations (2026-08-06).
@@ -50,12 +51,13 @@ export const CREATE_STEP_TO_MOD_STEP: Partial<Record<PipelineStep, SalesModStep>
 };
 
 /**
- * Statuses a queued mutation can be coalesced in. 'failed' is deliberate: a
- * rejected Mod changed nothing in QB, so folding the next edit into it IS the
- * repair flow (same call as Purchase). 'processing'/'submitted' are never
- * eligible — that operation is already on its way to the bridge.
+ * Statuses a queued mutation can be coalesced in — dispatchable, blocked, or a
+ * failed attempt (retrying or terminal): a rejected Mod changed nothing in QB,
+ * so folding the next edit into it IS the repair flow (same call as Purchase).
+ * 'processing'/'submitted' are never eligible — that operation is already on
+ * its way to the bridge.
  */
-const COALESCIBLE_STATUSES = ["pending", "waiting", "failed"] as const;
+const COALESCIBLE_STATUSES_SQL = `${SALES_SQL.dispatchable}, ${SALES_SQL.blocked}, ${SALES_SQL.failedAny}`;
 
 export interface EnqueueSalesMutationInput {
   step: SalesModStep;
@@ -86,8 +88,12 @@ export interface EnqueueSalesMutationInput {
   medusaRefNumber?: string | null;
   qbRefNumber?: string | null;
   dependsOn?: string | null;
-  /** 'waiting' parks the row behind depends_on; default 'pending'. */
-  status?: "pending" | "waiting";
+  /**
+   * 'blocked' parks the row behind depends_on; default dispatchable
+   * (`WRITE.sales.dispatchable`, which is the legacy `pending` while
+   * VOCAB_PHASE is "expand").
+   */
+  status?: PipelineStatus | "pending"; // legacy-literal
 }
 
 export interface EnqueueSalesMutationResult {
@@ -163,7 +169,7 @@ export async function enqueueSalesMutation(
   // SR-embedded payment has no ReceivePayment TxnID to carry) — see the
   // consolidator's case. Every other step must know its target up front.
   const resolvesTargetAtDispatch = input.step === "payment_txndate_change";
-  const waitingBehindAdd = input.status === "waiting" && !!input.dependsOn;
+  const waitingBehindAdd = input.status === WRITE.sales.blocked && !!input.dependsOn;
   if (!input.qbTxnId && !waitingBehindAdd && !resolvesTargetAtDispatch) {
     throw new Error(
       `enqueueSalesMutation: step "${input.step}" requires qbTxnId (the QB doc to modify) — ` +
@@ -196,7 +202,7 @@ export async function enqueueSalesMutation(
             ($2::text IS NOT NULL AND reference_id = $2::text)
             OR ($2::text IS NULL AND $3::text IS NOT NULL AND order_id = $3::text)
           )
-          AND status = ANY($4::text[])
+          AND status IN (${COALESCIBLE_STATUSES_SQL})
         ORDER BY created_at DESC, id DESC
         LIMIT 1
         FOR UPDATE`,
@@ -204,7 +210,6 @@ export async function enqueueSalesMutation(
         input.step,
         input.referenceId ?? null,
         input.orderId ?? null,
-        [...COALESCIBLE_STATUSES],
       ]
     );
 
@@ -226,7 +231,7 @@ export async function enqueueSalesMutation(
       await client.query(
         `UPDATE qb_order_pipeline
             SET payload           = $2::jsonb,
-                status            = CASE WHEN status = 'failed' THEN 'pending' ELSE status END,
+                status            = CASE WHEN status IN (${SALES_SQL.failedAny}) THEN '${WRITE.sales.dispatchable}' ELSE status END,
                 next_retry_at     = NULL,
                 failed_at         = NULL,
                 qb_txn_id         = COALESCE($3, qb_txn_id),
@@ -279,7 +284,7 @@ export async function enqueueSalesMutation(
         input.referenceId ?? null,
         input.referenceType ?? null,
         input.step,
-        input.status ?? "pending",
+        input.status ?? WRITE.sales.dispatchable,
         input.dependsOn ?? null,
         input.qbTxnId,
         input.qbRefNumber ?? null,
@@ -308,8 +313,8 @@ export async function claimSalesMutationRow(rowId: string): Promise<boolean> {
   const pool = getDbPool();
   const { rows } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'processing', updated_at = NOW(), error = NULL
-      WHERE id = $1 AND status IN ('pending', 'waiting')
+        SET status = '${WRITE.sales.processing}', updated_at = NOW(), error = NULL
+      WHERE id = $1 AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked})
       RETURNING id`,
     [rowId]
   );
@@ -325,14 +330,14 @@ export async function reactivateSalesMutationRow(rowId: string): Promise<void> {
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'pending',
+        SET status = '${WRITE.sales.dispatchable}',
             bridge_op_id = NULL,
             error = NULL,
             failed_at = NULL,
             submitted_at = NULL,
             next_retry_at = NULL,
             updated_at = NOW()
-      WHERE id = $1 AND status <> 'confirmed'`,
+      WHERE id = $1 AND status NOT IN (${SALES_SQL.synced})`,
     [rowId]
   );
 }
@@ -349,7 +354,7 @@ export async function submitPipelineRowById(
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status       = 'submitted',
+        SET status       = '${WRITE.sales.submitted}',
             bridge_op_id = COALESCE($2, bridge_op_id),
             submitted_at = NOW(),
             updated_at   = NOW()

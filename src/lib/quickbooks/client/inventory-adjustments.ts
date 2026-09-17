@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { getBusinessDateString } from "../../date/et";
 import { bridgeFetch } from "./core";
 import { damageModIsNoop } from "../damage/refresh-damage-snapshot";
+import { WRITE } from "../pipeline-status";
 
 export interface AdjustmentGroupPayload {
   count_id: string;
@@ -58,7 +59,7 @@ async function resolveQbListIds(
   const { data: itemRows } = await query.graph({
     entity: "qb_item_pipeline",
     fields: ["sku", "qb_list_id"],
-    filters: { sku: skus, status: "synced" } as any,
+    filters: { sku: skus, status: WRITE.purchase.synced } as any,
     pagination: { skip: 0, take: skus.length },
   });
   for (const r of itemRows as Array<{ sku: string; qb_list_id: string | null }>) {

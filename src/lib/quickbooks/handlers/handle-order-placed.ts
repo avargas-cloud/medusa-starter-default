@@ -26,6 +26,7 @@ import {
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { resolveTaxListid } from "../resolve-tax-listid";
+import { WRITE } from "../pipeline-status";
 
 async function mergeOrderMetadata(
   orderId: string,
@@ -161,7 +162,7 @@ export async function handleOrderPlaced(
         await writePipelineRow({
           orderId,
           step: "sales_order",
-          status: "waiting",
+          status: WRITE.sales.blocked,
           medusaRefNumber: soFriendlyRef,
         });
       } catch (pErr: any) {
@@ -363,7 +364,7 @@ export async function handleOrderPlaced(
       await writePipelineRow({
         orderId,
         step: "sales_order",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         medusaRefNumber: soFriendlyRef,
       });
     } catch (pErr: any) {
@@ -382,7 +383,7 @@ export async function handleOrderPlaced(
         await writePipelineRow({
           orderId: orderWithCustomer.id,
           step: "sales_order",
-          status: "submitted",
+          status: WRITE.sales.submitted,
           bridgeOpId: operationId,
         });
       },
@@ -454,7 +455,7 @@ export async function handleOrderPlaced(
           orderId,
           step: "sales_order",
           status:
-            result.operationId && !result.soTxnId ? "submitted" : "confirmed",
+            result.operationId && !result.soTxnId ? WRITE.sales.submitted : WRITE.sales.synced,
           bridgeOpId: result.operationId || null,
           qbTxnId: result.soTxnId || null,
           qbRefNumber: result.soRefNumber || null,
@@ -491,7 +492,7 @@ export async function handleOrderPlaced(
         await writePipelineRow({
           orderId,
           step: "sales_order",
-          status: "failed",
+          status: WRITE.sales.failed,
           error: result.error || "No txnId or operationId returned from bridge",
         });
       } catch (pErr: any) {

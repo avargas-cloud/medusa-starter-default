@@ -367,7 +367,7 @@ export async function GET(
        FROM purchase_order_receipt
        WHERE purchase_order_id = po.id
          AND po.status = 'received'
-         AND status IN ('applied', 'synced')
+         AND status IN ('applied', 'synced') -- entity-status
          AND deleted_at IS NULL
        ORDER BY received_at ASC
        LIMIT 1
@@ -662,7 +662,7 @@ export async function GET(
          LEFT JOIN vendor_bill legacy_vb
            ON legacy_vb.purchase_order_receipt_id = por.id AND legacy_vb.deleted_at IS NULL
         WHERE por.purchase_order_id = ?
-          AND por.status IN ('applied', 'synced')
+          AND por.status IN ('applied', 'synced') -- entity-status
           AND por.deleted_at IS NULL
         GROUP BY por.id, por.number, por.seq, por.received_at,
                  fk_vb.id, fk_vb.number, legacy_vb.id, legacy_vb.number
@@ -716,7 +716,7 @@ export async function GET(
          JOIN purchase_order_receipt por ON por.id = porl.purchase_order_receipt_id
          LEFT JOIN purchase_order_line pol ON pol.id = porl.purchase_order_line_id
         WHERE por.purchase_order_id = ?
-          AND por.status IN ('applied', 'synced')
+          AND por.status IN ('applied', 'synced') -- entity-status
           AND por.deleted_at IS NULL
           AND porl.deleted_at IS NULL
         GROUP BY porl.purchase_order_receipt_id, porl.purchase_order_line_id
@@ -1224,8 +1224,8 @@ export async function PATCH(
     }
     if (
       linked.status !== "draft" &&
-      linked.status !== "confirmed" &&
-      linked.status !== "synced"
+      linked.status !== "confirmed" && // entity-status
+      linked.status !== "synced" // entity-status
     ) {
       return res.status(422).json({
         error: `Linked ${requiredType} bill is not editable`,
@@ -1363,7 +1363,8 @@ export async function PATCH(
       `SELECT 1 FROM china_finance_bill cfb
          JOIN china_wire_transfer_application cwta ON cwta.bill_id = cfb.id
          JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
-        WHERE cfb.vendor_bill_id = ? AND cwt.status = 'confirmed' LIMIT 1`,
+        WHERE cfb.vendor_bill_id = ? AND cwt.status = 'confirmed' -- entity-status
+        LIMIT 1`,
       [id]
     );
     // Paid by a confirmed wire → the money already moved, so this is no longer a
@@ -1463,7 +1464,7 @@ export async function PATCH(
     if (!rrow || rrow.purchase_order_id !== bill.purchase_order_id) {
       return res.status(422).json({ error: "Receipt does not belong to this bill's purchase order", code: "receipt_po_mismatch" });
     }
-    if (rrow.status !== "applied" && rrow.status !== "synced") {
+    if (rrow.status !== "applied" && rrow.status !== "synced") { // entity-status
       return res.status(422).json({ error: "Receipt is not applied yet", code: "receipt_not_applied" });
     }
     const pinnedElsewhere = await knex.raw(
@@ -1681,7 +1682,7 @@ export async function PATCH(
             )
             OR por.id = ANY(?))
           AND por.deleted_at IS NULL
-          AND por.status IN ('applied', 'synced')
+          AND por.status IN ('applied', 'synced') -- entity-status
         GROUP BY porl.purchase_order_line_id`,
       [id, id, patch.receipt_ids ?? []]
     );
@@ -2071,7 +2072,8 @@ export async function PATCH(
                    WHERE vendor_bill_id = ?
                 ), 2),
                 updated_at = NOW()
-          WHERE id = ? AND status = 'synced'`,
+          WHERE id = ? AND status = 'synced' -- entity-status
+        `,
         [id, id]
       );
     }

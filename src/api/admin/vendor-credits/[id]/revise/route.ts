@@ -19,6 +19,7 @@ import {
   type VendorCreditLineInput,
 } from "../../../../../lib/vendor-credits";
 import { applyVendorCreditStockDeltas } from "../../../../../lib/vendor-credits/stock";
+import { SALES_SQL } from "../../../../../lib/quickbooks/pipeline-status";
 
 /**
  * POST { credit_date?, reason?, memo?, vendor_bill_id?, lines? } — revises a
@@ -60,7 +61,7 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
   const pool = getDbPool();
   const { rows: inFlight } = await pool.query(
     `SELECT 1 FROM qb_order_pipeline
-      WHERE reference_id = $1 AND step = 'vendor_credit_add' AND status IN ('submitted', 'processing')
+      WHERE reference_id = $1 AND step = 'vendor_credit_add' AND status IN (${SALES_SQL.submitted}, ${SALES_SQL.processing})
       LIMIT 1`,
     [id]
   );

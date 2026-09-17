@@ -24,6 +24,7 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { promoteStaleWaitingSalesOrders } from "../../lib/quickbooks/pipeline/promote-stale-sales-orders";
 import { enqueueEstimateDeactivateIfNeeded } from "../../lib/quickbooks/pipeline/enqueue-estimate-deactivate";
 import { resubmitByStep } from "../../lib/quickbooks/consolidator/resubmit-by-step";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -117,31 +118,31 @@ async function main(): Promise<void> {
     await seedOrder(pool, `${PREFIX}${id}`, { canceled: id === "A4" });
   }
   // A1: eligible (age 2h, depends_on NULL, no invoice, active order)
-  await seedRow(pool, { orderId: `${PREFIX}A1`, step: "sales_order", status: "waiting", ageHours: 2 });
+  await seedRow(pool, { orderId: `${PREFIX}A1`, step: "sales_order", status: WRITE.sales.blocked, ageHours: 2 });
   // A2: too young (age 10min) → use 0.1h
-  await seedRow(pool, { orderId: `${PREFIX}A2`, step: "sales_order", status: "waiting", ageHours: 0.1 });
+  await seedRow(pool, { orderId: `${PREFIX}A2`, step: "sales_order", status: WRITE.sales.blocked, ageHours: 0.1 });
   // A3: has depends_on → owned by wake pass (depends_on FK → a real parent row)
-  const a3Parent = await seedRow(pool, { orderId: `${PREFIX}A3`, step: "customer", status: "confirmed", ageHours: 3 });
-  await seedRow(pool, { orderId: `${PREFIX}A3`, step: "sales_order", status: "waiting", ageHours: 2, dependsOn: a3Parent });
+  const a3Parent = await seedRow(pool, { orderId: `${PREFIX}A3`, step: "customer", status: WRITE.sales.synced, ageHours: 3 });
+  await seedRow(pool, { orderId: `${PREFIX}A3`, step: "sales_order", status: WRITE.sales.blocked, ageHours: 2, dependsOn: a3Parent });
   // A4: order canceled
-  await seedRow(pool, { orderId: `${PREFIX}A4`, step: "sales_order", status: "waiting", ageHours: 2 });
+  await seedRow(pool, { orderId: `${PREFIX}A4`, step: "sales_order", status: WRITE.sales.blocked, ageHours: 2 });
   // A5: active invoice exists → blocked
-  await seedRow(pool, { orderId: `${PREFIX}A5`, step: "sales_order", status: "waiting", ageHours: 2 });
-  await seedRow(pool, { orderId: `${PREFIX}A5`, step: "invoice", status: "pending", ageHours: 2 });
+  await seedRow(pool, { orderId: `${PREFIX}A5`, step: "sales_order", status: WRITE.sales.blocked, ageHours: 2 });
+  await seedRow(pool, { orderId: `${PREFIX}A5`, step: "invoice", status: WRITE.sales.dispatchable, ageHours: 2 });
   // A6: only a FAILED invoice → not blocked → eligible
-  await seedRow(pool, { orderId: `${PREFIX}A6`, step: "sales_order", status: "waiting", ageHours: 2 });
-  await seedRow(pool, { orderId: `${PREFIX}A6`, step: "invoice", status: "failed", ageHours: 2 });
+  await seedRow(pool, { orderId: `${PREFIX}A6`, step: "sales_order", status: WRITE.sales.blocked, ageHours: 2 });
+  await seedRow(pool, { orderId: `${PREFIX}A6`, step: "invoice", status: WRITE.sales.failed, ageHours: 2 });
 
   const rescued = await promoteStaleWaitingSalesOrders(pool);
   const rescuedOrders = new Set(rescued.map((r) => r.order_id));
 
-  check("A1 promoted to pending", (await statusOf(pool, `${PREFIX}A1`, "sales_order")) === "pending");
+  check("A1 promoted to pending", (await statusOf(pool, `${PREFIX}A1`, "sales_order")) === WRITE.sales.dispatchable);
   check("A1 in returned rows", rescuedOrders.has(`${PREFIX}A1`));
-  check("A2 stays waiting (age < 1h)", (await statusOf(pool, `${PREFIX}A2`, "sales_order")) === "waiting");
-  check("A3 stays waiting (has depends_on)", (await statusOf(pool, `${PREFIX}A3`, "sales_order")) === "waiting");
-  check("A4 stays waiting (order canceled)", (await statusOf(pool, `${PREFIX}A4`, "sales_order")) === "waiting");
-  check("A5 stays waiting (active invoice blocks)", (await statusOf(pool, `${PREFIX}A5`, "sales_order")) === "waiting");
-  check("A6 promoted (failed invoice does not block)", (await statusOf(pool, `${PREFIX}A6`, "sales_order")) === "pending");
+  check("A2 stays waiting (age < 1h)", (await statusOf(pool, `${PREFIX}A2`, "sales_order")) === WRITE.sales.blocked);
+  check("A3 stays waiting (has depends_on)", (await statusOf(pool, `${PREFIX}A3`, "sales_order")) === WRITE.sales.blocked);
+  check("A4 stays waiting (order canceled)", (await statusOf(pool, `${PREFIX}A4`, "sales_order")) === WRITE.sales.blocked);
+  check("A5 stays waiting (active invoice blocks)", (await statusOf(pool, `${PREFIX}A5`, "sales_order")) === WRITE.sales.blocked);
+  check("A6 promoted (failed invoice does not block)", (await statusOf(pool, `${PREFIX}A6`, "sales_order")) === WRITE.sales.dispatchable);
   check("only A1 + A6 returned", rescued.length === 2 && rescuedOrders.has(`${PREFIX}A6`));
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -151,11 +152,11 @@ async function main(): Promise<void> {
 
   // B-order with a confirmed estimate carrying a qb_txn_id
   await seedOrder(pool, `${PREFIX}B`);
-  await seedRow(pool, { orderId: `${PREFIX}B`, step: "estimate", status: "confirmed", qbTxnId: "TEST-EST-TXN-123" });
+  await seedRow(pool, { orderId: `${PREFIX}B`, step: "estimate", status: WRITE.sales.synced, qbTxnId: "TEST-EST-TXN-123" });
 
   const b1 = await enqueueEstimateDeactivateIfNeeded(`${PREFIX}B`);
   check("B1 returns a row id", !!b1);
-  check("B1 estimate_deactivate row is pending", (await statusOf(pool, `${PREFIX}B`, "estimate_deactivate")) === "pending");
+  check("B1 estimate_deactivate row is pending", (await statusOf(pool, `${PREFIX}B`, "estimate_deactivate")) === WRITE.sales.dispatchable);
   const { rows: b1rows } = await pool.query(
     `SELECT qb_txn_id FROM qb_order_pipeline WHERE order_id = $1 AND step = 'estimate_deactivate'`,
     [`${PREFIX}B`]
@@ -178,7 +179,7 @@ async function main(): Promise<void> {
 
   // B4: estimate exists but NOT confirmed → null
   await seedOrder(pool, `${PREFIX}B4`);
-  await seedRow(pool, { orderId: `${PREFIX}B4`, step: "estimate", status: "pending", qbTxnId: "TEST-EST-TXN-999" });
+  await seedRow(pool, { orderId: `${PREFIX}B4`, step: "estimate", status: WRITE.sales.dispatchable, qbTxnId: "TEST-EST-TXN-999" });
   const b4 = await enqueueEstimateDeactivateIfNeeded(`${PREFIX}B4`);
   check("B4 returns null (estimate not confirmed)", b4 === null);
 
@@ -197,7 +198,7 @@ async function main(): Promise<void> {
   );
   check(
     "B5a resubmit → submitted (DRY_RUN)",
-    b5after[0].status === "submitted" && !!b5after[0].bridge_op_id,
+    b5after[0].status === WRITE.sales.submitted && !!b5after[0].bridge_op_id,
     `got status=${b5after[0].status} op=${b5after[0].bridge_op_id}`
   );
 

@@ -35,6 +35,7 @@ import {
   type PurchaseOrderModLineLike,
 } from "../lib/quickbooks/purchase-order-line-order";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
+import { PURCHASE_SQL, WRITE } from "../lib/quickbooks/pipeline-status";
 
 const bridgeUrl = (): string =>
   requireBridgeUrl();
@@ -58,7 +59,7 @@ const withCanonicalPoMemo = (
 
 type BridgeStatus = {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed" | "expired";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired"; // bridge-status
     error?: string;
     txnId?: string;
     listId?: string;
@@ -385,7 +386,7 @@ export default async function qbPurchaseOrderPoller(
     .raw(
       `SELECT id, purchase_order_id, payload
        FROM qb_purchase_order_pipeline
-      WHERE status = 'waiting'
+      WHERE status IN (${PURCHASE_SQL.dispatchable})
         AND qb_operation_id IS NULL
         AND NOT (
           COALESCE(payload->>'is_mod', 'false') = 'true'
@@ -452,7 +453,7 @@ export default async function qbPurchaseOrderPoller(
         if (existing?.qb_purchase_order_list_id) {
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'synced', qb_list_id = ?, last_error = NULL,
+                SET status = '${WRITE.purchase.synced}', qb_list_id = ?, last_error = NULL,
                     next_retry_at = NULL, synced_at = NOW(), updated_at = NOW()
               WHERE id = ?`,
             [existing.qb_purchase_order_list_id, row.id]
@@ -468,7 +469,7 @@ export default async function qbPurchaseOrderPoller(
 
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'submitted', qb_operation_id = ?, updated_at = NOW()
+            SET status = '${WRITE.purchase.submitted}', qb_operation_id = ?, updated_at = NOW()
           WHERE id = ?`,
         [operationId, row.id]
       );
@@ -476,7 +477,7 @@ export default async function qbPurchaseOrderPoller(
     } catch (err: any) {
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'error',
+            SET status = '${WRITE.purchase.error}',
                 last_error = ?,
                 next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                 updated_at = NOW()
@@ -493,7 +494,7 @@ export default async function qbPurchaseOrderPoller(
     .raw(
       `SELECT id, purchase_order_id, qb_operation_id, qb_list_id, payload
        FROM qb_purchase_order_pipeline
-      WHERE status = 'submitted'
+      WHERE status IN (${PURCHASE_SQL.submitted})
         AND NOT (
           COALESCE(payload->>'is_mod', 'false') = 'true'
           AND (
@@ -565,7 +566,7 @@ export default async function qbPurchaseOrderPoller(
         // Bridge no longer knows the op. Clear op_id, mark as error, retry shortly.
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
-           SET status = 'error',
+           SET status = '${WRITE.purchase.error}',
                last_error = ?,
                qb_operation_id = NULL,
                next_retry_at = NOW() + INTERVAL '2 minutes',
@@ -596,7 +597,7 @@ export default async function qbPurchaseOrderPoller(
           };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'waiting',
+                SET status = '${WRITE.purchase.dispatchable}',
                     qb_operation_id = NULL,
                     payload = ?,
                     last_error = ?,
@@ -617,7 +618,7 @@ export default async function qbPurchaseOrderPoller(
           const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'waiting',
+                SET status = '${WRITE.purchase.dispatchable}',
                     qb_operation_id = NULL,
                     payload = ?,
                     last_error = ?,
@@ -634,7 +635,7 @@ export default async function qbPurchaseOrderPoller(
 
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
-              SET status = 'error',
+              SET status = '${WRITE.purchase.error}',
                   last_error = ?,
                   next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at = NOW()
@@ -662,7 +663,7 @@ export default async function qbPurchaseOrderPoller(
           const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'waiting',
+                SET status = '${WRITE.purchase.dispatchable}',
                     qb_operation_id = NULL,
                     payload = ?,
                     next_retry_at = NULL,
@@ -675,7 +676,7 @@ export default async function qbPurchaseOrderPoller(
         }
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
-              SET status = 'error',
+              SET status = '${WRITE.purchase.error}',
                   last_error = 'Completed but no TxnID in response',
                   next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at = NOW()
@@ -751,7 +752,7 @@ export default async function qbPurchaseOrderPoller(
         if (pl.is_void && isManuallyClosed) {
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'synced', last_error = NULL, next_retry_at = NULL,
+                SET status = '${WRITE.purchase.synced}', last_error = NULL, next_retry_at = NULL,
                     synced_at = NOW(), updated_at = NOW()
               WHERE id = ?`,
             [row.id]
@@ -772,7 +773,7 @@ export default async function qbPurchaseOrderPoller(
               const requeuePl = { ...pl, is_query: true, edit_sequence: undefined, _query_attempts: queryAttempts };
               await knex.raw(
                 `UPDATE qb_purchase_order_pipeline
-                    SET status = 'waiting',
+                    SET status = '${WRITE.purchase.dispatchable}',
                         qb_operation_id = NULL,
                         payload = ?,
                         updated_at = NOW()
@@ -828,7 +829,7 @@ export default async function qbPurchaseOrderPoller(
                     };
                     await knex.raw(
                       `UPDATE qb_purchase_order_pipeline
-                          SET status = 'waiting',
+                          SET status = '${WRITE.purchase.dispatchable}',
                               qb_operation_id = NULL,
                               payload = ?,
                               last_error = NULL,
@@ -862,7 +863,7 @@ export default async function qbPurchaseOrderPoller(
             logger.warn(`${TAG} row ${row.id}: ${reason}`);
             await knex.raw(
               `UPDATE qb_purchase_order_pipeline
-                  SET status = 'error',
+                  SET status = '${WRITE.purchase.error}',
                       last_error = ?,
                       next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                       updated_at = NOW()
@@ -875,7 +876,7 @@ export default async function qbPurchaseOrderPoller(
             const requeuePl = { ...pl, is_query: true, edit_sequence: undefined };
             await knex.raw(
               `UPDATE qb_purchase_order_pipeline
-                  SET status = 'waiting',
+                  SET status = '${WRITE.purchase.dispatchable}',
                       qb_operation_id = NULL,
                       payload = ?,
                       updated_at = NOW()
@@ -925,7 +926,7 @@ export default async function qbPurchaseOrderPoller(
           };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'waiting',
+                SET status = '${WRITE.purchase.dispatchable}',
                     qb_operation_id = NULL,
                     payload = ?,
                     qb_list_id = NULL,
@@ -962,7 +963,7 @@ export default async function qbPurchaseOrderPoller(
         `SELECT id, number, status, qb_edit_sequence,
                 vendor_qb_list_id_snapshot, vendor_name_snapshot
            FROM purchase_order
-          WHERE id = ? AND status = 'voided' AND deleted_at IS NULL
+          WHERE id = ? AND status = 'voided' AND deleted_at IS NULL -- entity-status
           LIMIT 1`,
         [row.purchase_order_id]
       ).then((r: { rows: any[] }) => r.rows);
@@ -981,7 +982,7 @@ export default async function qbPurchaseOrderPoller(
         };
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
-              SET status          = 'waiting',
+              SET status          = '${WRITE.purchase.dispatchable}',
                   qb_list_id      = ?,
                   qb_txn_number   = COALESCE(?, qb_txn_number),
                   qb_operation_id = NULL,
@@ -1005,7 +1006,7 @@ export default async function qbPurchaseOrderPoller(
       // Normal add/mod completion — mark synced
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'synced',
+            SET status = '${WRITE.purchase.synced}',
                 qb_list_id = ?,
                 qb_txn_number = COALESCE(?, qb_txn_number),
                 last_error = NULL,
@@ -1030,7 +1031,7 @@ export default async function qbPurchaseOrderPoller(
     .raw(
       `SELECT id, purchase_order_id, payload, retries, last_error
        FROM qb_purchase_order_pipeline
-      WHERE status = 'error'
+      WHERE status IN (${PURCHASE_SQL.error})
         AND (next_retry_at IS NULL OR next_retry_at <= NOW())
         AND NOT (
           COALESCE(payload->>'is_mod', 'false') = 'true'
@@ -1059,7 +1060,7 @@ export default async function qbPurchaseOrderPoller(
       const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'waiting',
+            SET status = '${WRITE.purchase.dispatchable}',
                 qb_operation_id = NULL,
                 payload = ?,
                 next_retry_at = NULL,
@@ -1102,7 +1103,7 @@ export default async function qbPurchaseOrderPoller(
         if (recentlySynced && parent?.qb_purchase_order_list_id) {
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'synced',
+                SET status = '${WRITE.purchase.synced}',
                     retries = ?,
                     qb_list_id = ?,
                     last_error = NULL,
@@ -1124,7 +1125,7 @@ export default async function qbPurchaseOrderPoller(
 
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'failed_permanent',
+            SET status = '${WRITE.purchase.failed}',
                 retries = ?,
                 updated_at = NOW()
           WHERE id = ?`,
@@ -1159,7 +1160,7 @@ export default async function qbPurchaseOrderPoller(
         if (existing?.qb_purchase_order_list_id) {
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'synced', qb_list_id = ?, last_error = NULL,
+                SET status = '${WRITE.purchase.synced}', qb_list_id = ?, last_error = NULL,
                     next_retry_at = NULL, synced_at = NOW(), updated_at = NOW()
               WHERE id = ?`,
             [existing.qb_purchase_order_list_id, row.id]
@@ -1174,7 +1175,7 @@ export default async function qbPurchaseOrderPoller(
       }
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'submitted',
+            SET status = '${WRITE.purchase.submitted}',
                 qb_operation_id = ?,
                 retries = ?,
                 last_error = NULL,

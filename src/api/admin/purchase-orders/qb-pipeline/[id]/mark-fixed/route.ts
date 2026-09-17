@@ -24,6 +24,7 @@
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { isGlDocumentKind, type GlDocumentKind } from "../../../../../../lib/quickbooks/gl-documents/types";
+import { SALES_SQL, WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 async function markDelegatedOperationFixed(
   knex: any,
@@ -32,12 +33,12 @@ async function markDelegatedOperationFixed(
   if (!orderPipelineId) return;
   await knex.raw(
     `UPDATE qb_order_pipeline
-        SET status = 'fixed', error = NULL, next_retry_at = NULL,
+        SET status = '${WRITE.sales.fixed}', error = NULL, next_retry_at = NULL,
             bridge_op_id = NULL, failed_at = NULL,
             confirmed_at = COALESCE(confirmed_at, NOW()),
             updated_at = NOW()
       WHERE id = ?::uuid
-        AND status NOT IN ('confirmed', 'fixed')`,
+        AND status NOT IN (${SALES_SQL.done})`,
     [orderPipelineId]
   );
 }
@@ -211,13 +212,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'synced', last_error = NULL, next_retry_at = NULL,
+          SET status = '${WRITE.purchase.synced}', last_error = NULL, next_retry_at = NULL,
               synced_at = NOW(), updated_at = NOW()
         WHERE id = ?`,
       [vendorBillId]
     );
     await knex.raw(
-      `UPDATE vendor_bill SET status = 'synced', qb_synced_at = NOW(), updated_at = NOW()
+      `UPDATE vendor_bill SET status = 'synced', qb_synced_at = NOW(), updated_at = NOW() -- entity-status
         WHERE id = ? AND deleted_at IS NULL`,
       [row.vendor_bill_id]
     );
@@ -241,20 +242,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(404).json({ error: "Pipeline entry not found" });
     await knex.raw(
       `UPDATE qb_order_pipeline
-          SET status = 'fixed', error = NULL, next_retry_at = NULL,
+          SET status = '${WRITE.sales.fixed}', error = NULL, next_retry_at = NULL,
               confirmed_at = COALESCE(confirmed_at, NOW()), updated_at = NOW()
         WHERE id = ?::uuid`,
       [vendorBillId]
     );
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'synced', last_error = NULL, next_retry_at = NULL,
+          SET status = '${WRITE.purchase.synced}', last_error = NULL, next_retry_at = NULL,
               synced_at = NOW(), updated_at = NOW()
         WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
       [row.reference_id]
     );
     await knex.raw(
-      `UPDATE vendor_bill SET status = 'synced', qb_synced_at = NOW(), updated_at = NOW()
+      `UPDATE vendor_bill SET status = 'synced', qb_synced_at = NOW(), updated_at = NOW() -- entity-status
         WHERE id = ? AND deleted_at IS NULL`,
       [row.reference_id]
     );
@@ -276,7 +277,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(404).json({ error: "Pipeline entry not found" });
     await knex.raw(
       `UPDATE qb_vendor_bill_pipeline
-          SET void_status = 'synced', void_last_error = NULL,
+          SET void_status = '${WRITE.purchase.synced}', void_last_error = NULL,
               void_next_retry_at = NULL, updated_at = NOW()
         WHERE id = ?`,
       [vendorBillId]
@@ -308,7 +309,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(404).json({ error: "Pipeline entry not found" });
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status        = 'completed',
+          SET mod_status        = '${WRITE.purchase.synced}',
               mod_last_error    = NULL,
               mod_next_retry_at = NULL,
               mod_synced_at     = NOW(),
@@ -336,7 +337,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(404).json({ error: "Pipeline entry not found" });
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET void_status        = 'synced',
+          SET void_status        = '${WRITE.purchase.synced}',
               void_last_error    = NULL,
               void_next_retry_at = NULL,
               void_synced_at     = NOW(),
@@ -373,7 +374,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
-          SET status        = 'synced',
+          SET status        = '${WRITE.purchase.synced}',
               last_error    = NULL,
               next_retry_at = NULL,
               synced_at     = NOW(),
@@ -399,7 +400,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   await knex.raw(
     `UPDATE qb_purchase_order_pipeline
-        SET status = 'synced',
+        SET status = '${WRITE.purchase.synced}',
             last_error = NULL,
             next_retry_at = NULL,
             synced_at = NOW(),

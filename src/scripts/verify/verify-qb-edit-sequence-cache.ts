@@ -6,6 +6,7 @@
  */
 
 import { Pool } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import * as dotenv from "dotenv";
 dotenv.config();
 
@@ -56,10 +57,10 @@ async function pollUntilQbConfirmed(
       `SELECT status FROM qb_order_pipeline WHERE id = $1`,
       [rowId]
     );
-    const status = rows[0]?.status as string | undefined;
-    if (status === "confirmed") return "confirmed";
-    if (status === "failed") return "failed";
-    if (status === "skipped") return "skipped";
+    const rowStatus = rows[0]?.status as string | undefined;
+    if (rowStatus === WRITE.sales.synced) return "confirmed";
+    if (rowStatus === WRITE.sales.failed) return "failed";
+    if (rowStatus === WRITE.sales.skipped) return "skipped";
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   return "timeout";
@@ -158,7 +159,7 @@ async function runTests() {
   // Simulate consolidator confirming 1s later
   setTimeout(async () => {
     await pool.query(
-      `UPDATE qb_order_pipeline SET status = 'confirmed', updated_at = NOW() WHERE id = $1`,
+      `UPDATE qb_order_pipeline SET status = '${WRITE.sales.synced}', updated_at = NOW() WHERE id = $1`,
       [rowId]
     );
   }, 1000);

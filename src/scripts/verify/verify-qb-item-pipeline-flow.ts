@@ -27,6 +27,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import qbItemPipelinePoller from "../../jobs/qb-item-pipeline-poller";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
+import { WRITE, pipelineStatusIs } from "../../lib/quickbooks/pipeline-status";
 
 // ── Test fixture: a real variant from the dev DB. The variant is NEVER
 //    mutated — only used as FK target so qb_item_pipeline rows are valid.
@@ -204,7 +205,7 @@ async function scenarioPhaseACompleted(ctx: TestCtx): Promise<void> {
     kind: "json",
     body: {
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         listId: FIXTURE_QB_LIST_ID,
         editSequence: "9999999999",
       },
@@ -212,7 +213,7 @@ async function scenarioPhaseACompleted(ctx: TestCtx): Promise<void> {
   });
 
   const id = await insertPipelineRow(ctx, {
-    status: "waiting",
+    status: WRITE.purchase.dispatchable,
     qb_operation_id: "stub-op-001",
     op_payload: { ListID: FIXTURE_QB_LIST_ID, Name: FIXTURE_SKU },
   });
@@ -220,7 +221,7 @@ async function scenarioPhaseACompleted(ctx: TestCtx): Promise<void> {
   await qbItemPipelinePoller(ctx.container);
   const row = await getRow(ctx, id);
   expect(
-    row.status === "synced",
+    row.status === WRITE.purchase.synced,
     `expected synced, got ${row.status} (err=${row.last_error})`
   );
   expect(row.qb_list_id === FIXTURE_QB_LIST_ID, "qb_list_id should match");
@@ -238,21 +239,21 @@ async function scenarioPhaseAFailed(ctx: TestCtx): Promise<void> {
     kind: "json",
     body: {
       operation: {
-        status: "failed",
+        status: "failed", // bridge-status
         error: "QuickBooks Error 3045: stub-injected failure",
       },
     },
   });
 
   const id = await insertPipelineRow(ctx, {
-    status: "waiting",
+    status: WRITE.purchase.dispatchable,
     qb_operation_id: "stub-op-002",
     op_payload: { ListID: FIXTURE_QB_LIST_ID, Name: FIXTURE_SKU },
   });
 
   await qbItemPipelinePoller(ctx.container);
   const row = await getRow(ctx, id);
-  expect(row.status === "error", `expected error, got ${row.status}`);
+  expect(row.status === WRITE.purchase.error, `expected error, got ${row.status}`);
   expect(
     row.last_error?.includes("3045"),
     `last_error should mention 3045, got: ${row.last_error}`
@@ -276,7 +277,7 @@ async function scenarioEditSequenceFallback(ctx: TestCtx): Promise<void> {
     kind: "json",
     body: {
       operation: {
-        status: "completed",
+        status: "completed", // bridge-status
         result: {
           QBXML: {
             QBXMLMsgsRs: {
@@ -296,7 +297,7 @@ async function scenarioEditSequenceFallback(ctx: TestCtx): Promise<void> {
   });
 
   const id = await insertPipelineRow(ctx, {
-    status: "error",
+    status: WRITE.purchase.error,
     last_error: "Failed to build XML",
     op_payload: {
       ListID: FIXTURE_QB_LIST_ID,
@@ -319,7 +320,7 @@ async function scenarioEditSequenceFallback(ctx: TestCtx): Promise<void> {
   await qbItemPipelinePoller(ctx.container);
   const parked = await getRow(ctx, id);
   expect(
-    parked.status === "waiting",
+    parked.status === WRITE.purchase.dispatchable,
     `tick 1: expected waiting while the ItemQuery is in flight, got ${parked.status}`
   );
   expect(
@@ -335,7 +336,7 @@ async function scenarioEditSequenceFallback(ctx: TestCtx): Promise<void> {
   await qbItemPipelinePoller(ctx.container);
   const row = await getRow(ctx, id);
   expect(
-    row.status === "waiting",
+    row.status === WRITE.purchase.dispatchable,
     `tick 2: expected waiting after resubmit, got ${row.status}`
   );
   expect(
@@ -367,7 +368,7 @@ async function scenarioFailedPermanent(ctx: TestCtx): Promise<void> {
   });
 
   const id = await insertPipelineRow(ctx, {
-    status: "error",
+    status: WRITE.purchase.error,
     last_error: "initial error",
     op_payload: { ListID: FIXTURE_QB_LIST_ID, Name: FIXTURE_SKU },
     next_retry_at: new Date(Date.now() - 60_000), // due NOW
@@ -386,12 +387,12 @@ async function scenarioFailedPermanent(ctx: TestCtx): Promise<void> {
     });
     const r = await getRow(ctx, id);
     ctx.log(`  tick ${i}: status=${r.status} retries=${r.retries}`);
-    if (r.status === "failed_permanent") break;
+    if (pipelineStatusIs("purchase", r, "failed")) break;
   }
 
   const final = await getRow(ctx, id);
   expect(
-    final.status === "failed_permanent",
+    pipelineStatusIs("purchase", final, "failed"),
     `expected failed_permanent, got ${final.status} (retries=${final.retries})`
   );
   expect(final.retries >= 5, `expected retries>=5, got ${final.retries}`);

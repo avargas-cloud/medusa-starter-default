@@ -31,6 +31,7 @@ import { LOG_PREFIX, getQbConfig, getFloat, consumeClosestNet } from "./utils";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
 import { resolveTaxListid } from "../resolve-tax-listid";
 import { invoiceLineDiscountCents } from "../force-sync-doc-payload";
+import { WRITE } from "../pipeline-status";
 
 export async function handleSalesReceiptCreated(
   data: any,
@@ -75,7 +76,7 @@ export async function handleSalesReceiptCreated(
     const { rows: failedWithOp } = await pool.query(
       `SELECT id, bridge_op_id FROM qb_order_pipeline
        WHERE order_id = $1 AND step = 'sales_receipt'
-         AND status = 'failed' AND bridge_op_id IS NOT NULL
+         AND status = '${WRITE.sales.failed}' AND bridge_op_id IS NOT NULL
          AND failed_at > NOW() - INTERVAL '2 hours'
        ORDER BY failed_at DESC LIMIT 1`,
       [orderId]
@@ -96,7 +97,7 @@ export async function handleSalesReceiptCreated(
           // 'submitted' so the consolidator picks it up, and skip this retry.
           await pool.query(
             `UPDATE qb_order_pipeline
-             SET status = 'submitted', failed_at = NULL, error = NULL, updated_at = NOW()
+             SET status = '${WRITE.sales.submitted}', failed_at = NULL, error = NULL, updated_at = NOW()
              WHERE id = $1`,
             [failedRowId]
           );
@@ -193,7 +194,7 @@ export async function handleSalesReceiptCreated(
         referenceId: data.invoice_id || null,
         referenceType: data.invoice_id ? "pos_invoice" : null,
         step: "sales_receipt",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: errMsg,
       });
     } catch (pErr: any) {
@@ -229,7 +230,7 @@ export async function handleSalesReceiptCreated(
         referenceId: data.invoice_id || null,
         referenceType: data.invoice_id ? "pos_invoice" : null,
         step: "sales_receipt",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: `SR superseded by existing QB document (SO=${existingSoTxnId ?? "none"}, Estimate=${existingEstimateTxnId ?? "none"}) — Invoice created instead`,
       });
     } catch (srFailErr: any) {

@@ -30,6 +30,7 @@ process.env.DATABASE_URL =
 import { Client } from "pg";
 import { randomUUID } from "crypto";
 import { failPipelineRow } from "../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SANDBOX_DB = process.env.DATABASE_URL!;
 const TEST_RUN_ID = `t1515-${Date.now()}`;
@@ -123,7 +124,7 @@ async function testEstimateCancelMissingTxnId(client: Client) {
     [rowId]
   );
   const r = finalRow.rows[0];
-  assert(r.status === "failed", `row → 'failed' (got ${r.status})`);
+  assert(r.status === WRITE.sales.failed, `row went to failed (got ${r.status})`);
   assert(
     r.error?.includes("no qb_estimate.txn_id"),
     `error mentions missing txn_id`,
@@ -157,7 +158,7 @@ async function testEstimateCancelHappyPathSql(client: Client) {
   const fakeOpId = `mock-op-${rowId}`;
   await client.query(
     `UPDATE qb_order_pipeline
-       SET status = 'submitted',
+       SET status = '${WRITE.sales.submitted}',
            bridge_op_id = $2,
            qb_txn_id = $3,
            submitted_at = NOW(),
@@ -171,7 +172,7 @@ async function testEstimateCancelHappyPathSql(client: Client) {
     [rowId]
   );
   const r = final.rows[0];
-  assert(r.status === "submitted", `status → 'submitted' (got ${r.status})`);
+  assert(r.status === WRITE.sales.submitted, `row went to submitted (got ${r.status})`);
   assert(r.bridge_op_id === fakeOpId, `bridge_op_id stored correctly`);
   assert(r.qb_txn_id === txnId, `qb_txn_id stored correctly`);
   assert(r.submitted_at !== null, `submitted_at populated`);
@@ -203,7 +204,7 @@ async function testCreditMemoModMissingTxnId(client: Client) {
     [rowId]
   );
   const r = final.rows[0];
-  assert(r.status === "failed", `status → 'failed'`);
+  assert(r.status === WRITE.sales.failed, `row went to failed`);
   assert(
     r.error?.includes("no qb_txn_id"),
     `error mentions missing qb_txn_id`
@@ -233,7 +234,7 @@ async function testCreditMemoModMissingEditSeq(client: Client) {
     [rowId]
   );
   const r = final.rows[0];
-  assert(r.status === "failed", `status → 'failed'`);
+  assert(r.status === WRITE.sales.failed, `row went to failed`);
   assert(
     r.error?.includes("no qb_edit_sequence"),
     `error mentions missing qb_edit_sequence`
@@ -273,7 +274,7 @@ async function testCreditMemoModHappyPathSql(client: Client) {
   const fakeOpId = `mock-op-${rowId}`;
   await client.query(
     `UPDATE qb_order_pipeline
-       SET status = 'submitted',
+       SET status = '${WRITE.sales.submitted}',
            bridge_op_id = $2,
            qb_txn_id = $3,
            submitted_at = NOW(),
@@ -287,7 +288,7 @@ async function testCreditMemoModHappyPathSql(client: Client) {
     [rowId]
   );
   const r = final.rows[0];
-  assert(r.status === "submitted", "status → 'submitted'");
+  assert(r.status === WRITE.sales.submitted, "row went to submitted");
   assert(r.bridge_op_id === fakeOpId, "bridge_op_id stored");
   assert(r.qb_txn_id === j.qb_txn_id, "qb_txn_id stored from CM");
 }
@@ -325,7 +326,7 @@ async function testPendingDispatchQuery(client: Client) {
     SELECT id, step
       FROM qb_order_pipeline
      WHERE step IN ('estimate_cancel', 'credit_memo_mod')
-       AND status = 'pending'
+       AND status = '${WRITE.sales.dispatchable}'
        AND id IN ($1::uuid, $2::uuid, $3::uuid)
      ORDER BY COALESCE(updated_at, created_at) ASC
   `, [id1, id2, id3]);

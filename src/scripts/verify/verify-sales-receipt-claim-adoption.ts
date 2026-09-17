@@ -107,7 +107,7 @@ function check(name: string, pass: boolean, detail: string): void {
     ["order_id", /order_id\s*=\s*\$2/],
     ["reference_id", /reference_id\s*=\s*\$3/],
     ["step sales_receipt", /step\s*=\s*'sales_receipt'/],
-    ["status processing", /status\s*=\s*'processing'/],
+    ["status processing", /status\s+IN\s*\(\$\{SALES_SQL\.processing\}\)/], // vocab-20260917: lista del helper
   ] as [string, RegExp][]) {
     check(
       `claim: la adopción exige ${label}`,

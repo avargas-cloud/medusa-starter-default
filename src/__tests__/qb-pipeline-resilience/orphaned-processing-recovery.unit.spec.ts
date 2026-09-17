@@ -13,6 +13,7 @@ jest.mock("../../lib/quickbooks/client/sales-orders", () => ({
   reopenSalesOrderInQb: jest.fn(),
 }));
 
+import { WRITE, SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 import { runOrphanedProcessingRecovery } from "../../lib/quickbooks/consolidator/recovery-pass";
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -28,11 +29,11 @@ describe("runOrphanedProcessingRecovery (B2)", () => {
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = query.mock.calls[0];
     const s = String(sql);
-    expect(s).toMatch(/status\s*=\s*'processing'/);
+    expect(s).toMatch(new RegExp(`status IN \\(${SALES_SQL.processing}\\)`));
     expect(s).toMatch(/bridge_op_id IS NULL/);
     expect(s).toMatch(/INTERVAL '8 minutes'/);
     expect(s).toMatch(/retry_count, 0\) < 5/);
-    expect(s).toMatch(/SET[\s\S]*status\s*=\s*'pending'/);
+    expect(s).toMatch(new RegExp(`SET[\\s\\S]*status\\s*=\\s*'${WRITE.sales.dispatchable}'`));
     // idempotent steps only — ADD steps must NOT be in the allow-list
     const steps: string[] = params[0];
     expect(steps).toContain("invoice_update");

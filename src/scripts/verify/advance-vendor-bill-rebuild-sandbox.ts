@@ -9,6 +9,7 @@
 
 import { getDbPool } from "../../api/utils/db-pool";
 import { confirmPipelineRow } from "../../lib/quickbooks/qb-pipeline";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import type { ResubmitRow } from "../../lib/quickbooks/consolidator/resubmit-by-step";
 import {
   completeVendorBillRebuildDelete,
@@ -100,7 +101,7 @@ async function main(): Promise<void> {
   );
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'pending', error = NULL, updated_at = NOW()
+        SET status = '${WRITE.sales.dispatchable}', error = NULL, updated_at = NOW()
       WHERE id = $1 AND depends_on = $2`,
     [deletion.id, preflight.id]
   );

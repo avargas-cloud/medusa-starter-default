@@ -11,6 +11,8 @@ import {
 import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+import { PipelineStatusBadge } from "./PipelineStatusBadge";
+import { pipelineStatusIs } from "../../../../lib/quickbooks/pipeline-status";
 
 type PipelineRow = {
   id: string;
@@ -46,31 +48,9 @@ const STATUS_FILTERS = [
   { label: "Failed", value: "failed" },
 ];
 
-const StatusBadge = ({ status }: { status: string }) => {
-  if (status === "confirmed")
-    return (
-      <Badge color="green" size="2xsmall">
-        confirmed
-      </Badge>
-    );
-  if (status === "failed")
-    return (
-      <Badge color="red" size="2xsmall">
-        failed
-      </Badge>
-    );
-  if (status === "submitted")
-    return (
-      <Badge color="blue" size="2xsmall">
-        submitted
-      </Badge>
-    );
-  return (
-    <Badge color="orange" size="2xsmall">
-      {status}
-    </Badge>
-  );
-};
+const StatusBadge = ({ status }: { status: string }) => (
+  <PipelineStatusBadge status={status} family="sales" />
+);
 
 export const CustomerSyncPipelineSection = () => {
   const [rows, setRows] = useState<CustomerRow[]>([]);
@@ -411,7 +391,7 @@ export const CustomerSyncPipelineSection = () => {
                                 {isExpanded ? "▲ hide" : "▼ error"}
                               </button>
                             ) : null}
-                            {r.status === "failed" ? (
+                            {pipelineStatusIs("sales", r, "error", "failed") ? (
                               <Button
                                 size="small"
                                 variant="secondary"

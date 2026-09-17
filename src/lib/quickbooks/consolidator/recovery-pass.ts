@@ -4,6 +4,7 @@ import {
   reopenSalesOrderInQb,
 } from "../client/sales-orders";
 import { activateRefundPaymentRow } from "./refund-payment-activation";
+import { SALES_SQL, WRITE, pipelineStatusIs, salesRetryDue } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -74,13 +75,13 @@ export async function runOrphanedProcessingRecovery(
   try {
     const { rows, rowCount } = await pool.query(
       `UPDATE qb_order_pipeline
-          SET status        = 'pending',
+          SET status        = '${WRITE.sales.dispatchable}',
               bridge_op_id  = NULL,
               error         = NULL,
               retry_count   = COALESCE(retry_count, 0) + 1,
               next_retry_at = NOW(),
               updated_at    = NOW()
-        WHERE status = 'processing'
+        WHERE status IN (${SALES_SQL.processing})
           AND bridge_op_id IS NULL
           AND step = ANY($1::text[])
           AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '8 minutes'
@@ -125,13 +126,11 @@ export async function runRefundPaymentRecovery(logger: any): Promise<void> {
             JOIN qb_order_pipeline wc ON wc.id = rp.depends_on
             WHERE rp.step   = 'refund_payment'
               AND wc.step   = 'write_check'
-              AND wc.status = 'confirmed'
+              AND wc.status IN (${SALES_SQL.synced})
               AND wc.qb_txn_id IS NOT NULL
               AND (
-                rp.status = 'waiting'
-                OR (rp.status = 'failed'
-                    AND rp.next_retry_at IS NOT NULL
-                    AND rp.next_retry_at <= NOW()
+                rp.status IN (${SALES_SQL.blocked})
+                OR (${salesRetryDue('rp.')}
                     AND COALESCE(rp.retry_count, 0) < 8)
               )
         `);
@@ -153,7 +152,7 @@ export async function runRefundPaymentRecovery(logger: any): Promise<void> {
         );
       } catch (recErr: unknown) {
         const msg = recErr instanceof Error ? recErr.message : String(recErr);
-        if (rpRow.status === "failed") {
+        if (pipelineStatusIs("sales", rpRow, "error", "failed")) {
           // Bridge unreachable on a retry attempt — reschedule with a growing
           // backoff instead of stranding the row (attempt cap enforced by the
           // claim query above). 'waiting' rows keep their status: the next
@@ -166,7 +165,7 @@ export async function runRefundPaymentRecovery(logger: any): Promise<void> {
                       error         = $3,
                       next_retry_at = NOW() + (LEAST($2 * 2, 30) || ' minutes')::interval,
                       updated_at    = NOW()
-                WHERE id = $1 AND status = 'failed'`,
+                WHERE id = $1 AND status IN (${SALES_SQL.failedAny})`,
               [rpRow.id, attempt, msg]
             );
           } catch {
@@ -198,9 +197,9 @@ export async function runSoToggleRecovery(logger: any): Promise<void> {
             FROM qb_order_pipeline child
             JOIN qb_order_pipeline parent ON parent.id = child.depends_on
             WHERE child.step   IN ('so_close', 'so_reopen')
-              AND child.status  = 'waiting'
+              AND child.status  IN (${SALES_SQL.blocked})
               AND parent.step  IN ('so_close', 'so_reopen')
-              AND parent.status = 'confirmed'
+              AND parent.status IN (${SALES_SQL.synced})
         `);
 
     if (orphanSoRows.length > 0) {
@@ -237,7 +236,7 @@ export async function runSoToggleRecovery(logger: any): Promise<void> {
         if (soResult.success && soResult.data?.operationId) {
           await pool.query(
             `UPDATE qb_order_pipeline
-                         SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
+                         SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, submitted_at = NOW()
                          WHERE id = $1`,
             [soRow.id, soResult.data.operationId]
           );
@@ -246,7 +245,7 @@ export async function runSoToggleRecovery(logger: any): Promise<void> {
           );
         } else {
           await pool.query(
-            `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW() WHERE id = $1`,
+            `UPDATE qb_order_pipeline SET status = '${WRITE.sales.failed}', error = $2, failed_at = NOW() WHERE id = $1`,
             [soRow.id, soResult.error ?? "QB sync failed (recovery)"]
           );
           logger.warn(

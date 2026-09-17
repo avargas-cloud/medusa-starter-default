@@ -14,6 +14,7 @@ import {
 } from "../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
+import { SALES_SQL } from "../../../../lib/quickbooks/pipeline-status";
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
@@ -453,7 +454,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
 
             const { rows: pipeRows } = await pool.query(
               `SELECT qb_txn_id FROM qb_order_pipeline
-                             WHERE order_id = $1 AND step = 'sales_receipt' AND status = 'confirmed'
+                             WHERE order_id = $1 AND step = 'sales_receipt' AND status IN (${SALES_SQL.synced})
                              ORDER BY created_at DESC LIMIT 1`,
               [orderId]
             );

@@ -23,6 +23,7 @@ import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { requireBridgeUrl } from "../lib/quickbooks/bridge-url";
 import { requireQbApiKey } from "../lib/quickbooks/qb-api-key";
+import { WRITE, pipelineStatusIs } from "../lib/quickbooks/pipeline-status";
 const TAG = "[QB-NIGHTLY-VERIFY]";
 
 const REPORT_EMAIL = process.env.QB_REPORT_EMAIL || "a.vargas@ecopowertech.com";
@@ -55,7 +56,7 @@ interface VerificationResult {
 // ─── Bridge helper ────────────────────────────────────────────────────────────
 
 async function checkBridgeStatus(operationId: string): Promise<{
-  status: "completed" | "failed" | "pending" | "expired" | "error";
+  status: "completed" | "failed" | "pending" | "expired" | "error"; // bridge-status
   txnId?: string;
   refNumber?: string;
   error?: string;
@@ -75,22 +76,22 @@ async function checkBridgeStatus(operationId: string): Promise<{
     const data = await res.json();
     const op = data?.operation;
 
-    if (!op) return { status: "error", error: "No operation in response" };
+    if (!op) return { status: "error", error: "No operation in response" }; // bridge-status
 
-    if (op.status === "completed") {
+    if (op.status === "completed") { // bridge-status
       return {
-        status: "completed",
+        status: "completed", // bridge-status
         txnId: op.txnId || op.result?.TxnID,
         refNumber: op.refNumber || op.result?.RefNumber,
       };
     }
-    if (op.status === "failed") {
-      return { status: "failed", error: op.error || "Unknown QB error" };
+    if (op.status === "failed") { // bridge-status
+      return { status: "failed", error: op.error || "Unknown QB error" }; // bridge-status
     }
     // pending / processing / queued
-    return { status: "pending" };
+    return { status: "pending" }; // bridge-status
   } catch (err: any) {
-    return { status: "error", error: err.message };
+    return { status: "error", error: err.message }; // bridge-status
   }
 }
 
@@ -335,9 +336,9 @@ export default async function qbNightlyVerifyHandler(
         case "failed":
           failed++;
           // Retroactively mark as failed if it was logged as completed
-          if (entry.status === "completed") {
+          if (pipelineStatusIs("log", entry, "synced")) {
             await client.query(
-              `UPDATE qb_sync_log SET status = 'failed', error = $1 WHERE id = $2`,
+              `UPDATE qb_sync_log SET status = '${WRITE.log.failed}', error = $1 WHERE id = $2`,
               [
                 `[Nightly verify] QB operation actually failed: ${bridge.error}`,
                 entry.id,

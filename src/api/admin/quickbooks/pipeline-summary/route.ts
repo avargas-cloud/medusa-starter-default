@@ -7,16 +7,26 @@ import {
   COMMISSION_PIPELINE_STEPS,
   PURCHASE_PIPELINE_STEPS,
 } from "../../../../lib/quickbooks/pipeline/sales-pipeline-scope";
+import {
+  PIPELINE_STATUSES,
+  normalizePipelineStatus,
+  type PipelineFamily,
+  type PipelineStatus,
+} from "../../../../lib/quickbooks/pipeline-status";
 
 /**
  * GET /admin/quickbooks/pipeline-summary
  *
- * Returns live counts for every Medusa-side QB pipeline, normalized into a
- * shared 5-bucket model. Drives the per-pipeline breakdown card on the
- * QuickBooks Pipelines admin page.
+ * Returns live counts for every Medusa-side QB pipeline, normalized into the
+ * nine canonical pipeline-status buckets (qb-pipeline-status-vocab-20260917).
+ * Every row is counted through `normalizePipelineStatus`, the same function
+ * the badges use, so a raw legacy literal (sales `pending`/`confirmed`,
+ * purchase `failed_permanent`/`cancelled`, log `completed`…) buckets exactly
+ * where its badge would show it — no separate 5-bucket display vocabulary.
+ * Drives the per-pipeline breakdown card on the QuickBooks Pipelines admin page.
  */
 
-type Bucket = "pending" | "processing" | "completed" | "failed" | "skipped";
+type Bucket = PipelineStatus;
 
 export type PipelineSummary = {
   key: string;
@@ -26,60 +36,45 @@ export type PipelineSummary = {
   total: number;
 };
 
-const BUCKETS: Bucket[] = [
-  "pending",
-  "processing",
-  "completed",
-  "failed",
-  "skipped",
-];
+const BUCKETS: Bucket[] = [...PIPELINE_STATUSES];
 
 const zeroCounts = (): Record<Bucket, number> =>
   Object.fromEntries(BUCKETS.map((b) => [b, 0])) as Record<Bucket, number>;
 
-// Maps raw status strings from any pipeline table into the shared 5-bucket model.
-const STATUS_BUCKET: Record<string, Bucket> = {
-  // pending family
-  pending: "pending",
-  waiting: "pending",
-  // in-flight family
-  submitted: "processing",
-  processing: "processing",
-  // success family
-  synced: "completed",
-  confirmed: "completed",
-  fixed: "completed",
-  completed: "completed",
-  // failure family
-  error: "failed",
-  failed: "failed",
-  failed_permanent: "failed",
-  // intentional no-op
-  skipped: "skipped",
-  cancelled: "skipped",
-};
+/** One row per (status, "does it carry a scheduled retry") pair, pre-grouped in SQL. */
+type StatusRow = { status: string; has_retry: boolean; count: string };
 
-const bucketOf = (status: string | null | undefined): Bucket | null => {
-  if (!status) return null;
-  return STATUS_BUCKET[status] ?? null;
-};
-
-type StatusRow = { status: string; count: string };
-
+/**
+ * Accumulates raw rows into the canonical buckets. `family` decides which
+ * legacy-literal table `normalizePipelineStatus` consults; `has_retry` is
+ * the only piece of information the sales `failed` split needs, and every
+ * caller below fetches it instead of a full `next_retry_at` timestamp
+ * because a `COUNT(*) GROUP BY` can't carry a group of distinct instants.
+ */
 const accumulate = (
+  family: PipelineFamily,
   rows: StatusRow[]
 ): { counts: Record<Bucket, number>; total: number } => {
   const counts = zeroCounts();
   let total = 0;
   for (const row of rows) {
-    const bucket = bucketOf(row.status);
-    if (!bucket) continue;
+    const normalized = normalizePipelineStatus(
+      family,
+      row.status,
+      row.has_retry ? new Date() : null
+    );
     const n = parseInt(row.count, 10) || 0;
-    counts[bucket] += n;
+    if ((BUCKETS as string[]).includes(normalized)) {
+      counts[normalized as Bucket] += n;
+    }
     total += n;
   }
   return { counts, total };
 };
+
+/** `GROUP BY status, has_retry` fragment shared by every `qb_order_pipeline` read below. */
+const GROUP_BY_STATUS_RETRY =
+  "GROUP BY status, (next_retry_at IS NOT NULL)";
 
 /**
  * The Customer Sync TAB fetches both of these steps, so the breakdown counts both.
@@ -117,10 +112,10 @@ export async function GET(
     // 1) Sales pipeline = qb_order_pipeline excluding customer steps (those
     //    surface under their own Customer Sync tab in the UI).
     const sales = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count
+      `SELECT status, (next_retry_at IS NOT NULL) AS has_retry, COUNT(*) AS count
          FROM qb_order_pipeline
         WHERE step <> ALL($1::text[])
-        GROUP BY status`,
+        ${GROUP_BY_STATUS_RETRY}`,
       [NON_SALES_STEPS]
     );
 
@@ -128,51 +123,47 @@ export async function GET(
     //     to QuickBooks. Replaces the Bill Payments tab, whose hourly BillQuery
     //     monitor was retired once bills started being paid in the POS.
     const ledger = await client.query<StatusRow>(
-      `SELECT CASE
-                WHEN status IN ('confirmed','fixed','skipped') THEN 'synced'
-                WHEN status = 'failed' AND next_retry_at IS NULL THEN 'failed_permanent'
-                WHEN status = 'failed' THEN 'error'
-                WHEN status IN ('submitted','processing') THEN 'submitted'
-                ELSE 'waiting'
-              END AS status, COUNT(*) AS count
+      `SELECT status, (next_retry_at IS NOT NULL) AS has_retry, COUNT(*) AS count
          FROM qb_order_pipeline
         WHERE step = ANY($1::text[])
-        GROUP BY 1`,
+        ${GROUP_BY_STATUS_RETRY}`,
       [[...LEDGER_PIPELINE_STEPS]]
     );
 
     // 1c) Commissions Pipeline = el par check/payment del caso store_credit de
     //     las comisiones por orden (lane propio, ver sales-pipeline-scope.ts).
     const commissions = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count
+      `SELECT status, (next_retry_at IS NOT NULL) AS has_retry, COUNT(*) AS count
          FROM qb_order_pipeline
         WHERE step = ANY($1::text[])
-        GROUP BY status`,
+        ${GROUP_BY_STATUS_RETRY}`,
       [[...COMMISSION_PIPELINE_STEPS]]
     );
 
     // 2) Customer sync = qb_order_pipeline restricted to customer steps.
     const customers = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count
+      `SELECT status, (next_retry_at IS NOT NULL) AS has_retry, COUNT(*) AS count
          FROM qb_order_pipeline
         WHERE step IN (${CUSTOMER_STEPS.map((_, i) => `$${i + 1}`).join(", ")})
-        GROUP BY status`,
+        ${GROUP_BY_STATUS_RETRY}`,
       CUSTOMER_STEPS
     );
 
-    // 3-6) Independent pipeline tables.
+    // 3-6) Independent pipeline tables — purchase family, no retry-split ambiguity
+    // (their `failed_permanent` is unconditionally terminal), so `has_retry` is
+    // always false for them: never affects `normalizePipelineStatus("purchase", …)`.
     const items = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count FROM qb_item_pipeline
+      `SELECT status, false AS has_retry, COUNT(*) AS count FROM qb_item_pipeline
         WHERE deleted_at IS NULL GROUP BY status`
     );
     const inventory = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count FROM qb_inventory_adjustment_pipeline
+      `SELECT status, false AS has_retry, COUNT(*) AS count FROM qb_inventory_adjustment_pipeline
         WHERE deleted_at IS NULL GROUP BY status`
     );
     // Purchase pipeline = the same purchase-side families rendered by the
     // Purchase Pipeline tab: PO, ItemReceipt, and Vendor Bill operations.
     const purchases = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count FROM (
+      `SELECT status, false AS has_retry, COUNT(*) AS count FROM (
          SELECT status
            FROM qb_purchase_order_pipeline
           WHERE deleted_at IS NULL
@@ -194,25 +185,23 @@ export async function GET(
           WHERE deleted_at IS NULL
             AND (intent = 'add' OR qb_txn_id IS NOT NULL)
          UNION ALL
-         SELECT CASE
-                  WHEN status IN ('confirmed','fixed','skipped') THEN 'synced'
-                  WHEN status = 'failed' AND next_retry_at IS NULL THEN 'failed_permanent'
-                  WHEN status = 'failed' THEN 'error'
-                  WHEN status IN ('submitted','processing') THEN 'submitted'
-                  ELSE 'waiting'
-                END AS status
-           FROM qb_order_pipeline
-          WHERE step = 'vendor_bill_mod'
-         UNION ALL
-         SELECT CASE WHEN void_status = 'completed' THEN 'synced'
-                     ELSE void_status END AS status
+         SELECT void_status AS status
            FROM qb_vendor_bill_pipeline
           WHERE deleted_at IS NULL AND void_status IS NOT NULL
        ) feed
        GROUP BY status`
     );
+    // vendor_bill_mod chain rows live in qb_order_pipeline (sales-family table,
+    // per the pipeline-status vocabulary), counted separately so the retry
+    // split stays correct, then merged into the "purchases" summary below.
+    const purchasesModChain = await client.query<StatusRow>(
+      `SELECT status, (next_retry_at IS NOT NULL) AS has_retry, COUNT(*) AS count
+         FROM qb_order_pipeline
+        WHERE step = 'vendor_bill_mod'
+        ${GROUP_BY_STATUS_RETRY}`
+    );
     const vendors = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count FROM qb_vendor_pipeline
+      `SELECT status, false AS has_retry, COUNT(*) AS count FROM qb_vendor_pipeline
         WHERE deleted_at IS NULL GROUP BY status`
     );
 
@@ -220,28 +209,38 @@ export async function GET(
       key: string,
       label: string,
       tab: string,
-      rows: StatusRow[]
+      family: PipelineFamily,
+      rows: StatusRow[],
+      extra?: { family: PipelineFamily; rows: StatusRow[] }
     ): PipelineSummary => {
-      const { counts, total } = accumulate(rows);
-      return { key, label, tab, counts, total };
+      const a = accumulate(family, rows);
+      if (!extra) return { key, label, tab, counts: a.counts, total: a.total };
+      const b = accumulate(extra.family, extra.rows);
+      const counts = zeroCounts();
+      for (const bucket of BUCKETS) counts[bucket] = a.counts[bucket] + b.counts[bucket];
+      return { key, label, tab, counts, total: a.total + b.total };
     };
 
     const pipelines: PipelineSummary[] = [
-      build("sales", "Sales", "operations", sales.rows),
-      build("items", "Items", "items", items.rows),
+      build("sales", "Sales", "operations", "sales", sales.rows),
+      build("items", "Items", "items", "purchase", items.rows),
       build(
         "inventory_adjustments",
         "Inventory Adjustments",
         "inventory-adjustments",
+        "purchase",
         inventory.rows
       ),
-      build("purchase_orders", "Purchases", "po-pipeline", purchases.rows),
+      build("purchase_orders", "Purchases", "po-pipeline", "purchase", purchases.rows, {
+        family: "sales",
+        rows: purchasesModChain.rows,
+      }),
       // `tab` must match the Tabs.Trigger value in qb-pipeline/page.tsx — clicking
       // the row jumps to that tab, and a wrong value jumps nowhere.
-      build("ledger", "Ledger → QuickBooks", "ledger", ledger.rows),
-      build("commissions", "Commissions", "commissions", commissions.rows),
-      build("vendors", "Vendors", "vendors", vendors.rows),
-      build("customers", "Customer Sync", "customer-sync", customers.rows),
+      build("ledger", "Ledger → QuickBooks", "ledger", "sales", ledger.rows),
+      build("commissions", "Commissions", "commissions", "sales", commissions.rows),
+      build("vendors", "Vendors", "vendors", "purchase", vendors.rows),
+      build("customers", "Customer Sync", "customer-sync", "sales", customers.rows),
     ];
 
     // Totals across every pipeline (for a global rollup row).

@@ -3,6 +3,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { CREDIT_MEMO_MODULE } from "../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../modules/credit_memos/service";
 import { sortDocItemsByInsertion } from "../../../invoices/_lib/item-order";
+import { SALES_SQL } from "../../../../../lib/quickbooks/pipeline-status";
 
 export async function GET(
   req: MedusaRequest,
@@ -76,8 +77,8 @@ export async function GET(
           .where({
             qb_txn_id: (creditMemo as any).qb_txn_id,
             step: "credit_memo",
-            status: "confirmed",
           })
+          .whereRaw(`status IN (${SALES_SQL.synced})`)
           .select("qb_ref_number")
           .first();
         qb_ref_number = pipelineRow?.qb_ref_number ?? null;

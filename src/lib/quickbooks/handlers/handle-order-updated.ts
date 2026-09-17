@@ -13,6 +13,7 @@ import { buildSalesOrderModQbItems } from "../build-sales-order-mod-items";
 import { getQbConfig } from "../qb-config";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { resolveOrderQbCustomer } from "../resolve-order-qb-customer";
+import { WRITE } from "../pipeline-status";
 import { getSoTxnId, getSoRef } from "../qb-metadata-types";
 import {
   claimSalesMutationRow,
@@ -136,7 +137,7 @@ export async function handleOrderUpdated(
         payload: {},
         medusaRefNumber: medusaRef,
         dependsOn: inFlightAdd.id,
-        status: "waiting",
+        status: WRITE.sales.blocked,
       });
       logger.info(
         `${LOG_PREFIX} ⏸ SO CREATE in-flight for ${orderId} — edit parked as waiting sales_order_mod row ${parked.rowId}`

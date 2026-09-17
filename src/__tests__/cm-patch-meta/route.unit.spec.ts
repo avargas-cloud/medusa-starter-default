@@ -34,6 +34,7 @@ jest.mock("../../modules/credit_memos", () => ({
 
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { getQbConfig } from "../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
 import { PATCH } from "../../api/admin/pos/credit_memos/[id]/patch-meta/route";
@@ -77,7 +78,7 @@ function buildMemo(overrides: Record<string, unknown> = {}) {
   return {
     id: "cm-001",
     credit_memo_number: "CM-20001",
-    status: "completed",
+    status: "completed", // entity-status (pos_credit_memo.status)
     subtotal: 10000, // cents
     tax: 700,
     shipping: 0,
@@ -211,7 +212,7 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
     expect(mockWritePipeline).toHaveBeenCalledWith(
       expect.objectContaining({
         step: "credit_memo_mod",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         referenceId: "cm-001",
       })
     );
@@ -363,7 +364,7 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
     expect(mockWritePipeline).toHaveBeenCalledWith(
       expect.objectContaining({
         step: "credit_memo_mod",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: "pipeline write conflict",
         qbTxnId: "QB-CM-TXN-001",
       })
@@ -380,7 +381,7 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
 
     expect(mockWritePipeline).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "failed",
+        status: WRITE.sales.failed,
         error: "QB config unreachable",
       })
     );

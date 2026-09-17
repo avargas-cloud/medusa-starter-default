@@ -5,6 +5,7 @@ import { FINANCE_MODULE } from "../../../modules/finance";
 import { bridgeFetch, pollRawOperationResult } from "../client/core";
 import { findInFlightQbRowsByRef } from "../pipeline/in-flight";
 import { writePipelineRow } from "../qb-pipeline";
+import { WRITE } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-VOIDED]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -67,7 +68,7 @@ export async function handlePosPaymentVoided({
         orderId,
         referenceId: payment_id,
         step: "payment",
-        status: "confirmed",
+        status: WRITE.sales.synced,
       }).catch(() => {});
     }
     return;
@@ -137,7 +138,7 @@ export async function handlePosPaymentVoided({
         orderId,
         referenceId: payment_id,
         step: "payment",
-        status: "confirmed",
+        status: WRITE.sales.synced,
       }).catch(() => {});
     }
     return;

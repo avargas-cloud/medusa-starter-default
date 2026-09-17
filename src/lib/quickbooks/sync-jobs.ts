@@ -12,7 +12,7 @@ export type SyncType =
 export interface SyncJob {
   id: string;
   type: SyncType;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error";  // entity-status
   logs: string[];
   emitter: EventEmitter;
   startedAt: Date;
@@ -22,7 +22,7 @@ export interface SyncJob {
 export interface PersistedReport {
   id: string;
   type: SyncType;
-  status: "done" | "error";
+  status: "done" | "error";  // entity-status
   logs: string[];
   startedAt: string;
   finishedAt: string;
@@ -111,7 +111,7 @@ export function appendLog(job: SyncJob, line: string) {
   job.emitter.emit("log", line);
 }
 
-export function finishJob(job: SyncJob, status: "done" | "error") {
+export function finishJob(job: SyncJob, status: "done" | "error") {  // entity-status
   job.status = status;
   job.finishedAt = new Date();
   job.emitter.emit("done", status);

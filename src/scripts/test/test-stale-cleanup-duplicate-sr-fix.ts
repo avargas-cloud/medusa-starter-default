@@ -19,6 +19,7 @@
 
 import http from "http";
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const DB_URL =
   process.env.DATABASE_URL ||
@@ -128,7 +129,7 @@ async function runStaleCleanupInline(
   const { rows: staleSubmitted } = await client.query(
     `SELECT id, step, qb_txn_id, bridge_op_id, submitted_at
      FROM qb_order_pipeline
-     WHERE status = 'submitted' AND updated_at < NOW() - INTERVAL '30 minutes'
+     WHERE status = '${WRITE.sales.submitted}' AND updated_at < NOW() - INTERVAL '30 minutes'
        AND order_id LIKE 'order_test_%'`
   );
 
@@ -178,7 +179,7 @@ async function runStaleCleanupInline(
 
     await client.query(
       `UPDATE qb_order_pipeline
-       SET status='failed', error='Stale test', updated_at=NOW(), failed_at=NOW(), confirmed_at=NULL
+       SET status='${WRITE.sales.failed}', error='Stale test', updated_at=NOW(), failed_at=NOW(), confirmed_at=NULL
        WHERE id=$1`,
       [row.id]
     );
@@ -196,7 +197,7 @@ async function runSecondaryGuardInline(
   const { rows: failedWithOp } = await client.query(
     `SELECT id, bridge_op_id FROM qb_order_pipeline
      WHERE order_id = $1 AND step = 'sales_receipt'
-       AND status = 'failed' AND bridge_op_id IS NOT NULL
+       AND status = '${WRITE.sales.failed}' AND bridge_op_id IS NOT NULL
        AND failed_at > NOW() - INTERVAL '2 hours'
      ORDER BY failed_at DESC LIMIT 1`,
     [orderId]
@@ -217,7 +218,7 @@ async function runSecondaryGuardInline(
         if (opStatus === "pending" || opStatus === "processing") {
           await client.query(
             `UPDATE qb_order_pipeline
-             SET status='submitted', failed_at=NULL, error=NULL, updated_at=NOW()
+             SET status='${WRITE.sales.submitted}', failed_at=NULL, error=NULL, updated_at=NOW()
              WHERE id=$1`,
             [failedRowId]
           );
@@ -264,7 +265,7 @@ async function main(): Promise<void> {
       id: ROW_ID,
       orderId: "order_test_001",
       step: "sales_receipt",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       bridgeOpId: "bridge-op-pending-001",
       submittedAgoMinutes: 35,
       updatedAgoMinutes: 35,
@@ -274,7 +275,7 @@ async function main(): Promise<void> {
 
     const row = await getRowStatus(client, ROW_ID);
     const extended =
-      row?.status === "submitted" &&
+      row?.status === WRITE.sales.submitted &&
       row?.failed_at === null &&
       row?.updated_at &&
       Date.now() - row.updated_at.getTime() < 5000; // updated < 5s ago
@@ -304,7 +305,7 @@ async function main(): Promise<void> {
       id: ROW_ID,
       orderId: "order_test_002",
       step: "sales_receipt",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       bridgeOpId: null,
       submittedAgoMinutes: 35,
       updatedAgoMinutes: 35,
@@ -314,7 +315,7 @@ async function main(): Promise<void> {
 
     const row = await getRowStatus(client, ROW_ID);
     const failed =
-      row?.status === "failed" && row?.failed_at !== null;
+      row?.status === WRITE.sales.failed && row?.failed_at !== null;
 
     results.push({
       name: "Test 2: stale cleanup no bridge_op_id → mark failed (normal path)",
@@ -341,7 +342,7 @@ async function main(): Promise<void> {
       id: ROW_ID,
       orderId: "order_test_003",
       step: "sales_receipt",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       bridgeOpId: "bridge-op-old-stuck-001",
       submittedAgoMinutes: 130, // >2h
       updatedAgoMinutes: 35,
@@ -350,7 +351,7 @@ async function main(): Promise<void> {
     await runStaleCleanupInline(client, (m) => log.push(m));
 
     const row = await getRowStatus(client, ROW_ID);
-    const failed = row?.status === "failed" && row?.failed_at !== null;
+    const failed = row?.status === WRITE.sales.failed && row?.failed_at !== null;
 
     results.push({
       name: "Test 3: stale cleanup bridge=pending but >2h → force fail (abandon)",
@@ -376,7 +377,7 @@ async function main(): Promise<void> {
       id: ROW_ID,
       orderId: "order_test_004",
       step: "sales_receipt",
-      status: "submitted",
+      status: WRITE.sales.submitted,
       bridgeOpId: "bridge-op-completed-001",
       submittedAgoMinutes: 35,
       updatedAgoMinutes: 35,
@@ -386,7 +387,7 @@ async function main(): Promise<void> {
 
     const row = await getRowStatus(client, ROW_ID);
     const bumped =
-      row?.status === "submitted" &&
+      row?.status === WRITE.sales.submitted &&
       row?.failed_at === null &&
       row?.updated_at &&
       Date.now() - row.updated_at.getTime() < 5000;
@@ -416,7 +417,7 @@ async function main(): Promise<void> {
       id: ROW_ID,
       orderId: "order_test_005",
       step: "sales_receipt",
-      status: "failed",
+      status: WRITE.sales.failed,
       bridgeOpId: "bridge-op-guard-test-001",
       submittedAgoMinutes: 35,
       updatedAgoMinutes: 35,
@@ -428,7 +429,7 @@ async function main(): Promise<void> {
 
     const passed =
       outcome === "skipped" &&
-      restoredRow?.status === "submitted" &&
+      restoredRow?.status === WRITE.sales.submitted &&
       restoredRow?.failed_at === null;
 
     results.push({

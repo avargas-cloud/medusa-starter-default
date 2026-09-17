@@ -21,6 +21,7 @@ import {
 import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
 import { toQbRefNumber } from "../../../lib/quickbooks/qb-ref-number";
 import { isQbSyncEnabled } from "../../../lib/quickbooks/sync-enabled";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 export interface EnqueueQbItemReceiptStepInputLine {
   receipt_line_id: string;
@@ -148,7 +149,7 @@ export const enqueueQbItemReceiptStep = createStep(
       {
         purchase_order_receipt_id: input.receipt_id,
         purchase_order_id: input.po_id,
-        status: "waiting",
+        status: WRITE.purchase.dispatchable,
         payload,
       },
     ];

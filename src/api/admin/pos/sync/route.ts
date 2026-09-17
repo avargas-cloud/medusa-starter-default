@@ -24,6 +24,7 @@ import {
   purchaseOperationKey,
 } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
 import { isQbSyncEnabled } from "../../../../lib/quickbooks/sync-enabled";
+import { WRITE, SALES_SQL } from "../../../../lib/quickbooks/pipeline-status";
 // 1.5.4: handleDraftOrderCreated import removed — pos/sync now enqueues
 // 'pending' rows for the consolidator's pending-dispatch pass.
 
@@ -146,7 +147,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         const updated = await knex.raw(
           `UPDATE qb_purchase_order_pipeline
-              SET status          = 'waiting',
+              SET status          = '${WRITE.purchase.dispatchable}',
                   qb_operation_id = NULL,
                   payload         = ?,
                   retries         = 0,
@@ -170,7 +171,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         );
         if ((updated.rowCount ?? 0) === 0) {
           const created = await service.createQbPurchaseOrderPipelines([
-            { purchase_order_id: id, status: "waiting", payload: modPayload },
+            { purchase_order_id: id, status: WRITE.purchase.dispatchable, payload: modPayload },
           ]);
           const createdRows = Array.isArray(created) ? created : [created];
           legacyPipelineId = String(
@@ -252,7 +253,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             await writePipelineRow({
               orderId: id,
               step: pipelineStep,
-              status: "pending",
+              status: WRITE.sales.dispatchable,
               qbTxnId: getEstimateTxnId(order.metadata || {}),
               medusaRefNumber: estimateMedusaRef,
             });
@@ -273,7 +274,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     await writePipelineRow({
                       orderId: id,
                       step: pipelineStep,
-                      status: "submitted",
+                      status: WRITE.sales.submitted,
                       bridgeOpId: res.data?.operationId,
                       qbTxnId,
                       medusaRefNumber: estimateMedusaRef,
@@ -282,7 +283,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     await writePipelineRow({
                       orderId: id,
                       step: pipelineStep,
-                      status: "failed",
+                      status: WRITE.sales.failed,
                       error: res?.error,
                       qbTxnId,
                       medusaRefNumber: estimateMedusaRef,
@@ -348,7 +349,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 await enqueueEstimateMod({
                   orderId: id,
                   step: "estimate",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                   // intent:"mod" — force-sync of an EXISTING estimate. Without it the
                   // QB_CREATE_STEPS guard no-ops a confirmed estimate row and the manual
                   // "Sync to QuickBooks" silently does nothing (same bug as the SO path).
@@ -376,7 +377,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 await enqueue({
                   orderId: id,
                   step: "estimate",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                 });
               }
             } catch (bgErr: any) {
@@ -490,7 +491,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 await enqueueSalesOrderMod({
                   orderId: id,
                   step: "sales_order",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                   // intent:"mod" — force-sync of an EXISTING SO. Without it the
                   // QB_CREATE_STEPS guard no-ops a confirmed SO row and the manual
                   // "Sync to QuickBooks" silently does nothing (same bug as post-edit-sync).
@@ -518,7 +519,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 await enqueueSo2({
                   orderId: id,
                   step: "sales_order",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                 });
               }
             } catch (bgErr: any) {
@@ -882,7 +883,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                       referenceId: id,
                       referenceType: "pos_invoice",
                       step: isSR ? "sales_receipt_update" : "invoice_update",
-                      status: "failed",
+                      status: WRITE.sales.failed,
                       error: `Line snapshot fetch failed: ${mErr.message}`,
                       qbTxnId: freshTxnId,
                       medusaRefNumber: freshInvoice.invoice_number
@@ -906,7 +907,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     referenceId: id,
                     referenceType: "pos_invoice",
                     step: pipelineStep,
-                    status: "pending",
+                    status: WRITE.sales.dispatchable,
                     qbTxnId: freshTxnId,
                     medusaRefNumber,
                   });
@@ -935,7 +936,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   referenceId: id,
                   referenceType: "pos_invoice",
                   step: pipelineStep,
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                   qbTxnId: freshTxnId,
                   medusaRefNumber,
                   payload: modPayload,
@@ -969,7 +970,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     referenceId: id,
                     referenceType: "invoice",
                     step: "invoice",
-                    status: "pending",
+                    status: WRITE.sales.dispatchable,
                     payload: {
                       invoice_id: id,
                       fulfillment_id: invoice.fulfillment_id,
@@ -988,7 +989,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     referenceId: id,
                     referenceType: "invoice",
                     step: "sales_receipt",
-                    status: "pending",
+                    status: WRITE.sales.dispatchable,
                     payload: {
                       invoice_id: id,
                       fulfillment_id: invoice.fulfillment_id,
@@ -1069,7 +1070,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   referenceId: app.id,
                   referenceType: "payment_application",
                   step: "apply_payment",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                   payload: {
                     payment_id: refreshedPayment.id,
                     invoice_id: app.invoice_id,
@@ -1112,7 +1113,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               referenceId: id,
               referenceType: "payment",
               step: "payment",
-              status: "pending",
+              status: WRITE.sales.dispatchable,
             });
 
             const refreshedPayment =
@@ -1130,7 +1131,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     referenceId: app.id,
                     referenceType: "payment_application",
                     step: "apply_payment",
-                    status: "pending",
+                    status: WRITE.sales.dispatchable,
                     payload: {
                       payment_id: refreshedPayment.id,
                       invoice_id: app.invoice_id,
@@ -1216,7 +1217,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: id,
             referenceType: "payment",
             step: "payment",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
           });
         } catch (err: any) {
           logger.error(
@@ -1238,7 +1239,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           return res.status(404).json({ error: "Credit Memo not found" });
 
         // Smart void retry: if CM is voided and has a QB TxnID, re-send void to QB (background)
-        if (creditMemo.status === "voided" || action === "void") {
+        if (creditMemo.status === "voided" || action === "void") { // entity-status
           if (!creditMemo.qb_txn_id) {
             return res.status(400).json({
               error:
@@ -1264,7 +1265,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   referenceId: id,
                   referenceType: "credit_memo",
                   step: "void_credit_memo",
-                  status: "pending",
+                  status: WRITE.sales.dispatchable,
                   qbTxnId: creditMemo.qb_txn_id,
                   qbRefNumber: qb_ref_number,
                   medusaRefNumber: creditMemo.credit_memo_number || null,
@@ -1280,7 +1281,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 referenceId: id,
                 referenceType: "credit_memo",
                 step: "void_credit_memo",
-                status: "pending",
+                status: WRITE.sales.dispatchable,
                 qbTxnId: creditMemo.qb_txn_id,
                 qbRefNumber:
                   creditMemo.qb_ref_number ??
@@ -1306,7 +1307,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
-        if (creditMemo.status !== "completed")
+        if (creditMemo.status !== "completed") // entity-status
           return res.status(400).json({
             error: "Only completed credit memos can be synced to QuickBooks.",
           });
@@ -1484,7 +1485,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: id,
             referenceType: "credit_memo",
             step: "credit_memo_mod",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             qbTxnId: cmTxnId,
             medusaRefNumber: creditMemo.credit_memo_number ?? null,
             payload: cmPayload,
@@ -1510,7 +1511,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
              FROM qb_order_pipeline
             WHERE reference_id = ?
               AND step = 'credit_memo'
-              AND status IN ('processing', 'submitted', 'confirmed')
+              AND status IN (${SALES_SQL.processing}, ${SALES_SQL.submitted}, ${SALES_SQL.synced})
             ORDER BY COALESCE(updated_at, created_at) DESC
             LIMIT 1`,
           [id]
@@ -1532,7 +1533,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: id,
           referenceType: "credit_memo",
           step: "credit_memo",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           medusaRefNumber: creditMemo.credit_memo_number ?? null,
           qbRefNumber: creditMemo.credit_memo_number ?? null,
           payload: cmPayload,

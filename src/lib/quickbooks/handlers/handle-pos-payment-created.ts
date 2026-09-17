@@ -20,6 +20,7 @@ import {
   cacheEditSequence,
   skipPaymentRowByReference,
 } from "../qb-pipeline";
+import { WRITE } from "../pipeline-status";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -321,7 +322,7 @@ export async function handlePosPaymentCreated({
         referenceId: paymentId,
         referenceType: "customer_payment",
         step: "payment",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         medusaRefNumber: medusaPayRef,
       });
     } catch (pErr: any) {
@@ -405,7 +406,7 @@ export async function handlePosPaymentCreated({
           referenceId: paymentId,
           referenceType: "customer_payment",
           step: "payment",
-          status: "submitted",
+          status: WRITE.sales.submitted,
           bridgeOpId: operationId,
         });
       },
@@ -428,7 +429,7 @@ export async function handlePosPaymentCreated({
           orderId: pipelineOrderId,
           referenceId: paymentId,
           step: "payment",
-          status: "failed",
+          status: WRITE.sales.failed,
           error: result.error,
         });
       } catch (mErr) {}
@@ -467,7 +468,7 @@ export async function handlePosPaymentCreated({
           referenceId: paymentId,
           step: "payment",
           status:
-            result.operationId && !result.txnId ? "submitted" : "confirmed",
+            result.operationId && !result.txnId ? WRITE.sales.submitted : WRITE.sales.synced,
           bridgeOpId: result.operationId || null,
           qbTxnId: result.txnId || null,
           qbRefNumber: result.refNumber || null,

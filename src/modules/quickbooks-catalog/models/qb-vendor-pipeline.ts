@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 /**
  * Observability trail for QuickBooks vendor create/update ops.
@@ -23,7 +24,7 @@ export const QbVendorPipeline = model.define("qb_vendor_pipeline", {
   op_type: model.text().default("create"), // create | update
   qb_operation_id: model.text().nullable(),
   qb_list_id: model.text().nullable(),
-  status: model.text().default("waiting"), // waiting | synced | error
+  status: model.text().default(WRITE.purchase.dispatchable), // waiting | synced | error
   last_error: model.text().nullable(),
   retries: model.number().default(0),
   resolved_at: model.dateTime().nullable(),

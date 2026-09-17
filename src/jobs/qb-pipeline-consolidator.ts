@@ -22,6 +22,7 @@ import {
   runStaleSubmittedCleanup,
   runStalePendingCleanup,
 } from "../lib/quickbooks/consolidator/stale-cleanup-pass";
+import { SALES_SQL } from "../lib/quickbooks/pipeline-status";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -52,7 +53,7 @@ export default async function qbPipelineConsolidator(
     const { rows } = await pool.query(`
             SELECT id, order_id, reference_id, reference_type, step, bridge_op_id, retry_count, qb_txn_id, payload
             FROM qb_order_pipeline
-            WHERE status = 'submitted'
+            WHERE status IN (${SALES_SQL.submitted})
               AND bridge_op_id IS NOT NULL
             ORDER BY COALESCE(updated_at, created_at) ASC
             LIMIT 50

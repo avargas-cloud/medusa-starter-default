@@ -245,7 +245,7 @@ describe("decideSecondaryDispatch — China-agent vendor", () => {
     const d = decideSecondaryDispatch(
       facts({
         vendor_is_china_agent: true,
-        parent_regular: parent({ number: "VB-1150", status: "confirmed" }),
+        parent_regular: parent({ number: "VB-1150", status: "confirmed" }), // entity-status
       })
     );
     expect(d.dispatch).toBe(true);
@@ -311,7 +311,7 @@ describe("dispatchConfirmedSiblings — a sibling already in QuickBooks", () => 
   }
 
   it("skips it with 'already in QuickBooks' and never touches the pipeline", async () => {
-    const knex = fakeKnex({ in_qb: true, status: "synced" });
+    const knex = fakeKnex({ in_qb: true, status: "synced" }); // entity-status
     const outcomes = await dispatchConfirmedSiblings(knex, "vb_reg");
     expect(outcomes).toEqual([
       expect.objectContaining({
@@ -336,7 +336,7 @@ describe("parentDocumentIsLive", () => {
       parentDocumentIsLive(parent({ status: "draft", already_in_quickbooks: false }))
     ).toBe(false);
     expect(
-      parentDocumentIsLive(parent({ status: "voided", already_in_quickbooks: true }))
+      parentDocumentIsLive(parent({ status: "voided", already_in_quickbooks: true })) // entity-status
     ).toBe(false);
   });
 
@@ -387,7 +387,7 @@ describe("fatalSiblingOutcomes", () => {
     const fatal = fatalSiblingOutcomes([
       outcome({ outcome: "queued" }),
       outcome({ outcome: "skipped", reason: "already in QuickBooks" }),
-      outcome({ outcome: "skipped", reason: "not a finished document yet (status 'draft')" }),
+      outcome({ outcome: "skipped", reason: "not a finished document yet (status 'draft')" }), // entity-status
       outcome({ outcome: "failed", reason: "bill has no lines to send", number: "VB-77" }),
     ]);
     expect(fatal.map((f) => f.number)).toEqual(["VB-77"]);

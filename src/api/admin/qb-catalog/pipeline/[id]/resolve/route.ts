@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../../modules/quickbooks-catalog";
 import { requireBridgeUrl } from "../../../../../../lib/quickbooks/bridge-url";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 const bridgeUrl = (): string =>
   requireBridgeUrl();
@@ -55,7 +56,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   if (row.op_action === "add" && !row.qb_id) {
     await catalog.updateQbItemPipelines({
       id: row.id,
-      status: "error",
+      status: WRITE.purchase.error,
       recovery_mode: "none",
       qb_operation_id: null,
       submit_count: 0,
@@ -94,7 +95,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     await catalog.updateQbItemPipelines({
       id: row.id,
-      status: "waiting",
+      status: WRITE.purchase.dispatchable,
       recovery_mode: "editseq_query",
       qb_operation_id: iqJson.operationId,
       submit_count: 0,

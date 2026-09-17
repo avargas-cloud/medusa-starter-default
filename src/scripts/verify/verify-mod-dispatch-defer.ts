@@ -22,6 +22,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const SRC = path.join(process.cwd(), "src");
 const failures: string[] = [];
@@ -186,9 +187,12 @@ if (!fs.existsSync(path.join(SRC, GATE_REL))) {
   } else {
     fail("3", `${GATE_REL}: el SQL del sibling no ordena created_at ASC.`);
   }
-  const livenessOk = raw.includes("'processing'") && raw.includes("'submitted'") && raw.includes("bridge_op_id IS NOT NULL");
+  // vocab-20260917: los literales viven en el helper; el predicado nombra las
+  // listas SALES_SQL.processing / .submitted en vez de strings.
+  const livenessOk =
+    raw.includes("SALES_SQL.processing") && raw.includes("SALES_SQL.submitted") && raw.includes("bridge_op_id IS NOT NULL");
   if (livenessOk) {
-    ok("3", `${GATE_REL}: liveness cubre 'processing', 'submitted' y bridge_op_id IS NOT NULL`);
+    ok("3", `${GATE_REL}: liveness cubre SALES_SQL.processing, SALES_SQL.submitted y bridge_op_id IS NOT NULL`);
   } else {
     fail("3", `${GATE_REL}: el predicado de liveness no cubre los tres términos esperados.`);
   }
@@ -229,7 +233,7 @@ async function runProdCheck(): Promise<void> {
               percentile_cont(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM confirmed_at - submitted_at)) AS p90
          FROM qb_order_pipeline
         WHERE step IN ('sales_order_mod', 'estimate_mod')
-          AND status = 'confirmed'
+          AND status = '${WRITE.sales.synced}'
           AND confirmed_at > $1`,
       [since.toISOString()]
     );

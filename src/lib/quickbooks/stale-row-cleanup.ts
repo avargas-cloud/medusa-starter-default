@@ -13,6 +13,7 @@
  * are currently past their threshold.
  */
 import type { Knex } from "knex";
+import { WRITE } from "./pipeline-status";
 
 export interface StaleStatusConfig {
   /** Status value to match in the WHERE clause (e.g. 'waiting', 'submitted'). */
@@ -50,7 +51,7 @@ export async function markStaleRowsAsFailed(
 
   for (const cfg of staleStatuses) {
     const setClauses: string[] = [
-      `status = 'error'`,
+      `status = '${WRITE.purchase.error}'`,
       `last_error = ?`,
       `next_retry_at = NOW() + INTERVAL '2 minutes'`,
       `updated_at = NOW()`,
@@ -76,7 +77,7 @@ export async function markStaleRowsAsFailed(
 
     if (rowCount > 0 && logger) {
       logger.warn(
-        `[stale-cleanup] ${table}: ${rowCount} row(s) demoted from '${cfg.status}' (> ${cfg.timeoutMin} min) → 'error'`
+        `[stale-cleanup] ${table}: ${rowCount} row(s) demoted from '${cfg.status}' (> ${cfg.timeoutMin} min) → '${WRITE.purchase.error}'`
       );
     }
   }
@@ -89,8 +90,8 @@ export async function markStaleRowsAsFailed(
  * Matches the consolidator's existing thresholds (20 min waiting, 30 min submitted).
  */
 export const STANDARD_STALE_CONFIG: StaleStatusConfig[] = [
-  { status: "waiting", timeoutMin: 20, clearOpId: false },
-  { status: "submitted", timeoutMin: 30, clearOpId: true },
+  { status: WRITE.purchase.dispatchable, timeoutMin: 20, clearOpId: false },
+  { status: WRITE.purchase.submitted, timeoutMin: 30, clearOpId: true },
 ];
 
 /**
@@ -98,6 +99,6 @@ export const STANDARD_STALE_CONFIG: StaleStatusConfig[] = [
  * (note: uses 'processing' instead of 'submitted').
  */
 export const INVENTORY_ADJUSTMENT_STALE_CONFIG: StaleStatusConfig[] = [
-  { status: "waiting", timeoutMin: 20, clearOpId: false },
-  { status: "processing", timeoutMin: 30, clearOpId: true },
+  { status: WRITE.purchase.dispatchable, timeoutMin: 20, clearOpId: false },
+  { status: WRITE.purchase.processing, timeoutMin: 30, clearOpId: true },
 ];

@@ -2,6 +2,7 @@
 // Handler now only enqueues 'pending' rows; consolidator submits to bridge.
 import { getSoTxnId, getLatestInvoiceTxnId } from "../qb-metadata-types";
 import { writePipelineRow } from "../qb-pipeline";
+import { WRITE } from "../pipeline-status";
 
 import { LOG_PREFIX, isPosOrder } from "./utils";
 
@@ -82,7 +83,7 @@ export async function handleCustomerTransferred(
         referenceId: soTxnId,
         referenceType: "sales_order",
         step: "transfer_customer",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: "New customer has no qb_list_id — cannot transfer SO in QB",
       }).catch(() => {});
     }
@@ -92,7 +93,7 @@ export async function handleCustomerTransferred(
         referenceId: invoiceTxnId,
         referenceType: "invoice",
         step: "transfer_customer",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: "New customer has no qb_list_id — cannot transfer Invoice in QB",
       }).catch(() => {});
     }
@@ -135,7 +136,7 @@ export async function handleCustomerTransferred(
         referenceId: doc.txnId,
         referenceType: doc.refType,
         step: "transfer_customer",
-        status: "failed",
+        status: WRITE.sales.failed,
         error: errMsg,
       }).catch(() => {});
       continue;
@@ -151,7 +152,7 @@ export async function handleCustomerTransferred(
       referenceId: doc.txnId,
       referenceType: doc.refType,
       step: "transfer_customer",
-      status: "pending",
+      status: WRITE.sales.dispatchable,
       payload: {
         docType: doc.docType,
         txnId: doc.txnId,

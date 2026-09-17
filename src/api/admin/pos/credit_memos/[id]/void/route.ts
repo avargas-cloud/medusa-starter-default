@@ -20,6 +20,7 @@ import { syncCreditMemoDamageAdjustment } from "../../../../../../lib/quickbooks
 import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
 import { reverseCreditMemo } from "../../../../../../lib/ledger";
 import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
+import { WRITE } from "../../../../../../lib/quickbooks/pipeline-status";
 
 export async function POST(
   req: MedusaRequest,
@@ -57,12 +58,12 @@ export async function POST(
       return;
     }
 
-    if (creditMemo.status === "voided") {
+    if (creditMemo.status === "voided") { // entity-status
       res.status(400).json({ message: "Credit Memo is already voided" });
       return;
     }
 
-    const wasCompleted = creditMemo.status === "completed";
+    const wasCompleted = creditMemo.status === "completed"; // entity-status
 
     // 1. Reverse inventory if CM was completed (items were restocked)
     const touchedInventoryItemIds = new Set<string>();
@@ -152,13 +153,13 @@ export async function POST(
             type: "credit_memo",
           })
           .orWhere({ reference: creditMemo.credit_memo_number, type: "refund" })
-          .whereNot({ status: "voided" })
+          .whereNot({ status: "voided" }) // entity-status
           .first();
 
         if (payRow) {
           await financeService.updateCustomerPayments({
             id: payRow.id,
-            status: "voided",
+            status: "voided", // entity-status
             metadata: {
               ...(payRow.metadata || {}),
               voided_via: "credit_memo_void",
@@ -238,7 +239,7 @@ export async function POST(
           referenceId: id,
           referenceType: "credit_memo",
           step: "void_credit_memo",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           qbTxnId: creditMemo.qb_txn_id,
           qbRefNumber:
             creditMemo.qb_ref_number ?? creditMemo.credit_memo_number ?? null,
@@ -330,7 +331,7 @@ export async function POST(
     // 5. Mark CM as voided in DB
     await (creditMemoService as any).updatePosCreditMemos({
       id,
-      status: "voided",
+      status: "voided", // entity-status
       voided_at: new Date(),
     });
 

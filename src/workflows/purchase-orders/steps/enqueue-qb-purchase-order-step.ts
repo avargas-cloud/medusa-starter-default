@@ -20,6 +20,7 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { PURCHASE_ORDERS_MODULE } from "../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../modules/purchase-orders/service";
+import { WRITE } from "../../../lib/quickbooks/pipeline-status";
 
 export interface EnqueueQbPurchaseOrderStepInputLine {
   line_id: string;
@@ -107,7 +108,7 @@ export const enqueueQbPurchaseOrderStep = createStep(
     const toCreate: Array<Record<string, unknown>> = [
       {
         purchase_order_id: input.po_id,
-        status: "waiting",
+        status: WRITE.purchase.dispatchable,
         payload,
       },
     ];

@@ -6,6 +6,7 @@ import {
   completeVendorBillRebuildDelete,
   completeVendorBillRebuildPreflight,
 } from "./vendor-bill-rebuild-operations";
+import { SALES_SQL, WRITE } from "../pipeline-status";
 
 type Logger = {
   info: (message: string) => void;
@@ -168,7 +169,7 @@ export async function dispatchPurchaseOperation(
   await pool.query(
     `UPDATE qb_order_pipeline
         SET payload = $2::jsonb,
-            status = 'submitted',
+            status = '${WRITE.sales.submitted}',
             bridge_op_id = $3,
             submitted_at = NOW(),
             updated_at = NOW()
@@ -280,7 +281,7 @@ export async function schedulePurchaseAddExistenceCheck(
   const pool = getDbPool();
   const { rowCount } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'pending',
+        SET status = '${WRITE.sales.dispatchable}',
             payload = COALESCE(payload, '{}'::jsonb) ||
               jsonb_build_object($2::text, true) ||
               jsonb_build_object($4::text, $5::int),
@@ -289,7 +290,7 @@ export async function schedulePurchaseAddExistenceCheck(
             next_retry_at = NOW(),
             error = $3,
             updated_at = NOW()
-      WHERE id = $1 AND status = 'submitted'`,
+      WHERE id = $1 AND status IN (${SALES_SQL.submitted})`,
     [
       row.id,
       PURCHASE_EXISTENCE_CHECK_KEY,
@@ -309,7 +310,7 @@ async function markPurchaseAddVerifiedAbsent(row: ResubmitRow): Promise<void> {
   const pool = getDbPool();
   await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'pending',
+        SET status = '${WRITE.sales.dispatchable}',
             payload =
               (COALESCE(payload, '{}'::jsonb) - $2::text) ||
               jsonb_build_object($3::text, retry_count),
@@ -346,7 +347,7 @@ async function mirrorPurchaseAddWaiting(
   if (row.step === "item_receipt_add") {
     await pool.query(
       `UPDATE qb_item_receipt_pipeline
-          SET status = 'waiting', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.dispatchable}', qb_operation_id = NULL,
               last_error = $2, updated_at = NOW()
         WHERE id = $1`,
       [legacyId, reason]
@@ -354,7 +355,7 @@ async function mirrorPurchaseAddWaiting(
   } else if (row.step === "vendor_bill_add") {
     await pool.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'waiting', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.dispatchable}', qb_operation_id = NULL,
               last_error = $2, updated_at = NOW()
         WHERE id = $1`,
       [legacyId, reason]
@@ -603,7 +604,7 @@ async function mirrorSubmittedToLegacy(
   if (row.step === "purchase_order_mod") {
     await pool.query(
       `UPDATE qb_purchase_order_pipeline
-          SET status = 'submitted', qb_operation_id = $2,
+          SET status = '${WRITE.purchase.submitted}', qb_operation_id = $2,
               updated_at = NOW()
         WHERE id = $1`,
       [legacyId, operationId]
@@ -618,14 +619,14 @@ async function mirrorSubmittedToLegacy(
   } else if (row.step === "item_receipt_mod") {
     await pool.query(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status = 'submitted', mod_operation_id = $2, updated_at = NOW()
+          SET mod_status = '${WRITE.purchase.submitted}', mod_operation_id = $2, updated_at = NOW()
         WHERE id = $1`,
       [legacyId, operationId]
     );
   } else if (row.step === "vendor_bill_add") {
     await pool.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'submitted', qb_operation_id = $2, updated_at = NOW()
+          SET status = '${WRITE.purchase.submitted}', qb_operation_id = $2, updated_at = NOW()
         WHERE id = $1`,
       [legacyId, operationId]
     );
@@ -635,7 +636,7 @@ async function mirrorSubmittedToLegacy(
   ) {
     await pool.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'submitted', qb_operation_id = $2,
+          SET status = '${WRITE.purchase.submitted}', qb_operation_id = $2,
               last_error = NULL, next_retry_at = NULL, updated_at = NOW()
         WHERE id = $1`,
       [legacyId, operationId]
@@ -662,7 +663,7 @@ export async function mirrorPurchaseOperationFailure(
   if (row.step === "purchase_order_mod") {
     await pool.query(
       `UPDATE qb_purchase_order_pipeline
-          SET status = 'error', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.error}', qb_operation_id = NULL,
               last_error = $2, next_retry_at = NOW() + INTERVAL '2 minutes',
               updated_at = NOW()
         WHERE id = $1`,
@@ -671,7 +672,7 @@ export async function mirrorPurchaseOperationFailure(
   } else if (row.step === "item_receipt_add") {
     await pool.query(
       `UPDATE qb_item_receipt_pipeline
-          SET status = 'error', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.error}', qb_operation_id = NULL,
               last_error = $2, next_retry_at = NOW() + INTERVAL '2 minutes',
               updated_at = NOW()
         WHERE id = $1`,
@@ -680,7 +681,7 @@ export async function mirrorPurchaseOperationFailure(
   } else if (row.step === "item_receipt_mod") {
     await pool.query(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status = 'error', mod_operation_id = NULL,
+          SET mod_status = '${WRITE.purchase.error}', mod_operation_id = NULL,
               mod_last_error = $2,
               mod_next_retry_at = NOW() + INTERVAL '2 minutes',
               updated_at = NOW()
@@ -690,7 +691,7 @@ export async function mirrorPurchaseOperationFailure(
   } else if (row.step === "vendor_bill_add") {
     await pool.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'error', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.error}', qb_operation_id = NULL,
               last_error = $2, next_retry_at = NOW() + INTERVAL '2 minutes',
               updated_at = NOW()
         WHERE id = $1`,
@@ -705,12 +706,12 @@ export async function mirrorPurchaseOperationFailure(
           SET status = $2, qb_operation_id = NULL,
               last_error = $3,
               next_retry_at = CASE
-                WHEN $2 = 'failed_permanent' THEN NULL
+                WHEN $2 = '${WRITE.purchase.failed}' THEN NULL
                 ELSE NOW() + INTERVAL '2 minutes'
               END,
               updated_at = NOW()
         WHERE id = $1`,
-      [legacyId, permanent ? "failed_permanent" : "error", error]
+      [legacyId, permanent ? WRITE.purchase.failed : WRITE.purchase.error, error]
     );
   }
 }
@@ -835,7 +836,7 @@ async function completePurchaseOrder(
   if (legacyId) {
     await pool.query(
       `UPDATE qb_purchase_order_pipeline
-          SET status = 'synced', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.synced}', qb_operation_id = NULL,
               qb_list_id = $2,
               qb_txn_number = COALESCE($3, qb_txn_number),
               last_error = NULL, next_retry_at = NULL,
@@ -862,7 +863,7 @@ async function completeItemReceiptAdd(
               COALESCE($3, qb_item_receipt_txn_number),
             qb_edit_sequence = COALESCE($4, qb_edit_sequence),
             qb_synced_at = NOW(),
-            status = CASE WHEN status = 'pending' THEN 'applied' ELSE status END,
+            status = CASE WHEN status = 'pending' THEN 'applied' ELSE status END, -- entity-status: purchase_order_receipt.status
             updated_at = NOW()
       WHERE id = $1`,
     [receiptId, txnId, refNumber, editSequence]
@@ -871,7 +872,7 @@ async function completeItemReceiptAdd(
   if (legacyId) {
     await pool.query(
       `UPDATE qb_item_receipt_pipeline
-          SET status = 'synced', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.synced}', qb_operation_id = NULL,
               qb_list_id = $2,
               qb_txn_number = COALESCE($3, qb_txn_number),
               last_error = NULL, next_retry_at = NULL,
@@ -901,7 +902,7 @@ async function completeItemReceiptMod(
   if (legacyId) {
     await pool.query(
       `UPDATE qb_item_receipt_pipeline
-          SET mod_status = 'completed', mod_operation_id = NULL,
+          SET mod_status = '${WRITE.purchase.synced}', mod_operation_id = NULL,
               mod_synced_at = NOW(), mod_payload = NULL,
               mod_last_error = NULL, mod_next_retry_at = NULL,
               updated_at = NOW()
@@ -973,7 +974,7 @@ async function completeVendorBillAdd(
             qb_edit_sequence = COALESCE($3, qb_edit_sequence),
             qb_ref_number = COALESCE($4, qb_ref_number),
             qb_synced_at = NOW(), qb_source = 'owned',
-            status = 'synced', updated_at = NOW()
+            status = 'synced', updated_at = NOW() -- entity-status: vendor_bill.status
       WHERE id = $1`,
     [billId, txnId, editSequence, refNumber]
   );
@@ -981,7 +982,7 @@ async function completeVendorBillAdd(
   if (legacyId) {
     await pool.query(
       `UPDATE qb_vendor_bill_pipeline
-          SET status = 'synced', qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.synced}', qb_operation_id = NULL,
               qb_txn_id = $2,
               qb_ref_number = COALESCE($3, qb_ref_number),
               edit_sequence = COALESCE($4, edit_sequence),

@@ -17,6 +17,7 @@ import {
   getEstimateTxnId,
   getLatestInvoiceTxnId,
 } from "../../lib/quickbooks/qb-metadata-types";
+import { SALES_SQL } from "../../lib/quickbooks/pipeline-status";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -98,10 +99,10 @@ const CASES: TestCase[] = [
              OR o.metadata->'qb_sales_order'->>'txn_id' IS NOT NULL)
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
           AND NOT EXISTS (
             SELECT 1 FROM qb_order_pipeline v
-            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
           )
         )
         AND (o.metadata->>'qb_skip' IS NULL OR o.metadata->>'qb_skip' != 'true')
@@ -122,10 +123,10 @@ const CASES: TestCase[] = [
              OR o.metadata->'qb_sales_order'->>'txn_id' IS NOT NULL)
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
           AND NOT EXISTS (
             SELECT 1 FROM qb_order_pipeline v
-            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
           )
         )
       LIMIT 3
@@ -151,14 +152,14 @@ const CASES: TestCase[] = [
         )
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline v
-          WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+          WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
         )
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
           AND NOT EXISTS (
             SELECT 1 FROM qb_order_pipeline vv
-            WHERE vv.order_id = o.id AND vv.step = 'void_invoice' AND vv.status = 'confirmed'
+            WHERE vv.order_id = o.id AND vv.step = 'void_invoice' AND vv.status IN (${SALES_SQL.synced})
           )
         )
       LIMIT 3
@@ -178,10 +179,10 @@ const CASES: TestCase[] = [
         AND (o.metadata->'qb_sales_order'->>'txn_id' IS NULL)
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
           AND NOT EXISTS (
             SELECT 1 FROM qb_order_pipeline v
-            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
           )
         )
       LIMIT 3
@@ -201,10 +202,10 @@ const CASES: TestCase[] = [
              OR o.metadata->'qb_estimate'->>'txn_id' IS NOT NULL)
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
           AND NOT EXISTS (
             SELECT 1 FROM qb_order_pipeline v
-            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+            WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
           )
         )
       LIMIT 3
@@ -228,7 +229,7 @@ const CASES: TestCase[] = [
         AND (o.metadata->'qb_invoices' IS NULL OR jsonb_array_length(o.metadata->'qb_invoices') = 0)
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
         )
       LIMIT 3
     `,
@@ -252,14 +253,14 @@ const CASES: TestCase[] = [
         )
         AND EXISTS (
           SELECT 1 FROM qb_order_pipeline v
-          WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status = 'confirmed'
+          WHERE v.order_id = o.id AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
         )
         AND NOT EXISTS (
           SELECT 1 FROM qb_order_pipeline p
-          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+          WHERE p.order_id = o.id AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
           AND NOT EXISTS (
             SELECT 1 FROM qb_order_pipeline vv
-            WHERE vv.order_id = o.id AND vv.step = 'void_invoice' AND vv.status = 'confirmed'
+            WHERE vv.order_id = o.id AND vv.step = 'void_invoice' AND vv.status IN (${SALES_SQL.synced})
           )
         )
       LIMIT 3
@@ -276,15 +277,15 @@ async function getActiveInvoiceStatus(
     `SELECT
        (EXISTS (
          SELECT 1 FROM qb_order_pipeline p
-         WHERE p.order_id = $1 AND p.step IN ('invoice','sales_receipt') AND p.status = 'confirmed'
+         WHERE p.order_id = $1 AND p.step IN ('invoice','sales_receipt') AND p.status IN (${SALES_SQL.synced})
          AND NOT EXISTS (
            SELECT 1 FROM qb_order_pipeline v
-           WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status = 'confirmed'
+           WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
          )
        )) AS has_active_invoice,
        (EXISTS (
          SELECT 1 FROM qb_order_pipeline v
-         WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status = 'confirmed'
+         WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status IN (${SALES_SQL.synced})
        )) AS has_confirmed_void`,
     [orderId]
   );

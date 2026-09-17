@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { etDateString } from "../../../lib/finance/batch-day";
+import { SALES_SQL } from "../../../lib/quickbooks/pipeline-status";
 
 export interface PaymentSummaryDay {
   date: string;
@@ -65,7 +66,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(updated_at, created_at) AS confirmed_at
          FROM qb_order_pipeline
          WHERE step = 'write_check'
-           AND status = 'confirmed'
+           AND status IN (${SALES_SQL.synced})
          ORDER BY reference_id, COALESCE(updated_at, created_at) DESC
        )
        SELECT
@@ -77,12 +78,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        FROM (
          SELECT
            ${dayKeyExpr} AS d,
-           CASE WHEN status <> 'voided'
+           CASE WHEN status <> 'voided' -- entity-status
                 THEN amount ELSE 0 END AS net_amount,
-           CASE WHEN status <> 'voided'
+           CASE WHEN status <> 'voided' -- entity-status
                 THEN amount ELSE 0 END AS gross_payments,
            0                           AS refunds,
-           CASE WHEN status <> 'voided'
+           CASE WHEN status <> 'voided' -- entity-status
                 THEN 1 ELSE 0 END      AS payment_count
          FROM customer_payment
          WHERE deleted_at IS NULL

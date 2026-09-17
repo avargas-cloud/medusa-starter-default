@@ -12,6 +12,7 @@ import { FINANCE_MODULE } from "../../../../modules/finance";
 import { runLedgerHook } from "../../../../lib/ledger-hooks/run-ledger-hook";
 import { postCustomerPayment } from "../../../../lib/ledger";
 import { resolveActorId } from "../../../../lib/pos/supervisor-pin-guard";
+import { WRITE } from "../../../../lib/quickbooks/pipeline-status";
 
 /**
  * GET /admin/finance/payments
@@ -294,7 +295,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           referenceId: payment.id,
           referenceType: "customer_payment",
           step: "payment",
-          status: "waiting",
+          status: WRITE.sales.blocked,
           medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
         });
       } catch (rowErr: any) {
@@ -328,7 +329,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceId: payment.id,
             referenceType: "payment",
             step: "payment",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
           });
         } catch (enqErr: any) {
           console.error(

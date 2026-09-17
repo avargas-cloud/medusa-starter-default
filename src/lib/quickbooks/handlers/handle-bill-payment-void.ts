@@ -14,8 +14,9 @@ export async function handleBillPaymentVoidConfirmed(
 ): Promise<void> {
   await knex.raw(
     `UPDATE vendor_bill_payment
-        SET status = 'voided', voided_at = NOW(), voided_by = ?, updated_at = NOW()
-      WHERE id = ? AND deleted_at IS NULL AND status <> 'voided'`,
+        SET status = 'voided', voided_at = NOW(), voided_by = ?, updated_at = NOW() -- entity-status
+      WHERE id = ? AND deleted_at IS NULL AND status <> 'voided' -- entity-status
+      `,
     [voidedBy, vendorBillPaymentId]
   );
 }

@@ -28,6 +28,7 @@ import {
 } from "./qb-vendor-bill-sibling-dispatch";
 import { deriveClearingDrift } from "./qb-vendor-bill-clearing-lines";
 import { loadClearingSiblings } from "./load-clearing-siblings";
+import { PURCHASE_SQL } from "../quickbooks/pipeline-status";
 
 export interface ScanKnex {
   raw: (
@@ -79,11 +80,11 @@ export async function scanLostSiblingBills(
             EXISTS (SELECT 1 FROM qb_vendor_bill_pipeline p
                      WHERE p.vendor_bill_id = vb.id
                        AND p.deleted_at IS NULL
-                       AND p.status NOT IN ('error','failed_permanent')) AS has_live_row
+                       AND p.status NOT IN (${PURCHASE_SQL.failedAny})) AS has_live_row
        FROM vendor_bill vb
       WHERE vb.deleted_at IS NULL
         AND vb.bill_type <> 'regular'
-        AND vb.status = 'confirmed'
+        AND vb.status = 'confirmed' -- entity-status
         AND vb.qb_txn_id IS NULL
       ORDER BY vb.number`,
     []
@@ -198,11 +199,11 @@ export async function scanPrematureSiblingDispatch(
       WHERE vb.deleted_at IS NULL
         AND vb.bill_type IN ('service', 'freight', 'tariff')
         AND vb.qb_txn_id IS NOT NULL
-        AND vb.status <> 'voided'
+        AND vb.status <> 'voided' -- entity-status
         AND (v.metadata @> '{"is_china_agent": true}'::jsonb
              OR lower(v.metadata->>'is_china_agent') = 'true')
         AND (reg.number IS NULL
-             OR (reg.status NOT IN ('confirmed', 'synced') AND reg.qb_txn_id IS NULL))
+             OR (reg.status NOT IN ('confirmed', 'synced') AND reg.qb_txn_id IS NULL)) -- entity-status
       ORDER BY vb.number`,
     []
   );

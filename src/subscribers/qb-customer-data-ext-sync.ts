@@ -3,6 +3,7 @@ import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../api/utils/db-pool";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { SALES_SQL } from "../lib/quickbooks/pipeline-status";
 
 /**
  * AUTO-ENQUEUE CUSTOMER DATA-EXT TO QB
@@ -44,7 +45,7 @@ async function enqueueIfNeeded(
       `SELECT id FROM qb_order_pipeline
         WHERE step = 'customer_data_ext'
           AND reference_id = $1
-          AND status IN ('pending', 'submitted', 'waiting')
+          AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.submitted}, ${SALES_SQL.blocked})
         LIMIT 1`,
       [customerId]
     );

@@ -21,6 +21,7 @@
  *     ./node_modules/.bin/tsx src/scripts/tests/e2e-po-void-race-sandbox.ts
  */
 import { Pool } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 const URL = process.env.DATABASE_URL ?? "";
 if (!URL.includes(":5499/")) {
@@ -51,7 +52,7 @@ const VOIDED_PO_LOOKUP = `
   SELECT id, number, status, qb_edit_sequence,
          vendor_qb_list_id_snapshot, vendor_name_snapshot
     FROM purchase_order
-   WHERE id = $1 AND status = 'voided' AND deleted_at IS NULL
+   WHERE id = $1 AND status = 'voided' AND deleted_at IS NULL -- entity-status
    LIMIT 1
 `;
 
@@ -91,7 +92,7 @@ async function main() {
 
     // ── 2 · el PO se voidea mientras su create viaja ───────────────────────
     await pool.query(
-      `UPDATE purchase_order SET status = 'voided' WHERE id = $1`,
+      `UPDATE purchase_order SET status = 'voided' WHERE id = $1`, // entity-status
       [poId]
     );
     const voideado = await pool.query(VOIDED_PO_LOOKUP, [poId]);
@@ -124,7 +125,7 @@ async function main() {
     };
     await pool.query(
       `UPDATE qb_purchase_order_pipeline
-          SET status = 'waiting', qb_list_id = $2, qb_operation_id = NULL,
+          SET status = '${WRITE.purchase.dispatchable}', qb_list_id = $2, qb_operation_id = NULL,
               payload = $3, retries = 0, last_error = NULL,
               next_retry_at = NULL, synced_at = NULL, updated_at = NOW()
         WHERE purchase_order_id = $1 AND deleted_at IS NULL`,
@@ -147,7 +148,7 @@ async function main() {
     const pl = after[0]?.payload ?? {};
     check(
       "la fila queda 'waiting' con el payload de void y sin marcar synced",
-      after[0]?.status === "waiting" &&
+      after[0]?.status === WRITE.purchase.dispatchable &&
         pl.is_void === true &&
         after[0]?.synced_at === null,
       JSON.stringify({ status: after[0]?.status, synced_at: after[0]?.synced_at })

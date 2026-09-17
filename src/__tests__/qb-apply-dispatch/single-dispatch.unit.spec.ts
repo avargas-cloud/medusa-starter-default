@@ -13,6 +13,7 @@
  * dispatched at 14:14:29 and WORKER dispatched the same apply at 14:15:29; the
  * loser died with QuickBooks Error 3200.
  */
+import { SALES_SQL, WRITE } from "../../lib/quickbooks/pipeline-status";
 import { claimApplyPaymentRow } from "../../lib/quickbooks/handlers/handle-pos-payment-applied";
 
 type Call = { sql: string; params?: unknown[] };
@@ -34,7 +35,7 @@ const REF = "papp_1";
 
 describe("claimApplyPaymentRow", () => {
   it("claims a row nobody owns", async () => {
-    const pool = fakePool([{ id: "row1", status: "waiting" }], [{ id: "row1" }]);
+    const pool = fakePool([{ id: "row1", status: WRITE.sales.blocked }], [{ id: "row1" }]);
     await expect(
       claimApplyPaymentRow(pool, ORDER, REF, null)
     ).resolves.toEqual({ outcome: "claimed" });
@@ -43,16 +44,16 @@ describe("claimApplyPaymentRow", () => {
   it("refuses when the UPDATE matches nothing — another dispatcher holds it", async () => {
     // status 'processing' is outside the claimable set, so the UPDATE returns 0
     // rows. This is the SERVER-vs-WORKER collision.
-    const pool = fakePool([{ id: "row1", status: "processing" }], []);
+    const pool = fakePool([{ id: "row1", status: WRITE.sales.processing }], []);
     await expect(claimApplyPaymentRow(pool, ORDER, REF, null)).resolves.toEqual({
       outcome: "held_by_other",
       rowId: "row1",
-      status: "processing",
+      status: WRITE.sales.processing,
     });
   });
 
   it("refuses a row that already confirmed", async () => {
-    const pool = fakePool([{ id: "row1", status: "confirmed" }], []);
+    const pool = fakePool([{ id: "row1", status: WRITE.sales.synced }], []);
     const res = await claimApplyPaymentRow(pool, ORDER, REF, null);
     expect(res.outcome).toBe("held_by_other");
   });
@@ -60,7 +61,7 @@ describe("claimApplyPaymentRow", () => {
   it("lets the consolidator through on the row it already claimed", async () => {
     // The consolidator sets 'processing' via FOR UPDATE SKIP LOCKED before
     // calling. Without this branch it would refuse to dispatch on its own lock.
-    const pool = fakePool([{ id: "row1", status: "processing" }], []);
+    const pool = fakePool([{ id: "row1", status: WRITE.sales.processing }], []);
     await expect(
       claimApplyPaymentRow(pool, ORDER, REF, "row1")
     ).resolves.toEqual({ outcome: "claimed" });
@@ -69,7 +70,7 @@ describe("claimApplyPaymentRow", () => {
   });
 
   it("does NOT short-circuit for a different row id", async () => {
-    const pool = fakePool([{ id: "row1", status: "processing" }], []);
+    const pool = fakePool([{ id: "row1", status: WRITE.sales.processing }], []);
     const res = await claimApplyPaymentRow(pool, ORDER, REF, "some-other-row");
     expect(res.outcome).toBe("held_by_other");
   });
@@ -82,13 +83,16 @@ describe("claimApplyPaymentRow", () => {
   });
 
   it("only ever claims from waiting/pending/failed", async () => {
-    const pool = fakePool([{ id: "row1", status: "waiting" }], [{ id: "row1" }]);
+    const pool = fakePool([{ id: "row1", status: WRITE.sales.blocked }], [{ id: "row1" }]);
     await claimApplyPaymentRow(pool, ORDER, REF, null);
     const update = pool.calls.find((c) => c.sql.includes("UPDATE"));
     expect(update).toBeDefined();
-    expect(update!.sql).toContain("'waiting', 'pending', 'failed'");
+    // Claimable = dispatchable ∪ blocked ∪ any failed attempt (both vocabularies).
+    expect(update!.sql).toContain(
+      `status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked}, ${SALES_SQL.failedAny})`
+    );
     // Never claimable: dispatching over these is the duplicate we are stopping.
-    for (const terminal of ["submitted", "confirmed", "fixed", "skipped"]) {
+    for (const terminal of ["submitted", "confirmed", "synced", "fixed", "skipped"]) {
       expect(update!.sql).not.toContain(`'${terminal}'`);
     }
   });

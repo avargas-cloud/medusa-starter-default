@@ -30,6 +30,7 @@ import {
 import { randomUUID } from "crypto";
 import { qbItemReceiptIdentityMemo } from "./qb-item-receipt-identity";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { PURCHASE_SQL, WRITE, normalizePipelineStatus } from "../quickbooks/pipeline-status";
 
 export type KnexRaw = {
   raw: (
@@ -119,10 +120,10 @@ export async function buildItemReceiptModPayload(
     return { ok: false, reason: `receipt ${receiptId} or its pipeline row not found` };
   }
 
-  if (header.pipe_status !== "synced") {
+  if (normalizePipelineStatus("purchase", header.pipe_status as string | null) !== WRITE.purchase.synced) {
     return {
       ok: false,
-      reason: `pipeline status is '${String(header.pipe_status)}', expected 'synced'`,
+      reason: `pipeline status is '${String(header.pipe_status)}', expected '${WRITE.purchase.synced}'`,
     };
   }
   const voidStatus = header.pipe_void_status as string | null;
@@ -223,7 +224,7 @@ export async function enqueueItemReceiptModAtomic(
 
   const res = await knex.raw(
     `UPDATE qb_item_receipt_pipeline
-        SET mod_status        = 'waiting',
+        SET mod_status        = '${WRITE.purchase.dispatchable}',
             mod_payload       = ?::jsonb,
             mod_operation_id  = NULL,
             mod_retries       = 0,
@@ -233,7 +234,7 @@ export async function enqueueItemReceiptModAtomic(
             updated_at        = NOW()
       WHERE id = ?
         AND qb_list_id IS NOT NULL
-        AND COALESCE(mod_status, '') NOT IN ('waiting', 'submitted')`,
+        AND COALESCE(mod_status, '') NOT IN (${PURCHASE_SQL.dispatchable}, ${PURCHASE_SQL.submitted})`,
     [JSON.stringify(payload), pipelineId]
   );
   if ((res.rowCount ?? 0) <= 0) return false;
@@ -303,13 +304,13 @@ export async function computeReceiptDrift(
        SELECT p.id AS pipeline_id,
               p.purchase_order_receipt_id AS receipt_id,
               pr.number AS receipt_number,
-              CASE WHEN p.mod_status = 'completed' THEN p.mod_payload ELSE p.payload END AS qb_payload
+              CASE WHEN p.mod_status IN (${PURCHASE_SQL.modSynced}) THEN p.mod_payload ELSE p.payload END AS qb_payload
        FROM qb_item_receipt_pipeline p
        JOIN purchase_order_receipt pr ON pr.id = p.purchase_order_receipt_id
-       WHERE p.status = 'synced'
+       WHERE p.status IN (${PURCHASE_SQL.synced})
          AND p.void_status IS NULL
          AND p.deleted_at IS NULL
-         AND COALESCE(p.mod_status, '') NOT IN ('waiting', 'submitted', 'error')
+         AND COALESCE(p.mod_status, '') NOT IN (${PURCHASE_SQL.dispatchable}, ${PURCHASE_SQL.submitted}, ${PURCHASE_SQL.error})
          AND pr.voided_at IS NULL
          ${filter ? "AND pr.number = ANY(?)" : ""}
      ),
@@ -381,13 +382,13 @@ export async function reconcileReceiptModIfDrifted(
   const driftRows = await knex.raw(
     `WITH eff AS (
        SELECT p.id AS pipeline_id,
-              CASE WHEN p.mod_status = 'completed' THEN p.mod_payload ELSE p.payload END AS qb_payload
+              CASE WHEN p.mod_status IN (${PURCHASE_SQL.modSynced}) THEN p.mod_payload ELSE p.payload END AS qb_payload
        FROM qb_item_receipt_pipeline p
        WHERE p.purchase_order_receipt_id = ?
-         AND p.status = 'synced'
+         AND p.status IN (${PURCHASE_SQL.synced})
          AND p.void_status IS NULL
          AND p.deleted_at IS NULL
-         AND COALESCE(p.mod_status, '') NOT IN ('waiting', 'submitted', 'error')
+         AND COALESCE(p.mod_status, '') NOT IN (${PURCHASE_SQL.dispatchable}, ${PURCHASE_SQL.submitted}, ${PURCHASE_SQL.error})
      ),
      qbl AS (
        SELECT (l->>'receipt_line_id') AS receipt_line_id,

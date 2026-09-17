@@ -23,6 +23,7 @@
 import type { ExecArgs } from "@medusajs/framework/types";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { handleInvoiceVoided } from "../../lib/quickbooks/handlers/handle-invoice-voided";
 import { enqueueVoidIfAlreadyVoided } from "../../lib/quickbooks/pipeline/void-intent";
 
@@ -115,7 +116,7 @@ export default async function replayVoidRace({ container }: ExecArgs) {
 
     // ── t0+41s · el usuario voidea ─────────────────────────────────────────
     console.log("t0+41s · el usuario hace VOID (el TxnID todavía no existe)\n");
-    await pool.query(`UPDATE pos_invoice SET status = 'voided' WHERE id = $1`, [
+    await pool.query(`UPDATE pos_invoice SET status = 'voided' WHERE id = $1`, [ // entity-status
       inv.id,
     ]);
 
@@ -150,7 +151,7 @@ export default async function replayVoidRace({ container }: ExecArgs) {
     );
     await pool.query(
       `UPDATE qb_order_pipeline
-          SET status = 'confirmed', qb_txn_id = $2, qb_ref_number = $3,
+          SET status = '${WRITE.sales.synced}', qb_txn_id = $2, qb_ref_number = $3,
               confirmed_at = NOW(), updated_at = NOW()
         WHERE reference_id = $1 AND step = 'invoice'`,
       [inv.id, FAKE_TXN, FAKE_REF]
@@ -178,14 +179,14 @@ export default async function replayVoidRace({ container }: ExecArgs) {
       "EL ARREGLO: el void se materializa solo, con el TxnID recién conocido",
       !!materialized &&
         voidRow?.step === "void_invoice" &&
-        voidRow?.status === "pending" &&
+        voidRow?.status === WRITE.sales.dispatchable &&
         voidRow?.qb_txn_id === FAKE_TXN,
       JSON.stringify(voidRow)
     );
 
     check(
       "y queda listo para que el consolidator lo despache (status pending)",
-      voidRow?.status === "pending"
+      voidRow?.status === WRITE.sales.dispatchable
     );
 
     // ── Regresión: si la invoice NO estuviera voideada, no encola nada ─────

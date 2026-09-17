@@ -11,6 +11,7 @@ import {
 import { loadUnattributedPayments } from "./load-unattributed-payments";
 import { loadZeroCostLines } from "./load-zero-cost-lines";
 import { loadCreditMemoMovements } from "./load-cm-movements";
+import { SALES_SQL } from "../../../../../lib/quickbooks/pipeline-status";
 import type {
   TreasuryBucketView,
   TreasuryDailyReport,
@@ -159,7 +160,7 @@ async function computeLiveRangeReport(
          reference_id,
          COALESCE(updated_at, created_at) AS confirmed_at
        FROM qb_order_pipeline
-       WHERE step = 'write_check' AND status = 'confirmed'
+       WHERE step = 'write_check' AND status IN (${SALES_SQL.synced})
        ORDER BY reference_id, COALESCE(updated_at, created_at) DESC
      ),
      applied AS (
@@ -177,10 +178,10 @@ async function computeLiveRangeReport(
        SELECT
          cp.id,
          cp.received_at,
-         CASE WHEN cp.status <> 'voided'
+         CASE WHEN cp.status <> 'voided' -- entity-status
            THEN LEAST(cp.amount, COALESCE(a.applied, 0))
            ELSE 0 END AS applied_cents,
-         CASE WHEN cp.status <> 'voided'
+         CASE WHEN cp.status <> 'voided' -- entity-status
            THEN GREATEST(cp.amount - COALESCE(a.applied, 0), 0)
            ELSE 0 END AS unapplied_cents,
          COALESCE(ld.effective_treasury_date, cp.batch_day::date, (cp.received_at AT TIME ZONE 'America/New_York')::date) AS unapplied_effective_date

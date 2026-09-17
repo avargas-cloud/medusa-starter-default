@@ -15,6 +15,7 @@
  */
 import { getDbPool } from "../../api/utils/db-pool";
 import { computeBatchDay } from "./batch-day";
+import { SALES_SQL, WRITE } from "../quickbooks/pipeline-status";
 
 export interface RevertRefundAudit {
   reason?: string | null;
@@ -169,7 +170,7 @@ export async function performMedusaRefundRevert(
         const { rows: otherRows } = await pool.query(
           `SELECT COUNT(*)::int AS n FROM pos_credit_memo
             WHERE order_id = $1 AND id <> $2
-              AND refund_method = 'refund' AND status = 'completed'
+              AND refund_method = 'refund' AND status = 'completed' -- entity-status
               AND deleted_at IS NULL`,
           [cm.order_id, cm.id]
         );
@@ -206,10 +207,10 @@ export async function skipOpenRefundPipelineRows(
   const pool = getDbPool();
   const { rows } = await pool.query(
     `UPDATE qb_order_pipeline
-        SET status = 'skipped', error = $3, updated_at = NOW()
+        SET status = '${WRITE.sales.skipped}', error = $3, updated_at = NOW()
       WHERE reference_id = $1
         AND step = ANY($2)
-        AND status IN ('pending', 'waiting', 'failed')
+        AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked}, ${SALES_SQL.failedAny})
       RETURNING id`,
     [paymentId, steps, note]
   );

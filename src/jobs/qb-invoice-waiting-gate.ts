@@ -34,6 +34,7 @@ import { INVOICE_MODULE } from "../modules/invoices";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import { isQbSyncEnabled } from "../lib/quickbooks/sync-enabled";
+import { WRITE } from "../lib/quickbooks/pipeline-status";
 const MAX_ROWS_PER_TICK = 20;
 
 type DispatchPayload = {
@@ -152,7 +153,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
               referenceId: inv.id,
               referenceType: "pos_invoice",
               step: "sales_receipt",
-              status: "waiting",
+              status: WRITE.sales.blocked,
               medusaRefNumber: `INV-${payload.invoice_number}`,
             });
           } else {
@@ -161,7 +162,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
               referenceId: inv.id,
               referenceType: "pos_invoice",
               step: "invoice",
-              status: "waiting",
+              status: WRITE.sales.blocked,
               medusaRefNumber: `INV-${payload.invoice_number}`,
             });
             if (payload.payment_id_to_emit) {
@@ -170,7 +171,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
                 referenceId: payload.payment_id_to_emit,
                 referenceType: "customer_payment",
                 step: "payment",
-                status: "waiting",
+                status: WRITE.sales.blocked,
                 medusaRefNumber: payload.next_pay_num
                   ? `PAY-${payload.next_pay_num}`
                   : null,
@@ -211,7 +212,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
                 referenceId: applyRef.referenceId,
                 referenceType: applyRef.referenceType,
                 step: "apply_payment",
-                status: "waiting",
+                status: WRITE.sales.blocked,
                 dependsOn: invoicePipelineRowId,
                 medusaRefNumber: applyMedusaRef,
                 payload: app,
@@ -239,7 +240,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
             referenceId: inv.id,
             referenceType: "invoice",
             step: "sales_receipt",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             payload: {
               invoice_id: inv.id,
               items: bodyItems,
@@ -261,7 +262,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
             referenceId: inv.id,
             referenceType: "invoice",
             step: "invoice",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
             payload: {
               invoice_id: inv.id,
               items: bodyItems,
@@ -285,7 +286,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
             referenceId: payload.payment_id_to_emit,
             referenceType: "payment",
             step: "payment",
-            status: "pending",
+            status: WRITE.sales.dispatchable,
           });
           logger.info(
             `[qb-invoice-waiting-gate] 📥 Enqueued payment for ${payload.payment_id_to_emit}`
@@ -315,7 +316,7 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
                 referenceId: applyRef.referenceId,
                 referenceType: applyRef.referenceType,
                 step: "apply_payment",
-                status: "pending",
+                status: WRITE.sales.dispatchable,
                 payload: appPayload,
               });
             })

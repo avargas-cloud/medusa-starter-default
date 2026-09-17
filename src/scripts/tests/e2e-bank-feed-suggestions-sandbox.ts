@@ -31,6 +31,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { requireBankingSandbox } from "../../lib/banking/security";
 import { listSuggestionAccounts, runSuggestionsForMonth } from "../../lib/banking/suggestion-runner";
 import { readFeedSuggestions } from "../../lib/banking/suggestion-store";
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
   const linesAug = (await q<{ n: string }>(`SELECT count(*)::text AS n FROM bank_statement_line WHERE statement_id=$1`, [aug.id]))[0]!.n;
   const r3 = await runSuggestionsForMonth(account, "2026-08", { trigger: "manual", actorId: ACTOR, today: "2026-09-15" });
   const augAfter = (await q<{ xmin: string; n: string }>(`SELECT s.xmin::text AS xmin,(SELECT count(*)::text FROM bank_statement_line l WHERE l.statement_id=s.id) AS n FROM bank_statement s WHERE s.id=$1`, [aug.id]))[0]!;
-  check(r3.outcome.status === "skipped" && r3.outcome.skipped_reason === "closed" && augAfter.xmin === aug.xmin && augAfter.n === linesAug, "extracto cerrado: skipped 'closed', fila y líneas intactas (xmin igual)");
+  check(r3.outcome.status === "skipped" && r3.outcome.skipped_reason === "closed" && augAfter.xmin === aug.xmin && augAfter.n === linesAug, "extracto cerrado: skipped 'closed', fila y líneas intactas (xmin igual)"); // entity-status
   check((await q<{ n: string }>(`SELECT count(*)::text AS n FROM bank_statement_suggestion WHERE statement_id=$1`, [aug.id]))[0]!.n === "0", "sin sugerencias sobre un extracto cerrado");
 
   console.log(`\n${checks} checks OK (fase 3)`);
@@ -186,7 +187,7 @@ async function main(): Promise<void> {
   const glc = (await q<{ status: string; kind: string; entry_id: string }>(`SELECT status,kind,entry_id FROM gl_check WHERE id=$1`, [doc.document_id]))[0]!;
   const pipe = (await q<{ status: string }>(`SELECT status FROM qb_order_pipeline WHERE step='gl_document_add' AND order_id=$1`, [doc.document_id]))[0];
   check(glc.status === "posted" && glc.kind === "expense" && !!glc.entry_id, "gl_check posted con asiento");
-  check(pipe?.status === "pending", `encolado a QuickBooks: gl_document_add ${pipe?.status} (bridge apagado en sandbox → queda pending)`);
+  check(pipe?.status === WRITE.sales.dispatchable, `encolado a QuickBooks: gl_document_add ${pipe?.status} (bridge apagado en sandbox -> queda pending)`);
   check((await feedRow(orphan)).review_status === "reconciled", "la línea quedó Matched contra el documento nuevo");
   const again = await confirmFeedDocument(orphan, actor, `e2e-${RUN}-doc`, { category_list_id: category, payee_type: "other", payee_name: "Bank Fee E2E", number: null, memo: null, preview_hash: pv.preview_hash });
   check(again.document_id === doc.document_id && (await countChecks()) === c1 + 3, "misma Idempotency-Key → mismo documento, no se duplica");
@@ -200,7 +201,7 @@ async function main(): Promise<void> {
   check(pvIn.document === "gl_journal_entry" && pvIn.qb_txn_type === "JournalEntry" && pvIn.lines[0]!.debit_cents === inCents, "entrada: preview = JE Dr banco / Cr ingreso, JournalEntryAdd");
   const je = await confirmFeedDocument(inflow, actor, `e2e-${RUN}-je`, { category_list_id: incomeAcct, payee_type: "other", payee_name: "Bank Interest", number: null, memo: null, preview_hash: pvIn.preview_hash });
   const jePipe = (await q<{ status: string }>(`SELECT status FROM qb_order_pipeline WHERE step='gl_document_add' AND order_id=$1`, [je.document_id]))[0];
-  check(je.document === "gl_journal_entry" && /^JE-\d+$/.test(je.doc_number) && "statement_id" in je.match && jePipe?.status === "pending" && (await feedRow(inflow)).review_status === "reconciled", `${je.doc_number} creado, encolado y casado`);
+  check(je.document === "gl_journal_entry" && /^JE-\d+$/.test(je.doc_number) && "statement_id" in je.match && jePipe?.status === WRITE.sales.dispatchable && (await feedRow(inflow)).review_status === "reconciled", `${je.doc_number} creado, encolado y casado`);
 
   // 9. Confirm viejo sobre una línea de extracto → 409. En un día ABIERTO (el 09/12 del clon está
   //    cerrado y el review viejo ya lo rechaza por eso, que no es lo que se prueba acá).

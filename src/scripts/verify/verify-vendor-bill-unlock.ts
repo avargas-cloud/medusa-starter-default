@@ -19,6 +19,7 @@
  */
 
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { claimUnlock, type UnlockKnex } from "../../lib/purchase-orders/qb-vendor-bill-unlock";
 
 const SANDBOX_DEFAULT_URL = "postgresql://postgres:sandbox@localhost:5499/medusa";
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
 
       // ── Sync the bill + seed its pipeline row (synced ADD lifecycle) ──────
       await client.query(
-        `UPDATE vendor_bill SET status = 'synced', qb_txn_id = $2 WHERE id = $1`,
+        `UPDATE vendor_bill SET status = 'synced', qb_txn_id = $2 WHERE id = $1`, // entity-status
         [billId, fakeTxnId]
       );
 
@@ -184,7 +185,7 @@ async function main(): Promise<void> {
         rowAfterClaim?.intent === "rebuild_prepare",
         JSON.stringify(rowAfterClaim)
       );
-      assert("row flipped to status='waiting'", rowAfterClaim?.status === "waiting");
+      assert("row flipped to the dispatchable status", rowAfterClaim?.status === WRITE.purchase.dispatchable);
       assert("qb_operation_id cleared", rowAfterClaim?.qb_operation_id === null);
       assert("retries reset to 0", rowAfterClaim?.retries === 0);
       assert(
@@ -228,12 +229,12 @@ async function main(): Promise<void> {
       );
       assert(
         "preflight is the first runnable operation",
-        preflight?.status === "pending" && preflight?.depends_on === null,
+        preflight?.status === WRITE.sales.dispatchable && preflight?.depends_on === null,
         JSON.stringify(chainRows)
       );
       assert(
         "delete waits on the preflight",
-        deletion?.status === "waiting" &&
+        deletion?.status === WRITE.sales.blocked &&
           deletion?.depends_on === preflight?.id,
         JSON.stringify(chainRows)
       );

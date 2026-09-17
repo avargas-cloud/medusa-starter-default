@@ -1,4 +1,5 @@
 import type { ExecArgs } from "@medusajs/framework/types";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import {
   enqueueChinaAgencyVendorBillModGroup,
@@ -22,7 +23,7 @@ export default async function verifyChinaAgencyVendorBillMod({
        FROM vendor_bill vb
       WHERE vb.deleted_at IS NULL
         AND vb.bill_type = 'regular'
-        AND vb.status = 'synced'
+        AND vb.status = 'synced' -- entity-status
         AND vb.qb_source IS NULL
         AND vb.qb_txn_id IS NOT NULL
         AND vb.service_vendor_bill_id IS NOT NULL
@@ -33,7 +34,7 @@ export default async function verifyChinaAgencyVendorBillMod({
              vb.id, vb.service_vendor_bill_id, vb.freight_vendor_bill_id
            )
              AND p.deleted_at IS NULL
-             AND p.status IN ('waiting','submitted','error')
+             AND p.status IN ('${WRITE.purchase.dispatchable}','${WRITE.purchase.submitted}','${WRITE.purchase.error}')
         )
       ORDER BY vb.number
       LIMIT 1`
@@ -85,8 +86,8 @@ export default async function verifyChinaAgencyVendorBillMod({
       };
       const expectedStatusOk =
         index === 0
-          ? row.status === "pending" || row.status === "waiting"
-          : row.status === "waiting";
+          ? row.status === WRITE.sales.dispatchable || row.status === WRITE.sales.blocked
+          : row.status === WRITE.sales.blocked;
       const expectedDependencyOk =
         index === 0 || row.depends_on === previousCentralId;
       if (
@@ -114,7 +115,7 @@ export default async function verifyChinaAgencyVendorBillMod({
           __mod_group_id?: string;
         };
       };
-      if (row.intent !== "mod" || row.status !== "waiting") {
+      if (row.intent !== "mod" || row.status !== WRITE.sales.blocked) {
         throw new Error(`Unexpected pipeline state ${row.intent}/${row.status}`);
       }
       if (

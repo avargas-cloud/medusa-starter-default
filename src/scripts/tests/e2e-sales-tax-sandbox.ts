@@ -15,6 +15,7 @@
  * banco default), un admin con Accounting y `pos_supervisor_pin` en el store.
  */
 import { Client } from "pg";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { loadGlDocumentAddFacts } from "../../lib/quickbooks/gl-documents/facts";
 
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
   const applied = (await db.query<{ applied_payment_id: string | null }>(`SELECT applied_payment_id FROM gl_sales_tax_adjustment WHERE id = $1`, [adjustment.id])).rows[0]!;
   check("el STA quedó aplicado al STP", applied.applied_payment_id === payment.id);
   const payRow = (await db.query<{ status: string; payload: { ready: boolean; reason?: string; blocking_reference_ids?: string[] } }>(`SELECT status, payload FROM qb_order_pipeline WHERE step='gl_document_add' AND reference_type='gl_sales_tax_payment' AND reference_id=$1 ORDER BY created_at DESC LIMIT 1`, [payment.id])).rows[0];
-  check("pipeline: STP transitorio, esperando el TxnID del STA (nunca un ADD antes del JE)", !!payRow && payRow.payload.ready === false && (payRow.payload.blocking_reference_ids ?? []).includes(adjustment.id) && !["failed", "skipped"].includes(payRow.status), payRow ? `${payRow.status} · ${payRow.payload.reason}` : "sin fila");
+  check("pipeline: STP transitorio, esperando el TxnID del STA (nunca un ADD antes del JE)", !!payRow && payRow.payload.ready === false && (payRow.payload.blocking_reference_ids ?? []).includes(adjustment.id) && !([WRITE.sales.failed, WRITE.sales.skipped] as string[]).includes(payRow.status), payRow ? `${payRow.status} · ${payRow.payload.reason}` : "sin fila");
   const dup = await call("/admin/accounting/sales-tax/payments", { method: "POST", token, body: payBody, pin });
   check("segundo pago del mismo período → 409", dup.status === 409, String(dup.status));
   const after = await call(`/admin/accounting/sales-tax/periods/${PERIOD}`, { token });
@@ -151,15 +152,15 @@ async function main(): Promise<void> {
   const voidNoPin = await call(`/admin/accounting/sales-tax/payments/${payment.id}/void`, { method: "POST", token, body: { reason: "e2e" } });
   check("void payment sin PIN → 403", voidNoPin.status === 403, String(voidNoPin.status));
   const voided = await call(`/admin/accounting/sales-tax/payments/${payment.id}/void`, { method: "POST", token, body: { reason: "e2e void" }, pin });
-  check("void payment con PIN → voided", voided.status === 200 && (voided.body.payment as { status: string })?.status === "voided", JSON.stringify(voided.body).slice(0, 160));
+  check("void payment con PIN → voided", voided.status === 200 && (voided.body.payment as { status: string })?.status === "voided", JSON.stringify(voided.body).slice(0, 160)); // entity-status
   const reversal = await count(`SELECT COUNT(*)::text AS n FROM bank_journal_entry WHERE reverses_entry_id = '${payment.entry_id}' AND deleted_at IS NULL`);
   check("reversa del asiento del pago", reversal === "1");
   const released = (await db.query<{ applied_payment_id: string | null }>(`SELECT applied_payment_id FROM gl_sales_tax_adjustment WHERE id = $1`, [adjustment.id])).rows[0]!;
   check("el STA vuelve a estar disponible", released.applied_payment_id === null);
   const addRowAfterVoid = (await db.query<{ status: string }>(`SELECT status FROM qb_order_pipeline WHERE step='gl_document_add' AND reference_type='gl_sales_tax_payment' AND reference_id=$1 ORDER BY created_at DESC LIMIT 1`, [payment.id])).rows[0];
-  check("pipeline: el ADD nunca enviado queda skipped (sin TxnVoid porque no hay TxnID)", addRowAfterVoid?.status === "skipped", addRowAfterVoid?.status);
+  check("pipeline: el ADD nunca enviado queda skipped (sin TxnVoid porque no hay TxnID)", addRowAfterVoid?.status === WRITE.sales.skipped, addRowAfterVoid?.status);
   const voidAdj = await call(`/admin/accounting/sales-tax/adjustments/${adjustment.id}/void`, { method: "POST", token, body: { reason: "e2e" }, pin });
-  check("void del STA (ya liberado) → voided", voidAdj.status === 200 && (voidAdj.body.adjustment as { status: string })?.status === "voided");
+  check("void del STA (ya liberado) → voided", voidAdj.status === 200 && (voidAdj.body.adjustment as { status: string })?.status === "voided"); // entity-status
   const reopen = await call(`/admin/accounting/sales-tax/periods/${PERIOD}/reopen`, { method: "POST", token, body: {}, pin });
   check("Reopen con PIN → removed", reopen.status === 200 && reopen.body.removed === true);
 
