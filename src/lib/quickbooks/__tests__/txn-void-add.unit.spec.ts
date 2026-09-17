@@ -23,3 +23,15 @@ describe("buildTxnVoidQbxml", () => {
     expect(() => buildTxnVoidQbxml("VendorCredit", "")).toThrow(/TxnID/);
   });
 });
+
+describe("buildTxnVoidQbxml — delete-only types (qbXML ≤ 11.0)", () => {
+  it("SalesTaxPaymentCheck goes as TxnDelRq: TxnVoidRq rejects it with 3110 on this company file (measured 09/17/2026)", () => {
+    const xml = buildTxnVoidQbxml("SalesTaxPaymentCheck", "1D199F-1789667901");
+    expect(xml).toContain("<TxnDelRq><TxnDelType>SalesTaxPaymentCheck</TxnDelType><TxnID>1D199F-1789667901</TxnID></TxnDelRq>");
+    expect(xml).not.toContain("TxnVoidRq");
+  });
+
+  it("JournalEntry still goes as TxnVoidRq", () => {
+    expect(buildTxnVoidQbxml("JournalEntry", "1D199C-1789665764")).toContain("<TxnVoidRq><TxnVoidType>JournalEntry</TxnVoidType>");
+  });
+});

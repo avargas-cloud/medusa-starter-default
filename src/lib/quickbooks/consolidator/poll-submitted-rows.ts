@@ -281,14 +281,16 @@ export async function pollSubmittedRows(
             );
             continue;
           }
+          // Un SalesTaxPaymentCheck no se anula en qbXML ≤ 11.0: su void viaja
+          // como TxnDelRq y vuelve como TxnDelRs (ver `txn-void-add.ts`).
           const glRsNode: Record<string, unknown> | undefined =
-            row.step === "gl_document_add" ? msgs?.[glQbResponseTag(glTxnType!)] : msgs?.TxnVoidRs;
+            row.step === "gl_document_add" ? msgs?.[glQbResponseTag(glTxnType!)] : (msgs?.TxnVoidRs ?? msgs?.TxnDelRs);
           const { statusCode: glStatusCode, statusMessage: glStatusMessage } = readDirectQueryStatus(glRsNode);
           if (!glRsNode || (glStatusCode !== null && glStatusCode !== "0")) {
             const message =
               glStatusCode !== null
                 ? `QuickBooks rejected ${row.step} (${glStatusCode}): ${glStatusMessage}`
-                : `${row.step} completed without a recognizable ${row.step === "gl_document_add" ? glQbResponseTag(glTxnType!) : "TxnVoidRs"} response`;
+                : `${row.step} completed without a recognizable ${row.step === "gl_document_add" ? glQbResponseTag(glTxnType!) : "TxnVoidRs/TxnDelRs"} response`;
             if (row.step === "gl_document_add") {
               // Un ADD rechazado con código: nada se creó, pero jamás se
               // auto-reintenta (mismo trato que vendor_credit_add). Sin nodo de

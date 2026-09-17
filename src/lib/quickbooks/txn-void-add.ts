@@ -33,12 +33,31 @@ export type VoidableTxnType =
   // sales-tax-center-20260917: Pay Sales Tax del POS (gl_sales_tax_payment).
   | "SalesTaxPaymentCheck";
 
+/**
+ * Tipos que `TxnVoidRq` NO acepta en qbXML ≤ 11.0 (el techo de este company
+ * file): QuickBooks contesta 3110 "enumerated value … unknown or invalid for
+ * the qbXML version in use". El SDK sólo los admite en `TxnDelRq` — igual que
+ * ReceivePayment. Medido el 09/17/2026 con la sonda del Sales Tax Center.
+ */
+const DELETE_ONLY_TYPES: ReadonlySet<VoidableTxnType> = new Set(["SalesTaxPaymentCheck"]);
+
+export function isDeleteOnlyTxnType(txnVoidType: VoidableTxnType): boolean {
+  return DELETE_ONLY_TYPES.has(txnVoidType);
+}
+
+/** `TxnVoidRq`, o `TxnDelRq` cuando el tipo no se puede anular en esta versión de qbXML. */
 export function buildTxnVoidQbxml(
   txnVoidType: VoidableTxnType,
   txnId: string
 ): string {
   if (!txnId) {
     throw new Error(`TxnVoidRq (${txnVoidType}) requires a TxnID`);
+  }
+  if (isDeleteOnlyTxnType(txnVoidType)) {
+    const body =
+      `<TxnDelType>${escapeXml(txnVoidType)}</TxnDelType>` +
+      `<TxnID>${escapeXml(txnId)}</TxnID>`;
+    return qbxmlEnvelope(`<TxnDelRq>${body}</TxnDelRq>`);
   }
   const body =
     `<TxnVoidType>${escapeXml(txnVoidType)}</TxnVoidType>` +
