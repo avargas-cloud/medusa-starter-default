@@ -35,6 +35,8 @@ export interface CoworkerPerson {
 }
 
 const LIMIT = 8;
+/** El modal de coworkers lista al equipo ENTERO (hoy 14); el de customers busca. */
+const COWORKER_LIMIT = 50;
 
 function fullName(first: unknown, last: unknown): string {
   return `${first == null ? "" : String(first)} ${last == null ? "" : String(last)}`.trim();
@@ -58,7 +60,7 @@ export async function searchCoworkers(pg: RawPg, q: string): Promise<CoworkerPer
         AND (? = '' OR u.email ILIKE ? OR u.first_name ILIKE ? OR u.last_name ILIKE ?)
       ORDER BY u.first_name, u.last_name
       LIMIT ?`,
-    [q, like, like, like, LIMIT]
+    [q, like, like, like, COWORKER_LIMIT]
   );
   return res.rows.map((r) => ({
     id: String(r.id),
