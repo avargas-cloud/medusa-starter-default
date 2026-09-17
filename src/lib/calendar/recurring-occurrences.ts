@@ -150,7 +150,18 @@ export function generateOccurrences(rule: RuleShape, from: string, to: string): 
   return out.sort((a, b) => (a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0));
 }
 
-/** `overdue` es una lectura, no un estado: esperado y con la fecha ya pasada. */
-export function viewStatus(status: "expected" | "paid" | "skipped", dueDate: string, todayEt: string) {
-  return status === "expected" && dueDate < todayEt ? ("overdue" as const) : status;
+/**
+ * `overdue` es una lectura, no un estado: esperado y con la fecha ya pasada.
+ * `paid` también se lee de un `booked` cuyo documento ya está posted/pagado
+ * (`settled`): el enlace no adivina el pago, lo mira.
+ */
+export function viewStatus(
+  status: "expected" | "booked" | "paid" | "skipped",
+  dueDate: string,
+  todayEt: string,
+  settled = false
+) {
+  if (status === "expected" && dueDate < todayEt) return "overdue" as const;
+  if (status === "booked" && settled) return "paid" as const;
+  return status;
 }

@@ -399,6 +399,20 @@ export default defineMiddlewares({
       method: ["POST"],
       middlewares: [idempotency("admin.trip-objectives.objectives")],
     },
+    // calendar-workqueue-20260917: CheckEditor ya mandaba la key y nadie la
+    // reclamaba; el vendor bill staged la manda desde ahora. Match EXACTO por
+    // `method` (ver medusa-core 2026-08-20): `/admin/vendor-bills/from-receipts`
+    // y `/admin/accounting/checks/:id/post` NO caen acá.
+    {
+      matcher: "/admin/accounting/checks",
+      method: ["POST"],
+      middlewares: [idempotency("admin.accounting.checks")],
+    },
+    {
+      matcher: "/admin/vendor-bills",
+      method: ["POST"],
+      middlewares: [idempotency("admin.vendor-bills")],
+    },
     {
       matcher: "/admin/customer-payments",
       method: ["POST"],

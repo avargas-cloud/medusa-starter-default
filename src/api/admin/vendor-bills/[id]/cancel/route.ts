@@ -31,6 +31,7 @@ import {
   getActorUserId,
   UnauthenticatedError,
 } from "../../../purchase-orders/_lib/auth";
+import { knexLinkDb, unlinkByDocument } from "../../../../../lib/calendar/occurrence-link";
 import { reverseVendorBill } from "../../../../../lib/ledger";
 import { runLedgerHook } from "../../../../../lib/ledger-hooks/run-ledger-hook";
 import { resolveActorId } from "../../../../../lib/pos/supervisor-pin-guard";
@@ -233,6 +234,9 @@ export async function POST(
         WHERE id = ? AND deleted_at IS NULL`,
       [newStatus, bill.id]
     );
+    // calendar-workqueue-20260917: the calendar occurrence this bill settled
+    // goes back to `expected` (same transaction; only if still booked by it).
+    await unlinkByDocument(knexLinkDb(trx), "vendor_bill", bill.id, `${bill.number ?? "Bill"} ${newStatus}`);
     await trx.commit();
   } catch (error) {
     await trx.rollback().catch(() => undefined);

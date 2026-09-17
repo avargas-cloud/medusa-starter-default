@@ -24,6 +24,14 @@ import type {
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { getDbPool } from "../../utils/db-pool";
+import {
+  OccurrenceError,
+  knexLinkDb,
+  linkOccurrence,
+  lockLinkable,
+  occurrenceErrorStatus,
+} from "../../../lib/calendar/occurrence-link";
+import { accessFailure, assertAccounting } from "../../../lib/pos/access-level";
 import { computeBillBalancesBatch } from "../../../lib/finance/recompute-bill-finance";
 
 import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/auth";
@@ -87,6 +95,10 @@ const createVendorBillSchema = z.object({
     )
     .max(100)
     .optional(),
+  // calendar-workqueue-20260917: la ocurrencia del Accounting Calendar que este
+  // bill liquida. Se toma FOR UPDATE y queda `booked` en la MISMA transacción
+  // que el INSERT; exige nivel accounting (el resto de la ruta no).
+  recurring_occurrence_id: z.string().min(1).max(128).nullish(),
 });
 
 // ── Knex type ────────────────────────────────────────────────────────────────
@@ -384,6 +396,15 @@ export async function POST(
   }
 
   const body = parsed.data;
+  const occurrenceId = body.recurring_occurrence_id ?? null;
+  let occurrenceActorId: string | null = null;
+  if (occurrenceId) {
+    try {
+      occurrenceActorId = (await assertAccounting(req)).userId;
+    } catch (error) {
+      return accessFailure(res, error);
+    }
+  }
   const referenceId = normalizeRequiredVendorBillReference(body.reference_id);
   if (!referenceId) {
     return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
@@ -484,6 +505,7 @@ export async function POST(
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
   try {
+    if (occurrenceId) await lockLinkable(knexLinkDb(db), occurrenceId);
     const duplicate = await findDuplicateVendorBillReference(db, {
       vendorId: vendor.id,
       referenceId,
@@ -590,6 +612,15 @@ export async function POST(
       );
       insertedLines.push(lineResult.rows[0] as Record<string, unknown>);
     }
+    if (occurrenceId) {
+      await linkOccurrence(knexLinkDb(db), occurrenceId, {
+        kind: "vendor_bill",
+        documentId: billId,
+        totalCents: initialLines.reduce((sum, l) => sum + l.amount_cents, 0),
+        day: (body.document_date ?? new Date().toISOString()).slice(0, 10),
+        actorId: occurrenceActorId ?? "",
+      });
+    }
     if (trx) await trx.commit();
     return res.status(201).json({
       vendor_bill: {
@@ -602,6 +633,8 @@ export async function POST(
     });
   } catch (error) {
     if (trx) await trx.rollback();
+    if (error instanceof OccurrenceError)
+      return res.status(occurrenceErrorStatus(error.code)).json({ error: error.message, code: error.code });
     throw error;
   }
 }

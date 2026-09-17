@@ -4,6 +4,7 @@ import type {
 } from "@medusajs/framework/http";
 import type { PoolClient } from "pg";
 
+import { pgLinkDb, unlinkByDocument } from "../../../../../../lib/calendar/occurrence-link";
 import { voidBankCheck } from "../../../../../../lib/ledger";
 import {
   REASON_SCHEMA,
@@ -18,7 +19,9 @@ import { getDbPool } from "../../../../../utils/db-pool";
 
 /**
  * POST /admin/accounting/checks/:id/void { reason }
- *   Reversa el asiento (si estaba posteado) y deja el documento `voided`.
+ *   Reversa el asiento (si estaba posteado) y deja el documento `voided`. Si el
+ *   check liquidaba una ocurrencia del Accounting Calendar, ésta vuelve a
+ *   `expected` en la misma transacción (sólo si seguía `booked` con ESTE check).
  *   → 200 { check } · 409 GL_DOCUMENT_NOT_POSTED (ya anulado) · 409 GL_PERIOD_CLOSED
  */
 export async function POST(
@@ -44,7 +47,13 @@ export async function POST(
       client,
       req.params.id as string,
       parsed.data.reason,
-      actorId
+      actorId,
+      {
+        inTransaction: async (tx, id) => {
+          const doc = await tx.query<{ doc_number: string }>(`SELECT doc_number FROM gl_check WHERE id = $1`, [id]);
+          await unlinkByDocument(pgLinkDb(tx), "gl_check", id, `${doc.rows[0]?.doc_number ?? "Check"} voided`);
+        },
+      }
     );
     return res.json({ check });
   } catch (error) {

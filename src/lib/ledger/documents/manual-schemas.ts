@@ -85,6 +85,8 @@ export const bankCheckBodySchema = z
     evidence_id: OPTIONAL_ID_SCHEMA,
     lines: z.array(checkLineSchema).min(1).max(199),
     post: z.boolean().optional(),
+    /** Ocurrencia del Accounting Calendar que este documento liquida (enlace en la misma tx). */
+    recurring_occurrence_id: OPTIONAL_ID_SCHEMA,
   })
   .strict()
   .superRefine((body, ctx) => {

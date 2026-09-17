@@ -9,11 +9,13 @@
  * hora) o ISO-8601 con zona cuando no.
  */
 import { payrollHalves, fetchPayrollRows } from "../../api/admin/reports/_lib/monthly-payroll";
+import { getDbPool } from "../../api/utils/db-pool";
 import { getBusinessDateString } from "../date/et";
+import { computeBillBalancesBatch } from "../finance/recompute-bill-finance";
 
 import { viewStatus } from "./recurring-occurrences";
 import type { RawPg } from "./recurring-repo";
-import type { OccurrenceViewStatus, RecurringOccurrence, RecurringRule } from "./recurring-types";
+import type { MatchedDocumentInfo, OccurrenceViewStatus, RecurringOccurrence, RecurringRule } from "./recurring-types";
 
 export type CalendarSource = "google_personal" | "recurring_expense" | "payroll";
 
@@ -43,11 +45,71 @@ export interface CalendarEvent {
   attendees?: CalendarAttendee[];
 }
 
+/**
+ * Los documentos enlazados de un lote de ocurrencias, resueltos al leer: el
+ * calendario no guarda si un check se posteó o un bill se pagó — lo mira.
+ * Un documento borrado (bill draft eliminado) simplemente no aparece.
+ */
+export async function resolveMatchedDocuments(
+  occurrences: RecurringOccurrence[]
+): Promise<Map<string, MatchedDocumentInfo>> {
+  const out = new Map<string, MatchedDocumentInfo>();
+  const checkIds = occurrences.filter((o) => o.matched_kind === "gl_check").map((o) => o.matched_id as string);
+  const billIds = occurrences.filter((o) => o.matched_kind === "vendor_bill").map((o) => o.matched_id as string);
+  const pool = getDbPool();
+  if (checkIds.length) {
+    const res = await pool.query<{ id: string; doc_number: string; status: string; total_cents: string }>(
+      `SELECT id, doc_number, status, total_cents::text FROM gl_check WHERE id = ANY($1::text[]) AND deleted_at IS NULL`,
+      [checkIds]
+    );
+    for (const r of res.rows) {
+      out.set(`gl_check:${r.id}`, {
+        kind: "gl_check",
+        id: r.id,
+        doc_number: r.doc_number,
+        status: r.status,
+        settled: r.status === "posted",
+        total_cents: Number(r.total_cents),
+        href: `/accounting/checks?check=${encodeURIComponent(r.id)}`,
+      });
+    }
+  }
+  if (billIds.length) {
+    const res = await pool.query<{ id: string; number: string | null; status: string }>(
+      `SELECT id, number, status FROM vendor_bill WHERE id = ANY($1::text[]) AND deleted_at IS NULL`,
+      [billIds]
+    );
+    const balances = await computeBillBalancesBatch(pool, res.rows.map((r) => r.id));
+    for (const r of res.rows) {
+      const b = balances.get(r.id);
+      out.set(`vendor_bill:${r.id}`, {
+        kind: "vendor_bill",
+        id: r.id,
+        doc_number: r.number ?? r.id,
+        status: r.status,
+        settled: r.status !== "cancelled" && b?.paid_status === "paid",
+        total_cents: b?.payable_cents ?? 0,
+        href: `/vendor-bills/${encodeURIComponent(r.id)}`,
+      });
+    }
+  }
+  return out;
+}
+
+export function matchedDocumentOf(
+  occ: RecurringOccurrence,
+  docs: ReadonlyMap<string, MatchedDocumentInfo>
+): MatchedDocumentInfo | null {
+  return occ.matched_kind && occ.matched_id ? (docs.get(`${occ.matched_kind}:${occ.matched_id}`) ?? null) : null;
+}
+
 export function occurrenceToEvent(
   occ: RecurringOccurrence,
-  rule: Pick<RecurringRule, "name" | "payee_name" | "amount_kind" | "expense_account_list_id" | "pay_from_account_list_id">,
-  todayEt: string
+  rule: Pick<RecurringRule, "name" | "amount_kind">,
+  todayEt: string,
+  doc: MatchedDocumentInfo | null = null
 ): CalendarEvent {
+  const status = viewStatus(occ.status, occ.due_date, todayEt, doc?.settled ?? false);
   return {
     id: `rexo:${occ.id}`,
     source: "recurring_expense",
@@ -55,17 +117,27 @@ export function occurrenceToEvent(
     start: occ.due_date,
     end: null,
     all_day: true,
-    status: viewStatus(occ.status, occ.due_date, todayEt),
-    amount_cents: occ.status === "paid" && occ.actual_amount_cents != null ? occ.actual_amount_cents : occ.expected_amount_cents,
+    status,
+    amount_cents:
+      (occ.status === "paid" || occ.status === "booked") && occ.actual_amount_cents != null
+        ? occ.actual_amount_cents
+        : occ.expected_amount_cents,
     ref: occ.id,
     meta: {
       rule_id: occ.rule_id,
-      payee_name: rule.payee_name,
+      payee_name: occ.payee_name,
       amount_kind: rule.amount_kind,
       expected_amount_cents: occ.expected_amount_cents,
-      expense_account_list_id: rule.expense_account_list_id,
-      pay_from_account_list_id: rule.pay_from_account_list_id,
+      expense_account_list_id: occ.expense_account_list_id,
+      pay_from_account_list_id: occ.pay_from_account_list_id,
+      document_kind: occ.document_kind,
+      due_date_override: occ.due_date_override,
       note: occ.note,
+      matched_kind: occ.matched_kind,
+      matched_id: occ.matched_id,
+      matched_doc_number: doc?.doc_number ?? null,
+      matched_status: doc?.status ?? null,
+      matched_href: doc?.href ?? null,
     },
   };
 }

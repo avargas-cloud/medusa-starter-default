@@ -140,10 +140,20 @@ async function writeHeaderAndLines(
   }
 }
 
+/**
+ * Un caller puede colgar trabajo DENTRO de la transacción del documento
+ * (`inTransaction`): el enlace con una ocurrencia del Accounting Calendar
+ * vive ahí, así un check y su ocurrencia nacen o mueren juntos.
+ */
+export interface BankCheckHooks {
+  inTransaction?: (client: PoolClient, id: string) => Promise<void>;
+}
+
 export async function createBankCheck(
   client: PoolClient,
   input: BankCheckWriteInput,
-  actorId: string
+  actorId: string,
+  hooks: BankCheckHooks = {}
 ): Promise<BankCheckDto> {
   const id = newGlId("gchk");
   await runInPostingTransaction(client, async () => {
@@ -153,6 +163,7 @@ export async function createBankCheck(
       docNumber,
       actorId,
     });
+    if (hooks.inTransaction) await hooks.inTransaction(client, id);
   });
   return (await getBankCheck(client, id))!;
 }
@@ -234,7 +245,8 @@ export async function voidBankCheck(
   client: PoolClient,
   id: string,
   reason: string,
-  actorId: string
+  actorId: string,
+  hooks: BankCheckHooks = {}
 ): Promise<BankCheckDto> {
   await runInPostingTransaction(client, async () => {
     const header = await loadHeader(client, id, true);
@@ -257,6 +269,7 @@ export async function voidBankCheck(
       [id, reason]
     );
     await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "gl_check", id);
+    if (hooks.inTransaction) await hooks.inTransaction(client, id);
   });
   return (await getBankCheck(client, id))!;
 }

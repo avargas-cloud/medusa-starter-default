@@ -7,14 +7,17 @@
  * Materializar es idempotente por `uq_rexo_rule_period` (ON CONFLICT DO
  * NOTHING). Al EDITAR una regla se re-materializa sólo el futuro no resuelto:
  * las ocurrencias `expected` con fecha >= hoy se borran y regeneran con el
- * snapshot nuevo; las pagadas/saltadas y las pasadas quedan como estaban.
+ * snapshot nuevo; las pagadas/saltadas/enlazadas, las pasadas y las MOVIDAS a
+ * mano (`due_date_override`) quedan como estaban — snapshot íntegro incluido.
+ *
+ * El snapshot de la ocurrencia congela también lo que conduce el documento
+ * (kind, payee, cuentas): editar la regla nunca reescribe un prefill pasado.
  */
 import { randomUUID } from "crypto";
 
 import { addDays } from "./recurring-occurrences";
 import { generateOccurrences } from "./recurring-occurrences";
 import type {
-  OccurrencePatch,
   RecurringOccurrence,
   RecurringRule,
   RecurringRuleInput,
@@ -55,6 +58,7 @@ function rowToRule(r: Record<string, unknown>): RecurringRule {
     end_date: r.end_date == null ? null : iso(r.end_date),
     is_active: r.is_active === true,
     notes: optStr(r.notes),
+    document_kind: String(r.document_kind ?? "expense") as RecurringRule["document_kind"],
     created_by_user_id: String(r.created_by_user_id),
     updated_by_user_id: String(r.updated_by_user_id),
     created_at: ts(r.created_at),
@@ -62,7 +66,7 @@ function rowToRule(r: Record<string, unknown>): RecurringRule {
   };
 }
 
-function rowToOccurrence(r: Record<string, unknown>): RecurringOccurrence {
+export function rowToOccurrence(r: Record<string, unknown>): RecurringOccurrence {
   return {
     id: String(r.id),
     rule_id: String(r.rule_id),
@@ -74,17 +78,29 @@ function rowToOccurrence(r: Record<string, unknown>): RecurringOccurrence {
     status: String(r.status) as RecurringOccurrence["status"],
     actual_amount_cents: optInt(r.actual_amount_cents),
     actual_date: r.actual_date == null ? null : iso(r.actual_date),
-    matched_kind: optStr(r.matched_kind),
+    matched_kind: optStr(r.matched_kind) as RecurringOccurrence["matched_kind"],
     matched_id: optStr(r.matched_id),
     note: optStr(r.note),
+    document_kind: optStr(r.document_kind) as RecurringOccurrence["document_kind"],
+    payee_type: optStr(r.payee_type) as RecurringOccurrence["payee_type"],
+    payee_id: optStr(r.payee_id),
+    payee_name: optStr(r.payee_name),
+    expense_account_list_id: optStr(r.expense_account_list_id),
+    pay_from_account_list_id: optStr(r.pay_from_account_list_id),
+    due_date_override: r.due_date_override === true,
     updated_at: ts(r.updated_at),
   };
 }
 
+export const OCCURRENCE_COLS = `id, rule_id, period_key, due_date, expected_amount_cents, tolerance_cents,
+  tolerance_pct, status, actual_amount_cents, actual_date, matched_kind, matched_id, note,
+  document_kind, payee_type, payee_id, payee_name, expense_account_list_id, pay_from_account_list_id,
+  due_date_override, updated_at`;
+
 const RULE_COLS = `id, name, payee_type, payee_id, payee_name, expense_account_list_id,
   pay_from_account_list_id, expected_amount_cents, amount_kind, tolerance_cents, tolerance_pct,
   frequency, day_of_month, weekday, month_of_year, end_of_month_policy, start_date, end_date,
-  is_active, notes, created_by_user_id, updated_by_user_id, created_at, updated_at`;
+  is_active, notes, document_kind, created_by_user_id, updated_by_user_id, created_at, updated_at`;
 
 export async function listRules(pg: RawPg, includeInactive = true): Promise<RecurringRule[]> {
   const res = await pg.raw(
@@ -121,6 +137,7 @@ function ruleValues(input: RecurringRuleInput): unknown[] {
     input.end_date,
     input.is_active,
     input.notes,
+    input.document_kind,
   ];
 }
 
@@ -130,8 +147,8 @@ export async function createRule(pg: RawPg, input: RecurringRuleInput, actorId: 
     `INSERT INTO recurring_expense_rule (id, name, payee_type, payee_id, payee_name,
        expense_account_list_id, pay_from_account_list_id, expected_amount_cents, amount_kind,
        tolerance_cents, tolerance_pct, frequency, day_of_month, weekday, month_of_year,
-       end_of_month_policy, start_date, end_date, is_active, notes, created_by_user_id, updated_by_user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       end_of_month_policy, start_date, end_date, is_active, notes, document_kind, created_by_user_id, updated_by_user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, ...ruleValues(input), actorId, actorId]
   );
   const rule = await getRule(pg, id);
@@ -151,7 +168,7 @@ export async function updateRule(
        pay_from_account_list_id = ?, expected_amount_cents = ?, amount_kind = ?, tolerance_cents = ?,
        tolerance_pct = ?, frequency = ?, day_of_month = ?, weekday = ?, month_of_year = ?,
        end_of_month_policy = ?, start_date = ?, end_date = ?, is_active = ?, notes = ?,
-       updated_by_user_id = ?, updated_at = now()
+       document_kind = ?, updated_by_user_id = ?, updated_at = now()
      WHERE id = ?`,
     [...ruleValues(input), actorId, id]
   );
@@ -173,22 +190,32 @@ export async function materializeRule(pg: RawPg, rule: RecurringRule, from: stri
   for (const occ of generateOccurrences(rule, from, to)) {
     const res = await pg.raw(
       `INSERT INTO recurring_expense_occurrence
-         (id, rule_id, period_key, due_date, expected_amount_cents, tolerance_cents, tolerance_pct)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         (id, rule_id, period_key, due_date, expected_amount_cents, tolerance_cents, tolerance_pct,
+          document_kind, payee_type, payee_id, payee_name, expense_account_list_id, pay_from_account_list_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (rule_id, period_key) DO NOTHING
        RETURNING id`,
-      [`rexo_${randomUUID()}`, rule.id, occ.period_key, occ.due_date, rule.expected_amount_cents, rule.tolerance_cents, rule.tolerance_pct]
+      [
+        `rexo_${randomUUID()}`, rule.id, occ.period_key, occ.due_date,
+        rule.expected_amount_cents, rule.tolerance_cents, rule.tolerance_pct,
+        rule.document_kind, rule.payee_type, rule.payee_id, rule.payee_name,
+        rule.expense_account_list_id, rule.pay_from_account_list_id,
+      ]
     );
     inserted += res.rows.length;
   }
   return inserted;
 }
 
-/** Borra el futuro no resuelto de una regla y lo regenera con el snapshot vigente. */
+/**
+ * Borra el futuro no resuelto de una regla y lo regenera con el snapshot
+ * vigente. Una ocurrencia movida a mano (`due_date_override`) se conserva
+ * entera: su `period_key` sigue ocupado, así el ON CONFLICT no la duplica.
+ */
 export async function rematerializeFuture(pg: RawPg, rule: RecurringRule, todayEt: string): Promise<number> {
   await pg.raw(
     `DELETE FROM recurring_expense_occurrence
-      WHERE rule_id = ? AND status = 'expected' AND due_date >= ?`,
+      WHERE rule_id = ? AND status = 'expected' AND due_date >= ? AND NOT due_date_override`,
     [rule.id, todayEt]
   );
   return materializeRule(pg, rule, todayEt, addDays(todayEt, MATERIALIZE_HORIZON_DAYS));
@@ -207,9 +234,7 @@ export async function materializeAll(pg: RawPg, todayEt: string): Promise<{ rule
 
 export async function listOccurrences(pg: RawPg, from: string, to: string): Promise<RecurringOccurrence[]> {
   const res = await pg.raw(
-    `SELECT id, rule_id, period_key, due_date, expected_amount_cents, tolerance_cents, tolerance_pct,
-            status, actual_amount_cents, actual_date, matched_kind, matched_id, note, updated_at
-       FROM recurring_expense_occurrence
+    `SELECT ${OCCURRENCE_COLS} FROM recurring_expense_occurrence
       WHERE due_date BETWEEN ? AND ?
       ORDER BY due_date, id`,
     [from, to]
@@ -217,20 +242,20 @@ export async function listOccurrences(pg: RawPg, from: string, to: string): Prom
   return res.rows.map(rowToOccurrence);
 }
 
-export async function patchOccurrence(
+export async function getOccurrence(pg: RawPg, id: string): Promise<RecurringOccurrence | null> {
+  const res = await pg.raw(`SELECT ${OCCURRENCE_COLS} FROM recurring_expense_occurrence WHERE id = ?`, [id]);
+  return res.rows[0] ? rowToOccurrence(res.rows[0]) : null;
+}
+
+/** La ocurrencia que un documento liquidó (para el backlink documento → calendario). */
+export async function findOccurrenceByDocument(
   pg: RawPg,
-  id: string,
-  patch: OccurrencePatch,
-  actorId: string
+  matchedKind: string,
+  matchedId: string
 ): Promise<RecurringOccurrence | null> {
   const res = await pg.raw(
-    `UPDATE recurring_expense_occurrence SET
-       status = ?, actual_amount_cents = ?, actual_date = ?, note = ?,
-       updated_by_user_id = ?, updated_at = now()
-     WHERE id = ?
-     RETURNING id, rule_id, period_key, due_date, expected_amount_cents, tolerance_cents, tolerance_pct,
-               status, actual_amount_cents, actual_date, matched_kind, matched_id, note, updated_at`,
-    [patch.status, patch.actual_amount_cents, patch.actual_date, patch.note, actorId, id]
+    `SELECT ${OCCURRENCE_COLS} FROM recurring_expense_occurrence WHERE matched_kind = ? AND matched_id = ?`,
+    [matchedKind, matchedId]
   );
   return res.rows[0] ? rowToOccurrence(res.rows[0]) : null;
 }

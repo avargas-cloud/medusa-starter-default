@@ -15,10 +15,26 @@ export type EndOfMonthPolicy = (typeof EOM_POLICIES)[number];
 export const AMOUNT_KINDS = ["fixed", "estimated"] as const;
 export type AmountKind = (typeof AMOUNT_KINDS)[number];
 
-export const OCCURRENCE_STATUSES = ["expected", "paid", "skipped"] as const;
+export const DOCUMENT_KINDS = ["check", "expense", "bill"] as const;
+export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
+
+/**
+ * `booked` = existe un documento enlazado (draft o posted); lo pone el enlace,
+ * nunca un PATCH manual. `paid` sigue siendo la afirmación del contador.
+ */
+export const OCCURRENCE_STATUSES = ["expected", "booked", "paid", "skipped"] as const;
 export type OccurrenceStatus = (typeof OCCURRENCE_STATUSES)[number];
 
-/** Estado que ve la pantalla: `overdue` se deriva, nunca se guarda. */
+/** Lo que un PATCH manual puede pedir: nunca `booked` (eso lo decide el enlace). */
+export const OCCURRENCE_PATCH_STATUSES = ["expected", "paid", "skipped"] as const;
+
+export const MATCHED_KINDS = ["gl_check", "vendor_bill"] as const;
+export type MatchedKind = (typeof MATCHED_KINDS)[number];
+
+/**
+ * Estado que ve la pantalla: `overdue` se deriva, nunca se guarda; `paid`
+ * también se deriva de un `booked` cuyo documento ya está posted/pagado.
+ */
 export type OccurrenceViewStatus = OccurrenceStatus | "overdue";
 
 const PAYEE_TYPES = ["vendor", "customer", "other", "other_name"] as const;
@@ -45,6 +61,7 @@ export interface RecurringRuleInput {
   end_date: string | null;
   is_active: boolean;
   notes: string | null;
+  document_kind: DocumentKind;
 }
 
 export interface RecurringRule extends RecurringRuleInput {
@@ -66,10 +83,31 @@ export interface RecurringOccurrence {
   status: OccurrenceStatus;
   actual_amount_cents: number | null;
   actual_date: string | null;
-  matched_kind: string | null;
+  matched_kind: MatchedKind | null;
   matched_id: string | null;
   note: string | null;
+  /** Snapshot de lo que conduce el documento, congelado al materializar. */
+  document_kind: DocumentKind | null;
+  payee_type: PayeeType | null;
+  payee_id: string | null;
+  payee_name: string | null;
+  expense_account_list_id: string | null;
+  pay_from_account_list_id: string | null;
+  /** Fecha movida a mano: la re-materialización no la toca. */
+  due_date_override: boolean;
   updated_at: string;
+}
+
+/** Lo que la pantalla necesita del documento enlazado (resuelto al leer). */
+export interface MatchedDocumentInfo {
+  kind: MatchedKind;
+  id: string;
+  doc_number: string;
+  status: string;
+  /** Un check posted o un bill pagado: la ocurrencia se muestra `paid`. */
+  settled: boolean;
+  total_cents: number;
+  href: string;
 }
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -150,6 +188,10 @@ export function parseRecurringRule(raw: unknown): ParseResult<RecurringRuleInput
   const end_of_month_policy = oneOf(b.end_of_month_policy, EOM_POLICIES) ? b.end_of_month_policy : "last_day";
 
   const payee_type = oneOf(b.payee_type, PAYEE_TYPES) ? b.payee_type : null;
+  const document_kind = oneOf(b.document_kind, DOCUMENT_KINDS) ? b.document_kind : "expense";
+  if (document_kind === "bill" && payee_type !== "vendor") {
+    return { ok: false, error: "a bill rule needs a vendor payee" };
+  }
 
   return {
     ok: true,
@@ -173,22 +215,37 @@ export function parseRecurringRule(raw: unknown): ParseResult<RecurringRuleInput
       end_date,
       is_active: b.is_active === undefined ? true : b.is_active === true,
       notes: optionalString(b.notes, 1000),
+      document_kind,
     },
   };
 }
 
 export interface OccurrencePatch {
-  status: OccurrenceStatus;
+  status: (typeof OCCURRENCE_PATCH_STATUSES)[number];
   actual_amount_cents: number | null;
   actual_date: string | null;
   note: string | null;
+}
+
+/** Mover UNA ocurrencia de día sin tocar la regla (`due_date_override`). */
+export interface OccurrenceMove {
+  due_date: string;
+}
+
+export function parseOccurrenceMove(raw: unknown): ParseResult<OccurrenceMove> {
+  if (!raw || typeof raw !== "object") return { ok: false, error: "body must be an object" };
+  const b = raw as Record<string, unknown>;
+  if (typeof b.due_date !== "string" || !ISO_DATE_RE.test(b.due_date)) {
+    return { ok: false, error: "due_date must be YYYY-MM-DD" };
+  }
+  return { ok: true, value: { due_date: b.due_date } };
 }
 
 /** PATCH de una ocurrencia: marcar pagada / saltada / volver a esperada. */
 export function parseOccurrencePatch(raw: unknown): ParseResult<OccurrencePatch> {
   if (!raw || typeof raw !== "object") return { ok: false, error: "body must be an object" };
   const b = raw as Record<string, unknown>;
-  if (!oneOf(b.status, OCCURRENCE_STATUSES)) return { ok: false, error: "status is invalid" };
+  if (!oneOf(b.status, OCCURRENCE_PATCH_STATUSES)) return { ok: false, error: "status is invalid" };
   const actual_amount_cents = b.actual_amount_cents == null ? null : b.actual_amount_cents;
   if (actual_amount_cents !== null && !isIntIn(actual_amount_cents, 0, Number.MAX_SAFE_INTEGER)) {
     return { ok: false, error: "actual_amount_cents must be a non-negative integer" };

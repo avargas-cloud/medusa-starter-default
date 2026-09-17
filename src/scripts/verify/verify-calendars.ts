@@ -20,6 +20,21 @@
  *    del calendario personal no leen emails del request; `user_id` sólo pasa
  *    por `resolveCalendarTarget`, que exige owner; el mapeo all-day
  *    inclusivo↔exclusivo de Google es simétrico.
+ * §6 Documentos (calendar-workqueue-20260917, DB con ROLLBACK): el snapshot de
+ *    la ocurrencia congela kind/payee/cuentas; una ocurrencia MOVIDA sobrevive
+ *    a la re-materialización con su snapshot íntegro; enlace → `booked` con el
+ *    monto real; doble enlace 409; reabrir una enlazada 409; desenlace sólo si
+ *    sigue `booked` con ESE documento; los CHECKs y el índice único parcial
+ *    muerden; el prefill bloquea un bill sin vendor y deriva `card_charge` de
+ *    una tarjeta; y la CARRERA real: dos transacciones sobre la misma
+ *    ocurrencia → una enlaza y la otra 409 (datos commiteados y borrados al
+ *    final, porque dos conexiones no comparten un ROLLBACK).
+ * §7 Estático: cada camino que crea o mata un documento llama al enlace /
+ *    desenlace (fuera de imports); el feed lee `expected` y su Create & match
+ *    enlaza DENTRO de la transacción del documento con la ocurrencia en el
+ *    hash; idempotencia registrada; rutas nuevas declaradas en el guard de
+ *    accounting; y la otra mitad del gate — las pantallas MANDAN el PIN de
+ *    regla y el `recurring_occurrence_id` / `occurrence_id`.
  */
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -27,15 +42,27 @@ import { resolve } from "path";
 import { Client } from "pg";
 
 import { generateOccurrences, viewStatus } from "../../lib/calendar/recurring-occurrences";
-import { parseOccurrencePatch, parseRecurringRule } from "../../lib/calendar/recurring-types";
+import { parseOccurrenceMove, parseOccurrencePatch, parseRecurringRule } from "../../lib/calendar/recurring-types";
 import { CALENDAR_SCOPE, isDwdEligible, toCalendarEvent } from "../../lib/calendar/google-calendar-client";
 import { parseAttendees, parsePersonalEvent } from "../../lib/calendar/personal-calendar";
+import { payeeMatches } from "../../lib/calendar/feed-expected-hints";
+import {
+  OccurrenceError,
+  linkOccurrence,
+  lockLinkable,
+  moveOccurrence,
+  patchOccurrence,
+  pgLinkDb,
+  unlinkByDocument,
+} from "../../lib/calendar/occurrence-link";
+import { buildOccurrencePrefill } from "../../lib/calendar/occurrence-prefill";
 import {
   createRule,
+  deleteRule,
+  getOccurrence,
   listOccurrences,
   materializeRule,
   rematerializeFuture,
-  patchOccurrence,
   updateRule,
   type RawPg,
 } from "../../lib/calendar/recurring-repo";
@@ -62,6 +89,7 @@ const base = {
   end_date: null,
   is_active: true,
   notes: null,
+  document_kind: "expense" as const,
 };
 
 function section1(): void {
@@ -102,6 +130,8 @@ function section1(): void {
   check("viewStatus: expected + pasado = overdue", viewStatus("expected", "2026-09-01", "2026-09-17") === "overdue");
   check("viewStatus: paid + pasado sigue paid", viewStatus("paid", "2026-09-01", "2026-09-17") === "paid");
   check("viewStatus: expected + futuro sigue expected", viewStatus("expected", "2026-09-30", "2026-09-17") === "expected");
+  check("viewStatus: booked + documento settled → paid (derivado)", viewStatus("booked", "2026-09-01", "2026-09-17", true) === "paid");
+  check("viewStatus: booked sin settle sigue booked (aunque esté vencida)", viewStatus("booked", "2026-09-01", "2026-09-17", false) === "booked");
 }
 
 function section2(): void {
@@ -118,6 +148,15 @@ function section2(): void {
   const p = parseOccurrencePatch({ status: "skipped", actual_amount_cents: 5 });
   check("patch skipped descarta actual_amount", p.ok && p.value.actual_amount_cents === null);
   check("NEGATIVO: patch con status inventado se rechaza", !parseOccurrencePatch({ status: "done" }).ok);
+  check("NEGATIVO: patch a 'booked' se rechaza (lo pone el documento, no el contador)", !parseOccurrencePatch({ status: "booked" }).ok);
+  check("NEGATIVO: bill sin vendor se rechaza en la frontera", !parseRecurringRule({ name: "x", frequency: "monthly", day_of_month: 1, expected_amount_cents: 1, start_date: "2026-01-01", document_kind: "bill", payee_type: "other", payee_name: "Landlord" }).ok);
+  const billOk = parseRecurringRule({ name: "x", frequency: "monthly", day_of_month: 1, expected_amount_cents: 1, start_date: "2026-01-01", document_kind: "bill", payee_type: "vendor", payee_id: "qbvnd_x", payee_name: "V" });
+  check("bill con vendor pasa y conserva document_kind", billOk.ok && billOk.value.document_kind === "bill");
+  check("document_kind ausente → expense", (() => { const r = parseRecurringRule({ name: "x", frequency: "monthly", day_of_month: 1, expected_amount_cents: 1, start_date: "2026-01-01" }); return r.ok && r.value.document_kind === "expense"; })());
+  check("move: due_date válida", parseOccurrenceMove({ due_date: "2026-10-05" }).ok);
+  check("NEGATIVO: move con fecha inventada se rechaza", !parseOccurrenceMove({ due_date: "next tuesday" }).ok);
+  check("payeeMatches: 'Landlord LLC' ↔ 'LANDLORD PROPERTIES 0912'", payeeMatches("Landlord LLC", "LANDLORD PROPERTIES 0912", null));
+  check("NEGATIVO: payeeMatches con sólo stop-words no matchea", !payeeMatches("The Co", "THE CO PAYMENT", null));
 }
 
 function rawAdapter(client: Client): RawPg {
@@ -254,12 +293,226 @@ function section5(): void {
   check("evento propio → is_organizer true", own?.meta.is_organizer === true);
 }
 
+/** Cuentas y vendor REALES del sandbox: el prefill se prueba contra `qb_account`/`qb_vendor` vivos. */
+async function sampleAccounts(client: Client) {
+  const pick = async (type: string) =>
+    (await client.query<{ qb_list_id: string }>(`SELECT qb_list_id FROM qb_account WHERE account_type = $1 AND is_active AND deleted_at IS NULL ORDER BY full_name LIMIT 1`, [type])).rows[0]?.qb_list_id ?? null;
+  const vendor = (await client.query<{ id: string }>(`SELECT id FROM qb_vendor WHERE is_active = true AND deleted_at IS NULL ORDER BY id LIMIT 1`)).rows[0]?.id ?? null;
+  return { bank: await pick("Bank"), card: await pick("CreditCard"), expense: await pick("Expense"), vendor };
+}
+
+async function section6(): Promise<void> {
+  console.log("\n§6 documentos (transacción con ROLLBACK + carrera commiteada)");
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.log("⏭️  sin DATABASE_URL — se omite");
+    return;
+  }
+  const client = new Client({ connectionString: url });
+  await client.connect();
+  const pg = rawAdapter(client);
+  const link = pgLinkDb(client as unknown as import("pg").PoolClient);
+  const acc = await sampleAccounts(client);
+  check("el sandbox tiene Bank + CreditCard + Expense + vendor para probar", !!(acc.bank && acc.card && acc.expense && acc.vendor), JSON.stringify(acc));
+  try {
+    await client.query("BEGIN");
+    const cols = await client.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'recurring_expense_occurrence'
+         AND column_name IN ('document_kind','payee_type','payee_id','payee_name','expense_account_list_id','pay_from_account_list_id','due_date_override')`
+    );
+    check("migración: 7 columnas de snapshot/override en la ocurrencia", cols.rowCount === 7);
+    const cons = await client.query(
+      `SELECT conname FROM pg_constraint WHERE conname IN ('rexo_matched_pair','rexo_booked_linked','rexo_matched_kind','rex_document_kind')`
+    );
+    check("migración: CHECKs de enlace + document_kind", cons.rowCount === 4, cons.rows.map((r) => r.conname).join());
+    const idx = await client.query(`SELECT 1 FROM pg_indexes WHERE indexname = 'uq_rexo_matched_document'`);
+    check("migración: índice único parcial (matched_kind, matched_id)", idx.rowCount === 1);
+
+    const input = parseRecurringRule({
+      name: "VERIFY expense", frequency: "monthly", day_of_month: 5, expected_amount_cents: 42000, start_date: "2026-01-01",
+      document_kind: "expense", payee_type: "vendor", payee_id: acc.vendor, payee_name: "Verify Payee LLC",
+      expense_account_list_id: acc.expense, pay_from_account_list_id: acc.bank,
+    });
+    if (!input.ok) throw new Error(input.error);
+    const rule = await createRule(pg, input.value, "verify");
+    await materializeRule(pg, rule, "2026-01-01", "2026-04-30");
+    const occs = (await listOccurrences(pg, "2026-01-01", "2026-04-30")).filter((o) => o.rule_id === rule.id);
+    const jan = occs.find((o) => o.due_date === "2026-01-05")!;
+    const mar = occs.find((o) => o.due_date === "2026-03-05")!;
+    check("snapshot: la ocurrencia congela kind/payee/cuentas de la regla",
+      jan.document_kind === "expense" && jan.payee_id === acc.vendor && jan.payee_name === "Verify Payee LLC" &&
+      jan.expense_account_list_id === acc.expense && jan.pay_from_account_list_id === acc.bank && !jan.due_date_override);
+
+    // Mover UNA ocurrencia y editar la regla: la movida sobrevive con su snapshot viejo.
+    const moved = await moveOccurrence(pg, mar.id, "2026-03-09", "verify");
+    check("move: due_date nueva + override, period_key intacto", moved?.due_date === "2026-03-09" && moved.due_date_override && moved.period_key === mar.period_key);
+    const edited = await updateRule(pg, rule.id, { ...input.value, expected_amount_cents: 50000, payee_name: "Renamed LLC" }, "verify");
+    await rematerializeFuture(pg, edited!, "2026-02-01");
+    const after = (await listOccurrences(pg, "2026-01-01", "2026-04-30")).filter((o) => o.rule_id === rule.id);
+    const marAfter = after.find((o) => o.id === mar.id);
+    const aprAfter = after.find((o) => o.due_date === "2026-04-05");
+    check("override sobrevive a la re-materialización (mismo id, 03/09, snapshot 420.00 y payee viejo)",
+      marAfter?.due_date === "2026-03-09" && marAfter.expected_amount_cents === 42000 && marAfter.payee_name === "Verify Payee LLC");
+    check("la no movida se regeneró con el snapshot nuevo (500.00, Renamed LLC)", aprAfter?.expected_amount_cents === 50000 && aprAfter.payee_name === "Renamed LLC");
+    check("NEGATIVO: no hay duplicado del período movido", after.filter((o) => o.period_key === mar.period_key).length === 1);
+
+    // Enlace.
+    const locked = await lockLinkable(link, jan.id);
+    check("lockLinkable devuelve la ocurrencia expected", locked.id === jan.id);
+    await linkOccurrence(link, jan.id, { kind: "gl_check", documentId: "gchk_verify_1", totalCents: 41950, day: "2026-01-04", actorId: "verify" });
+    const booked = await getOccurrence(pg, jan.id);
+    check("link: expected → booked con monto y fecha reales", booked?.status === "booked" && booked.matched_kind === "gl_check" && booked.matched_id === "gchk_verify_1" && booked.actual_amount_cents === 41950 && booked.actual_date === "2026-01-04");
+    const dbl = await lockLinkable(link, jan.id).then(() => null).catch((e) => (e instanceof OccurrenceError ? e.code : "other"));
+    check("NEGATIVO: doble enlace → OCCURRENCE_NOT_LINKABLE", dbl === "OCCURRENCE_NOT_LINKABLE");
+    const reopen = await patchOccurrence(pg, jan.id, { status: "expected", actual_amount_cents: null, actual_date: null, note: null }, "verify").then(() => null).catch((e) => (e instanceof OccurrenceError ? e.code : "other"));
+    check("NEGATIVO: reabrir una enlazada a mano → OCCURRENCE_LINKED", reopen === "OCCURRENCE_LINKED");
+    const skip = await patchOccurrence(pg, jan.id, { status: "skipped", actual_amount_cents: null, actual_date: null, note: null }, "verify").then(() => null).catch((e) => (e instanceof OccurrenceError ? e.code : "other"));
+    check("NEGATIVO: saltar una enlazada → OCCURRENCE_LINKED", skip === "OCCURRENCE_LINKED");
+    const notMovable = await moveOccurrence(pg, jan.id, "2026-01-20", "verify").then(() => null).catch((e) => (e instanceof OccurrenceError ? e.code : "other"));
+    check("NEGATIVO: mover una booked → OCCURRENCE_NOT_MOVABLE", notMovable === "OCCURRENCE_NOT_MOVABLE");
+    check("NEGATIVO: desenlazar con OTRO documento no toca nada", (await unlinkByDocument(link, "gl_check", "gchk_other", "x")) === 0);
+    check("desenlace: el documento muere → expected sin matched_* y con la razón en la nota",
+      (await unlinkByDocument(link, "gl_check", "gchk_verify_1", "CHK-0001 voided")) === 1 &&
+        (await getOccurrence(pg, jan.id).then((o) => o?.status === "expected" && o.matched_id === null && o.actual_amount_cents === null && /CHK-0001 voided/.test(o.note ?? ""))));
+    check("NEGATIVO: segundo desenlace → 0", (await unlinkByDocument(link, "gl_check", "gchk_verify_1", "again")) === 0);
+    // Marcar paid a mano una booked conserva el enlace; y después el desenlace NO la reabre.
+    await linkOccurrence(link, jan.id, { kind: "vendor_bill", documentId: "vb_verify_1", totalCents: 42000, day: "2026-01-05", actorId: "verify" });
+    const paidLinked = await patchOccurrence(pg, jan.id, { status: "paid", actual_amount_cents: 42000, actual_date: "2026-01-05", note: null }, "verify");
+    check("paid a mano sobre una booked conserva matched_*", paidLinked?.status === "paid" && paidLinked.matched_id === "vb_verify_1");
+    check("NEGATIVO: el desenlace no reabre una marcada paid (sólo booked)", (await unlinkByDocument(link, "vendor_bill", "vb_verify_1", "deleted")) === 0);
+
+    // Constraints — sobre una fila que EXISTE: la re-materialización de arriba
+    // regeneró febrero con otro id (un UPDATE sobre el id viejo afecta 0 filas y
+    // "pasa" sin probar nada — el fixture es la cobertura).
+    const feb = after.find((o) => o.due_date === "2026-02-05")!;
+    check("fixture: febrero regenerado existe y está expected", !!feb && feb.status === "expected" && (await getOccurrence(pg, feb.id)) !== null);
+    const tryUpdate = async (sql: string, params: unknown[]) => {
+      await client.query("SAVEPOINT c");
+      const failed = await client.query(sql, params).then(() => false).catch(() => true);
+      await client.query("ROLLBACK TO SAVEPOINT c");
+      return failed;
+    };
+    check("NEGATIVO: CHECK rexo_booked_linked — booked sin matched se rechaza",
+      await tryUpdate(`UPDATE recurring_expense_occurrence SET status = 'booked' WHERE id = $1`, [feb.id]));
+    check("NEGATIVO: CHECK rexo_matched_pair — matched_kind sin id se rechaza",
+      await tryUpdate(`UPDATE recurring_expense_occurrence SET matched_kind = 'gl_check' WHERE id = $1`, [feb.id]));
+    check("NEGATIVO: CHECK rexo_matched_kind — kind inventado se rechaza",
+      await tryUpdate(`UPDATE recurring_expense_occurrence SET matched_kind = 'invoice', matched_id = 'x' WHERE id = $1`, [feb.id]));
+    check("NEGATIVO: índice único — un documento no liquida dos ocurrencias",
+      await tryUpdate(`UPDATE recurring_expense_occurrence SET status = 'booked', matched_kind = 'vendor_bill', matched_id = 'vb_verify_1' WHERE id = $1`, [feb.id]));
+    check("NEGATIVO: CHECK rex_document_kind — kind inventado en la regla se rechaza",
+      await tryUpdate(`UPDATE recurring_expense_rule SET document_kind = 'invoice' WHERE id = $1`, [rule.id]));
+
+    // Prefill.
+    const p1 = await buildOccurrencePrefill(feb, rule, client);
+    // `feb` es la regenerada: lleva el snapshot NUEVO (Renamed LLC, 500.00).
+    check("prefill expense desde Bank: check_kind expense, payee/cuentas/memo del SNAPSHOT", p1.blocked === null && p1.check_kind === "expense" && p1.payee?.name === "Renamed LLC" && p1.pay_from_account?.list_id === acc.bank && /VERIFY expense — 2026-02/.test(p1.memo) && p1.amount_cents === 50000 && p1.day === "2026-02-05", JSON.stringify({ blocked: p1.blocked, kind: p1.check_kind, payee: p1.payee?.name, memo: p1.memo, amount: p1.amount_cents }));
+    const p2 = await buildOccurrencePrefill({ ...feb, pay_from_account_list_id: acc.card }, rule, client);
+    check("prefill desde CreditCard → card_charge (la cuenta decide)", p2.blocked === null && p2.check_kind === "card_charge");
+    const p3 = await buildOccurrencePrefill({ ...feb, document_kind: "bill", payee_type: "other", payee_id: null }, rule, client);
+    check("NEGATIVO: prefill bill sin vendor → blocked", /vendor/i.test(p3.blocked ?? ""));
+    const p4 = await buildOccurrencePrefill({ ...feb, document_kind: "bill" }, rule, client);
+    check("prefill bill con vendor: vendor resuelto, sin check_kind", p4.blocked === null && p4.vendor?.id === acc.vendor && p4.check_kind === null);
+    const p5 = await buildOccurrencePrefill({ ...feb, pay_from_account_list_id: null }, rule, client);
+    check("NEGATIVO: prefill expense sin banco → blocked", /bank/i.test(p5.blocked ?? ""));
+    const p6 = await buildOccurrencePrefill({ ...feb, pay_from_account_list_id: acc.expense }, rule, client);
+    check("NEGATIVO: prefill expense pagando desde una cuenta de gasto → blocked", /not a bank/i.test(p6.blocked ?? ""));
+  } finally {
+    await client.query("ROLLBACK");
+  }
+
+  // Carrera: dos conexiones, la misma ocurrencia. Datos commiteados y borrados al final.
+  const a = new Client({ connectionString: url });
+  const b = new Client({ connectionString: url });
+  await a.connect();
+  await b.connect();
+  let raceRuleId: string | null = null;
+  try {
+    const input = parseRecurringRule({ name: "VERIFY race", frequency: "monthly", day_of_month: 1, expected_amount_cents: 1000, start_date: "2026-01-01", document_kind: "check", payee_type: "other", payee_name: "Race", expense_account_list_id: acc.expense, pay_from_account_list_id: acc.bank });
+    if (!input.ok) throw new Error(input.error);
+    const rule = await createRule(pg, input.value, "verify");
+    raceRuleId = rule.id;
+    await materializeRule(pg, rule, "2026-01-01", "2026-01-31");
+    const occ = (await listOccurrences(pg, "2026-01-01", "2026-01-31")).find((o) => o.rule_id === rule.id)!;
+    const la = pgLinkDb(a as unknown as import("pg").PoolClient);
+    const lb = pgLinkDb(b as unknown as import("pg").PoolClient);
+    await a.query("BEGIN");
+    await b.query("BEGIN");
+    await lockLinkable(la, occ.id);
+    // B se queda esperando el FOR UPDATE hasta que A commitee.
+    const bPromise = lockLinkable(lb, occ.id).then(() => "linkable" as const).catch((e) => (e instanceof OccurrenceError ? e.code : "other"));
+    await new Promise((r) => setTimeout(r, 150));
+    await linkOccurrence(la, occ.id, { kind: "gl_check", documentId: "gchk_race_a", totalCents: 1000, day: "2026-01-01", actorId: "a" });
+    await a.query("COMMIT");
+    const bResult = await bPromise;
+    await b.query("ROLLBACK");
+    const final = await getOccurrence(pg, occ.id);
+    check("CARRERA: A enlaza y commitea; B, que esperaba el lock, ve booked → OCCURRENCE_NOT_LINKABLE", bResult === "OCCURRENCE_NOT_LINKABLE" && final?.matched_id === "gchk_race_a");
+  } finally {
+    if (raceRuleId) await deleteRule(pg, raceRuleId);
+    await a.end();
+    await b.end();
+    await client.end();
+  }
+}
+
+function section7(): void {
+  console.log("\n§7 estático — documentos y feed");
+  const read = (rel: string) => stripImports(readFileSync(resolve(ROOT, rel), "utf8"));
+  const checks = read("src/api/admin/accounting/checks/route.ts");
+  check("POST /accounting/checks: lockLinkable + linkOccurrence (fuera de imports)", /lockLinkable\(/.test(checks) && /linkOccurrence\(/.test(checks));
+  check("POST /accounting/checks: el enlace va DENTRO de la tx del documento (hook inTransaction)", /inTransaction:/.test(checks));
+  check("void de check llama unlinkByDocument", /unlinkByDocument\(/.test(read("src/api/admin/accounting/checks/[id]/void/route.ts")));
+  const bankCheck = read("src/lib/ledger/documents/bank-check.ts");
+  check("createBankCheck/voidBankCheck ejecutan el hook dentro de runInPostingTransaction", (bankCheck.match(/if \(hooks\.inTransaction\) await hooks\.inTransaction\(client, id\);/g) ?? []).length === 2);
+  const vb = read("src/api/admin/vendor-bills/route.ts");
+  check("POST /vendor-bills: lockLinkable antes del INSERT y linkOccurrence antes del commit", vb.indexOf("lockLinkable(") < vb.indexOf("INSERT INTO vendor_bill") && vb.indexOf("linkOccurrence(") < vb.indexOf("trx.commit()"));
+  check("POST /vendor-bills: recurring_occurrence_id exige nivel accounting", /if \(occurrenceId\)[\s\S]{0,120}assertAccounting\(req\)/.test(vb));
+  check("DELETE /vendor-bills/:id llama unlinkByDocument", /unlinkByDocument\(/.test(read("src/api/admin/vendor-bills/[id]/route.ts")));
+  check("cancel de vendor bill llama unlinkByDocument antes del commit", (() => { const c = read("src/api/admin/vendor-bills/[id]/cancel/route.ts"); return /unlinkByDocument\(/.test(c) && c.indexOf("unlinkByDocument(") < c.indexOf("trx.commit()"); })());
+  const feed = read("src/lib/banking/feed-confirm-document.ts");
+  check("feed Create & match: la ocurrencia entra al preview (y por lo tanto al hash) con updated_at", /occurrence,\s*\n\s*\};/.test(feed) && /updated_at: occ\.updated_at/.test(feed));
+  check("feed Create & match: enlaza DENTRO de la tx, antes de postear", feed.indexOf("lockLinkable(") > feed.indexOf("createBankCheck(") && feed.indexOf("linkOccurrence(") < feed.indexOf("postBankCheck("));
+  check("NEGATIVO: el feed no enlaza un bill ni una entrada (sólo gl_check de salida)", /document !== "gl_check" \|\| occ\.status !== "expected" \|\| occ\.matched_id/.test(feed));
+  const store = read("src/lib/banking/suggestion-store.ts");
+  const insertCols = store.match(/INSERT INTO bank_statement_suggestion\(([^)]*)\)/)?.[1] ?? "expected";
+  check("readFeedSuggestions adjunta `expected` (calculado al leer, no persistido)", /expectedHintsByTransaction\(/.test(store) && !/expected/.test(insertCols));
+  const hints = read("src/lib/calendar/feed-expected-hints.ts");
+  check("hint del feed: filtra por cuenta pagadora, monto en tolerancia y ±días; sólo salidas", /pay_from_account_list_id = a\.qb_list_id/.test(hints) && /GREATEST\(o\.tolerance_cents/.test(hints) && /t\.amount::numeric > 0/.test(hints));
+  check("NEGATIVO: el motor de sugerencias no cambió de versión por esto", /SUGGEST_ENGINE_VERSION = "2026-09-15\.1"/.test(readFileSync(resolve(ROOT, "src/lib/banking/statement-suggest-types.ts"), "utf8")));
+  const mw = read("src/api/middlewares.ts");
+  check("idempotencia registrada para POST /admin/accounting/checks y /admin/vendor-bills", /matcher: "\/admin\/accounting\/checks",\s*\n\s*method: \["POST"\]/.test(mw) && /matcher: "\/admin\/vendor-bills",\s*\n\s*method: \["POST"\]/.test(mw));
+  const guard = readFileSync(resolve(ROOT, "src/scripts/verify/verify-accounting-guard.ts"), "utf8");
+  check("verify-accounting-guard declara prefill y scheduled", /occurrences\/\[id\]\/prefill\/route\.ts/.test(guard) && /recurring-expenses\/scheduled\/route\.ts/.test(guard));
+  const occRoute = read("src/api/admin/accounting/recurring-expenses/occurrences/[id]/route.ts");
+  check("PATCH de ocurrencia: move y patch, ninguno con PIN, errores de estado → 409 por código", /moveOccurrence\(/.test(occRoute) && /patchOccurrence\(/.test(occRoute) && !/requirePin\(/.test(occRoute) && /occurrenceErrorStatus\(/.test(occRoute));
+
+  // La OTRA mitad del gate: las pantallas mandan lo que las rutas exigen.
+  // Desde un worktree el vecino no es `../store-pos`: `STORE_POS_ROOT` lo apunta.
+  const POS = process.env.STORE_POS_ROOT ? resolve(process.env.STORE_POS_ROOT) : resolve(ROOT, "../store-pos");
+  const posRead = (rel: string) => {
+    try {
+      return readFileSync(resolve(POS, rel), "utf8");
+    } catch {
+      return ""; // archivo ausente = el check falla, no el script
+    }
+  };
+  const ruleModal = posRead("app/(pos)/accounting/calendar/_components/RuleModal.tsx") + posRead("lib/calendar/api.ts");
+  check("store-pos: la pantalla de reglas MANDA el PIN (supervisorPin / x-supervisor-pin)", /supervisorPin|x-supervisor-pin/.test(ruleModal));
+  check("store-pos: CheckEditor manda recurring_occurrence_id al crear", /recurring_occurrence_id/.test(posRead("app/(pos)/accounting/checks/_components/CheckEditor.tsx")));
+  check("store-pos: /vendor-bills/new manda recurring_occurrence_id al crear", /recurring_occurrence_id/.test(posRead("app/(pos)/vendor-bills/new/page.tsx")));
+  check("store-pos: ConfirmDocumentModal manda occurrence_id en preview y confirm", /occurrence_id/.test(posRead("app/(pos)/accounting/banks/_components/ConfirmDocumentModal.tsx")));
+  check("store-pos: la pestaña Scheduled existe y su fila mueve por moveOccurrence (PATCH due_date)", /fetchScheduled\(/.test(posRead("app/(pos)/accounting/calendar/_components/ScheduledTab.tsx")) && /moveOccurrence\(/.test(posRead("app/(pos)/accounting/calendar/_components/ScheduledRow.tsx")) && /body: \{ due_date \}/.test(posRead("lib/calendar/api.ts")));
+}
+
 async function main(): Promise<void> {
   section1();
   section2();
   await section3();
   section4();
   section5();
+  await section6();
+  section7();
   console.log(failures.length ? `\n❌ ${failures.length} check(s) fallaron: ${failures.join(" · ")}` : "\n✅ verify-calendars: todo verde");
   process.exit(failures.length ? 1 : 0);
 }

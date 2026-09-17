@@ -21,6 +21,7 @@ import { randomUUID } from "crypto";
 
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../purchase-orders/_lib/format";
+import { knexLinkDb, unlinkByDocument } from "../../../../lib/calendar/occurrence-link";
 import { recomputeBillFinanceLinks } from "../../../../lib/finance/recompute-bill-finance";
 import { loadVendorBillPayablesDetail } from "../../../../lib/bill-payments";
 import { getDbPool } from "../../../utils/db-pool";
@@ -2322,6 +2323,11 @@ export async function DELETE(
         WHERE id = ? AND deleted_at IS NULL`,
       [id]
     );
+
+    // calendar-workqueue-20260917: a bill born from a calendar occurrence
+    // hands the occurrence back to `expected` when it dies (same transaction;
+    // only if it was still booked by THIS bill).
+    await unlinkByDocument(knexLinkDb(db), "vendor_bill", id, `${existing.number ?? "Bill"} deleted`);
 
     if (trx) await trx.commit();
   } catch (err) {

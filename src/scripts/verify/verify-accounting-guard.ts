@@ -102,15 +102,19 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     why: "delega en lib/accounting/month-close-auth.ts",
   })),
   /**
-   * pos-calendars-20260917: Accounting → Calendar. Las 4 rutas pasan por
+   * pos-calendars-20260917: Accounting → Calendar. Las rutas pasan por
    * `requireAccounting` de `lib/calendar/recurring-http.ts` (delegante, chequeo
    * 3); las escrituras de REGLA exigen además PIN en la ruta (`requirePin`).
+   * calendar-workqueue-20260917 sumó `prefill` (lo que un documento necesita para
+   * abrirse pre-llenado) y `scheduled` (la pestaña Scheduled).
    */
   ...[
     "accounting/recurring-expenses/route.ts",
     "accounting/recurring-expenses/[id]/route.ts",
     "accounting/recurring-expenses/occurrences/route.ts",
     "accounting/recurring-expenses/occurrences/[id]/route.ts",
+    "accounting/recurring-expenses/occurrences/[id]/prefill/route.ts",
+    "accounting/recurring-expenses/scheduled/route.ts",
   ].map((file) => ({
     file,
     call: "requireAccounting(",

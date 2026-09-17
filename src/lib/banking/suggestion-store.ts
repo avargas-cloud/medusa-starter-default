@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { expectedHintsByTransaction, type FeedExpectedHint } from "../calendar/feed-expected-hints";
 
 import { bankingEnvSql, requireBankingEnabled } from "./security";
 import type { LineSuggestion, SuggestCandidate, SuggestPlan } from "./statement-suggest-types";
@@ -114,6 +115,12 @@ export type FeedSuggestion = {
   category: { list_id: string; name: string; rule_id: string | null } | null;
   engine_version: string;
   computed_at: string;
+  /**
+   * calendar-workqueue-20260917: ocurrencias ESPERADAS del Accounting Calendar que esta
+   * salida podría ser (misma cuenta pagadora, monto en tolerancia, fecha cercana), mejor
+   * primero. Calculado al leer, nunca persistido — no es un candidato del libro.
+   */
+  expected: FeedExpectedHint[];
 };
 
 /** Lectura para el feed: por ids de transacción o por día. Sólo líneas de borradores (lo cerrado no se sugiere). */
@@ -146,5 +153,7 @@ export async function readFeedSuggestions(input: { ids?: string[]; date?: string
       `SELECT finished_at::text AS finished_at,status FROM bank_suggestion_run WHERE finished_at IS NOT NULL AND deleted_at IS NULL ORDER BY finished_at DESC LIMIT 1`
     )
   ).rows[0];
-  return { suggestions: rows, last_run: last ?? null };
+  const hints = await expectedHintsByTransaction(rows.filter((r) => r.kind !== "match").map((r) => r.transaction_id));
+  const suggestions = rows.map((r) => ({ ...r, expected: hints.get(r.transaction_id) ?? [] }));
+  return { suggestions, last_run: last ?? null };
 }

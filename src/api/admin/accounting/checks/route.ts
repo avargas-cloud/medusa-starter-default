@@ -5,6 +5,13 @@ import type {
 import type { PoolClient } from "pg";
 
 import {
+  OccurrenceError,
+  linkOccurrence,
+  lockLinkable,
+  occurrenceErrorStatus,
+  pgLinkDb,
+} from "../../../../lib/calendar/occurrence-link";
+import {
   createBankCheck,
   getBankCheck,
   listBankChecks,
@@ -32,6 +39,9 @@ import { getDbPool } from "../../../utils/db-pool";
  *   → { items: Check[], next_cursor: "<day>,<id>" | null }
  * POST { day, bank_account_list_id, number?, payee_type: "vendor"|"customer"|"other", payee_id?,
  *        payee_name, memo?, to_be_printed?, evidence_id?, post?: boolean,
+ *        recurring_occurrence_id?,   (calendar-workqueue-20260917: la ocurrencia queda `booked`
+ *                                     en la MISMA transacción; 409 OCCURRENCE_NOT_LINKABLE si ya
+ *                                     tiene documento o no está `expected`)
  *        lines: [{ account_list_id, amount_cents (≠0), memo?, customer_id?, billable? }] }
  *   → 201 { check: Check, post?: { status: "posted"|"already_posted", entry_id } }
  *
@@ -81,19 +91,34 @@ export async function POST(
   const parsed = bankCheckBodySchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues[0]?.message);
 
+  const occurrenceId = parsed.data.recurring_occurrence_id ?? null;
+  const input = toBankCheckInput(parsed.data);
   const client: PoolClient = await getDbPool().connect();
   try {
-    const created = await createBankCheck(
-      client,
-      toBankCheckInput(parsed.data),
-      actorId
-    );
+    const created = await createBankCheck(client, input, actorId, {
+      inTransaction: occurrenceId
+        ? async (tx, id) => {
+            const db = pgLinkDb(tx);
+            await lockLinkable(db, occurrenceId);
+            const total = input.lines.reduce((sum, l) => sum + l.amount_cents, 0n);
+            await linkOccurrence(db, occurrenceId, {
+              kind: "gl_check",
+              documentId: id,
+              totalCents: Number(total),
+              day: input.day,
+              actorId,
+            });
+          }
+        : undefined,
+    });
     if (!parsed.data.post) return res.status(201).json({ check: created });
     const post = await postBankCheck(client, created.id, actorId);
     return res
       .status(201)
       .json({ check: await getBankCheck(client, created.id), post });
   } catch (error) {
+    if (error instanceof OccurrenceError)
+      return res.status(occurrenceErrorStatus(error.code)).json({ code: error.code, error: error.message });
     return ledgerFailure(res, error);
   } finally {
     client.release();

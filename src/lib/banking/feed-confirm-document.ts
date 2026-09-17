@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { getDbPool } from "../../api/utils/db-pool";
+import { loadOccurrenceForFeed } from "../calendar/feed-expected-hints";
+import { linkOccurrence, lockLinkable, pgLinkDb } from "../calendar/occurrence-link";
 import { createBankCheck, createJournalEntry, postBankCheck, postJournalEntry } from "../ledger";
 
 import { confirmFeedMatch, feedLineTarget } from "./feed-confirm-match";
@@ -31,6 +33,12 @@ export const feedDocumentSchema = z
     payee_name: z.string().trim().min(1).max(500),
     number: z.string().trim().max(50).nullable().optional(),
     memo: z.string().trim().max(1000).nullable().optional(),
+    /**
+     * calendar-workqueue-20260917: la ocurrencia ESPERADA del Accounting Calendar que esta
+     * salida liquida. Entra al preview (y a su hash, con `updated_at`) y queda `booked` en la
+     * MISMA transacción que el documento — el match de la línea sigue siendo el paso de después.
+     */
+    occurrence_id: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).nullable().optional(),
   })
   .strict();
 export const feedDocumentConfirmSchema = feedDocumentSchema.extend({
@@ -54,6 +62,7 @@ export type FeedDocumentPreview = {
   number: string | null;
   memo: string;
   lines: Array<{ account: string; debit_cents: number; credit_cents: number }>;
+  occurrence: { id: string; due_date: string; expected_amount_cents: number; updated_at: string } | null;
   preview_hash: string;
 };
 
@@ -128,6 +137,16 @@ export async function previewFeedDocument(transactionId: string, input: unknown)
   const document = direction === "out" ? "gl_check" : "gl_journal_entry";
   const kind = document === "gl_journal_entry" ? "journal_entry" : isCard ? "card_charge" : number ? "check" : "expense";
   const memo = body.memo?.trim() || `feed:${tx.id}`;
+  let occurrence: FeedDocumentPreview["occurrence"] = null;
+  if (body.occurrence_id) {
+    const occ = await loadOccurrenceForFeed(body.occurrence_id);
+    if (!occ) throw new BankingError("BANKING_OCCURRENCE_NOT_FOUND", 404);
+    // Sólo una salida en `gl_check` puede liquidar una ocurrencia desde acá; un bill se carga
+    // en Vendor Bills y su pago casa después. Y sólo una ocurrencia sin documento.
+    if (document !== "gl_check" || occ.status !== "expected" || occ.matched_id)
+      throw new BankingError("BANKING_OCCURRENCE_NOT_LINKABLE", 409);
+    occurrence = { id: occ.id, due_date: occ.due_date, expected_amount_cents: occ.expected_amount_cents, updated_at: occ.updated_at };
+  }
   const preview: Omit<FeedDocumentPreview, "preview_hash"> = {
     transaction_id: tx.id,
     statement_id: target.statement_id,
@@ -153,6 +172,7 @@ export async function previewFeedDocument(transactionId: string, input: unknown)
             { account: tx.bank_name ?? tx.qb_list_id!, debit_cents: amount, credit_cents: 0 },
             { account: category.full_name, debit_cents: 0, credit_cents: amount },
           ],
+    occurrence,
   };
   const preview_hash = createHash("sha256")
     .update(JSON.stringify(preview))
@@ -208,6 +228,17 @@ export async function confirmFeedDocument(
           },
           actorId
         );
+        if (preview.occurrence) {
+          const db = pgLinkDb(client);
+          await lockLinkable(db, preview.occurrence.id);
+          await linkOccurrence(db, preview.occurrence.id, {
+            kind: "gl_check",
+            documentId: doc.id,
+            totalCents: preview.amount_cents,
+            day: preview.day,
+            actorId,
+          });
+        }
         const posted = await postBankCheck(client, doc.id, actorId);
         return { document: "gl_check" as const, document_id: doc.id, doc_number: doc.doc_number, entry_id: posted.entry_id, qb: (posted as { qb?: unknown }).qb ?? null };
       }
