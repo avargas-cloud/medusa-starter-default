@@ -19,7 +19,8 @@ export type TreasuryWarningCode =
   | "FOREIGN_CURRENCY_DETECTED"
   | "UNATTRIBUTED_PAYMENTS"
   | "CREDIT_MEMO_COGS_UNROUTED"
-  | "CM_MOVEMENTS_UNRESOLVED";
+  | "CM_MOVEMENTS_UNRESOLVED"
+  | "BUCKET_MOVE_EXCEEDS_SOURCE";
 
 export interface TreasuryWarning {
   code: TreasuryWarningCode;
@@ -150,6 +151,8 @@ export interface TreasuryDailyReport {
     gross_payments_cents: number;
     refunds_cents: number;
     net_cash_received_cents: number;
+    /** Cash in range with no order/invoice behind it — kept out of the COGS pool (2026-09-17). */
+    unapplied_cash_cents: number;
   };
   splits: TreasurySplitWithBucket[];
   warnings: TreasuryWarning[];

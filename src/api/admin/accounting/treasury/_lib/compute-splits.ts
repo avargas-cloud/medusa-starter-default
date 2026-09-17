@@ -32,6 +32,18 @@ export interface SplitInputs {
   cogs_local_cents: number;
   net_cash_received_cents: number;
   /**
+   * Cash counted in `net_cash_received_cents` that has NO order/invoice
+   * behind it yet (customer deposits, unlinked wires). It carries no revenue
+   * and no COGS, so it must not feed the COGS-weighted pool: it sits whole in
+   * `operating` until the operator links or assigns it. Defaults to 0.
+   *
+   * 2026-09-17: before this input the pool was derived from ALL cash with a
+   * ratio derived from ORDERED sales only — a $23.5k deposit on a $5.2k sales
+   * day inflated the pool 5.7× and, once its face value was also assigned to
+   * a bucket, drove Operating to −$8,773.86 on 09/14.
+   */
+  unapplied_cash_cents?: number;
+  /**
    * Bucket codes that are active in the treasury_bucket registry. Inactive
    * buckets are omitted from the result entirely. `operating` should always
    * be in this list — it is the rounding sink that guarantees delta=0.
@@ -65,6 +77,7 @@ export function computeSplits(inputs: SplitInputs): SplitResult {
     net_cash_received_cents,
     active_bucket_codes,
   } = inputs;
+  const unapplied_cash_cents = Math.max(0, inputs.unapplied_cash_cents ?? 0);
 
   const active = new Set<TreasuryBucketCode>(active_bucket_codes);
   if (!active.has("operating")) {
@@ -78,6 +91,9 @@ export function computeSplits(inputs: SplitInputs): SplitResult {
 
   // 2. Cash available after parking sales tax aside.
   const cash_after_tax = net_cash_received_cents - split_tax;
+  // 2b. Only cash with an order behind it can carry COGS. Un-ordered cash
+  // (deposits, unlinked wires) is left out of the pool basis — never below 0.
+  const pool_basis = Math.max(0, cash_after_tax - unapplied_cash_cents);
 
   // 3. COGS-weighted attribution.
   const cogs_total = cogs_china_cents + cogs_local_cents;
@@ -92,11 +108,11 @@ export function computeSplits(inputs: SplitInputs): SplitResult {
     // Clamp to [0, 1] so a freak data state can't blow up the pool.
     const ratio_num = cogs_total;
     const ratio_den = gross_revenue_pre_tax_cents;
-    // pool_cents = floor(cash_after_tax * cogs_total / gross_revenue) in integer math.
+    // pool_cents = floor(pool_basis * cogs_total / gross_revenue) in integer math.
     const pool_signed =
       ratio_num >= ratio_den
-        ? cash_after_tax
-        : intDiv(cash_after_tax * ratio_num, ratio_den);
+        ? pool_basis
+        : intDiv(pool_basis * ratio_num, ratio_den);
 
     if (active.has("china_cogs")) {
       split_china = intDiv(pool_signed * cogs_china_cents, cogs_total);

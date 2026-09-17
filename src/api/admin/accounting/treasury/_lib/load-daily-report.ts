@@ -1,3 +1,4 @@
+import { applyBucketMoves, type BucketMove } from "./apply-bucket-moves";
 import {
   computeSplits,
   type TreasuryBucketCode,
@@ -24,6 +25,8 @@ interface CashRow {
   gross_payments_cents: string | null;
   refunds_cents: string | null;
   net_cash_received_cents: string | null;
+  /** Portion of gross with no order/invoice behind it (effective in range). */
+  unapplied_cash_cents: string | null;
 }
 
 interface BucketRow {
@@ -137,7 +140,7 @@ async function computeLiveRangeReport(
   const dayEnd = `${to} 23:59:59.999999`;
 
   const sales = await loadSalesByApplication(pg, dayStart, dayEnd);
-  const unattributedPayments = await loadUnattributedPayments(pg, dayStart, dayEnd);
+  const unattributedPaymentsLoaded = await loadUnattributedPayments(pg, dayStart, dayEnd);
   const creditMemoCogsRows = await loadCreditMemoCogsGaps(pg, dayStart, dayEnd);
   const zeroCostLines = await loadZeroCostLines(pg, dayStart, dayEnd);
   const creditMemoMovements = await loadCreditMemoMovements(pg, dayStart, dayEnd);
@@ -189,7 +192,8 @@ async function computeLiveRangeReport(
      SELECT
        COALESCE(SUM(gross), 0)::bigint   AS gross_payments_cents,
        COALESCE(SUM(refund), 0)::bigint  AS refunds_cents,
-       COALESCE(SUM(gross), 0)::bigint - COALESCE(SUM(refund), 0)::bigint AS net_cash_received_cents
+       COALESCE(SUM(gross), 0)::bigint - COALESCE(SUM(refund), 0)::bigint AS net_cash_received_cents,
+       COALESCE(SUM(unapplied), 0)::bigint AS unapplied_cash_cents
      FROM (
        SELECT
          (
@@ -201,11 +205,15 @@ async function computeLiveRangeReport(
              WHERE unapplied_effective_date >= ?::date AND unapplied_effective_date <= ?::date
            ), 0)
          ) AS gross,
+         COALESCE(SUM(unapplied_cents) FILTER (
+           WHERE unapplied_effective_date >= ?::date AND unapplied_effective_date <= ?::date
+         ), 0) AS unapplied,
          0 AS refund
        FROM payment_cash
        UNION ALL
        SELECT
          0 AS gross,
+         0 AS unapplied,
          COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount) AS refund
        FROM customer_payment cp
        LEFT JOIN lwc ON lwc.reference_id = cp.id
@@ -216,7 +224,7 @@ async function computeLiveRangeReport(
          AND COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) >= ?
          AND COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) <= ?
      ) sub`,
-    [dayStart, dayEnd, from, to, dayStart, dayEnd]
+    [dayStart, dayEnd, from, to, from, to, dayStart, dayEnd]
   );
 
   const bucketsResult = await pg.raw(
@@ -234,6 +242,7 @@ async function computeLiveRangeReport(
     gross_payments_cents: "0",
     refunds_cents: "0",
     net_cash_received_cents: "0",
+    unapplied_cash_cents: "0",
   };
   const bucketRows: BucketRow[] = bucketsResult.rows ?? [];
 
@@ -245,6 +254,7 @@ async function computeLiveRangeReport(
     gross_payments_cents: toInt(cash.gross_payments_cents),
     refunds_cents: toInt(cash.refunds_cents),
     net_cash_received_cents: toInt(cash.net_cash_received_cents),
+    unapplied_cash_cents: toInt(cash.unapplied_cash_cents),
   };
 
   const activeBuckets = bucketRows.filter((b) => b.is_active);
@@ -276,13 +286,14 @@ async function computeLiveRangeReport(
     cogs_china_cents: totals.cogs_china_cents,
     cogs_local_cents: totals.cogs_local_cents,
     net_cash_received_cents: totals.net_cash_received_cents,
+    unapplied_cash_cents: totals.unapplied_cash_cents,
     active_bucket_codes: activeCodes,
   });
 
   const bucketByCode = new Map<TreasuryBucketCode, BucketRow>();
   for (const b of bucketRows) bucketByCode.set(b.code, b);
 
-  const splits: TreasurySplitWithBucket[] = result.splits.map((s) => {
+  const baseSplits: TreasurySplitWithBucket[] = result.splits.map((s) => {
     const row = bucketByCode.get(s.code);
     const bucket: TreasuryBucketView = row
       ? mapBucket(row)
@@ -309,45 +320,78 @@ async function computeLiveRangeReport(
   //    of Operating (its factual sink per compute-splits) into the selection.
   // If either side's bucket isn't in this range's splits, the move is skipped
   // whole (never half-applied).
-  const splitByCode = new Map(splits.map((s) => [s.code, s]));
-  const applyMove = (
-    fromCode: TreasuryBucketCode,
-    toCode: TreasuryBucketCode,
-    cents: number
-  ) => {
-    const fromSplit = splitByCode.get(fromCode);
-    const toSplit = splitByCode.get(toCode);
-    if (!fromSplit || !toSplit || cents <= 0 || fromCode === toCode) return;
-    fromSplit.amount_cents -= cents;
-    toSplit.amount_cents += cents;
-  };
-  for (const m of creditMemoMovements) {
-    if (
-      m.resolution === "moved" &&
-      !m.resolution_stale &&
-      m.resolution_target_bucket &&
-      m.resolution_amount_cents &&
-      (m.current_bucket === "china_cogs" || m.current_bucket === "local_cogs")
-    ) {
-      applyMove(
-        m.current_bucket,
-        m.resolution_target_bucket,
-        m.resolution_amount_cents
-      );
-    }
-  }
-  for (const p of unattributedPayments) {
-    if (
-      p.credit_bucket &&
-      !p.credit_stale &&
-      p.credit_bucket !== "operating" &&
-      p.credit_amount_cents
-    ) {
-      applyMove("operating", p.credit_bucket, p.credit_amount_cents);
-    }
-  }
+  // 2026-09-17: a move that would leave its source bucket NEGATIVE is rejected
+  // (apply-bucket-moves.ts). A rejected payment pick is treated as stale — the
+  // row blocks the lock again until the operator re-picks — and the range
+  // gets a BUCKET_MOVE_EXCEEDS_SOURCE warning. Rejected CM moves only warn.
+  const cmMoves: BucketMove[] = creditMemoMovements.flatMap((m) =>
+    m.resolution === "moved" &&
+    !m.resolution_stale &&
+    m.resolution_target_bucket &&
+    m.resolution_amount_cents &&
+    (m.current_bucket === "china_cogs" || m.current_bucket === "local_cogs")
+      ? [
+          {
+            from: m.current_bucket,
+            to: m.resolution_target_bucket,
+            cents: m.resolution_amount_cents,
+            ref: `cm:${m.payment_application_id}`,
+          },
+        ]
+      : []
+  );
+  const paymentMoves: BucketMove[] = unattributedPaymentsLoaded.flatMap((p) =>
+    p.credit_bucket &&
+    !p.credit_stale &&
+    p.credit_bucket !== "operating" &&
+    p.credit_amount_cents
+      ? [
+          {
+            from: "operating" as const,
+            to: p.credit_bucket,
+            cents: p.credit_amount_cents,
+            ref: `pay:${p.payment_id}`,
+          },
+        ]
+      : []
+  );
+  const moved = applyBucketMoves(baseSplits, [...cmMoves, ...paymentMoves]);
+  const splits = moved.splits;
+  const rejectedPaymentIds = new Set(
+    moved.rejected
+      .filter((r) => r.ref.startsWith("pay:"))
+      .map((r) => r.ref.slice("pay:".length))
+  );
+  const unattributedPayments = rejectedPaymentIds.size
+    ? unattributedPaymentsLoaded.map((p) =>
+        rejectedPaymentIds.has(p.payment_id)
+          ? { ...p, credit_stale: true, blocking: true }
+          : p
+      )
+    : unattributedPaymentsLoaded;
 
   const warnings: TreasuryWarning[] = [];
+  if (moved.rejected.length > 0) {
+    const labelFor = (ref: string): string => {
+      if (!ref.startsWith("pay:")) return ref;
+      const p = unattributedPaymentsLoaded.find((x) => x.payment_id === ref.slice(4));
+      return p?.display_id ? `PAY-${p.display_id}` : ref.slice(4);
+    };
+    warnings.push({
+      code: "BUCKET_MOVE_EXCEEDS_SOURCE",
+      severity: "warning",
+      count: moved.rejected.length,
+      sample_ids: moved.rejected.slice(0, 20).map((r) => labelFor(r.ref)),
+      detail: moved.rejected
+        .slice(0, 5)
+        .map(
+          (r) =>
+            `${labelFor(r.ref)}: $${(r.cents / 100).toFixed(2)} → ${r.to} exceeds what ${r.from} holds ($${(r.available_cents / 100).toFixed(2)})`
+        )
+        .join("; ") +
+        " — the assignment was NOT applied. Pick Operating/As credit again, or link the payment to its order.",
+    });
+  }
   if (toInt(sales.unit_cost_fallback_count) > 0) {
     warnings.push({
       code: "LINES_USED_UNIT_COST_FALLBACK",
@@ -520,6 +564,7 @@ function mergeContributions(
     gross_payments_cents: 0,
     refunds_cents: 0,
     net_cash_received_cents: 0,
+    unapplied_cash_cents: 0, // locked snapshots predating 2026-09-17 lack it → `?? 0` below
   };
   const splitAmounts = new Map<TreasuryBucketCode, number>();
   const splitBasisCount = new Map<TreasuryBucketCode, number>();
