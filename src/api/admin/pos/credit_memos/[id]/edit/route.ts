@@ -4,6 +4,9 @@ import { Modules } from "@medusajs/utils";
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
+import { postCreditMemo, reverseCreditMemo } from "../../../../../../lib/ledger";
+import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
+import { creditMemoTotalViolation } from "../../../../../../lib/pos/credit-memo-total-guard";
 import {
   extractSupervisorPin,
   guardSupervisorPin,
@@ -193,6 +196,14 @@ export async function PATCH(
       shipping: Math.round((totals?.shipping ?? 0) * 100),
       total: Math.round((totals?.total ?? 0) * 100),
     };
+
+    // Mismo guard que `sync`/`complete`: un memo completado no se puede
+    // corregir HACIA $0 (dejaría un crédito emitido sin documento que lo respalde).
+    const totalViolation = creditMemoTotalViolation(dbTotals);
+    if (totalViolation) {
+      res.status(400).json({ success: false, message: totalViolation });
+      return;
+    }
 
     // ── Payment guard: cannot reduce below already-applied credit ─────────────
     const cmNumber = creditMemo.credit_memo_number as string | null | undefined;
@@ -862,6 +873,22 @@ export async function PATCH(
         extractWebEditAudit(req)
       );
     }
+
+    // GL (best-effort, gl-core-v1 §6): el asiento del memo se posteó al
+    // completar con los totales VIEJOS. Un edit no lo tocaba, así que el libro
+    // seguía diciendo lo que el documento ya no decía (CM-1173 quedó con
+    // `Sales Discounts −198.61` después de corregirlo). Se reversa el asiento
+    // activo y se postea uno nuevo desde las filas ya actualizadas, en la
+    // misma transacción del hook.
+    const actorId = resolveActorId(req);
+    await runLedgerHook(
+      async (client) => {
+        await reverseCreditMemo(client, id, actorId, "credit memo edited");
+        await postCreditMemo(client, id, actorId);
+      },
+      { source_kind: "pos_credit_memo", source_id: id }
+    );
+
     res.status(200).json({ success: true, credit_memo_id: id });
   } catch (e: any) {
     logger.error(`[credit_memos edit] failed: ${e.message}`);

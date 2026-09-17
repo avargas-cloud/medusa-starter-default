@@ -33,6 +33,7 @@ import {
 } from "../../../../../../lib/reports/fraud-writeoff";
 import { runLedgerHook } from "../../../../../../lib/ledger-hooks/run-ledger-hook";
 import { postCreditMemo } from "../../../../../../lib/ledger";
+import { creditMemoTotalViolation } from "../../../../../../lib/pos/credit-memo-total-guard";
 import { resolveActorId } from "../../../../../../lib/pos/supervisor-pin-guard";
 
 export async function POST(
@@ -75,6 +76,21 @@ export async function POST(
       res
         .status(400)
         .json({ message: "Credit Memo is already completed or voided" });
+      return;
+    }
+
+    // Un memo en $0 no se completa: emitiría el crédito por OTRO número (ver
+    // `cmTotal` abajo), postearía el GL con el descuento entero y QB lo
+    // rechazaría con 3180. Corre ANTES del lock, sin haber mutado nada.
+    const totalViolation = creditMemoTotalViolation({
+      subtotal: Number(creditMemo.subtotal ?? 0),
+      discount: Number(creditMemo.discount ?? 0),
+      shipping: Number(creditMemo.shipping ?? 0),
+      tax: Number(creditMemo.tax ?? 0),
+      total: Number(creditMemo.total ?? 0),
+    });
+    if (totalViolation) {
+      res.status(400).json({ success: false, message: totalViolation });
       return;
     }
 
@@ -462,13 +478,11 @@ export async function POST(
     // and 'refund' only matters at the extra step after: for refund, we mark the
     // freshly-created payment as refunded so it lands in accounting's queue to be
     // physically processed — and we issue a QB Write Check against AR.
-    const cmTotal =
-      (creditMemo as any).total ||
-      (creditMemo as any).subtotal ||
-      creditMemo.items.reduce(
-        (sum: number, i: any) => sum + i.quantity * i.unit_price,
-        0
-      );
+    // El crédito que se emite es el TOTAL del memo, nunca su subtotal: el
+    // fallback `total || subtotal` que vivía acá emitió $154.98 de store credit
+    // por un memo cuyo total era $0.00 (CM-1173). El guard de arriba garantiza
+    // total > 0, así que no queda nada que "rellenar".
+    const cmTotal = Number((creditMemo as any).total);
 
     // -- POS INVOICE REFUND STATUS BEGIN --
     // Update the parent pos_invoice: status, refunded_amount, refunded_shipping,

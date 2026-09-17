@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { getVariantAvgCostBatch } from "../../../../../lib/cost/get-variant-avg-cost";
+import { creditMemoTotalViolation } from "../../../../../lib/pos/credit-memo-total-guard";
 import {
   guardSupervisorPin,
   pinGuardResponse,
@@ -16,6 +17,31 @@ import CreditMemoModuleService from "../../../../../modules/credit_memos/service
  * que la pantalla lo lea de acá.
  */
 const OLD_INVOICE_DAYS = 30;
+
+/**
+ * Claves de `metadata` que el POS puede persistir en un credit memo. Es una
+ * lista cerrada a propósito: por acá NO entran claves de QB, de reportes ni de
+ * fraude. `discount_type`/`discount_value` son las que faltaban — sin ellas un
+ * descuento de orden en PORCENTAJE volvía a cargarse como monto FIJO y una
+ * devolución parcial quedaba en $0 (CM-1173/CM-1174, 2026-09-17).
+ */
+const CLIENT_METADATA_KEYS = [
+  "discount_type",
+  "discount_value",
+  "original_discount_cents",
+  "original_shipping_cents",
+  "parent_invoice_date",
+] as const;
+
+function pickClientMetadata(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const out: Record<string, unknown> = {};
+  for (const key of CLIENT_METADATA_KEYS) {
+    const v = (raw as Record<string, unknown>)[key];
+    if (v !== undefined) out[key] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 export async function POST(
   req: MedusaRequest,
@@ -84,6 +110,16 @@ export async function POST(
       shipping: Math.round((totals?.shipping || 0) * 100),
       total: Math.round((totals?.total || 0) * 100),
     };
+
+    // Un credit memo en $0 (o negativo) no se guarda ni como borrador: QB lo
+    // rechaza (3180) y `complete` emitiría el crédito por otro número.
+    const totalViolation = creditMemoTotalViolation(dbTotals);
+    if (totalViolation) {
+      res.status(400).json({ success: false, message: totalViolation });
+      return;
+    }
+
+    const clientMetadata = pickClientMetadata(payload?.metadata);
 
     // ── Invoice-linked validation ─────────────────────────────────────────────────
     // Each item may not exceed (invoiced_qty − already_refunded_qty). When editing
@@ -275,6 +311,7 @@ export async function POST(
         shipping_option_id: shipping?.optionId || null,
         shipping_option_name: shipping?.optionName || null,
         ...dbTotals,
+        ...(clientMetadata ? { metadata: clientMetadata } : {}),
       });
 
       resolvedId = created.id;
@@ -290,6 +327,19 @@ export async function POST(
     } else {
       // UPDATE EXISTING
 
+      // Read-modify-write de metadata (regla transversal): se conserva lo que
+      // el memo ya tenía y se pisan sólo las claves que el POS manda.
+      let mergedMetadata: Record<string, unknown> | undefined;
+      if (clientMetadata) {
+        const existingRow = (await creditMemoService.retrievePosCreditMemo(
+          resolvedId
+        )) as { metadata?: Record<string, unknown> | null };
+        mergedMetadata = {
+          ...(existingRow?.metadata ?? {}),
+          ...clientMetadata,
+        };
+      }
+
       // @ts-ignore
       await (creditMemoService as any).updatePosCreditMemos({
         id: resolvedId,
@@ -299,6 +349,7 @@ export async function POST(
         shipping_option_id: shipping?.optionId || null,
         shipping_option_name: shipping?.optionName || null,
         ...dbTotals,
+        ...(mergedMetadata ? { metadata: mergedMetadata } : {}),
       });
 
       // Re-create items (safest total sync approach, since they have no side effects)
