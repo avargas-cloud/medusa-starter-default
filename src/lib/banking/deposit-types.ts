@@ -60,6 +60,8 @@ export const depositVoidSchema = z
   .object({
     expected_revision: z.number().int().positive(),
     reason: z.string().trim().min(1).max(1000),
+    /** Día del asiento de reversa cuando el depósito está posteado (default: hoy ET). */
+    reversal_day: reviewDate.optional(),
   })
   .strict();
 export type DepositLine = {

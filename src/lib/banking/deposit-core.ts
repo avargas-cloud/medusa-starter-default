@@ -17,6 +17,8 @@ import {
   type BankDeposit,
 } from "./deposit-types";
 import {
+  depositActivePostingId,
+  guardDepositClosedDay,
   guardDepositEdit,
   invalidateDepositReviews,
   validateDepositFee,
@@ -27,6 +29,8 @@ import {
   reviewCapacity,
   runReviewCommand,
 } from "./review-common";
+import { reverseDepositPosting } from "./receipts-core";
+import { reviewToday } from "./review-date";
 import { BankingError } from "./security";
 import { bankId } from "./store";
 import { allocateGlNumber } from "../ledger/documents/manual-shared";
@@ -248,11 +252,20 @@ export async function readyBankDeposit(
     }
   );
 }
+/**
+ * Void en UN gesto (09/17/2026). Un depósito posteado ya no exige pasar antes por
+ * "Reverse posted deposit": si tiene asiento vivo, acá mismo se reversa (asiento
+ * inverso en el libro + TxnVoid del Deposit en QuickBooks) y recién después se
+ * anula — todo en la misma transacción, así nunca queda reversado-sin-void ni
+ * void-con-asiento-vivo. Reversar es contabilidad, así que ese camino exige la
+ * capacidad `post` (`canPost`), igual que la ruta de reversa.
+ */
 export async function voidBankDeposit(
   id: string,
   actorId: string,
   key: string | undefined,
-  body: z.infer<typeof depositVoidSchema>
+  body: z.infer<typeof depositVoidSchema>,
+  canPost = false
 ): Promise<{ deposit: BankDeposit }> {
   if (!depositVoidSchema.safeParse(body).success)
     throw new BankingError("BANKING_INVALID_REQUEST");
@@ -264,7 +277,19 @@ export async function voidBankDeposit(
         throw new BankingError("BANKING_DEPOSIT_CONFLICT", 409);
       if (before.status === "void")
         throw new BankingError("BANKING_DEPOSIT_VOID", 409);
-      await guardDepositEdit(client, id);
+      await guardDepositClosedDay(client, id);
+      const activePosting = await depositActivePostingId(client, id);
+      if (activePosting) {
+        if (!canPost) throw new BankingError("BANKING_ACCOUNTING_FORBIDDEN", 403);
+        await reverseDepositPosting(
+          client,
+          id,
+          activePosting,
+          body.reversal_day ?? reviewToday(),
+          body.reason,
+          actorId
+        );
+      }
       await client.query(
         `UPDATE bank_deposit SET status='void',revision=revision+1,voided_by=$2,voided_at=now(),
       void_reason=$3,updated_at=now() WHERE id=$1`,

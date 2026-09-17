@@ -150,6 +150,22 @@ export async function validateDepositFunding(
     source_hash: reviewHash({ manual: true, reference, description, amount }),
   };
 }
+/** Entry id del asiento vivo (kind='document', sin reversa) del depósito; null si no está posteado. */
+export async function depositActivePostingId(
+  client: PoolClient,
+  id: string
+): Promise<string | null> {
+  const posted = await client.query<{ id: string }>(
+    `SELECT entry.id FROM bank_journal_entry entry
+      WHERE entry.source_kind='bank_deposit' AND entry.source_id=$1 AND entry.kind='document'
+        AND entry.deleted_at IS NULL
+        AND NOT EXISTS(SELECT 1 FROM bank_journal_entry r WHERE r.reverses_entry_id=entry.id)
+      ORDER BY entry.created_at DESC LIMIT 1`,
+    [id]
+  );
+  return posted.rows[0]?.id ?? null;
+}
+/** Editar o marcar listo exige que el asiento esté reversado; el void lo reversa solo (deposit-core). */
 export async function guardDepositEdit(
   client: PoolClient,
   id: string
@@ -160,6 +176,13 @@ export async function guardDepositEdit(
   );
   if (posted.rowCount)
     throw new BankingError("BANKING_DEPOSIT_ACCOUNTING_REVERSAL_REQUIRED", 409);
+  await guardDepositClosedDay(client, id);
+}
+/** Un depósito casado a un día bancario CERRADO no cambia hasta que un auditor lo reabra. */
+export async function guardDepositClosedDay(
+  client: PoolClient,
+  id: string
+): Promise<void> {
   const result = await client.query<{ closed: boolean }>(
     `SELECT EXISTS(SELECT 1 FROM bank_day_close dc
     WHERE dc.status='closed' AND dc.deleted_at IS NULL AND (

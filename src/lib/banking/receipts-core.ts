@@ -259,6 +259,49 @@ type Original = {
   reference: string;
   description: string;
 };
+/**
+ * Reversa el asiento vivo de un depósito y lo anula en QuickBooks. Lo comparten
+ * el "Reverse posted deposit" del diálogo contable y el void del depósito
+ * (deposit-core: un solo gesto desde 09/17/2026), siempre dentro de la
+ * transacción del comando que lo llama.
+ */
+export async function reverseDepositPosting(
+  client: PoolClient,
+  id: string,
+  reversesEntryId: string,
+  day: string,
+  reason: string,
+  actorId: string
+): Promise<void> {
+  let entryId: string | null = null;
+  try {
+    const reversed = await reverseBankDepositDocument(client, id, day, reason, actorId);
+    if (reversed.status === "nothing_to_reverse")
+      throw new BankingError("BANKING_RECEIPT_POSTING_NOT_ACTIVE", 409);
+    entryId = reversed.entry_id ?? null;
+  } catch (error) {
+    if (error instanceof LedgerError)
+      throw new BankingError(
+        error.code === "GL_PERIOD_CLOSED"
+          ? "BANKING_ACCOUNTING_PERIOD_CLOSED"
+          : "BANKING_RECEIPT_POSTING_NOT_ACTIVE",
+        409
+      );
+    throw error;
+  }
+  await appendReviewEvent(client, {
+    entity_type: "receipt_accounting",
+    entity_id: id,
+    action: "deposit_reversed",
+    actor_id: actorId,
+    transaction_id: null,
+    details: { entry_id: entryId, reverses_entry_id: reversesEntryId, day, reason },
+  });
+  // gl-docs-to-qb-20260914: reversar el asiento anula el depósito en el
+  // libro → TxnVoid del Deposit en QuickBooks (si el Add ya confirmó; si
+  // está en vuelo, lo encola su confirmación desde el estado del documento).
+  await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "bank_deposit", id);
+}
 export async function reverseReceiptAccounting(
   kind: ReceiptOrigin,
   id: string,
@@ -280,34 +323,7 @@ export async function reverseReceiptAccounting(
       if (body.day < active.day || body.day > reviewToday())
         throw new BankingError("BANKING_RECEIPT_REVERSAL_DATE_INVALID", 409);
       if (kind === "deposit") {
-        let entryId: string | null = null;
-        try {
-          const reversed = await reverseBankDepositDocument(client, id, body.day, body.reason, actorId);
-          if (reversed.status === "nothing_to_reverse")
-            throw new BankingError("BANKING_RECEIPT_POSTING_NOT_ACTIVE", 409);
-          entryId = reversed.entry_id ?? null;
-        } catch (error) {
-          if (error instanceof LedgerError)
-            throw new BankingError(
-              error.code === "GL_PERIOD_CLOSED"
-                ? "BANKING_ACCOUNTING_PERIOD_CLOSED"
-                : "BANKING_RECEIPT_POSTING_NOT_ACTIVE",
-              409
-            );
-          throw error;
-        }
-        await appendReviewEvent(client, {
-          entity_type: "receipt_accounting",
-          entity_id: id,
-          action: "deposit_reversed",
-          actor_id: actorId,
-          transaction_id: null,
-          details: { entry_id: entryId, reverses_entry_id: active.id, day: body.day, reason: body.reason },
-        });
-        // gl-docs-to-qb-20260914: reversar el asiento anula el depósito en el
-        // libro → TxnVoid del Deposit en QuickBooks (si el Add ya confirmó; si
-        // está en vuelo, lo encola su confirmación desde el estado del documento).
-        await enqueueGlDocumentVoid(clientInTransactionAsKnex(client), "bank_deposit", id);
+        await reverseDepositPosting(client, id, active.id, body.day, body.reason, actorId);
         return receiptContext(client, kind, id);
       }
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- active.id was just read from bank_journal_entry via receiptHistory in the same transaction, and journal entries are append-only (never deleted), so this SELECT always returns exactly one row

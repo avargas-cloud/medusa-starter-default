@@ -12,13 +12,16 @@ export async function POST(
   res: MedusaResponse
 ): Promise<MedusaResponse> {
   try {
-    const { id, actorId, key } = await reviewCommandRequest(req);
+    // `review` alcanza para anular un draft/ready; si el depósito está posteado,
+    // el void reversa el asiento y voidBankDeposit exige además `canPost`.
+    const { id, actorId, key, canPost } = await reviewCommandRequest(req);
     return res.json(
       await voidBankDeposit(
         id,
         actorId,
         key,
-        bankBody(depositVoidSchema, req.body)
+        bankBody(depositVoidSchema, req.body),
+        canPost
       )
     );
   } catch (error) {
