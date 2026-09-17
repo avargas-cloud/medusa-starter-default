@@ -6,7 +6,15 @@
  * order is exact per the plan's sample:
  *
  *   Check:       PayeeEntityRef → APAccountRef → TxnDate → BankAccountRef →
- *                IsToBePrinted → RefNumber → Memo → AppliedToTxnAdd*
+ *                (IsToBePrinted | RefNumber) → Memo → AppliedToTxnAdd*
+ *                ⚠️ `IsToBePrinted` and `RefNumber` are an `<xsd:choice>` in
+ *                qbxml130.xsd (L15621) — exactly ONE of them. The plan's sample
+ *                sent both and QuickBooks rejected the very first real dispatch
+ *                (BP-1092, 09/17/2026) with HRESULT 0x80040400 "error when
+ *                parsing the provided XML text stream" — a schema violation,
+ *                not a business error. With a RefNumber the check is numbered
+ *                (and therefore not in the print queue); without one we say
+ *                `IsToBePrinted=false` so it never lands in Print Checks.
  *   CreditCard:  PayeeEntityRef → APAccountRef → TxnDate →
  *                CreditCardAccountRef → RefNumber → Memo → AppliedToTxnAdd*
  *                (no IsToBePrinted — QuickBooks' CreditCard txn type has no
@@ -113,8 +121,9 @@ export function buildBillPaymentCheckAddQbxml(
     `<APAccountRef>${tag("ListID", input.apAccountListId)}</APAccountRef>` +
     tag("TxnDate", input.txnDate) +
     `<BankAccountRef>${tag("ListID", input.bankAccountListId)}</BankAccountRef>` +
-    `<IsToBePrinted>false</IsToBePrinted>` +
-    tag("RefNumber", input.refNumber) +
+    (input.refNumber
+      ? tag("RefNumber", input.refNumber)
+      : `<IsToBePrinted>false</IsToBePrinted>`) +
     tag("Memo", input.memo ?? null) +
     input.appliedToTxns.map(buildAppliedToTxnXml).join("");
 

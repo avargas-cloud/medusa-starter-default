@@ -29,7 +29,6 @@ describe("buildBillPaymentCheckAddQbxml", () => {
       "<APAccountRef>",
       "<TxnDate>",
       "<BankAccountRef>",
-      "<IsToBePrinted>",
       "<RefNumber>",
       "<Memo>",
       "<AppliedToTxnAdd>",
@@ -45,8 +44,31 @@ describe("buildBillPaymentCheckAddQbxml", () => {
       expect(idx).toBeGreaterThan(cursor);
       cursor = idx;
     }
-    expect(xml).toContain("<IsToBePrinted>false</IsToBePrinted>");
     expect(xml).toContain("<BillPaymentCheckAddRq><BillPaymentCheckAdd>");
+  });
+
+  // qbxml130.xsd L15621: `<xsd:choice> IsToBePrinted | RefNumber` — exactly one
+  // of the two. Sending both is what QB reports as HRESULT 0x80040400 "error
+  // when parsing the provided XML text stream" (BP-1092, 09/17/2026).
+  it("with a RefNumber, emits RefNumber and NOT IsToBePrinted (xsd:choice)", () => {
+    const xml = buildBillPaymentCheckAddQbxml({
+      ...BASE,
+      bankAccountListId: "80000005-BANK",
+    });
+    expect(xml).toContain("<RefNumber>BP-1001</RefNumber>");
+    expect(xml).not.toContain("<IsToBePrinted>");
+  });
+
+  it("without a RefNumber, emits IsToBePrinted=false and NOT RefNumber (xsd:choice)", () => {
+    const xml = buildBillPaymentCheckAddQbxml({
+      ...BASE,
+      refNumber: null,
+      bankAccountListId: "80000005-BANK",
+    });
+    expect(xml).toContain(
+      "</BankAccountRef><IsToBePrinted>false</IsToBePrinted><Memo>"
+    );
+    expect(xml).not.toContain("<RefNumber>");
   });
 
   it("formats amounts as dollar strings", () => {
