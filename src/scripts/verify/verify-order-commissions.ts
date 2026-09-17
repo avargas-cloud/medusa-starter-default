@@ -177,10 +177,15 @@ console.log("verify-order-commissions — registro del Commissions Pipeline\n");
   const unsettle = codeLines(read("src/lib/commissions/unsettle.ts"));
   const paidGuardAt = unsettle.indexOf("bill_already_paid");
   const billWriteAt = unsettle.indexOf("UPDATE vendor_bill\n");
+  // 09/16/2026 (aae38802): "pagado" es el BALANCE del POS (Pay Bills), nunca el
+  // espejo retirado `qb_is_paid`. Este check afirmaba la regla vieja y salió
+  // rojo un día después sin regresión — un test que afirma la regla vieja.
   check(
-    "unsettle rechaza un bill PAGADO (qb_is_paid) ANTES de tocar el bill",
+    "unsettle rechaza un bill PAGADO (balance del POS, no qb_is_paid) ANTES de tocar el bill",
     paidGuardAt > -1 && billWriteAt > -1 && paidGuardAt < billWriteAt &&
-      /if \(bill\.qb_is_paid\)/.test(unsettle)
+      /computeBillBalance\(client, bill\.id\)/.test(unsettle) &&
+      /paid_status !== "open"/.test(unsettle) &&
+      !/bill\.qb_is_paid/.test(unsettle)
   );
   check(
     "unsettle sólo admite method='vendor_bill' (store credit ya emitió documentos)",
@@ -681,6 +686,101 @@ const funcBody = (src: string, marker: string): string => {
   check(
     "el guard sólo mira RENAMES (compara contra el full_name actual), no toda edición",
     /canon\(renamedTo\) !== canon\(String\(vendor\.full_name/.test(vendorPatch)
+  );
+}
+
+// 28 (commission-requests-20260917) · solicitudes de comisión del cajero.
+// Las DOS mitades del gate, cada una por su lado: (a) la única puerta abierta
+// al cajero NO lleva assertAccounting y NO pide PIN (una solicitud no mueve
+// dinero — gatearla la vaciaría de sentido); (b) reject y el listado de
+// Accounting SÍ, y reject lleva el guard con throttle. La aprobación no es
+// una ruta: es la asignación, y se afirma que la resolución corre DENTRO del
+// lock (después de saveAssignment, antes del COMMIT del withOrderCommissionLock).
+// "Llama a X" se afirma sobre el cuerpo SIN imports (lección de
+// verify-pin-enforcement §4b: el import solo ya daba el check por cumplido).
+{
+  const noImports = (src: string): string =>
+    src
+      .split("\n")
+      .filter((l) => !/^\s*import\b/.test(l) && !/^\s*} from /.test(l))
+      .join("\n");
+
+  const orderReq = noImports(read("src/api/admin/commissions/orders/[orderId]/requests/route.ts"));
+  check(
+    "POST …/orders/:id/requests NO exige accounting (es la puerta del cajero)",
+    !/assertAccounting\(/.test(orderReq)
+  );
+  check(
+    "POST …/orders/:id/requests NO pide PIN (no mueve dinero)",
+    !/requireSupervisorPin\(|guardSupervisorPin\(/.test(orderReq)
+  );
+  check(
+    "POST …/orders/:id/requests exige usuario autenticado y valida por requestBlocker (vía createRequest)",
+    /auth_context\?\.actor_id/.test(orderReq) && /createRequest\(/.test(orderReq)
+  );
+  check(
+    "la solicitud nace bajo el MISMO lock que la asignación",
+    /withOrderCommissionLock\([\s\S]{0,200}?createRequest\(/.test(orderReq)
+  );
+
+  const listReq = noImports(read("src/api/admin/commissions/requests/route.ts"));
+  check("GET /admin/commissions/requests exige accounting", /assertAccounting\(req, res\)/.test(listReq));
+
+  const rejectReq = noImports(read("src/api/admin/commissions/requests/[requestId]/route.ts"));
+  check("POST /admin/commissions/requests/:id exige accounting", /assertAccounting\(req, res\)/.test(rejectReq));
+  check(
+    "reject pide PIN por requireSupervisorPin (guard con throttle), nunca verifySupervisorPin pelado",
+    /requireSupervisorPin\(req, res\)/.test(rejectReq) && !/verifySupervisorPin\(/.test(rejectReq)
+  );
+  check(
+    "reject exige motivo no vacío ANTES de consumir un intento de PIN",
+    rejectReq.indexOf("reason is required") > -1 &&
+      rejectReq.indexOf("reason is required") < rejectReq.indexOf("requireSupervisorPin(")
+  );
+
+  const assign = noImports(read("src/api/admin/commissions/orders/[orderId]/route.ts"));
+  const saveAt = assign.indexOf("await saveAssignment(");
+  const resolveAt = assign.indexOf("await resolveRequestsForAssignment(");
+  const lockCloseAt = assign.indexOf("return { ...result, approvedRequestIds };");
+  check(
+    "la asignación resuelve las solicitudes pendientes DENTRO del lock, después de saveAssignment",
+    saveAt > -1 && resolveAt > saveAt && lockCloseAt > resolveAt
+  );
+
+  const lib = read("src/lib/commissions/requests.ts");
+  check(
+    "requestBlocker espeja las reglas de la asignación (cancelada, cliente propio, duplicada, ya beneficiario)",
+    ["order_not_commissionable", "beneficiary_is_order_customer", "duplicate_pending_request", "already_a_recipient"].every(
+      (c) => lib.includes(`"${c}"`)
+    )
+  );
+  check(
+    "resolveRequestsForAssignment bloquea las pendientes (FOR UPDATE) antes de aprobarlas",
+    /status = 'pending' AND deleted_at IS NULL FOR UPDATE/.test(lib)
+  );
+
+  const migration = read("src/migrations/Migration20260917100001-CommissionRequests.ts");
+  check(
+    "una sola solicitud PENDIENTE por identidad+orden (índices parciales customer y vendor)",
+    /uq_creq_pending_customer[\s\S]{0,200}?WHERE status = 'pending' AND deleted_at IS NULL AND customer_id IS NOT NULL/.test(migration) &&
+      /uq_creq_pending_vendor[\s\S]{0,200}?WHERE status = 'pending' AND deleted_at IS NULL AND qb_vendor_id IS NOT NULL/.test(migration)
+  );
+
+  // Frontend, mitad (a): la puerta del cajero existe y NO es el modal de
+  // Accounting; la del tab Pending manda el PIN en el reject.
+  const orderPage = read("../store-pos/app/(pos)/orders/[id]/page.tsx");
+  // Las DOS puertas, cada una con su predicado: la del cajero es EXACTAMENTE
+  // la negación de la de Accounting (nadie se queda sin puerta, nadie tiene dos).
+  check(
+    "orders/[id] ofrece CommissionRequestModal cuando NO hay accounting (y CommissionsModal cuando sí)",
+    /const showCommissionRequest = !canAccounting;/.test(orderPage) &&
+      /showCommissionRequest && \(\s*<CommissionRequestModal/.test(orderPage) &&
+      /showCommissions && \(\s*<CommissionsModal/.test(orderPage)
+  );
+  const pendingApi = read("../store-pos/app/(pos)/accounting/commissions/_lib/api.ts");
+  check(
+    "el reject del tab Pending viaja con supervisorPin",
+    /rejectCommissionRequest[\s\S]{0,600}?supervisorPin/.test(pendingApi)
   );
 }
 

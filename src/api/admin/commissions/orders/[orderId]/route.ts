@@ -33,6 +33,7 @@ import {
   type RecipientRow,
 } from "../../../../../lib/commissions/writer";
 import { canReSaveAssignment } from "../../../../../lib/commissions/transitions";
+import { resolveRequestsForAssignment } from "../../../../../lib/commissions/requests";
 import { assertAccounting, requireSupervisorPin } from "../../_lib/guard";
 
 interface RecipientBody {
@@ -234,9 +235,24 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
         actorId: pin.actorId,
       });
       await refreshCommission(client, orderId, money);
-      return result;
+      // commission-requests-20260917: las solicitudes PENDIENTES del cajero
+      // cuya identidad quedó como beneficiario pasan a approved en ESTA tx
+      // (no hay ruta de "approve": aprobar ES asignar, con este mismo PIN).
+      const approvedRequestIds = await resolveRequestsForAssignment(
+        client,
+        orderId,
+        result.commissionId,
+        recipients,
+        pin.actorId
+      );
+      return { ...result, approvedRequestIds };
     });
-    res.json({ ok: true, commission_id: saved.commissionId, recipient_ids: saved.recipientIds });
+    res.json({
+      ok: true,
+      commission_id: saved.commissionId,
+      recipient_ids: saved.recipientIds,
+      approved_request_ids: saved.approvedRequestIds,
+    });
   } catch (err) {
     if (err instanceof CommissionError) {
       commissionErrorResponse(res, err);
