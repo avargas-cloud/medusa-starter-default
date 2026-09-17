@@ -167,6 +167,12 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     "commissions/customer-vendor-link/route.ts",
     "commissions/orders/[orderId]/route.ts",
     "commissions/orders/[orderId]/recipients/[recipientId]/route.ts",
+    // commission-requests-20260917: la bandeja y el reject son de Accounting.
+    // `commissions/orders/[orderId]/requests/**` NO está acá A PROPÓSITO: es la
+    // única puerta de comisiones del cajero (sin accounting, sin PIN, sin
+    // montos) y esa negativa la afirma verify-order-commissions §28.
+    "commissions/requests/route.ts",
+    "commissions/requests/[requestId]/route.ts",
     "outsourced-services/route.ts",
     "outsourced-services/types/route.ts",
     "outsourced-services/orders/[orderId]/route.ts",

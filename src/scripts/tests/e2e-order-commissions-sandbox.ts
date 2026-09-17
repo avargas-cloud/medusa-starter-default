@@ -855,7 +855,7 @@ async function main(): Promise<void> {
     const s17 = liveS[0];
     check("17: hay un settlement vivo por vendor_bill para revertir", !!s17?.vendor_bill_id, JSON.stringify(s17));
     const billId17 = String(s17?.vendor_bill_id ?? "");
-    await pool.query(`UPDATE vendor_bill SET status = 'synced', qb_is_paid = false WHERE id = $1`, [billId17]);
+    await pool.query(`UPDATE vendor_bill SET status = 'synced' WHERE id = $1`, [billId17]);
 
     // Negativas primero (el orden importa: después del unsettle ya no hay settlement vivo).
     const noReason = await api(
@@ -864,13 +864,42 @@ async function main(): Promise<void> {
     );
     check("17: unsettle sin reason → 400", noReason.status === 400, `status=${noReason.status}`);
 
-    await pool.query(`UPDATE vendor_bill SET qb_is_paid = true WHERE id = $1`, [billId17]);
+    // "Pagado" es el BALANCE del POS (aae38802, 09/16/2026): la suma de
+    // `vendor_bill_payment_allocation` de pagos `posted`, créditos y ajustes —
+    // ya no el espejo retirado `qb_is_paid`, que este check seteaba y por eso
+    // salió rojo un día después sin regresión. Se simula lo que hace Pay Bills:
+    // un pago posted con su allocation por el payable entero, y se borra
+    // después para volver al `open` que el unsettle real necesita.
+    const { rows: payable17 } = await pool.query<{ vendor_id: string; total: string }>(
+      `SELECT vb.vendor_id,
+              COALESCE(SUM(COALESCE(l.amount_cents, l.qty * l.unit_cost_cents)), 0)::text AS total
+         FROM vendor_bill vb
+         LEFT JOIN vendor_bill_line l ON l.vendor_bill_id = vb.id AND l.deleted_at IS NULL
+        WHERE vb.id = $1 GROUP BY vb.vendor_id`,
+      [billId17]
+    );
+    const payableCents17 = Number(payable17[0]?.total ?? 0);
+    const PAY17 = "vbp_e2e_commissions_17";
+    await pool.query(`DELETE FROM vendor_bill_payment_allocation WHERE payment_id = $1`, [PAY17]);
+    await pool.query(`DELETE FROM vendor_bill_payment WHERE id = $1`, [PAY17]);
+    await pool.query(
+      `INSERT INTO vendor_bill_payment
+         (id, vendor_id, bank_account_list_id, payment_date, method, amount_cents, status, memo)
+       VALUES ($1, $2, 'E2E-BANK', CURRENT_DATE, 'check', $3, 'posted', 'e2e 17: simulated payment')`,
+      [PAY17, payable17[0]?.vendor_id ?? "", payableCents17]
+    );
+    await pool.query(
+      `INSERT INTO vendor_bill_payment_allocation (id, payment_id, vendor_bill_id, amount_cents)
+       VALUES ($1 || '_a', $1, $2, $3)`,
+      [PAY17, billId17, payableCents17]
+    );
+    check("17: el pago sintético deja el bill con balance 0 (payable > 0)", payableCents17 > 0, `payable=${payableCents17}`);
     const paid = await api(
       token, "POST", `${orderPath}/recipients/${recipientVendorId}`,
       { action: "unsettle", reason: "e2e 17 paid" }, E2E_PIN
     );
     check(
-      "17: bill PAGADO en QB → 409 bill_already_paid y nada cambia",
+      "17: bill PAGADO (balance del POS) → 409 bill_already_paid y nada cambia",
       paid.status === 409 && (paid.body.details as { reason?: string } | undefined)?.reason === "bill_already_paid",
       `status=${paid.status} ${JSON.stringify(paid.body).slice(0, 120)}`
     );
@@ -884,7 +913,8 @@ async function main(): Promise<void> {
       stillClosed[0]?.state === "closed" && stillClosed[0]?.bstatus === "synced",
       JSON.stringify(stillClosed[0])
     );
-    await pool.query(`UPDATE vendor_bill SET qb_is_paid = false WHERE id = $1`, [billId17]);
+    await pool.query(`DELETE FROM vendor_bill_payment_allocation WHERE payment_id = $1`, [PAY17]);
+    await pool.query(`DELETE FROM vendor_bill_payment WHERE id = $1`, [PAY17]);
 
     // La vuelta atrás real.
     const un = await api(
@@ -1715,9 +1745,13 @@ async function main(): Promise<void> {
          ORDER BY created_at ASC LIMIT 1`,
       [fixture.order_id]
     );
+    // Sin el TxnID de QB: desde Migration20260912000000 el índice parcial
+    // `uniq_pos_invoice_qb_txn_id_active` prohíbe dos facturas vivas con el
+    // mismo `metadata.qb_txn_id`, y un clon con SELECT * lo repetía (23505).
     await pool.query(
       `UPDATE tmp_e2e_inv_14
-          SET id = $1, invoice_number = 'E2E-MIN-14', created_at = NOW(), updated_at = NOW()`,
+          SET id = $1, invoice_number = 'E2E-MIN-14', created_at = NOW(), updated_at = NOW(),
+              metadata = COALESCE(metadata, '{}'::jsonb) - 'qb_txn_id'`,
       [CLONE_INVOICE_ID]
     );
     await pool.query(`INSERT INTO pos_invoice SELECT * FROM tmp_e2e_inv_14`);
