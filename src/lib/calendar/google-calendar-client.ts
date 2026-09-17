@@ -5,25 +5,29 @@
  * Domain-Wide Delegation que ya usa `utils/gmail-sent-insert.ts` (misma clave,
  * `GMAIL_SERVICE_ACCOUNT_KEY`; mismo patrón `JWT + subject`).
  *
- * SEGURIDAD — las tres decisiones que hacen que "robar la clave" valga poco:
+ * DECISIÓN 09/17/2026 (owner, opción B): el calendario del POS es el PRINCIPAL
+ * del usuario, no un secundario. Con el secundario (`calendar.app.created`) las
+ * invitaciones que un coworker aceptaba caían en su principal y el POS no las
+ * veía. Scope: `calendar.events.owned` — eventos de los calendarios que el
+ * usuario POSEE (su principal incluido); no lista calendarios ajenos ni
+ * compartidos ni toca ACLs/settings.
  *
- * 1. Scope ÚNICO `calendar.app.created`: la SA sólo puede crear calendarios
- *    secundarios y ver/editar eventos DE ESOS calendarios. No puede leer la
- *    agenda personal de nadie ni listar sus calendarios. Cambiar este scope es
- *    cambiar el contrato de privacidad con el equipo; `verify-calendars.ts` lo
- *    afirma y el smoke lo prueba con control negativo (`primary` → 403).
- * 2. El email a impersonar lo decide la RUTA a partir del JWT del usuario
- *    autenticado (o de un user_id que sólo el owner puede elegir). Este módulo
- *    no acepta emails del cliente ni hace fallback a ninguno.
- * 3. La clave nunca se loguea ni se devuelve; los errores se resumen.
- *
- * Sólo cuentas del dominio con DWD (`@ecopowertech.com`) son elegibles.
+ * SEGURIDAD — lo que sigue valiendo y lo que cambió:
+ * 1. La SA ahora PUEDE leer eventos del calendario principal de cualquier
+ *    cuenta del dominio (igual que hoy puede insertar correos en cualquier
+ *    buzón con gmail.insert). Quien limita es la RUTA: el email a impersonar
+ *    sale del JWT del usuario autenticado; `user_id` ajeno sólo lo honra el
+ *    owner. Este módulo no acepta emails del cliente ni hace fallback.
+ * 2. La clave nunca se loguea ni se devuelve; los errores se resumen.
+ * 3. Sólo cuentas del dominio con DWD (`@ecopowertech.com`) son elegibles.
  */
 import { auth as gauth, calendar as calendarClient, type calendar_v3 } from "@googleapis/calendar";
 
 import type { CalendarAttendee, CalendarEvent } from "./calendar-events";
 
-export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created";
+export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.owned";
+/** El calendario que el POS lee y escribe: el principal del usuario impersonado. */
+export const PRIMARY_CALENDAR_ID = "primary";
 export const DWD_DOMAIN = "ecopowertech.com";
 export const POS_CALENDAR_SUMMARY = "EcoPowerTech POS";
 export const BUSINESS_TZ = "America/New_York";
@@ -71,40 +75,6 @@ export function calendarFor(subjectEmail: string): calendar_v3.Calendar {
     subject: subjectEmail,
   });
   return calendarClient({ version: "v3", auth: authClient });
-}
-
-/** Crea el calendario secundario del usuario. Devuelve su id (nunca `primary`). */
-export async function createPosCalendar(subjectEmail: string): Promise<string> {
-  try {
-    const res = await calendarFor(subjectEmail).calendars.insert({
-      requestBody: { summary: POS_CALENDAR_SUMMARY, timeZone: BUSINESS_TZ },
-    });
-    const id = res.data.id;
-    if (!id) throw new GoogleCalendarError("Google did not return a calendar id", 502);
-    return id;
-  } catch (err) {
-    throw err instanceof GoogleCalendarError ? err : summarize(err);
-  }
-}
-
-/** ¿El calendario guardado sigue existiendo? (borrado a mano en Google → false). */
-export async function calendarExists(subjectEmail: string, calendarId: string): Promise<boolean> {
-  try {
-    await calendarFor(subjectEmail).calendars.get({ calendarId });
-    return true;
-  } catch (err) {
-    const s = summarize(err).status;
-    if (s === 404 || s === 410) return false;
-    throw summarize(err);
-  }
-}
-
-export async function deletePosCalendar(subjectEmail: string, calendarId: string): Promise<void> {
-  try {
-    await calendarFor(subjectEmail).calendars.delete({ calendarId });
-  } catch (err) {
-    throw summarize(err);
-  }
 }
 
 export interface PersonalEventInput {
@@ -179,6 +149,10 @@ export function toCalendarEvent(ev: calendar_v3.Schema$Event): CalendarEvent | n
       description: ev.description ?? null,
       location: ev.location ?? null,
       html_link: ev.htmlLink ?? null,
+      // Un evento al que el usuario fue INVITADO vive en su principal pero no es
+      // suyo: Google rechaza editarlo/borrarlo; la pantalla lo muestra en modo lectura.
+      is_organizer: !ev.organizer || ev.organizer.self === true,
+      organizer_email: ev.organizer?.email ?? null,
     },
     attendees: toAttendees(ev.attendees),
   };
@@ -267,23 +241,29 @@ export async function deleteEvent(subjectEmail: string, calendarId: string, even
   }
 }
 
-export type PrimaryProbe = "forbidden" | "readable" | "scope_not_authorized" | "error";
+export type ScopeProbe = "narrow" | "too_broad" | "scope_not_authorized" | "error";
 
 /**
- * Control negativo del smoke: con `calendar.app.created` leer `primary` DEBE
- * fallar con 403/404 (`forbidden`). `readable` = el scope habilitado en Admin
- * Console es más amplio de lo que este módulo promete → frenar. Un 401
- * `unauthorized_client` es otra cosa: el scope AÚN no está autorizado para la
- * SA en Admin Console (o no propagó) → `scope_not_authorized`.
+ * Control negativo del smoke con `calendar.events.owned`: leer el principal SÍ
+ * debe funcionar; lo que NO debe funcionar es enumerar calendarios
+ * (`calendarList.list` exige calendar.calendarlist / calendar). `too_broad` =
+ * el scope autorizado en Admin Console es más amplio que el prometido. Un 401
+ * `unauthorized_client` = el scope aún no está autorizado (o no propagó).
  */
-export async function probePrimary(subjectEmail: string): Promise<{ result: PrimaryProbe; detail: string }> {
+export async function probeScope(subjectEmail: string): Promise<{ result: ScopeProbe; detail: string }> {
   try {
-    await calendarFor(subjectEmail).events.list({ calendarId: "primary", maxResults: 1 });
-    return { result: "readable", detail: "events.list(primary) → 200" };
+    await calendarFor(subjectEmail).events.list({ calendarId: PRIMARY_CALENDAR_ID, maxResults: 1 });
   } catch (err) {
     const s = summarize(err);
-    if (s.status === 403 || s.status === 404) return { result: "forbidden", detail: `HTTP ${s.status}` };
     if (s.status === 401 || /unauthorized_client/.test(s.message)) return { result: "scope_not_authorized", detail: s.message };
-    return { result: "error", detail: `HTTP ${s.status}: ${s.message}` };
+    return { result: "error", detail: `primary: HTTP ${s.status}: ${s.message}` };
+  }
+  try {
+    await calendarFor(subjectEmail).calendarList.list({ maxResults: 1 });
+    return { result: "too_broad", detail: "calendarList.list → 200" };
+  } catch (err) {
+    const s = summarize(err);
+    if (s.status === 403 || s.status === 401) return { result: "narrow", detail: `primary legible; calendarList HTTP ${s.status}` };
+    return { result: "error", detail: `calendarList: HTTP ${s.status}: ${s.message}` };
   }
 }

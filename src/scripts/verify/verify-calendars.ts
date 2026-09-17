@@ -15,7 +15,7 @@
  * §4 Estático: las rutas de escritura de reglas llaman `requirePin`, y la
  *    de ocurrencias NO (decisión documentada), y `gmail-sent-insert.ts` no
  *    cambió de forma (el patrón se copia, no se toca).
- * §5 Google (estático + puro): el scope es ÚNICAMENTE calendar.app.created; el
+ * §5 Google (estático + puro): el scope es ÚNICAMENTE calendar.events.owned; el
  *    cliente de Google no acepta un email que no sea del dominio; las rutas
  *    del calendario personal no leen emails del request; `user_id` sólo pasa
  *    por `resolveCalendarTarget`, que exige owner; el mapeo all-day
@@ -215,7 +215,7 @@ function section4(): void {
 
 function section5(): void {
   console.log("\n§5 Google Calendar (estático + puro)");
-  check("scope es exactamente calendar.app.created", CALENDAR_SCOPE === "https://www.googleapis.com/auth/calendar.app.created");
+  check("scope es exactamente calendar.events.owned (principal del usuario; sin listar calendarios ni ACLs)", CALENDAR_SCOPE === "https://www.googleapis.com/auth/calendar.events.owned");
   const client = readFileSync(resolve(ROOT, "src/lib/calendar/google-calendar-client.ts"), "utf8");
   const scopes = client.match(/scopes:\s*\[([^\]]*)\]/)?.[1] ?? "";
   check("NEGATIVO: el JWT no pide ningún otro scope de calendar", scopes.trim() === "CALENDAR_SCOPE");
@@ -248,6 +248,10 @@ function section5(): void {
   check("patch anula el campo contrario (date:null / dateTime:null) — Google 'Invalid start time'", /dateTime: null/.test(client2) && /date: null/.test(client2));
   const mig = readFileSync(resolve(ROOT, "src/migrations/Migration20260917110000-PosUserCalendar.ts"), "utf8");
   check("pos_user_calendar guarda sólo ids (ni tokens ni claves)", /google_calendar_id/.test(mig) && !/token|secret|private_key/i.test(mig));
+  const invited = toCalendarEvent({ id: "i", summary: "x", start: { date: "2026-09-17" }, end: { date: "2026-09-18" }, organizer: { email: "boss@ecopowertech.com", self: false } });
+  check("evento al que fui invitado → is_organizer false (modo lectura)", invited?.meta.is_organizer === false && invited.meta.organizer_email === "boss@ecopowertech.com");
+  const own = toCalendarEvent({ id: "o", summary: "x", start: { date: "2026-09-17" }, end: { date: "2026-09-18" }, organizer: { email: "me@ecopowertech.com", self: true } });
+  check("evento propio → is_organizer true", own?.meta.is_organizer === true);
 }
 
 async function main(): Promise<void> {

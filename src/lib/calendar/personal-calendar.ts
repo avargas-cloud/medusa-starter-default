@@ -9,20 +9,13 @@
  * · `user_id` explícito sólo lo honra un OWNER; a cualquier otro se le contesta
  *   403 aunque pida su propio id — así el parámetro nunca se vuelve un canal.
  *
- * El calendario "EcoPowerTech POS" se crea la primera vez que el usuario abre
- * la página (o cuando el que Google tenía ya no existe) y su id se recuerda en
- * `pos_user_calendar`.
+ * El calendario que se lee y escribe es el PRINCIPAL del usuario (Google).
  */
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
 
 import { PosAccessError, resolveAccessLevel } from "../pos/access-level";
 
-import {
-  availabilityFor,
-  calendarExists,
-  createPosCalendar,
-  type Availability,
-} from "./google-calendar-client";
+import { PRIMARY_CALENDAR_ID, availabilityFor, type Availability } from "./google-calendar-client";
 import type { RawPg } from "./recurring-repo";
 
 export interface CalendarUser {
@@ -90,26 +83,13 @@ export async function resolveCalendarTarget(
 }
 
 /**
- * Devuelve el id del calendario del usuario, creándolo si hace falta. Si el
- * email cambió respecto del guardado, o Google ya no tiene ese calendario, se
- * crea uno nuevo y se reemplaza la fila.
+ * El calendario del usuario es su PRINCIPAL (decisión del owner 09/17/2026, ver
+ * google-calendar-client.ts). `pos_user_calendar` queda como registro de los
+ * secundarios "EcoPowerTech POS" creados ese día, para migrar sus eventos
+ * (`scripts/fix/migrate-pos-calendar-to-primary.ts`); no se crean más.
  */
-export async function ensurePosCalendar(pg: RawPg, user: CalendarUser): Promise<string> {
-  const res = await pg.raw(`SELECT email, google_calendar_id FROM pos_user_calendar WHERE user_id = ?`, [user.id]);
-  const row = res.rows[0];
-  if (row && String(row.email).toLowerCase() === user.email.toLowerCase()) {
-    const id = String(row.google_calendar_id);
-    if (await calendarExists(user.email, id)) return id;
-  }
-  const created = await createPosCalendar(user.email);
-  await pg.raw(
-    `INSERT INTO pos_user_calendar (user_id, email, google_calendar_id)
-     VALUES (?, ?, ?)
-     ON CONFLICT (user_id) DO UPDATE SET
-       email = EXCLUDED.email, google_calendar_id = EXCLUDED.google_calendar_id, updated_at = now()`,
-    [user.id, user.email, created]
-  );
-  return created;
+export async function ensurePosCalendar(_pg: RawPg, _user: CalendarUser): Promise<string> {
+  return PRIMARY_CALENDAR_ID;
 }
 
 export interface ParsedPersonalEvent {
