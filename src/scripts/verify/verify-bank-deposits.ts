@@ -15,10 +15,13 @@ import { saveTransactionReview, confirmTransactionReview, changeTransactionRevie
 import { matchCandidates } from "../../lib/banking/review-matching";
 import { invalidateBankSource } from "../../lib/banking/review-source";
 import { readTransactionReview } from "../../lib/banking/review-read";
+import { reviewToday } from "../../lib/banking/review-date";
 
 const actor = "v7verify_bank_deposits";
 const connection = "bconn_v7verify_deposit"; const account = "bacc_v7verify_deposit";
-const day = "2026-08-19"; const txPrefix = "btx_v7verify_deposit_";
+// Today in ET, never a fixed date: the accountant's Daily Close walks forward through the prod
+// clone (closed through 09/13 by 09/17/2026) and a hardcoded 2026-08-19 landed inside closed history.
+const day = reviewToday(); const txPrefix = "btx_v7verify_deposit_";
 const financialTables = ["customer_payment", "payment_application", "pos_invoice", "pos_credit_memo",
   "vendor_bill", "qb_account", "treasury_distribution_log", "qb_order_pipeline"] as const;
 let checks = 0;
@@ -47,19 +50,28 @@ async function mutate(client: PoolClient, run: () => Promise<void>) {
   await transaction(client, async () => { await withReviewLock(client); await run(); });
 }
 type Receipt = { id: string; amount: string; source_hash: string; customer_id: string; display_id: number };
+/** [p, q]: p must be individually matchable (ach/zelle/check — `PAYMENT_ELIGIBLE_SQL`, the Match
+ * lane never takes cards); q only needs the grouped deposit lane, so a surcharge-free debit card
+ * qualifies. The prod clone keeps ~0 undeposited non-card receipts once Record Deposits runs daily
+ * (09/17/2026: 1 check left, 6 debit) — demanding two non-card receipts starved this fixture. */
 async function receipts(client: PoolClient): Promise<Receipt[]> {
-  return (await client.query<Receipt>(`SELECT DISTINCT ON(mp.customer_id) mp.id,mp.display_id,(mp.amount::numeric/100)::text AS amount,
+  const pool = (methods: string[], exclude: string[]) => client.query<Receipt>(`SELECT DISTINCT ON(mp.customer_id) mp.id,mp.display_id,(mp.amount::numeric/100)::text AS amount,
     mp.customer_id,${PAYMENT_FINGERPRINT_SQL} AS source_hash FROM customer_payment mp
     JOIN customer c ON c.id=mp.customer_id AND c.deleted_at IS NULL
-    WHERE mp.deleted_at IS NULL AND mp.type='payment' AND mp.method IN('ach','zelle','check')
-      AND mp.status IN('available','partially_applied','applied') AND mp.amount::numeric>=200
+    WHERE mp.deleted_at IS NULL AND mp.type='payment' AND mp.method = ANY($2::text[]) AND COALESCE(mp.surcharge_cents,0)=0
+      AND mp.status IN('available','partially_applied','applied') AND mp.amount::numeric>=5000
       AND upper(mp.currency)='USD' AND mp.display_id IS NOT NULL AND COALESCE(mp.metadata->>'qb_import','false')='false'
       AND (mp.received_at AT TIME ZONE 'America/New_York')::date BETWEEN '2026-01-01'::date AND $1::date
+      AND NOT (mp.customer_id = ANY($3::text[]))
       AND NOT EXISTS(SELECT 1 FROM bank_transaction_review r WHERE r.matched_payment_id=mp.id
         AND r.status<>'excluded' AND r.deleted_at IS NULL)
       AND NOT EXISTS(SELECT 1 FROM bank_deposit_line dl JOIN bank_deposit d ON d.id=dl.deposit_id
         WHERE dl.payment_id=mp.id AND dl.deleted_at IS NULL AND d.deleted_at IS NULL AND d.status<>'void')
-    ORDER BY mp.customer_id,mp.id LIMIT 2`,[day])).rows;
+    ORDER BY mp.customer_id,mp.id LIMIT 1`,[day, methods, exclude]);
+  const p = (await pool(["ach","zelle","check"], [])).rows[0];
+  if (!p) return [];
+  const q = (await pool(["ach","zelle","check","debit_card"], [p.customer_id])).rows[0];
+  return q ? [p, q] : [p];
 }
 
 async function clean(client: PoolClient) {
@@ -88,7 +100,8 @@ async function main() {
     before = await fingerprints(client); await clean(client);
     // Exercise real parameter binding on absent targets, including null status/search branches.
     same((await listBankDeposits({ account_id: "v7verify_absent" })).count, 0, "List binds absent account and optional filters");
-    same((await transactionDepositCandidates("v7verify_absent")).count, 0, "Grouped candidate query binds a missing movement");
+    // ca388c42 (09/14/2026): a missing movement is a 404, not an empty list — the scope query still binds before the throw.
+    await rejectCode(() => transactionDepositCandidates("v7verify_absent"), "BANKING_TRANSACTION_NOT_FOUND");
     same(await depositSuggestions(["v7verify_absent"]), [], "Suggestion batch binds missing IDs without writes");
     await rejectCode(() => readBankDeposit("v7verify_absent"), "BANKING_DEPOSIT_NOT_FOUND");
     truth(!(await client.query("SELECT 1 FROM bank_day_close WHERE day=$1 AND deleted_at IS NULL", [day])).rowCount, "Owned fixture day has no existing review closure");
@@ -99,12 +112,21 @@ async function main() {
     await mutate(client, async () => {
       const cap = (await client.query(`SELECT (SELECT count(*) FROM bank_connection)::int AS connections,
         (SELECT count(*) FROM bank_account)::int AS accounts,(SELECT count(*) FROM bank_transaction)::int AS transactions`)).rows[0];
-      truth(cap.connections<3 && cap.accounts<10 && cap.transactions+2<=2000, "Fixture stays within approved bank-feed caps");
+      // Caps sized for the LIVE feed the prod clone now carries (6 connections / 17 accounts / ~4.8k
+      // movements on 09/17/2026), not the empty synthetic sandbox of 09/09: the guard is against a
+      // runaway fixture, and this one adds 1 connection, 1 account and 2 movements.
+      truth(cap.connections<20 && cap.accounts<60 && cap.transactions+2<=50000, "Fixture stays within approved bank-feed caps");
       await client.query(`INSERT INTO bank_connection(id,provider,environment,provider_item_id,status,initial_sync_complete,historical_sync_complete,last_successful_sync_at)
         VALUES($1,'plaid','sandbox',$1,'disconnected',true,true,now())`, [connection]);
+      // record-deposits-gl-20260915: a deposit needs a QuickBooks mirror on the bank account
+      // (`qb_list_id`, unique among active accounts) — borrow a Bank account no feed maps yet.
+      const mirror = (await client.query<{ id: string }>(`SELECT qa.qb_list_id AS id FROM qb_account qa
+        WHERE qa.deleted_at IS NULL AND qa.account_type='Bank' AND NOT EXISTS (SELECT 1 FROM bank_account ba
+          WHERE ba.qb_list_id=qa.qb_list_id AND ba.is_active AND ba.deleted_at IS NULL) ORDER BY qa.full_name LIMIT 1`)).rows[0];
+      truth(mirror, "An unmapped QuickBooks Bank account exists to mirror the synthetic bank");
       await client.query(`INSERT INTO bank_account(id,connection_id,provider_account_id,name,type,currency,is_selected,
-        review_start_date,opening_bank_balance,opening_balance_date,opening_reference,setup_revision)
-        VALUES($1,$2,$1,'V7 verifier synthetic bank','depository','USD',true,'2026-01-01','0','2025-12-31','Verification fixture only',1)`, [account, connection]);
+        review_start_date,opening_bank_balance,opening_balance_date,opening_reference,setup_revision,qb_list_id)
+        VALUES($1,$2,$1,'V7 verifier synthetic bank','depository','USD',true,'2026-01-01','0','2025-12-31','Verification fixture only',1,$3)`, [account, connection, mirror.id]);
       for (const [suffix, amount] of [["individual", p.amount], ["group", "1.23"]]) await client.query(`INSERT INTO bank_transaction
         (id,connection_id,account_id,provider_transaction_id,amount,currency,status,transaction_date,name,source_data,first_seen_at,last_seen_at)
         VALUES($1,$2,$3,$1,-$4::numeric,'USD','posted',$5,'V7 verifier synthetic deposit','{}'::jsonb,now(),now())`,
@@ -119,27 +141,32 @@ async function main() {
     const initial = await depositCandidates({ account_id: account, q: String(p.display_id) });
     truth(initial.candidates.some(candidate => candidate.id===p.id), "Candidate query returns the real source receipt");
     same(cents(initial.candidates.find(candidate => candidate.id===p.id)!.available_amount),cents(p.amount),"Bank availability starts at the receipt face value independently of AR status");
+    // record-deposits-gl v2 (09/15/2026): a receipt deposited once is deposited — a live line on any
+    // OTHER deposit removes it from the picker and from save/ready, whatever the amount residual says.
+    // A partial amount inside ONE deposit is still allowed (the picker says "enter a partial amount").
     const half = cents(p.amount)/2n;
     const a = await make([line(p,major(half))]);
-    const b = await make([line(p,major(cents(p.amount)-half))]);
-    same(cents(a.gross_amount)+cents(b.gross_amount), cents(p.amount), "Partial deposits exactly cover one original receipt");
-    truth(!(await depositCandidates({ account_id:account,q:String(p.display_id) })).candidates.some(candidate => candidate.id===p.id),"Fully reserved receipt leaves the remaining-cash picker");
+    same(cents(a.gross_amount), half, "A partial amount inside one deposit is accepted");
+    await rejectCode(() => make([line(p,major(cents(p.amount)-half))]), "BANKING_DEPOSIT_OVER_RESERVED");
+    truth(!(await depositCandidates({ account_id:account,q:String(p.display_id) })).candidates.some(candidate => candidate.id===p.id),"A receipt on a live deposit leaves the remaining-cash picker even with residual amount");
     await rejectCode(() => make([line(p,"0.01")]), "BANKING_DEPOSIT_OVER_RESERVED");
     const own = await depositCandidates({ account_id: account, q: String(p.display_id), deposit_id: a.id });
     truth(own.candidates.some(candidate => candidate.id===p.id), "Editing excludes its own reservation from available candidates");
-    same(cents(own.candidates.find(candidate => candidate.id===p.id)!.available_amount),half,"Edit picker releases only its own portion when computing remaining capacity");
+    same(cents(own.candidates.find(candidate => candidate.id===p.id)!.available_amount),cents(p.amount),"Edit picker releases its own portion: the full face value is available to the owning deposit");
     await rejectCode(() => saveTransactionReview(txPrefix+"individual", actor, randomUUID(), {
       expected_revision: 0, expected_source_version: 1, mode: "match", matched_payment_id: p.id,
       expected_match_source_hash: p.source_hash, comment: "Cross-reservation control" }), "BANKING_MATCH_INVALID_OR_RESERVED");
-    const edited = (await saveBankDeposit(actor,randomUUID(), { ...body([line(p,major(cents(p.amount)-half-1n))]),
-      id:b.id,expected_revision:b.revision })).deposit;
+    const edited = (await saveBankDeposit(actor,randomUUID(), { ...body([line(p,major(cents(p.amount)-1n))]),
+      id:a.id,expected_revision:a.revision })).deposit;
+    same(cents(edited.gross_amount), cents(p.amount)-1n, "The owning deposit can grow its own line up to the face value");
+    await discard(edited.id);
+    // Concurrency: with the receipt free again, two deposits race for it — exactly one may claim it.
     const raced = await Promise.allSettled([make([line(p,"0.01")]),make([line(p,"0.01")])]);
-    same(raced.filter(result => result.status==="fulfilled").length,1,"Concurrent deposits cannot both reserve the final cent");
+    same(raced.filter(result => result.status==="fulfilled").length,1,"Concurrent deposits cannot both claim the same receipt");
     const loser = raced.find(result => result.status==="rejected");
     truth(loser?.status==="rejected" && loser.reason instanceof Error && "code" in loser.reason
       && loser.reason.code==="BANKING_DEPOSIT_OVER_RESERVED", "Concurrent loser is rejected for source capacity");
     for (const result of raced) if (result.status==="fulfilled") await discard(result.value.id);
-    await discard(a.id); await discard(edited.id);
     const liveMatch = (await matchCandidates(txPrefix+"individual","")).candidates.find(candidate => candidate.id===p.id);
     truth(liveMatch, "Voiding deposits restores the previously blocked individual Match candidate");
     const individual = (await saveTransactionReview(txPrefix+"individual",actor,randomUUID(), {
@@ -207,9 +234,12 @@ async function main() {
     same(closed.snapshot,JSON.parse(JSON.stringify(snapshot)),"Bank-source drift preserves closed composition snapshot");
     truth(closed.needs_review,"Source change flags the closed date for operator review");
     same(cents((await readBankDeposit(ready.id)).deposit.gross_amount),124n,"Closed source drift does not silently free grouped receipt portions");
-    const remaining = (await depositCandidates({ account_id:account,q:String(p.display_id) })).candidates.find(candidate => candidate.id===p.id);
-    truth(remaining,"The receipt still has its expected unreserved remainder");
-    same(cents(remaining.available_amount),cents(p.amount)-123n,"Audited deposit portions remain reserved after bank-source drift");
+    // Deposited once is deposited: after the drift the receipt stays off the free picker, and only
+    // the owning deposit still sees it (with its own portion released).
+    truth(!(await depositCandidates({ account_id:account,q:String(p.display_id) })).candidates.some(candidate => candidate.id===p.id),"Audited deposit keeps the receipt reserved after bank-source drift");
+    const owner = (await depositCandidates({ account_id:account,q:String(p.display_id),deposit_id:ready.id })).candidates.find(candidate => candidate.id===p.id);
+    truth(owner,"The audited deposit can still see its own receipt");
+    same(cents(owner.available_amount),cents(p.amount),"The owning deposit sees the face value with its own portion released");
     console.log(JSON.stringify({ coverage:{ partials:true,concurrent_capacity:true,cross_match:true,fees:true,
       retries:true,source_drift:true,closed_guard:true },financial_tables_checked:financialTables.length }));
   } finally {
