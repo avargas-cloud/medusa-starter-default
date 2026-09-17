@@ -3,6 +3,8 @@
  *
  * A quién se puede invitar desde el calendario personal (delta v3):
  * · coworkers — usuarios del POS (whitelist `pos_user` por email), con nombre;
+ *   las cuentas de prueba (`test@`, `sandbox@`, `admin@`) no se ofrecen como
+ *   invitables — siguen pudiendo entrar al POS (owner 09/17/2026);
  * · customers — clientes con email REAL (los `email_is_placeholder` no se
  *   ofrecen), con sus emails alternativos: `metadata.alt_email` (+ nombre del
  *   contacto) y `metadata.cc_emails` (texto separado por comas).
@@ -57,6 +59,7 @@ export async function searchCoworkers(pg: RawPg, q: string): Promise<CoworkerPer
        FROM "user" u
        JOIN pos_user p ON lower(p.email) = lower(u.email) AND p.deleted_at IS NULL
       WHERE u.deleted_at IS NULL
+        AND split_part(lower(u.email), '@', 1) NOT IN ('test', 'sandbox', 'admin')
         AND (? = '' OR u.email ILIKE ? OR u.first_name ILIKE ? OR u.last_name ILIKE ?)
       ORDER BY u.first_name, u.last_name
       LIMIT ?`,
