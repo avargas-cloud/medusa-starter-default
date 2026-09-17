@@ -36,6 +36,13 @@ export async function deleteDraftVendorCredit(client: PgClient, creditId: string
       `UPDATE vendor_credit SET deleted_at = now(), updated_at = now() WHERE id = $1`,
       [creditId]
     );
+    // A discarded prepayment draft releases its check-line consumption too
+    // (pay-bills-credits-prepayments-20260917).
+    await client.query(
+      `UPDATE vendor_prepayment_consumption SET voided_at = now()
+        WHERE vendor_credit_id = $1 AND voided_at IS NULL`,
+      [creditId]
+    );
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

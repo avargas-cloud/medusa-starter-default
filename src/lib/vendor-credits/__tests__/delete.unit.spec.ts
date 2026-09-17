@@ -20,12 +20,16 @@ describe("deleteDraftVendorCredit", () => {
       { match: "SELECT id, status FROM vendor_credit", rows: [{ id: "vcr_1", status: "draft" }] },
       { match: "UPDATE vendor_credit_line SET deleted_at", rows: [] },
       { match: "UPDATE vendor_credit SET deleted_at", rows: [] },
+      { match: "UPDATE vendor_prepayment_consumption SET voided_at", rows: [] },
     ]);
     await deleteDraftVendorCredit(client as never, "vcr_1");
     const sqls = client.calls.map((c) => c.sql);
     expect(sqls[0]).toBe("BEGIN");
     expect(sqls.some((s) => s.includes("UPDATE vendor_credit_line SET deleted_at"))).toBe(true);
     expect(sqls.some((s) => s.includes("UPDATE vendor_credit SET deleted_at"))).toBe(true);
+    // Delta v2 (pay-bills-credits-prepayments-20260917): a discarded draft
+    // releases its check-line consumption inside the same transaction.
+    expect(sqls.some((s) => s.includes("UPDATE vendor_prepayment_consumption SET voided_at"))).toBe(true);
     expect(sqls[sqls.length - 1]).toBe("COMMIT");
     expect(sqls.some((s) => s.startsWith("DELETE"))).toBe(false);
   });

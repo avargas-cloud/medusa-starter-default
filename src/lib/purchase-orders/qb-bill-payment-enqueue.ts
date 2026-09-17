@@ -230,9 +230,11 @@ export async function loadBillPaymentAddFacts(
       paymentAmountCents: 0n,
       setCredits: [],
     };
-    existing.paymentAmountCents =
-      (existing.paymentAmountCents as bigint) + BigInt(Math.round(Number(alloc.amount_cents)));
     if (alloc.credit_qb_txn_id) {
+      // credit-carrying allocation: SetCredit only, never PaymentAmount —
+      // it is money the vendor already holds (a VendorCredit), not cash
+      // this payment moves. Summing it into PaymentAmount too was a double
+      // count: QB read PaymentAmount + SetCredit as the total applied.
       existing.setCredits = [
         ...(existing.setCredits ?? []),
         {
@@ -243,6 +245,9 @@ export async function loadBillPaymentAddFacts(
           appliedAmountCents: BigInt(Math.round(Number(alloc.amount_cents))),
         },
       ];
+    } else {
+      existing.paymentAmountCents =
+        (existing.paymentAmountCents as bigint) + BigInt(Math.round(Number(alloc.amount_cents)));
     }
     byBill.set(billTxnId, existing);
   }

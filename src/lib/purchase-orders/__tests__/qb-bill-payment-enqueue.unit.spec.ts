@@ -129,12 +129,48 @@ describe("loadBillPaymentAddFacts", () => {
     expect(facts.ready).toBe(true);
     if (facts.ready) {
       expect(facts.qbxml).toContain("<BillPaymentCheckAddRq>");
-      // Both allocations against the same bill fold into ONE AppliedToTxnAdd,
-      // amount = their sum (100.00), with the credit's SetCredit inside it.
+      // Both allocations against the same bill fold into ONE AppliedToTxnAdd.
+      // pay-bills-credits-prepayments-20260917: PaymentAmount is ONLY the
+      // cash portion (alloc_2, 20.00) — the credit-carrying allocation
+      // (alloc_1, 80.00) counts ONLY inside its SetCredit, never doubled
+      // into PaymentAmount too.
       expect(facts.qbxml.match(/<AppliedToTxnAdd>/g)?.length).toBe(1);
-      expect(facts.qbxml).toContain("<PaymentAmount>100.00</PaymentAmount>");
+      expect(facts.qbxml).toContain("<PaymentAmount>20.00</PaymentAmount>");
       expect(facts.qbxml).toContain("<CreditTxnID>9000CREDIT</CreditTxnID>");
+      expect(facts.qbxml).toContain("<AppliedAmount>80.00</AppliedAmount>");
       expect(facts.isCreditCard).toBe(false);
+    }
+  });
+
+  it("does not double-count a credit-carrying allocation into PaymentAmount (only SetCredit)", async () => {
+    const knex = fakeKnex({
+      allocations: [
+        {
+          id: "alloc_cash",
+          vendor_bill_id: "vb_1",
+          amount_cents: 6000,
+          credit_application_id: null,
+          bill_qb_txn_id: "9000BILL",
+          credit_id: null,
+          credit_qb_txn_id: null,
+        },
+        {
+          id: "alloc_credit",
+          vendor_bill_id: "vb_1",
+          amount_cents: 4000,
+          credit_application_id: "vca_1",
+          bill_qb_txn_id: "9000BILL",
+          credit_id: "vcr_1",
+          credit_qb_txn_id: "9000CREDIT",
+        },
+      ],
+    });
+    const facts = await loadBillPaymentAddFacts(knex, "vbp_1");
+    expect(facts.ready).toBe(true);
+    if (facts.ready) {
+      expect(facts.qbxml).toContain("<PaymentAmount>60.00</PaymentAmount>");
+      expect(facts.qbxml).toContain("<CreditTxnID>9000CREDIT</CreditTxnID>");
+      expect(facts.qbxml).toContain("<AppliedAmount>40.00</AppliedAmount>");
     }
   });
 

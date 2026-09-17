@@ -107,6 +107,17 @@ describe("createBillPayment", () => {
     ).rejects.toMatchObject({ code: "invalid_allocation_amount" });
   });
 
+  it("refuses an allocation carrying a credit_application_id, before BEGIN", async () => {
+    const client = fakeClient([]);
+    await expect(
+      createBillPayment(client as never, {
+        ...baseInput,
+        allocations: [{ vendor_bill_id: "vb_1", amount_cents: 1_000, credit_application_id: "vcap_1" }],
+      })
+    ).rejects.toMatchObject({ code: "unsupported_credit_allocation" });
+    expect(client.calls).toEqual([]);
+  });
+
   it("posts on the happy path", async () => {
     const client = fakeClient([
       { match: "FROM qb_vendor WHERE", rows: [VENDOR] },

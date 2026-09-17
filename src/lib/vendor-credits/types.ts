@@ -43,6 +43,8 @@ export interface CreateVendorCreditInput {
   vendor_bill_id?: string | null;
   lines: VendorCreditLineInput[];
   actor_id: string;
+  /** Prepayment settlement (plan pay-bills-credits-prepayments-20260917): the credit consumes part of a posted check line against a vendor prepayment (OtherCurrentAsset) account. Inserted in the SAME transaction as the credit so a credit can never exist without its consumption row. */
+  prepayment?: { gl_check_id: string; gl_check_line_id: string; consumed_cents: number } | null;
 }
 
 export class VendorCreditError extends Error {

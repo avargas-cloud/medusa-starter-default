@@ -32,13 +32,6 @@ interface BillRow {
   vendor_id: string;
 }
 
-interface CreditApplicationRow {
-  id: string;
-  credit_id: string;
-  vendor_bill_id: string;
-  voided_at: string | null;
-}
-
 /**
  * Posts a bill payment against one or more open bills, atomically:
  *   - Σ allocations = amount_cents (plan §3);
@@ -68,6 +61,19 @@ export async function createBillPayment(
     if (!(a.amount_cents > 0)) {
       throw new BillPaymentError("invalid_allocation_amount", "Every allocation must have amount_cents > 0.");
     }
+  }
+  // pay-bills-credits-prepayments-20260917: the QB builder
+  // (`qb-bill-payment-enqueue.ts`) already sums a credit-carrying
+  // allocation into BOTH PaymentAmount and SetCredit — that is the double
+  // count — and this function used to add it to the cash total on top of
+  // that. Credits are applied through the vendor-credit lane
+  // (`applyVendorCreditToBill` + `enqueueVendorCreditApply`), never inside a
+  // bill payment allocation.
+  if (input.allocations.some((a) => a.credit_application_id)) {
+    throw new BillPaymentError(
+      "unsupported_credit_allocation",
+      "Credits are applied through the vendor-credit lane, never inside a bill payment allocation."
+    );
   }
 
   await client.query("BEGIN");
@@ -157,30 +163,6 @@ export async function createBillPayment(
           "exceeds_bill_balance",
           `Allocating ${total} to bill ${billId} would exceed its open balance (${balance?.balance_cents ?? 0} available).`
         );
-      }
-    }
-
-    const creditApplicationIds = input.allocations
-      .map((a) => a.credit_application_id)
-      .filter((v): v is string => !!v);
-    if (creditApplicationIds.length > 0) {
-      const { rows } = await client.query(
-        `SELECT ca.id, ca.credit_id, ca.vendor_bill_id, ca.voided_at, vc.vendor_id
-           FROM vendor_credit_application ca
-           JOIN vendor_credit vc ON vc.id = ca.credit_id
-          WHERE ca.id = ANY($1::text[])`,
-        [creditApplicationIds]
-      );
-      const appsById = new Map(
-        (rows as (CreditApplicationRow & { vendor_id: string })[]).map((r) => [r.id, r])
-      );
-      for (const id of creditApplicationIds) {
-        const app = appsById.get(id);
-        if (!app) throw new BillPaymentError("credit_application_not_found", `${id} not found.`, 404);
-        if (app.voided_at) throw new BillPaymentError("credit_application_voided", `${id} is voided.`, 409);
-        if (app.vendor_id !== vendor.id) {
-          throw new BillPaymentError("vendor_mismatch", `Credit application ${id} belongs to a different vendor.`);
-        }
       }
     }
 

@@ -146,6 +146,42 @@ export async function createDraftVendorCredit(
         ]
       );
     }
+
+    // pay-bills-credits-prepayments-20260917: settle.ts already checked
+    // eligibility/capacity in its own short read-only tx before calling
+    // here (`lockPrepaymentLine`) — but that lock is released before this
+    // tx opens, so a second settlement racing on the same check line could
+    // slip through. The DEFINITIVE capacity check lives here, under
+    // `FOR UPDATE OF l` in THIS transaction: if it fails, this whole credit
+    // rolls back with it — a credit can never exist without its
+    // consumption row, and consumption can never exceed the line.
+    if (input.prepayment) {
+      const { gl_check_id, gl_check_line_id, consumed_cents } = input.prepayment;
+      const { rows: lineRows } = await client.query(
+        `SELECT l.amount_cents - COALESCE((
+           SELECT SUM(v.consumed_cents) FROM vendor_prepayment_consumption v
+            WHERE v.gl_check_line_id = l.id AND v.voided_at IS NULL
+         ), 0) AS remaining_cents
+           FROM gl_check_line l WHERE l.id = $1 FOR UPDATE OF l`,
+        [gl_check_line_id]
+      );
+      const remaining = Number((lineRows[0] as { remaining_cents: number } | undefined)?.remaining_cents ?? 0);
+      if (consumed_cents > remaining) {
+        throw new VendorCreditError(
+          "prepayment_exceeds_remaining",
+          `Consuming ${consumed_cents} would exceed the check line's remaining prepayment (${remaining} available).`,
+          409
+        );
+      }
+      const vpcId = generateEntityId("", "vpc");
+      await client.query(
+        `INSERT INTO vendor_prepayment_consumption
+           (id, gl_check_id, gl_check_line_id, vendor_id, vendor_credit_id, consumed_cents, source, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,'settlement',$7)`,
+        [vpcId, gl_check_id, gl_check_line_id, vendor.id, id, consumed_cents, input.actor_id]
+      );
+    }
+
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

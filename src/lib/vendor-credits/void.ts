@@ -62,6 +62,14 @@ export async function voidVendorCredit(
         WHERE id=$1`,
       [creditId, actorId, reason ?? null]
     );
+    // pay-bills-credits-prepayments-20260917: a credit minted from a check
+    // prepayment holds a consumption row on that check line — voiding the
+    // credit gives the line its capacity back, or that money is stuck forever.
+    await client.query(
+      `UPDATE vendor_prepayment_consumption SET voided_at = now()
+        WHERE vendor_credit_id = $1 AND voided_at IS NULL`,
+      [creditId]
+    );
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
