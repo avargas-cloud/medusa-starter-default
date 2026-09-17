@@ -328,17 +328,22 @@ export interface SalesTaxPaymentCheckAddInput {
   txnDate: string;
   bankAccountListId: string;
   refNumber?: string | null;
-  memo?: string | null;
   lines: SalesTaxPaymentLineInput[];
 }
 
 /**
  * SalesTaxPaymentCheckAdd (qbXML 9.0+): PayeeEntityRef → TxnDate → BankAccountRef →
- * (IsToBePrinted | RefNumber) → Memo → SalesTaxPaymentCheckLineAdd* {ItemSalesTaxRef? → Amount}.
+ * (IsToBePrinted | RefNumber) → SalesTaxPaymentCheckLineAdd* {ItemSalesTaxRef? → Amount}.
  * Forma medida en producción (readback de 1B44DA-1768504629, 09/17/2026): línea 1 con
  * ItemSalesTaxRef "Sale Tax 7%" por el bruto, línea 2 SIN item por −30.00 (el ajuste
  * aplicado); el Amount del cheque es el neto. Es el write correcto — un CheckAdd
  * contra Sales Tax Payable deja la deuda viva en la ventana Pay Sales Tax.
+ *
+ * SIN `<Memo>`: existe en el Add recién desde qbXML 12.0 y este QuickBooks acepta
+ * hasta 11.0 (≥12 → 0x80040423). Con Memo el request entero muere con 0x80040400
+ * (sondeado 09/17/2026 con ListIDs inexistentes: sin Memo contesta 3240 "cannot be
+ * found", o sea que parseó). El memo del POS no viaja; el RefNumber (confirmación
+ * del DOR) sí.
  */
 export function buildSalesTaxPaymentCheckAddQbxml(input: SalesTaxPaymentCheckAddInput): string {
   const rq = "SalesTaxPaymentCheckAddRq";
@@ -362,7 +367,6 @@ export function buildSalesTaxPaymentCheckAddQbxml(input: SalesTaxPaymentCheckAdd
     tag("TxnDate", input.txnDate) +
     ref("BankAccountRef", input.bankAccountListId) +
     (input.refNumber ? tag("RefNumber", input.refNumber) : `<IsToBePrinted>false</IsToBePrinted>`) +
-    tag("Memo", input.memo) +
     lines.join("");
   return qbxmlEnvelope(`<SalesTaxPaymentCheckAddRq><SalesTaxPaymentCheckAdd>${body}</SalesTaxPaymentCheckAdd></SalesTaxPaymentCheckAddRq>`);
 }

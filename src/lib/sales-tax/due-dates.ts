@@ -162,7 +162,7 @@ export function filingDueDates(period: string): FilingDueDates {
   };
 }
 
-export type FilingUrgency = "upcoming" | "due_soon" | "overdue" | "not_open";
+export type FilingUrgency = "upcoming" | "due_soon" | "overdue" | "not_open" | "historical";
 
 /** Estado del vencimiento visto desde `today` (ET). `due_soon` = quedan ≤ 5 días para el corte del ACH. */
 export function filingUrgency(due: FilingDueDates, today: string): FilingUrgency {

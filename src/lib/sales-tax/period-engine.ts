@@ -271,10 +271,11 @@ export async function listPeriods(
   toPeriod: string,
   today = getBusinessDateString()
 ): Promise<PeriodSummary[]> {
-  const [sales, gl, docs] = await Promise.all([
+  const [sales, gl, docs, ledgerStart] = await Promise.all([
     loadSalesFigures(client, fromPeriod, toPeriod),
     loadGlFigures(client, settings.accounts.payable_list_id, fromPeriod, toPeriod),
     loadDocs(client, fromPeriod, toPeriod),
+    loadLedgerStartPeriod(client, settings.accounts.payable_list_id),
   ]);
   const out: PeriodSummary[] = [];
   for (let p = fromPeriod; p <= toPeriod; p = nextPeriod(p)) {
@@ -294,6 +295,9 @@ export async function listPeriods(
       adjustments: adjustments.map((a) => ({ type: a.type, signed_cents: BigInt(a.signed_cents) })),
     });
     const due = filingDueDates(p);
+    // Antes del libro del POS (la apertura del payable) el período vivió entero en
+    // QuickBooks: no hay facturas ni pago que mostrar, y "overdue" sería mentira.
+    const historical = ledgerStart !== null && p < ledgerStart && payments.length === 0 && adjustments.length === 0;
     out.push({
       period: p,
       sales: {
@@ -321,11 +325,21 @@ export async function listPeriods(
       return_status: ret ? ret.status : "open",
       payment_status: live.length === 0 ? "unpaid" : live.every((x) => x.qb_txn_id) ? "paid" : "pending_qb",
       due,
-      urgency: filingUrgency(due, today),
+      urgency: historical ? "historical" : filingUrgency(due, today),
       return: ret ? { id: ret.id, status: ret.status, prepared_at: ret.prepared_at, filed_at: ret.filed_at, confirmation_number: ret.confirmation_number, filed_amount_cents: ret.filed_amount_cents } : null,
     });
   }
   return out;
+}
+
+/** Primer período con movimiento en el payable (la apertura al 12/31/2025 → '2025-12'); null si el libro está vacío. */
+async function loadLedgerStartPeriod(client: PoolClient, payableListId: string): Promise<string | null> {
+  const { rows } = await client.query<{ p: string | null }>(
+    `SELECT substr(MIN(e.day)::text, 1, 7) AS p FROM bank_journal_line l JOIN bank_journal_entry e ON e.id = l.entry_id
+      WHERE l.deleted_at IS NULL AND e.deleted_at IS NULL AND l.account_list_id = $1`,
+    [payableListId]
+  );
+  return rows[0]?.p ?? null;
 }
 
 /** Clientes con ventas exentas en el período (línea B por cliente, con su certificado). */

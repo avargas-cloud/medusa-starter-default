@@ -150,14 +150,13 @@ export async function salesTaxPaymentFacts(db: GlDocumentDb, id: string): Promis
     itemSalesTaxListId: r.kind === "tax" ? r.item_sales_tax_list_id : null,
     amountCents: BigInt(r.amount_cents),
   }));
-  const memo = [doc.memo?.trim(), `Sales tax ${doc.period}`].filter(Boolean).join(" - ");
   try {
+    // Sin memo: el Add no lo admite en qbXML ≤ 11.0 (ver el builder).
     const qbxml = buildSalesTaxPaymentCheckAddQbxml({
       payeeListId: doc.vendor_list_id,
       txnDate: doc.day,
       bankAccountListId: doc.bank_account_list_id,
       refNumber: doc.reference ? toQbRefNumber(doc.reference) : null,
-      memo,
       lines,
     });
     return { ready: true, qbxml, qbTxnType: "SalesTaxPaymentCheck", blockingReferenceIds: [] };
