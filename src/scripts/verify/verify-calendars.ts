@@ -29,7 +29,7 @@ import { Client } from "pg";
 import { generateOccurrences, viewStatus } from "../../lib/calendar/recurring-occurrences";
 import { parseOccurrencePatch, parseRecurringRule } from "../../lib/calendar/recurring-types";
 import { CALENDAR_SCOPE, isDwdEligible, toCalendarEvent } from "../../lib/calendar/google-calendar-client";
-import { parsePersonalEvent } from "../../lib/calendar/personal-calendar";
+import { parseAttendees, parsePersonalEvent } from "../../lib/calendar/personal-calendar";
 import {
   createRule,
   listOccurrences,
@@ -238,6 +238,14 @@ function section5(): void {
   check("parsePersonalEvent: all-day con hora se rechaza", !parsePersonalEvent({ title: "t", all_day: true, start: "2026-09-17T10:00:00Z" }).ok);
   check("parsePersonalEvent: end < start se rechaza", !parsePersonalEvent({ title: "t", all_day: false, start: "2026-09-17T10:00:00Z", end: "2026-09-17T09:00:00Z" }).ok);
   check("NEGATIVO: título vacío se rechaza", !parsePersonalEvent({ title: "  ", all_day: true, start: "2026-09-17" }).ok);
+  const att = parseAttendees(["A@X.com", "a@x.com", "b@y.org"]);
+  check("attendees: minúsculas + dedup", att.ok && att.value?.join() === "a@x.com,b@y.org");
+  check("NEGATIVO: attendee sin @ se rechaza", !parseAttendees(["nope"]).ok);
+  check("attendees ausente → undefined (PATCH no toca la lista)", parseAttendees(undefined).ok && parseAttendees(undefined).value === undefined);
+  const withGuests = toCalendarEvent({ id: "g", summary: "x", start: { date: "2026-09-17" }, end: { date: "2026-09-18" }, attendees: [{ email: "P@z.com", responseStatus: "accepted", self: false }, { email: "", responseStatus: "declined" }] });
+  check("attendees de Google → contrato (email en minúsculas, sin vacíos)", withGuests?.attendees?.length === 1 && withGuests.attendees[0].email === "p@z.com" && withGuests.attendees[0].status === "accepted");
+  const client2 = readFileSync(resolve(ROOT, "src/lib/calendar/google-calendar-client.ts"), "utf8");
+  check("patch anula el campo contrario (date:null / dateTime:null) — Google 'Invalid start time'", /dateTime: null/.test(client2) && /date: null/.test(client2));
   const mig = readFileSync(resolve(ROOT, "src/migrations/Migration20260917110000-PosUserCalendar.ts"), "utf8");
   check("pos_user_calendar guarda sólo ids (ni tokens ni claves)", /google_calendar_id/.test(mig) && !/token|secret|private_key/i.test(mig));
 }

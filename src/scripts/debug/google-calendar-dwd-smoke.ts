@@ -27,6 +27,7 @@ import {
   isDwdEligible,
   listEvents,
   probePrimary,
+  updateEvent,
 } from "../../lib/calendar/google-calendar-client";
 
 function loadKeyFromEnvFile(): void {
@@ -76,6 +77,18 @@ async function main(): Promise<void> {
     const list = await listEvents(email, calendarId, today, today);
     if (!list.some((e) => e.ref === ev.ref)) throw new Error("el evento insertado no aparece al listar");
     console.log(`   ✅ ${list.length} evento(s)`);
+
+    console.log("4b. convertir all-day → con hora + agregar guest (la misma cuenta)…");
+    const timed = await updateEvent(email, calendarId, ev.ref, {
+      title: "POS smoke event (timed)",
+      start: `${today}T13:30:00-04:00`,
+      end: `${today}T14:00:00-04:00`,
+      all_day: false,
+      attendees: [email],
+    });
+    if (timed.all_day || !timed.start.includes("T")) throw new Error("la conversión a hora no se aplicó");
+    if (!timed.attendees?.some((a) => a.email === email.toLowerCase())) throw new Error("el guest no quedó en el evento");
+    console.log(`   ✅ ${timed.start} → ${timed.end} · guests: ${timed.attendees.map((a) => a.email).join(",")}`);
 
     console.log("5. borrar evento…");
     await deleteEvent(email, calendarId, ev.ref);

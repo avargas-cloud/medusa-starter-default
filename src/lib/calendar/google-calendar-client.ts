@@ -21,7 +21,7 @@
  */
 import { auth as gauth, calendar as calendarClient, type calendar_v3 } from "@googleapis/calendar";
 
-import type { CalendarEvent } from "./calendar-events";
+import type { CalendarAttendee, CalendarEvent } from "./calendar-events";
 
 export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created";
 export const DWD_DOMAIN = "ecopowertech.com";
@@ -114,6 +114,27 @@ export interface PersonalEventInput {
   all_day: boolean;
   description?: string | null;
   location?: string | null;
+  /** Emails ya validados/normalizados por `parsePersonalEvent`. En PATCH reemplaza la lista. */
+  attendees?: string[];
+}
+
+const ATTENDEE_STATUSES = new Set(["needsAction", "accepted", "declined", "tentative"]);
+
+function toAttendees(list: calendar_v3.Schema$EventAttendee[] | undefined): CalendarAttendee[] | undefined {
+  if (!list) return undefined;
+  return list
+    .filter((a) => !!a.email)
+    .map((a) => ({
+      email: String(a.email).toLowerCase(),
+      name: a.displayName ?? null,
+      status: a.responseStatus && ATTENDEE_STATUSES.has(a.responseStatus) ? (a.responseStatus as CalendarAttendee["status"]) : null,
+      self: a.self === true,
+    }));
+}
+
+function attendeesBody(input: PersonalEventInput): Pick<calendar_v3.Schema$Event, "attendees"> {
+  // `attendees` ausente = no tocar; `[]` = quitar a todos (PATCH reemplaza la lista).
+  return input.attendees === undefined ? {} : { attendees: input.attendees.map((email) => ({ email })) };
 }
 
 function toGoogleTimes(input: PersonalEventInput): Pick<calendar_v3.Schema$Event, "start" | "end"> {
@@ -121,10 +142,16 @@ function toGoogleTimes(input: PersonalEventInput): Pick<calendar_v3.Schema$Event
     // Google: `end.date` es EXCLUSIVO para all-day. La UI manda inclusivo.
     const endInclusive = input.end ?? input.start;
     const endExclusive = new Date(Date.parse(`${endInclusive}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-    return { start: { date: input.start }, end: { date: endExclusive } };
+    // `dateTime: null` explícito: `events.patch` MERGEA, y un evento que era con
+    // hora conservaría su dateTime junto al date nuevo → Google: "Invalid start time".
+    return { start: { date: input.start, dateTime: null }, end: { date: endExclusive, dateTime: null } };
   }
   const end = input.end ?? new Date(Date.parse(input.start) + 3_600_000).toISOString();
-  return { start: { dateTime: input.start, timeZone: BUSINESS_TZ }, end: { dateTime: end, timeZone: BUSINESS_TZ } };
+  // Simétrico: un all-day que pasa a tener hora tiene que soltar su `date`.
+  return {
+    start: { dateTime: input.start, timeZone: BUSINESS_TZ, date: null },
+    end: { dateTime: end, timeZone: BUSINESS_TZ, date: null },
+  };
 }
 
 export function toCalendarEvent(ev: calendar_v3.Schema$Event): CalendarEvent | null {
@@ -153,6 +180,7 @@ export function toCalendarEvent(ev: calendar_v3.Schema$Event): CalendarEvent | n
       location: ev.location ?? null,
       html_link: ev.htmlLink ?? null,
     },
+    attendees: toAttendees(ev.attendees),
   };
 }
 
@@ -180,13 +208,17 @@ export async function listEvents(
 
 export async function insertEvent(subjectEmail: string, calendarId: string, input: PersonalEventInput): Promise<CalendarEvent> {
   try {
+    // sendUpdates=all: Google manda la invitación a los guests desde la cuenta del
+    // usuario (delta v3, pedido del owner). Sin guests no se envía nada.
     const res = await calendarFor(subjectEmail).events.insert({
       calendarId,
+      sendUpdates: input.attendees?.length ? "all" : "none",
       requestBody: {
         summary: input.title,
         description: input.description ?? undefined,
         location: input.location ?? undefined,
         ...toGoogleTimes(input),
+        ...attendeesBody(input),
       },
     });
     const ev = toCalendarEvent(res.data);
@@ -207,11 +239,13 @@ export async function updateEvent(
     const res = await calendarFor(subjectEmail).events.patch({
       calendarId,
       eventId,
+      sendUpdates: input.attendees === undefined ? "none" : "all",
       requestBody: {
         summary: input.title,
         description: input.description ?? "",
         location: input.location ?? "",
         ...toGoogleTimes(input),
+        ...attendeesBody(input),
       },
     });
     const ev = toCalendarEvent(res.data);
@@ -224,7 +258,8 @@ export async function updateEvent(
 
 export async function deleteEvent(subjectEmail: string, calendarId: string, eventId: string): Promise<void> {
   try {
-    await calendarFor(subjectEmail).events.delete({ calendarId, eventId });
+    // Un evento con guests avisa la cancelación; Google no manda nada si no hay.
+    await calendarFor(subjectEmail).events.delete({ calendarId, eventId, sendUpdates: "all" });
   } catch (err) {
     const s = summarize(err);
     if (s.status === 404 || s.status === 410) return; // ya no está: idempotente

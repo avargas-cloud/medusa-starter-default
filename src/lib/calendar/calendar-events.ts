@@ -17,6 +17,16 @@ import type { OccurrenceViewStatus, RecurringOccurrence, RecurringRule } from ".
 
 export type CalendarSource = "google_personal" | "recurring_expense" | "payroll";
 
+export type AttendeeStatus = "needsAction" | "accepted" | "declined" | "tentative";
+
+export interface CalendarAttendee {
+  email: string;
+  name: string | null;
+  status: AttendeeStatus | null;
+  /** El dueño del calendario, cuando Google lo lista entre los asistentes. */
+  self: boolean;
+}
+
 export interface CalendarEvent {
   id: string;
   source: CalendarSource;
@@ -29,6 +39,8 @@ export interface CalendarEvent {
   /** Referencia a la fila de origen (id de ocurrencia, mes de nómina, eventId de Google). */
   ref: string;
   meta: Record<string, string | number | boolean | null>;
+  /** Sólo eventos de Google; los del calendario contable no tienen invitados. */
+  attendees?: CalendarAttendee[];
 }
 
 export function occurrenceToEvent(

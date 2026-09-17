@@ -119,9 +119,27 @@ export interface ParsedPersonalEvent {
   all_day: boolean;
   description: string | null;
   location: string | null;
+  /** undefined = el cliente no mandó la clave (PATCH: no tocar la lista). */
+  attendees?: string[];
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const MAX_ATTENDEES = 50;
+
+/** Emails válidos, en minúsculas, sin duplicados; `null` si alguno no es un email. */
+export function parseAttendees(raw: unknown): { ok: true; value: string[] | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (!Array.isArray(raw)) return { ok: false, error: "attendees must be an array of emails" };
+  if (raw.length > MAX_ATTENDEES) return { ok: false, error: `at most ${MAX_ATTENDEES} attendees` };
+  const out: string[] = [];
+  for (const item of raw) {
+    const email = typeof item === "string" ? item.trim().toLowerCase() : "";
+    if (!EMAIL_RE.test(email) || email.length > 254) return { ok: false, error: `invalid attendee email: ${String(item).slice(0, 60)}` };
+    if (!out.includes(email)) out.push(email);
+  }
+  return { ok: true, value: out };
+}
 
 export function parsePersonalEvent(raw: unknown): { ok: true; value: ParsedPersonalEvent } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object") return { ok: false, error: "body must be an object" };
@@ -142,5 +160,10 @@ export function parsePersonalEvent(raw: unknown): { ok: true; value: ParsedPerso
   }
   const opt = (v: unknown, max: number): string | null =>
     typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
-  return { ok: true, value: { title, start, end, all_day, description: opt(b.description, 2000), location: opt(b.location, 300) } };
+  const attendees = parseAttendees(b.attendees);
+  if (!attendees.ok) return attendees;
+  return {
+    ok: true,
+    value: { title, start, end, all_day, description: opt(b.description, 2000), location: opt(b.location, 300), attendees: attendees.value },
+  };
 }
