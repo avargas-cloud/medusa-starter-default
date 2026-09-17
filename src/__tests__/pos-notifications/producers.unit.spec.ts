@@ -54,14 +54,16 @@ describe("payments", () => {
     const n = buildPaymentNotification(row);
     expect(n.title).toBe("Payment received — $123.45 (Cash) · 21999");
     expect(n.body).toBe("ACME · Order S9 · PAY-7");
-    expect(n.action_url).toBe("/invoices/inv_1");
+    // Siempre a la página del PAGO: /invoices/:id del POS toma un ORDER id,
+    // así que /invoices/<pos_invoice.id> abría una factura vacía (09/17/2026).
+    expect(n.action_url).toBe("/payments/cp_1");
     expect(n.dedupe_key).toBe("payment_received:cp_1");
     expect(n.entity_type).toBe("customer_payment");
     expect(n.audiences).toEqual([{ kind: "admins" }, { kind: "rep", initials: "AG" }]);
   });
-  it("sin factura navega a la orden; sin rep la audiencia rep queda vacía (sólo admins)", () => {
+  it("sin factura sigue yendo al pago; sin rep la audiencia rep queda vacía (sólo admins)", () => {
     const n = buildPaymentNotification({ ...row, invoice_id: null, invoice_number: null, rep_initials: null });
-    expect(n.action_url).toBe("/orders/ord_1");
+    expect(n.action_url).toBe("/payments/cp_1");
     expect(n.title).not.toContain("·");
     expect(n.audiences[1]).toEqual({ kind: "rep", initials: null });
   });

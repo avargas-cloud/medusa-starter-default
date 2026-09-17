@@ -88,7 +88,9 @@ export function buildPaymentNotification(row: PaymentRow) {
     severity: "info" as const,
     title: `Payment received — ${amount} (${methodLabel(row.method)})${invoice}`,
     body: bodyParts.join(" · "),
-    action_url: row.invoice_id ? `/invoices/${row.invoice_id}` : row.order_id ? `/orders/${row.order_id}` : `/payments`,
+    // Siempre a la página del pago. `/invoices/:id` del POS toma un ORDER id
+    // (no un pos_invoice.id): mandarlo ahí abría una factura vacía (09/17/2026).
+    action_url: `/payments/${row.id}`,
     entity_type: "customer_payment",
     entity_id: row.id,
     payload: {
