@@ -101,6 +101,21 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     call: "requireFullAdmin(",
     why: "delega en lib/accounting/month-close-auth.ts",
   })),
+  /**
+   * pos-calendars-20260917: Accounting → Calendar. Las 4 rutas pasan por
+   * `requireAccounting` de `lib/calendar/recurring-http.ts` (delegante, chequeo
+   * 3); las escrituras de REGLA exigen además PIN en la ruta (`requirePin`).
+   */
+  ...[
+    "accounting/recurring-expenses/route.ts",
+    "accounting/recurring-expenses/[id]/route.ts",
+    "accounting/recurring-expenses/occurrences/route.ts",
+    "accounting/recurring-expenses/occurrences/[id]/route.ts",
+  ].map((file) => ({
+    file,
+    call: "requireAccounting(",
+    why: "delega en lib/calendar/recurring-http.ts (reglas: + PIN en la ruta)",
+  })),
   ...[
     "accounting/ledger/register/route.ts",
     "accounting/ledger/profit-loss/route.ts",
@@ -267,6 +282,10 @@ const DELEGATES: Array<{ file: string; calls: string[] }> = [
   },
   {
     file: "src/lib/ledger/reports/route-common.ts",
+    calls: ["assertAccounting("],
+  },
+  {
+    file: "src/lib/calendar/recurring-http.ts",
     calls: ["assertAccounting("],
   },
 ];
