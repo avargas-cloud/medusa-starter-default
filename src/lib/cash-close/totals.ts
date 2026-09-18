@@ -53,12 +53,19 @@ function settledByLabel(
   const paymentApps = invoice.applications.filter(
     (a) => a.payment_type === "payment"
   );
+  // A single payment received on an EARLIER day is a deposit, and the label
+  // must say so — the print read "Pmt 5047" for Decorini's 09/16 deposit while
+  // the modal counted it under "Paid with earlier deposits"; same fact, two
+  // words, and the owner read it as two different numbers.
+  if (paidToday === 0 && paidEarlier > 0 && paidStoreCredit === 0 && onAccount === 0) {
+    const day = paymentApps[0]?.payment_day;
+    const when = day ? ` ${day.slice(5).replace("-", "/")}` : "";
+    return paymentApps.length === 1
+      ? `Deposit${when} · Pmt ${paymentApps[0]!.payment_display_id}`
+      : `Deposits${when}`;
+  }
   if (paymentApps.length === 1 && paidStoreCredit === 0 && onAccount === 0) {
     return `Pmt ${paymentApps[0]!.payment_display_id}`;
-  }
-  if (paidToday === 0 && paidEarlier > 0 && paidStoreCredit === 0) {
-    const day = paymentApps[0]?.payment_day;
-    return day ? `Deposit ${day.slice(5).replace("-", "/")}` : "Deposit";
   }
   if (paidStoreCredit > 0 && paidToday === 0 && paidEarlier === 0 && onAccount === 0) {
     return "Store credit";
