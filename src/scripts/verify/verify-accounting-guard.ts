@@ -173,6 +173,7 @@ const MUST_REQUIRE_ACCOUNTING: Entry[] = [
     "accounting/checks/[id]/route.ts",
     "accounting/checks/[id]/post/route.ts",
     "accounting/checks/[id]/void/route.ts",
+  "accounting/checks/[id]/revise/route.ts",
     "accounting/transfers/route.ts",
     "accounting/transfers/[id]/route.ts",
     "accounting/transfers/[id]/post/route.ts",

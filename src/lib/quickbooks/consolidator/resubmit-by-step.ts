@@ -78,6 +78,10 @@ import { loadVendorCreditApplyFacts } from "../../purchase-orders/qb-vendor-cred
 import { buildTxnVoidQbxml, type VoidableTxnType } from "../txn-void-add";
 import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "../gl-documents/facts";
 import { isGlDocumentKind } from "../gl-documents/types";
+import { loadGlDocumentModFacts, loadGlDocumentModLink } from "../gl-documents/facts-mod";
+import { readDirectQueryStatus } from "../gl-documents/confirm";
+import { buildGlDocumentQueryQbxml, glQbQueryResponseTag } from "../gl-documents/qbxml-mod-builders";
+import { glQbRetTag } from "../gl-documents/qbxml-builders";
 import { SALES_SQL, WRITE, pipelineStatusIs } from "../pipeline-status";
 import type { GlQbTxnType } from "../gl-documents/qbxml-builders";
 // Confirmation write-back for these 4 steps (VendorCreditRet/BillPaymentRet/
@@ -1459,6 +1463,97 @@ export async function resubmitByStep(
           const message = addErr instanceof Error ? addErr.message : String(addErr);
           classifyQbError({ message });
           await failPipelineRow(row.id, message);
+        }
+        break;
+      }
+
+      // check-revise-20260918: CheckMod / CreditCardChargeMod de un cheque
+      // corregido en el lugar. Como `vendor_credit_mod`: el EditSequence se
+      // lee FRESCO de QuickBooks (lo bumpea cada edit/reconcile), los facts
+      // se re-evalúan con ese valor, y tras el submit el caso RETORNA — la
+      // confirmación la escribe el submitted-poller (regla dd4ce4f9: diferir,
+      // nunca esperar a otro scheduled job desde el despachador).
+      case "gl_document_mod": {
+        if (!row.reference_id || !isGlDocumentKind(row.reference_type)) {
+          await failPipelineRow(row.id, "gl_document_mod: missing reference_id or unknown reference_type");
+          break;
+        }
+        const modLink = await loadGlDocumentModLink(poolAsRawKnex(), row.reference_type, row.reference_id);
+        if (!modLink.exists) {
+          await failPipelineRow(row.id, `gl_document_mod: ${row.reference_type} ${row.reference_id} not found`);
+          break;
+        }
+        if (modLink.status === "voided") { // entity-status (gl_check.status)
+          // Anulado en el POS antes de que el Mod saliera: el void ya está encolado
+          // (o lo encola el confirm del Add). No hay nada que modificar.
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline SET status = '${WRITE.sales.skipped}', error = $2, updated_at = NOW() WHERE id = $1`,
+            [row.id, "document voided in the POS before its Mod reached QuickBooks"]
+          );
+          break;
+        }
+        if (!modLink.qb_txn_id || !modLink.qb_txn_type) {
+          await deferPipelineRow(row.id, "gl_document_mod: waiting on the add's qb_txn_id", QUIESCENCE_RECHECK_SECONDS);
+          break;
+        }
+        try {
+          const query = (await bridgeFetch("POST", "/api/sync/direct-query", {
+            qbxml: buildGlDocumentQueryQbxml(modLink.qb_txn_type, modLink.qb_txn_id),
+          })) as { operationId?: string; operation_id?: string } | undefined;
+          const queryOp = query?.operationId ?? query?.operation_id;
+          if (!queryOp) throw new Error(`gl_document_mod: ${modLink.qb_txn_type}Query returned no operationId`);
+          const raw = (await pollRawOperationResult(queryOp, (m) =>
+            logger.info(`${LOG_PREFIX} ${m}`)
+          )) as Record<string, unknown> | null;
+          const result = (raw?.result ?? raw) as Record<string, unknown> | undefined;
+          const qbxmlNode = (result?.QBXML ?? result) as Record<string, unknown> | undefined;
+          const msgsRs = (qbxmlNode?.QBXMLMsgsRs ?? qbxmlNode) as Record<string, unknown> | undefined;
+          const queryRs = msgsRs?.[glQbQueryResponseTag(modLink.qb_txn_type)] as Record<string, unknown> | undefined;
+          const { statusCode: qStatus, statusMessage: qMessage } = readDirectQueryStatus(queryRs);
+          if (qStatus !== null && qStatus !== "0") {
+            throw new Error(`gl_document_mod: QuickBooks rejected ${modLink.qb_txn_type}Query (${qStatus}): ${qMessage}`);
+          }
+          const retRaw = queryRs?.[glQbRetTag(modLink.qb_txn_type)];
+          const rets = (Array.isArray(retRaw) ? retRaw : retRaw ? [retRaw] : []) as Array<Record<string, unknown>>;
+          const match = rets.find((r) => String(r.TxnID ?? "") === modLink.qb_txn_id) ?? null;
+          const freshEditSequence = match && typeof match.EditSequence === "string" ? match.EditSequence : null;
+          if (!freshEditSequence) {
+            throw new Error(
+              `gl_document_mod: ${modLink.qb_txn_type}Query returned no exact TxnID/EditSequence match for ${modLink.qb_txn_id}`
+            );
+          }
+          const facts = await loadGlDocumentModFacts(poolAsRawKnex(), row.reference_type, row.reference_id, freshEditSequence);
+          if (!facts.ready) {
+            // Estructural: nada lo destraba solo. Terminal y visible; el Retry
+            // manual re-evalúa estos mismos facts.
+            await failPipelineRow(row.id, `gl_document_mod: ${facts.reason}`);
+            break;
+          }
+          const submitted = (await bridgeFetch(
+            "POST",
+            "/api/sync/direct-query",
+            { qbxml: facts.qbxml },
+            { idempotencyKey: `gl-document-mod:${row.id}:${freshEditSequence}` }
+          )) as { operationId?: string; operation_id?: string } | undefined;
+          const opId = submitted?.operationId ?? submitted?.operation_id;
+          if (!opId) throw new Error(`Bridge did not return an operationId for ${facts.qbTxnType}Mod`);
+          await getDbPool().query(
+            `UPDATE qb_order_pipeline
+                SET status = '${WRITE.sales.submitted}', bridge_op_id = $2, qb_txn_id = $3,
+                    payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object('qb_txn_type', $4::text, 'qb_txn_id', $3::text, 'edit_sequence', $5::text),
+                    submitted_at = NOW(), updated_at = NOW(), error = NULL
+              WHERE id = $1`,
+            [row.id, opId, facts.qbTxnId, facts.qbTxnType, freshEditSequence]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ gl_document_mod ${row.id} (${row.reference_type} ${facts.qbTxnType} ${facts.qbTxnId}) submitted op=${opId}`
+          );
+        } catch (modErr) {
+          const message = modErr instanceof Error ? modErr.message : String(modErr);
+          classifyQbError({ message });
+          // Un Mod rechazado o no enviado no crea nada en QuickBooks: puede
+          // reintentarse (a diferencia del Add).
+          await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
         }
         break;
       }

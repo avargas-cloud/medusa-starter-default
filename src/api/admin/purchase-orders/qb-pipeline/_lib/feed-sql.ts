@@ -48,6 +48,7 @@ import {
 export const LEDGER_FEED_STEPS = [
   "add_gl_document",
   "void_gl_document",
+  "mod_gl_document",
   "add_bill_payment",
   "void_bill_payment",
   "apply_vendor_credit",
@@ -710,6 +711,7 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
                                                            AS updated_at,
           doc.label                                      AS vendor_name,
           CASE WHEN qop.step = 'gl_document_add' THEN 'add_gl_document'
+               WHEN qop.step = 'gl_document_mod' THEN 'mod_gl_document'
                ELSE 'void_gl_document' END               AS step
         FROM qb_order_pipeline qop
         JOIN (
@@ -739,7 +741,7 @@ export const PURCHASE_PIPELINE_FEED_SQL = `
                  'Sales tax adjustment ' || a.period || ' - ' || a.type || ' · $' || (a.amount_cents::numeric / 100)::text
             FROM gl_sales_tax_adjustment a WHERE a.deleted_at IS NULL
         ) doc ON doc.id = qop.reference_id
-        WHERE qop.step IN ('gl_document_add', 'gl_document_void')
+        WHERE qop.step IN ('gl_document_add', 'gl_document_void', 'gl_document_mod')
 
         UNION ALL
 

@@ -82,6 +82,8 @@ export {
   voidBankCheck,
 } from "./documents/bank-check";
 export type { BankCheckDto, BankCheckLineDto, BankCheckWriteInput, CheckPayeeType } from "./documents/bank-check";
+export { reviseBankCheck, planMatchCarryOver } from "./documents/bank-check-revise";
+export type { ReviseBankCheckResult } from "./documents/bank-check-revise";
 export {
   createBankTransfer,
   getBankTransfer,

@@ -234,13 +234,58 @@ export function handle(
   if (method === "POST" && url.startsWith("/api/sync/direct-query")) {
     const qbxml = String(body.qbxml ?? "");
     const rqMatch = qbxml.match(/<([A-Za-z]+)AddRq>/);
-    const rqName = rqMatch?.[1] ?? "Unknown";
+    const queryMatch = qbxml.match(/<([A-Za-z]+)QueryRq>/);
+    const modMatch = qbxml.match(/<([A-Za-z]+)ModRq>/);
+    const rqName = rqMatch?.[1] ?? queryMatch?.[1] ?? modMatch?.[1] ?? "Unknown";
     const isVoid = /<TxnVoidRq>/.test(qbxml);
     const mode = state.directQueryMode ?? "ok";
     state.directQueryMode = undefined;
-    journal(state, { event: "direct_query", rqName, isVoid, mode, bytes: Buffer.byteLength(qbxml), qbxml });
+    journal(state, { event: "direct_query", rqName, isVoid, isQuery: !!queryMatch, isMod: !!modMatch, mode, bytes: Buffer.byteLength(qbxml), qbxml });
     if (mode === "unknown_outcome") {
       return mint({ status: "failed", error: "QB HRESULT 0x8004041C: session aborted before submitted state" });
+    }
+    // check-revise-20260918: `<Tipo>QueryRq` por TxnID → el EditSequence VIVO;
+    // `<Tipo>ModRq` → lock optimista igual que ReceivePaymentMod (3200 con
+    // EditSequence viejo), y en éxito bumpea el EditSequence y devuelve el Ret.
+    if (queryMatch && !rqMatch) {
+      const txnId = qbxml.match(/<TxnID>([^<]+)<\/TxnID>/)?.[1] ?? "";
+      const current = state.editSequences.get(txnId);
+      if (!current || mode === "reject") {
+        return mint({
+          status: "completed",
+          result: { QBXML: { QBXMLMsgsRs: { [`${rqName}QueryRs`]: { $: { statusCode: "3120", statusSeverity: "Error", statusMessage: `Object "${txnId}" specified in the request cannot be found.` } } } } },
+        });
+      }
+      return mint({
+        status: "completed",
+        result: { QBXML: { QBXMLMsgsRs: { [`${rqName}QueryRs`]: { $: { statusCode: "0", statusSeverity: "Info", statusMessage: "Status OK" }, [`${rqName}Ret`]: { TxnID: txnId, EditSequence: current } } } } },
+      });
+    }
+    if (modMatch && !rqMatch) {
+      const txnId = qbxml.match(/<TxnID>([^<]+)<\/TxnID>/)?.[1] ?? "";
+      const sent = qbxml.match(/<EditSequence>([^<]+)<\/EditSequence>/)?.[1] ?? "";
+      const current = state.editSequences.get(txnId);
+      const rsKey = `${rqName}ModRs`;
+      if (!current || mode === "reject") {
+        return mint({
+          status: "completed",
+          result: { QBXML: { QBXMLMsgsRs: { [rsKey]: { $: { statusCode: "3120", statusSeverity: "Error", statusMessage: `Object "${txnId}" specified in the request cannot be found.` } } } } },
+        });
+      }
+      if (sent !== current) {
+        return mint({
+          status: "completed",
+          result: { QBXML: { QBXMLMsgsRs: { [rsKey]: { $: { statusCode: "3200", statusSeverity: "Error", statusMessage: "The provided edit sequence is out-of-date." } } } } },
+        });
+      }
+      const bumped = nextEditSequence(state);
+      state.editSequences.set(txnId, bumped);
+      const lines = (qbxml.match(/<ExpenseLineMod>/g) ?? []).length;
+      journal(state, { event: "document_mod", rqName, txnId, editSequence: sent, newEditSequence: bumped, lines, clear: /<ClearExpenseLines>true</.test(qbxml) });
+      return mint({
+        status: "completed",
+        result: { QBXML: { QBXMLMsgsRs: { [rsKey]: { $: { statusCode: "0", statusSeverity: "Info", statusMessage: "Status OK" }, [`${rqName}Ret`]: { TxnID: txnId, EditSequence: bumped } } } } },
+      });
     }
     if (isVoid) {
       return mint({

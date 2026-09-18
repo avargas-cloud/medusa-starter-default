@@ -95,7 +95,7 @@ async function customerListId(db: GlDocumentDb, customerId: string): Promise<str
 
 // ── gl_check ────────────────────────────────────────────────────────────────
 
-interface CheckRow {
+export interface CheckRow {
   id: string;
   doc_number: string;
   number: string | null;
@@ -119,7 +119,24 @@ interface CheckLineRow {
   billable: boolean;
 }
 
-async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
+/**
+ * Forma QB de un `gl_check` resuelta desde la base (cuentas, payee, memo con
+ * el "Payee: X" cuando no hay ref, líneas con cliente). La comparten el Add
+ * (`checkFacts`) y el Mod (`facts-mod.ts`): UNA sola lectura de "cómo se ve este
+ * cheque en QuickBooks", así un revise manda exactamente lo que mandaría el Add.
+ */
+export type CheckQbShape =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      doc: CheckRow;
+      isCard: boolean;
+      payeeListId: string | null;
+      memo: string | null;
+      expenseLines: ExpenseLineInput[];
+    };
+
+export async function resolveCheckQbShape(db: GlDocumentDb, id: string): Promise<CheckQbShape> {
   const doc = one<CheckRow>(
     await db.raw(
       `SELECT id, doc_number, number, kind, day::text AS day, bank_account_list_id, payee_type, payee_id,
@@ -128,9 +145,8 @@ async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFa
       [id]
     )
   );
-  if (!doc) return structural("gl_check not found");
-  if (doc.qb_txn_id) return structural(`already in QuickBooks as ${doc.qb_txn_id}`);
-  if (doc.status !== "posted") return structural(`gl_check status is '${doc.status}', expected 'posted'`);
+  if (!doc) return { ok: false, reason: "gl_check not found" };
+  if (doc.status !== "posted") return { ok: false, reason: `gl_check status is '${doc.status}', expected 'posted'` };
 
   const lines = (
     await db.raw(
@@ -139,26 +155,28 @@ async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFa
       [id]
     )
   ).rows as CheckLineRow[];
-  if (lines.length === 0) return structural("gl_check has no lines");
+  if (lines.length === 0) return { ok: false, reason: "gl_check has no lines" };
 
   const accounts = await resolveAccounts(db, [doc.bank_account_list_id, ...lines.map((l) => l.account_list_id)]);
-  if (!accounts.ok) return structural(accounts.reason);
+  if (!accounts.ok) return { ok: false, reason: accounts.reason };
   const bankType = accounts.accounts.get(doc.bank_account_list_id)!.account_type;
   const isCard = bankType === "CreditCard";
-  if (!isCard && bankType !== "Bank") return structural(`bank account type '${bankType}' is neither Bank nor CreditCard`);
+  if (!isCard && bankType !== "Bank")
+    return { ok: false, reason: `bank account type '${bankType}' is neither Bank nor CreditCard` };
 
   let payeeListId: string | null = null;
   let memo = doc.memo?.trim() || null;
   if (doc.payee_type === "vendor") {
-    if (!doc.payee_id) return structural("vendor payee without vendor id");
+    if (!doc.payee_id) return { ok: false, reason: "vendor payee without vendor id" };
     payeeListId = await vendorListId(db, doc.payee_id);
-    if (!payeeListId) return structural(`vendor_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})`);
+    if (!payeeListId) return { ok: false, reason: `vendor_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})` };
   } else if (doc.payee_type === "customer" && doc.payee_id) {
     payeeListId = await customerListId(db, doc.payee_id);
   } else if (doc.payee_type === "other_name") {
-    if (!doc.payee_id) return structural("other_name payee without qb_other_name id");
+    if (!doc.payee_id) return { ok: false, reason: "other_name payee without qb_other_name id" };
     payeeListId = await otherNameListId(db, doc.payee_id);
-    if (!payeeListId) return structural(`other_name_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})`);
+    if (!payeeListId)
+      return { ok: false, reason: `other_name_not_in_quickbooks: ${doc.payee_name} (${doc.payee_id})` };
   }
   if (!payeeListId) {
     // Nombre libre (o cliente sin enlace): el payee viaja en el memo para que
@@ -177,6 +195,14 @@ async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFa
       billable: customer ? line.billable : undefined,
     });
   }
+  return { ok: true, doc, isCard, payeeListId, memo, expenseLines };
+}
+
+async function checkFacts(db: GlDocumentDb, id: string): Promise<GlDocumentAddFacts> {
+  const shape = await resolveCheckQbShape(db, id);
+  if (!shape.ok) return structural(shape.reason);
+  const { doc, isCard, payeeListId, memo, expenseLines } = shape;
+  if (doc.qb_txn_id) return structural(`already in QuickBooks as ${doc.qb_txn_id}`);
 
   try {
     const qbxml = isCard

@@ -28,6 +28,7 @@ import {
   buildJournalEntryAddQbxml,
 } from "../../lib/quickbooks/gl-documents/qbxml-builders";
 import { loadGlDocumentAddFacts } from "../../lib/quickbooks/gl-documents/facts";
+import { loadGlDocumentModFacts } from "../../lib/quickbooks/gl-documents/facts-mod";
 
 const SRC = path.join(process.cwd(), "src");
 const failures: string[] = [];
@@ -53,6 +54,7 @@ const codeLines = (src: string): string =>
 
 const ADD = "gl_document_add";
 const VOID = "gl_document_void";
+const MOD = "gl_document_mod";
 
 // ── 1 · Registro del step en cada lista que lo necesita ─────────────────────
 {
@@ -121,7 +123,7 @@ const VOID = "gl_document_void";
   check(purchaseList.includes(`"${ADD}"`) && purchaseList.includes(`"${VOID}"`), "sales-pipeline-scope.ts: los dos steps quedan fuera del Sales Pipeline");
 
   const feed = read("api/admin/purchase-orders/qb-pipeline/_lib/feed-sql.ts");
-  check(feed.includes(`WHERE qop.step IN ('${ADD}', '${VOID}')`), "feed-sql.ts: la UI del pipeline lista los dos steps");
+  check(feed.includes(`WHERE qop.step IN ('${ADD}', '${VOID}', '${MOD}')`), "feed-sql.ts: la UI del pipeline lista los tres steps");
   for (const table of ["gl_check", "gl_transfer", "gl_journal_entry", "bank_deposit"]) {
     check(feed.includes(`FROM ${table} `), `feed-sql.ts: el feed resuelve el documento en ${table}`);
   }
@@ -332,8 +334,134 @@ async function factsOtherName(): Promise<void> {
     JSON.stringify(facts).slice(0, 200));
 }
 
+
+// ── 7 · Revise en el lugar (check-revise-20260918): step gl_document_mod ────
+// Mismas disciplinas que §1: cada registro por NOMBRE, "llama a X" sin imports,
+// cortes por etiqueta. Y lo que un Mod tiene de distinto: EditSequence FRESCO
+// (query antes del Mod), diferir sin esperar, y un revise que reversa en el
+// día ORIGINAL y rechaza el cambio de tipo Bank↔CreditCard.
+{
+  const types = read("lib/quickbooks/pipeline/types.ts");
+  check(types.includes(`| "${MOD}"`), "pipeline/types.ts: PipelineStep incluye gl_document_mod");
+  const chain = read("lib/purchase-orders/qb-purchase-dependency-chain.ts");
+  check(chain.includes(`| "${MOD}"`), "qb-purchase-dependency-chain.ts: PurchaseQbStep incluye gl_document_mod");
+  const coalescible = chain.slice(chain.indexOf("COALESCIBLE_STEPS = new Set"), chain.indexOf("]);", chain.indexOf("COALESCIBLE_STEPS = new Set")));
+  check(coalescible.includes(`"${MOD}"`), "qb-purchase-dependency-chain.ts: un segundo revise REESCRIBE el Mod sin enviar (COALESCIBLE_STEPS)");
+  const statuses = chain.slice(chain.indexOf("COALESCIBLE_STATUSES = new Set"), chain.indexOf("]);", chain.indexOf("COALESCIBLE_STATUSES = new Set")));
+  check(statuses.includes("WRITE.sales.blocked") && statuses.includes("WRITE.sales.dispatchable"),
+    "qb-purchase-dependency-chain.ts: una fila `blocked` (Mod detrás de su Add) también es coalescible (vocabulario 09/17)");
+
+  const dispatch = read("lib/quickbooks/consolidator/dispatch-pass.ts");
+  check(dispatch.includes(`'${MOD}'`), "dispatch-pass.ts: gl_document_mod está en la whitelist del despachador");
+
+  const resubmit = read("lib/quickbooks/consolidator/resubmit-by-step.ts");
+  const modCase = resubmit.indexOf(`case "${MOD}": {`);
+  check(modCase > 0, "resubmit-by-step.ts: case gl_document_mod");
+  if (modCase > 0) {
+    const body = codeLines(resubmit.slice(modCase, resubmit.indexOf(`case "${VOID}": {`, modCase)));
+    check(body.includes("buildGlDocumentQueryQbxml(") && body.includes("freshEditSequence"),
+      "resubmit-by-step.ts (mod): consulta el documento y usa el EditSequence FRESCO, nunca el guardado");
+    check(body.includes("loadGlDocumentModFacts(poolAsRawKnex(), row.reference_type, row.reference_id, freshEditSequence)"),
+      "resubmit-by-step.ts (mod): los facts se re-evalúan al despachar con ese EditSequence");
+    check(body.includes("readDirectQueryStatus(queryRs)"), "resubmit-by-step.ts (mod): el status del QueryRs se lee bajo `$`");
+    check(body.includes("deferPipelineRow(") && body.includes("waiting on the add's qb_txn_id"),
+      "resubmit-by-step.ts (mod): sin TxnID se DIFIERE (Add en vuelo), no se falla");
+    check(!body.includes("pollUntilQbConfirmed("), "resubmit-by-step.ts (mod): tras el submit RETORNA — la confirmación es del poller (regla dd4ce4f9)");
+    check(body.includes("failOrRetryPipelineRow("), "resubmit-by-step.ts (mod): un Mod no enviado se reintenta (no crea nada en QB)");
+  }
+
+  const poll = read("lib/quickbooks/consolidator/poll-submitted-rows.ts");
+  const modBranch = poll.indexOf(`if (row.step === "${MOD}") {`);
+  check(modBranch > 0, "poll-submitted-rows.ts: rama de confirmación de gl_document_mod");
+  if (modBranch > 0) {
+    const body = codeLines(poll.slice(modBranch, poll.indexOf("gl-purchases-v2 §4: VendorCreditAdd", modBranch)));
+    check(body.includes("glQbModResponseTag(") && body.includes("readDirectQueryStatus(modRsNode)"),
+      "poll-submitted-rows.ts (mod): elige <Tipo>ModRs por payload.qb_txn_type y lee el status bajo `$`");
+    check(body.includes("handleGlDocumentModConfirmed("), "poll-submitted-rows.ts (mod): write-back del EditSequence nuevo al documento");
+  }
+  const confirm = codeLines(read("lib/quickbooks/gl-documents/confirm.ts"));
+  const modHandler = confirm.slice(confirm.indexOf("export async function handleGlDocumentModConfirmed"));
+  check(modHandler.includes("qb_edit_sequence = COALESCE(") && modHandler.includes("isDocumentVoidedInPos("),
+    "confirm.ts: el Mod confirmado guarda el EditSequence nuevo y encola el void si el doc se anuló en vuelo");
+
+  const gate = read("lib/quickbooks/pipeline/retry-gate.ts");
+  const gateList = gate.slice(gate.indexOf("ADD_CAPABLE_STEPS"), gate.indexOf("] as const", gate.indexOf("ADD_CAPABLE_STEPS")));
+  check(!gateList.includes(`"${MOD}"`), "retry-gate.ts: gl_document_mod NO está en ADD_CAPABLE_STEPS (un Mod no mintea)");
+
+  const scope = read("lib/quickbooks/pipeline/sales-pipeline-scope.ts");
+  for (const list of ["PURCHASE_PIPELINE_STEPS", "LEDGER_PIPELINE_STEPS"]) {
+    const slice = scope.slice(scope.indexOf(list), scope.indexOf("] as const", scope.indexOf(list)));
+    check(slice.includes(`"${MOD}"`), `sales-pipeline-scope.ts: ${list} incluye gl_document_mod`);
+  }
+  const feed = read("api/admin/purchase-orders/qb-pipeline/_lib/feed-sql.ts");
+  check(feed.includes(`WHEN qop.step = '${MOD}' THEN 'mod_gl_document'`) && feed.includes('"mod_gl_document",'),
+    "feed-sql.ts: el Mod se etiqueta mod_gl_document en la pestaña Ledger");
+  for (const route of ["retry", "mark-fixed"]) {
+    check(read(`api/admin/purchase-orders/qb-pipeline/[id]/${route}/route.ts`).includes(`"${MOD}",`),
+      `qb-pipeline/[id]/${route}: reconoce __gl_document_mod`);
+  }
+  const links = read("lib/ledger/qb-import/pos-links.ts");
+  check(links.slice(links.indexOf("GL_POSTED_PIPELINE_STEPS"), links.indexOf("] as const")).includes(`"${MOD}"`),
+    "pos-links.ts: gl_document_mod cuenta como 'conocido por el POS'");
+
+  // El revise mismo.
+  const revise = codeLines(read("lib/ledger/documents/bank-check-revise.ts"));
+  check(revise.includes('enqueueGlDocumentMod(clientInTransactionAsKnex(client), "gl_check"'),
+    "bank-check-revise.ts: encola el Mod en la MISMA transacción del re-post");
+  check(/reverseDocumentJournal\(client,\s*\{[^}]*day:\s*header\.day/.test(revise),
+    "bank-check-revise.ts: la reversa se fecha en el DÍA ORIGINAL (el mes queda neto; un extracto cerrado la rechaza)");
+  check(revise.includes('invalid("revise_type_change"') && revise.includes('invalid("statement_closed"') && revise.includes('invalid("entry_matched"'),
+    "bank-check-revise.ts: rechazos con nombre — tipo Bank↔CreditCard, extracto cerrado, match vivo no trasladable");
+  check(revise.includes("postCheckJournal(") && revise.includes("writeHeaderAndLines("),
+    "bank-check-revise.ts: reescribe header+líneas y re-postea con el MISMO builder del post inicial");
+  const route = read("api/admin/accounting/checks/[id]/revise/route.ts");
+  check(codeLines(route).includes("reviseBankCheck(") && codeLines(route).includes("assertAccounting(") && route.includes("REASON_SCHEMA"),
+    "checks/[id]/revise: llama a la lib con motivo obligatorio, bajo assertAccounting");
+  check(!route.includes("enqueueGlDocument"), "checks/[id]/revise: la ruta NO encola por su cuenta");
+  const dir = path.join(SRC, "migrations");
+  const file = fs.readdirSync(dir).find((f) => f.endsWith("-GlCheckRevision.ts"));
+  check(!!file && /^Migration\d{13}1-GlCheckRevision\.ts$/.test(file), "migrations: existe Migration…1-GlCheckRevision.ts (sufijo distintivo, nunca 000000)");
+  if (file) {
+    const up = fs.readFileSync(path.join(dir, file), "utf8").replace(/down\([\s\S]*$/, "");
+    check(/ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 0/.test(up) && !/DROP COLUMN|ALTER COLUMN/.test(up),
+      "migrations: GlCheckRevision es expand-only (revision default 0, resto nullable)");
+  }
+}
+
+async function modFactsFailClosed(): Promise<void> {
+  // Comportamiento: un cheque que QuickBooks tiene como Check y que ahora paga
+  // con tarjeta NO construye un Mod (revise_type_change), y con la forma intacta
+  // construye un CheckMod con el EditSequence dado.
+  const rows = {
+    check: { id: "gchk_stub", doc_number: "CHK-0941", number: null, kind: "expense", day: "2026-09-01",
+      bank_account_list_id: "80000006-1", payee_type: "other", payee_id: null, payee_name: "University Of Mi",
+      memo: null, to_be_printed: false, status: "posted", qb_txn_id: "1C8E6D-1", qb_txn_type: "Check", qb_edit_sequence: "5", revision: 1 },
+    bankType: "Bank",
+  };
+  const stub = {
+    raw: async (sql: string): Promise<{ rows: unknown[] }> => {
+      if (sql.includes("FROM gl_check WHERE")) return { rows: [rows.check] };
+      if (sql.includes("FROM gl_check_line")) return { rows: [{ account_list_id: "80000015-1", amount_cents: "6000", memo: "MED*UNIVERSITY", customer_id: null, billable: false }] };
+      if (sql.includes("FROM qb_account")) return { rows: [{ qb_list_id: "80000006-1", account_type: rows.bankType }, { qb_list_id: "80000015-1", account_type: "Expense" }] };
+      return { rows: [] };
+    },
+  };
+  const ready = await loadGlDocumentModFacts(stub, "gl_check", "gchk_stub", "7");
+  check(ready.ready && ready.qbxml.includes("<CheckModRq>") && ready.qbxml.includes("<EditSequence>7</EditSequence>") && ready.qbxml.includes("<Memo>Payee: University Of Mi</Memo>"),
+    "facts-mod: forma intacta → CheckMod con el EditSequence recibido y el payee libre en el memo", JSON.stringify(ready).slice(0, 200));
+  rows.bankType = "CreditCard";
+  const changed = await loadGlDocumentModFacts(stub, "gl_check", "gchk_stub", "7");
+  check(!changed.ready && /revise_type_change/.test(changed.reason),
+    "facts-mod: QB tiene un Check y el documento ahora es tarjeta → rechazo estructural revise_type_change", JSON.stringify(changed).slice(0, 200));
+  const noSeq = await loadGlDocumentModFacts(stub, "gl_check", "gchk_stub", "");
+  check(!noSeq.ready && /EditSequence/.test(noSeq.reason), "facts-mod: sin EditSequence no hay Mod");
+  const transfer = await loadGlDocumentModFacts(stub, "gl_transfer", "gtr_x", "7");
+  check(!transfer.ready && /void \+ new document/.test(transfer.reason), "facts-mod: un transfer no se corrige en el lugar (void + nuevo)");
+}
+
 factsFailClosed()
   .then(factsOtherName)
+  .then(modFactsFailClosed)
   .then(() => {
     for (const n of notes) console.log(n);
     if (failures.length) {

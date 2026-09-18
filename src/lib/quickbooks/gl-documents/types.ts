@@ -12,7 +12,12 @@ import type { GlQbTxnType } from "./qbxml-builders";
 
 export const GL_DOCUMENT_ADD_STEP = "gl_document_add" as const;
 export const GL_DOCUMENT_VOID_STEP = "gl_document_void" as const;
-export type GlDocumentStep = typeof GL_DOCUMENT_ADD_STEP | typeof GL_DOCUMENT_VOID_STEP;
+/** check-revise-20260918: corrección en el lugar → `<Tipo>ModRq` sobre el TxnID vivo (hoy sólo gl_check). */
+export const GL_DOCUMENT_MOD_STEP = "gl_document_mod" as const;
+export type GlDocumentStep =
+  | typeof GL_DOCUMENT_ADD_STEP
+  | typeof GL_DOCUMENT_VOID_STEP
+  | typeof GL_DOCUMENT_MOD_STEP;
 
 /** `reference_type` de la fila del pipeline = la TABLA del documento. */
 export const GL_DOCUMENT_KINDS = [
@@ -49,6 +54,25 @@ export interface GlDocumentVoidPayload {
   qb_txn_type: GlQbTxnType;
   qb_txn_id: string;
   qbxml: string;
+}
+
+/**
+ * Lo que viaja en `payload` de una fila `gl_document_mod`. El QBXML NO se
+ * persiste: el EditSequence lo bumpea QuickBooks en cada edit/reconcile, así
+ * que el despachador consulta el documento (`<Tipo>QueryRq`) y arma el Mod
+ * con el valor fresco en ese momento (misma política que `vendor_credit_mod`).
+ * `revision` es la del documento al encolar: una revisión posterior encola su
+ * propia fila y la anterior se marca `skipped` (superseded).
+ */
+export interface GlDocumentModPayload {
+  kind: GlDocumentKind;
+  document_id: string;
+  qb_txn_type: GlQbTxnType;
+  qb_txn_id: string;
+  revision: number;
+  reason: string | null;
+  /** Escrito por el despachador al enviar (auditoría del 3200). */
+  edit_sequence?: string;
 }
 
 /** Columnas espejo que la migración `GlDocumentsQbLink` agregó a las 4 tablas. */

@@ -54,6 +54,7 @@ export const GL_POSTED_PIPELINE_STEPS = [
   // incluidos) y en la columna espejo de su tabla (vivos).
   "gl_document_add",
   "gl_document_void",
+  "gl_document_mod",
 ] as const;
 
 const KNOWN_TXN_ID_SQL = `

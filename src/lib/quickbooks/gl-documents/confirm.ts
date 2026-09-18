@@ -11,6 +11,10 @@
  *
  * VOID confirmado → se limpian las columnas espejo. El TxnID anulado queda en
  * la fila del pipeline (y así lo sigue reconociendo el importador).
+ *
+ * MOD confirmado (check-revise-20260918) → `qb_edit_sequence` nuevo (QuickBooks
+ * lo bumpea en cada Mod) y `qb_synced_at`; el TxnID no cambia. Igual que el
+ * Add, si el documento se anuló mientras el Mod volaba, el void se encola acá.
  */
 
 import type { PurchaseDependencyKnex } from "../../purchase-orders/qb-purchase-dependency-chain";
@@ -115,4 +119,22 @@ export async function isDocumentVoidedInPos(
   const result = await db.raw(`SELECT status FROM ${kind} WHERE id = ? AND deleted_at IS NULL`, [documentId]);
   const row = result.rows[0] as { status: string } | undefined;
   return row?.status === "voided"; // entity-status
+}
+
+export async function handleGlDocumentModConfirmed(
+  db: PurchaseDependencyKnex,
+  kind: GlDocumentKind,
+  documentId: string,
+  ret: GlDocumentRet
+): Promise<{ confirmed: true; voidQueued: GlDocumentEnqueueResult | null }> {
+  await db.raw(
+    `UPDATE ${kind}
+        SET qb_edit_sequence = COALESCE(?, qb_edit_sequence), qb_synced_at = NOW(), updated_at = NOW()
+      WHERE id = ? AND deleted_at IS NULL`,
+    [ret.EditSequence ?? null, documentId]
+  );
+  const voidQueued = (await isDocumentVoidedInPos(db, kind, documentId))
+    ? await enqueueGlDocumentVoid(db, kind, documentId)
+    : null;
+  return { confirmed: true, voidQueued };
 }

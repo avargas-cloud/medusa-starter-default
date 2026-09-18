@@ -29,6 +29,7 @@ export type PurchaseQbStep =
   // cadena (add → void en serie). Ver lib/quickbooks/gl-documents/enqueue.ts.
   | "gl_document_add"
   | "gl_document_void"
+  | "gl_document_mod"
   // qb-import-void-ui-20260915: el TxnID importado es raíz de su propia cadena.
   | "qb_import_void";
 
@@ -98,6 +99,9 @@ interface TailRow extends PipelineRow {
 const COALESCIBLE_STEPS = new Set<PurchaseQbStep>([
   "purchase_order_mod",
   "item_receipt_mod",
+  // check-revise-20260918: un segundo revise del mismo cheque antes de que el
+  // primer Mod salga REESCRIBE esa fila (los facts se re-evalúan al despachar).
+  "gl_document_mod",
 ]);
 
 /**
@@ -111,7 +115,14 @@ const COALESCIBLE_STEPS = new Set<PurchaseQbStep>([
  * readable. `processing` and `submitted` are in flight and are never touched:
  * their outcome is already on its way and has to be observed, not overwritten.
  */
-const COALESCIBLE_STATUSES = new Set(["pending", "waiting", "failed"]);
+// Vocabulario 2026-09-17 (`pipeline-status.ts`, SEALED): `waiting` = despachable,
+// `blocked` = detrás de un predecesor. Una fila `blocked` (un Mod encolado detrás
+// de su propio Add en vuelo) también se reescribe.
+const COALESCIBLE_STATUSES = new Set<string>([
+  WRITE.sales.dispatchable,
+  WRITE.sales.blocked,
+  WRITE.sales.failed,
+]);
 
 /**
  * Appends one immutable operation to a PO-scoped QuickBooks dependency chain.

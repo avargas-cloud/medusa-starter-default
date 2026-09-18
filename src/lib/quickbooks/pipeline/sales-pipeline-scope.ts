@@ -34,6 +34,7 @@ export const PURCHASE_PIPELINE_STEPS = [
   // pestaña de compras (feed-sql.ts), fuera del Sales Pipeline.
   "gl_document_add",
   "gl_document_void",
+  "gl_document_mod",
   // qb-import-void-ui-20260915: TxnVoid de un doc importado — misma pestaña.
   "qb_import_void",
 ] as const;
@@ -69,6 +70,8 @@ export const BILL_PAYMENT_STEPS = ["vendor_bill_payment_check"] as const;
 export const LEDGER_PIPELINE_STEPS = [
   "gl_document_add",
   "gl_document_void",
+  // check-revise-20260918: CheckMod / CreditCardChargeMod de un cheque corregido.
+  "gl_document_mod",
   "bill_payment_add",
   "bill_payment_void",
   "vendor_credit_apply",

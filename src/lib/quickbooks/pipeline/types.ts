@@ -76,6 +76,7 @@ export type PipelineStep =
   // lib/quickbooks/gl-documents/.
   | "gl_document_add"
   | "gl_document_void"
+  | "gl_document_mod"
   // qb-import-void-ui-20260915: TxnVoid de un documento IMPORTADO de QuickBooks
   // (`bank_journal_entry` source_kind='qb_import', reference_id = TxnID).
   // Sin ADD: el POS nunca lo emitió. Ver lib/ledger/qb-import/void.ts.

@@ -34,11 +34,14 @@ import { isQbSyncEnabled } from "../sync-enabled";
 import { SALES_SQL, WRITE } from "../pipeline-status";
 import { buildTxnVoidQbxml } from "../txn-void-add";
 import { loadGlDocumentAddFacts, loadGlDocumentQbLink } from "./facts";
+import { loadGlDocumentModFacts, loadGlDocumentModLink } from "./facts-mod";
 import {
   GL_DOCUMENT_ADD_STEP,
+  GL_DOCUMENT_MOD_STEP,
   GL_DOCUMENT_VOID_STEP,
   type GlDocumentAddPayload,
   type GlDocumentKind,
+  type GlDocumentModPayload,
   type GlDocumentVoidPayload,
 } from "./types";
 
@@ -189,4 +192,98 @@ export async function enqueueGlDocumentVoid(
   });
   if (!operation) return { queued: false, reason: "QB_SYNC_ENABLED=false" };
   return { queued: true, pipelineRowId: operation.id, status: operation.status };
+}
+
+/**
+ * check-revise-20260918 — Mod de un documento corregido en el lugar.
+ *
+ * Tres estados del Add deciden qué se encola:
+ *   · Add confirmado (hay TxnID, incluidos los adoptados) → fila `gl_document_mod`
+ *     detrás del Add en la cadena del documento. Un segundo revise antes de que
+ *     salga REESCRIBE esa fila (`COALESCIBLE_STEPS`), nunca apila dos viajes.
+ *   · Add sin enviar (waiting/blocked/failed/error) → se marca `skipped`
+ *     ("superseded by revision N") y se encola un Add NUEVO con los facts
+ *     actuales: QuickBooks todavía no tiene el documento, así que lo que viaja
+ *     es la versión corregida, no un Mod de algo que no existe.
+ *   · Add en vuelo (processing/submitted) → fila `gl_document_mod` `blocked`
+ *     detrás del Add; el despachador la difiere hasta que el Add confirme y
+ *     escriba el TxnID (mismo trato que el void).
+ * Estructural (tipo no modificable, cuenta `pos_`, vendor sin ListID) → fila
+ * `failed` con motivo, visible en el pipeline.
+ */
+export async function enqueueGlDocumentMod(
+  db: PurchaseDependencyKnex,
+  kind: GlDocumentKind,
+  documentId: string
+): Promise<GlDocumentEnqueueResult> {
+  if (!isQbSyncEnabled()) return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+
+  const link = await loadGlDocumentModLink(db, kind, documentId);
+  if (!link.exists) return { queued: false, reason: `${kind} not found` };
+
+  if (!link.qb_txn_id) {
+    const unsent = await findAddRow(db, kind, documentId, LIVE_UNSENT);
+    if (unsent) {
+      await db.raw(
+        `UPDATE qb_order_pipeline
+            SET status = '${WRITE.sales.skipped}', error = ?, updated_at = NOW()
+          WHERE id = ?::uuid AND status = ANY(?::text[])`,
+        [`superseded by revision ${link.revision} before the Add reached QuickBooks`, unsent.id, [...LIVE_UNSENT]]
+      );
+      const fresh = await enqueueGlDocumentAdd(db, kind, documentId);
+      // La cadena del documento encola el Add nuevo DETRÁS del que acabamos de
+      // saltear, y el wake pass sólo libera a los que esperan un `synced`/`fixed`
+      // (`SALES_SQL.done`): detrás de un `skipped` quedaría `blocked` para siempre.
+      if (fresh.queued && fresh.status === WRITE.sales.blocked) {
+        await db.raw(
+          `UPDATE qb_order_pipeline w SET status = '${WRITE.sales.dispatchable}', updated_at = NOW()
+             FROM qb_order_pipeline d
+            WHERE w.id = ?::uuid AND w.status = '${WRITE.sales.blocked}' AND w.depends_on = d.id
+              AND d.status = '${WRITE.sales.skipped}'`,
+          [fresh.pipelineRowId]
+        );
+        return { ...fresh, status: WRITE.sales.dispatchable };
+      }
+      return fresh;
+    }
+    // Sin fila viva ni TxnID: o el Add está en vuelo (se encola el Mod detrás y el
+    // despachador lo difiere), o el documento nunca viajó (facts lo dirán).
+  }
+
+  const reasonRow = await db.raw(`SELECT revision_reason FROM ${kind} WHERE id = ? AND deleted_at IS NULL`, [documentId]);
+  const reason = ((reasonRow.rows[0] as { revision_reason?: string | null } | undefined)?.revision_reason ?? null);
+  const payload: GlDocumentModPayload = {
+    kind,
+    document_id: documentId,
+    qb_txn_type: link.qb_txn_type ?? "Check",
+    qb_txn_id: link.qb_txn_id ?? "",
+    revision: link.revision,
+    reason,
+  };
+  const operation = await enqueuePurchaseQbOperation(db, {
+    purchaseOrderId: documentId,
+    referenceId: documentId,
+    referenceType: kind,
+    step: GL_DOCUMENT_MOD_STEP,
+    payload: payload as unknown as Record<string, unknown>,
+    qbTxnId: link.qb_txn_id ?? undefined,
+    operationKey: purchaseOperationKey(GL_DOCUMENT_MOD_STEP, documentId, payload as unknown as Record<string, unknown>),
+  });
+  if (!operation) return { queued: false, reason: "QB_SYNC_ENABLED=false" };
+
+  if (!link.qb_txn_id) {
+    // Add en vuelo: la fila espera su TxnID. Los facts se evalúan al despachar.
+    return { queued: true, pipelineRowId: operation.id, status: operation.status };
+  }
+  // Con TxnID se evalúan YA los facts estructurales (con el EditSequence conocido,
+  // sólo para armar; el despachador vuelve a leer uno fresco).
+  const facts = await loadGlDocumentModFacts(db, kind, documentId, link.qb_edit_sequence ?? "0");
+  if (facts.ready) return { queued: true, pipelineRowId: operation.id, status: operation.status };
+  await db.raw(
+    `UPDATE qb_order_pipeline
+        SET status = '${WRITE.sales.failed}', error = ?, failed_at = NOW(), updated_at = NOW()
+      WHERE id = ?::uuid AND status IN (${SALES_SQL.dispatchable}, ${SALES_SQL.blocked})`,
+    [facts.reason, operation.id]
+  );
+  return { queued: true, pipelineRowId: operation.id, status: WRITE.sales.failed };
 }

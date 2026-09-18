@@ -175,6 +175,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       // gl-docs-to-qb-20260914: the document table is the row's reference_type.
       "gl_document_add",
       "gl_document_void",
+      "gl_document_mod",
       // qb-import-void-ui-20260915: no document table — the TxnID IS the reference.
       "qb_import_void",
     ] as const

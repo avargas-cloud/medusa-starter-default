@@ -21,6 +21,11 @@
  *  14. other_name (qb-other-names-picker-20260916): línea de JE → EntityRef con el
  *      ListID de qb_other_name · cheque → PayeeEntityRef · nombre desde la tabla ·
  *      negativas (A/R estructural, sin id 400, id desconocido 400)
+ *  15. revise en el lugar (check-revise-20260918): reversa en el día original + re-post
+ *      + CheckModRq con EditSequence FRESCO (el guardado se corrompe a propósito) ·
+ *      dos revises seguidos → un solo Mod (coalesce) · Bank↔Card 400 · mes cerrado
+ *      409 · Add sin enviar → superseded + Add nuevo · Add en vuelo → Mod diferido ·
+ *      rechazo de QB → failed sin tocar el link · draft 409 · sin motivo 400
  *
  * Los pasos de dispatch/confirm llaman a las funciones REALES del
  * consolidator (`resubmitByStep`, `pollSubmittedRows`) contra el stub bridge
@@ -371,6 +376,10 @@ async function main(): Promise<void> {
       }, idem());
       const depositId: string = save.json.deposit?.id ?? "";
       assert(save.status === 200 && !!depositId, "deposit saved (draft) with a payment line AND a manual UF line", `HTTP ${save.status} ${JSON.stringify(save.json).slice(0, 160)}`);
+      // Un save fallido ya cuenta como ❌; el resto de la sección leería `undefined` y
+      // tumbaría la corrida entera (BANKING_DEPOSIT_SOURCE_STALE en el clon del 09/18).
+      if (!depositId) console.log("   [skip] rest of §5 skipped: the deposit could not be saved in this clone");
+      if (depositId) {
       assert(/^DEP-\d{4}$/.test(String(save.json.deposit?.number)) && save.json.deposit?.account_list_id === PETTY, "deposit carries its DEP-#### number and the deposit-to ListID", `${save.json.deposit?.number} ${save.json.deposit?.account_list_id}`);
       const ready = await api("POST", `/admin/banking/deposits/${depositId}/ready`, { expected_revision: save.json.deposit.revision, expected_source_hash: save.json.deposit.source_hash }, idem());
       assert(ready.status === 200 && ready.json.deposit?.status === "ready", "deposit ready", `HTTP ${ready.status} ${JSON.stringify(ready.json).slice(0, 120)}`);
@@ -414,6 +423,7 @@ async function main(): Promise<void> {
       const cur = await api("GET", `/admin/banking/deposits/${depositId}`);
       const dvoid = await api("POST", `/admin/banking/deposits/${depositId}/void`, { expected_revision: cur.json.deposit.revision, reason: `${PREFIX}void` }, idem());
       assert(dvoid.status === 200 && (await rowsFor(client, depositId)).length === 2, "voiding the reversed deposit enqueues nothing new", `HTTP ${dvoid.status}`);
+      }
     }
 
     // ── 6 · void de un cheque confirmado ───────────────────────────────────
@@ -581,6 +591,178 @@ async function main(): Promise<void> {
     });
     assert(badId.status === 400 && /other_name_not_active/.test(JSON.stringify(badId.json)), "other_name with an unknown id → 400 other_name_not_active", `${badId.status}`);
 
+    // ── 15 · revise en el lugar (check-revise-20260918) ────────────────────
+    console.log("\n── 15. revise a POSTED check in place → reversal + re-post + CheckModRq");
+    const OTHER_EXPENSE = (await client.query<{ qb_list_id: string }>(
+      `SELECT qb_list_id FROM qb_account WHERE account_type = 'Expense' AND is_active AND deleted_at IS NULL AND qb_list_id <> $1 AND qb_list_id NOT LIKE 'pos_%' ORDER BY qb_list_id LIMIT 1`, [BANK_FEES]
+    )).rows[0]!.qb_list_id;
+    const entriesOf = async (id: string) => (await client.query<{ id: string; kind: string; day: string; reverses_entry_id: string | null; amount_cents: string }>(
+      `SELECT id, kind, day::text AS day, reverses_entry_id, amount_cents::text FROM bank_journal_entry WHERE source_kind='bank_check' AND source_id=$1 ORDER BY created_at`, [id]
+    )).rows;
+    const linesOf = async (entryId: string) => (await client.query<{ account_list_id: string; debit_cents: string; credit_cents: string }>(
+      `SELECT account_list_id, debit_cents::text, credit_cents::text FROM bank_journal_line WHERE entry_id=$1 ORDER BY account_list_id`, [entryId]
+    )).rows;
+
+    // 15a · cheque propio, confirmado en QB por el Add: cambiar cuenta, monto, memo y día.
+    const c15a = await api("POST", "/admin/accounting/checks", {
+      day: "2026-09-10", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber",
+      memo: `${PREFIX}uber rev`, lines: [{ account_list_id: BANK_FEES, amount_cents: 615, memo: "ride" }], post: true,
+    });
+    const check15a = c15a.json.check.id as string;
+    const add15a = (await rowsFor(client, check15a, "gl_document_add"))[0]!;
+    const rAdd15a = await dispatchAndConfirm(client, add15a.id);
+    assert(rAdd15a.status === WRITE.sales.synced, "fixture: a fresh check confirmed in QuickBooks", rAdd15a.status);
+    txnIdsSeen.push(rAdd15a.qb_txn_id!);
+    const before15 = await entriesOf(check15a);
+    const linkBefore = await client.query<{ qb_txn_id: string; qb_edit_sequence: string | null; revision: number }>(`SELECT qb_txn_id, qb_edit_sequence, revision FROM gl_check WHERE id=$1`, [check15a]);
+    // El EditSequence guardado se corrompe A PROPÓSITO: el despachador tiene que leer el fresco de QB.
+    await client.query(`UPDATE gl_check SET qb_edit_sequence='stale-1' WHERE id=$1`, [check15a]);
+    const rev1 = await api("POST", `/admin/accounting/checks/${check15a}/revise`, {
+      day: "2026-09-11", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber Technologies",
+      memo: `${PREFIX}uber · corregido`, lines: [{ account_list_id: OTHER_EXPENSE, amount_cents: 715, memo: "ride (fixed)" }],
+      reason: "wrong account and amount",
+    });
+    assert(rev1.status === 200 && rev1.json.check?.status === "posted" && rev1.json.check?.revision === 1, "revise → 200, still posted, revision 1", `HTTP ${rev1.status} ${JSON.stringify(rev1.json).slice(0, 160)}`);
+    assert(rev1.json.check?.doc_number === c15a.json.check.doc_number && rev1.json.check?.total_cents === 715 && rev1.json.check?.payee_name === "Uber Technologies" && rev1.json.check?.day === "2026-09-11", "same CHK number; header + lines rewritten");
+    assert(rev1.json.check?.revised_by && rev1.json.check?.revision_reason === "wrong account and amount", "revised_by / revision_reason persisted");
+    const after15 = await entriesOf(check15a);
+    const reversal = after15.find((e) => e.kind === "reversal");
+    const active = after15.filter((e) => e.kind === "document" && !after15.some((r) => r.reverses_entry_id === e.id));
+    assert(before15.length === 1 && after15.length === 3 && !!reversal && reversal.reverses_entry_id === before15[0]!.id, "ledger: original + reversal + new document entry (append-only)", JSON.stringify(after15));
+    assert(reversal?.day === "2026-09-10", "the reversal is dated on the ORIGINAL day (2026-09-10), not today", reversal?.day);
+    assert(active.length === 1 && active[0]!.day === "2026-09-11" && active[0]!.id === rev1.json.entry_id, "exactly one active entry, on the new day, = response.entry_id");
+    const newLines = await linesOf(active[0]!.id);
+    assert(newLines.some((l) => l.account_list_id === OTHER_EXPENSE && l.debit_cents === "715") && newLines.some((l) => l.account_list_id === CHASE && l.credit_cents === "715"), "new entry lines: Dr new expense 7.15 / Cr Chase 7.15", JSON.stringify(newLines));
+    const modRows = await rowsFor(client, check15a, "gl_document_mod");
+    assert(modRows.length === 1 && [WRITE.sales.dispatchable, WRITE.sales.blocked].includes(modRows[0]!.status as never) && modRows[0]!.payload?.revision === 1, "one gl_document_mod row queued with revision 1", JSON.stringify(modRows.map((r) => [r.status, r.payload?.revision])));
+    const linkMid = await client.query<{ qb_txn_id: string; qb_edit_sequence: string }>(`SELECT qb_txn_id, qb_edit_sequence FROM gl_check WHERE id=$1`, [check15a]);
+    assert(linkMid.rows[0]!.qb_txn_id === linkBefore.rows[0]!.qb_txn_id, "revise never touches qb_txn_id");
+    const rm1 = await dispatchAndConfirm(client, modRows[0]!.id);
+    assert(rm1.status === WRITE.sales.synced && rm1.qb_txn_id === linkBefore.rows[0]!.qb_txn_id, "dispatch → CheckQuery (fresh EditSequence) → CheckMod → confirmed on the SAME TxnID", `${rm1.status} ${rm1.qb_txn_id} ${rm1.error ?? ""}`);
+    const jq = lastJournal("Check");
+    const journalAll = require("fs").readFileSync(JOURNAL, "utf8").trim().split("\n").map((l: string) => JSON.parse(l));
+    const modEvt = [...journalAll].reverse().find((l: any) => l.event === "document_mod");
+    const queryEvt = [...journalAll].reverse().find((l: any) => l.event === "direct_query" && l.isQuery && l.rqName === "Check");
+    assert(!!queryEvt && !!modEvt && modEvt.editSequence !== "stale-1" && modEvt.clear === true && modEvt.lines === 1, "bridge saw CheckQueryRq then CheckModRq with the FRESH EditSequence, ClearExpenseLines + 1 line", JSON.stringify({ q: !!queryEvt, mod: modEvt }));
+    assert(!!jq && jq.qbxml.includes("<CheckModRq>") && jq.qbxml.includes(`<ListID>${OTHER_EXPENSE}</ListID>`) && jq.qbxml.includes("<Amount>7.15</Amount>") && jq.qbxml.includes("<TxnDate>2026-09-11</TxnDate>") && jq.qbxml.includes("<Memo>Payee: Uber Technologies - e2e_gldq_uber - corregido</Memo>"), "CheckMod carries the corrected account, amount, date and payee memo", jq?.qbxml?.slice(0, 300));
+    const linkAfter = await client.query<{ qb_edit_sequence: string; qb_synced_at: string | null }>(`SELECT qb_edit_sequence, qb_synced_at::text FROM gl_check WHERE id=$1`, [check15a]);
+    assert(linkAfter.rows[0]!.qb_edit_sequence === modEvt?.newEditSequence && !!linkAfter.rows[0]!.qb_synced_at, "confirm wrote the NEW EditSequence back to gl_check", JSON.stringify(linkAfter.rows[0]));
+
+    // 15b · segundo revise antes de despachar → una sola fila (coalesce), revision 2.
+    const rv2 = await api("POST", `/admin/accounting/checks/${check15a}/revise`, {
+      day: "2026-09-11", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber Technologies",
+      memo: `${PREFIX}uber · corregido 2`, lines: [{ account_list_id: OTHER_EXPENSE, amount_cents: 715, memo: "ride (fixed twice)" }], reason: "memo typo",
+    });
+    const rv3 = await api("POST", `/admin/accounting/checks/${check15a}/revise`, {
+      day: "2026-09-11", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber Technologies",
+      memo: `${PREFIX}uber · corregido 3`, lines: [{ account_list_id: OTHER_EXPENSE, amount_cents: 715, memo: "ride (fixed thrice)" }], reason: "memo typo again",
+    });
+    assert(rv2.status === 200 && rv3.status === 200 && rv3.json.check?.revision === 3, "two more revisions → revision 3", `${rv2.status} ${rv3.status} ${rv3.json.check?.revision}`);
+    const modRows2 = (await rowsFor(client, check15a, "gl_document_mod")).filter((r) => r.status !== WRITE.sales.synced);
+    assert(modRows2.length === 1 && modRows2[0]!.payload?.revision === 3, "the second unsent revise REWROTE the pending Mod row (one live row, payload.revision 3)", JSON.stringify(modRows2.map((r) => [r.status, r.payload?.revision])));
+    const rm3 = await dispatchAndConfirm(client, modRows2[0]!.id);
+    assert(rm3.status === WRITE.sales.synced, "coalesced Mod dispatches and confirms", `${rm3.status} ${rm3.error ?? ""}`);
+    assert((await entriesOf(check15a)).length === 7, "ledger has original + 3×(reversal + repost) = 7 entries");
+
+    // 15c · Bank → CreditCard rechazado ANTES de escribir nada.
+    const entriesBeforeType = (await entriesOf(check15a)).length;
+    const rvType = await api("POST", `/admin/accounting/checks/${check15a}/revise`, {
+      day: "2026-09-11", bank_account_list_id: VISA_7704, number: null, payee_type: "other", payee_name: "Uber Technologies",
+      memo: `${PREFIX}uber · card`, lines: [{ account_list_id: OTHER_EXPENSE, amount_cents: 715 }], reason: "paid by card actually",
+    });
+    assert(rvType.status === 400 && rvType.json.code === "GL_SOURCE_INVALID" && rvType.json.details?.reason === "revise_type_change", "Bank → CreditCard → 400 revise_type_change", `${rvType.status} ${JSON.stringify(rvType.json).slice(0, 160)}`);
+    assert((await entriesOf(check15a)).length === entriesBeforeType && (await client.query(`SELECT revision FROM gl_check WHERE id=$1`, [check15a])).rows[0].revision === 3, "rejected revise wrote nothing (no reversal, revision unchanged)");
+
+    // 15d · mes cerrado → 409 GL_PERIOD_CLOSED, sin escribir.
+    const APC_E2E = `apc_${PREFIX}sept`;
+    await client.query(`DELETE FROM accounting_period_close WHERE id=$1`, [APC_E2E]);
+    await client.query(
+      `INSERT INTO accounting_period_close (id, period_start, period_end, revision, status, summary, open_documents, readiness, closed_by_user_id)
+       VALUES ($1, '2026-09-01', '2026-10-01', (SELECT COALESCE(MAX(revision),0)+1 FROM accounting_period_close WHERE period_start='2026-09-01'), 'closed', '{}', '[]', '{}', 'e2e-gl-docs')`, [APC_E2E]
+    );
+    try {
+      const rvClosed = await api("POST", `/admin/accounting/checks/${check15a}/revise`, {
+        day: "2026-09-11", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Uber Technologies",
+        memo: `${PREFIX}uber · closed`, lines: [{ account_list_id: OTHER_EXPENSE, amount_cents: 715 }], reason: "after close",
+      });
+      assert(rvClosed.status === 409 && rvClosed.json.code === "GL_PERIOD_CLOSED", "closed accounting period → 409 GL_PERIOD_CLOSED", `${rvClosed.status} ${JSON.stringify(rvClosed.json).slice(0, 120)}`);
+      assert((await entriesOf(check15a)).length === entriesBeforeType, "nothing written under a closed period");
+    } finally {
+      await client.query(`DELETE FROM accounting_period_close WHERE id=$1`, [APC_E2E]);
+    }
+
+    // 15e · revise de un check cuyo ADD no salió → el ADD viejo queda skipped (superseded) y nace un ADD nuevo.
+    const c15 = await api("POST", "/admin/accounting/checks", {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Lyft",
+      memo: `${PREFIX}lyft`, lines: [{ account_list_id: BANK_FEES, amount_cents: 500 }], post: true,
+    });
+    const check15 = c15.json.check.id as string;
+    const addUnsent = (await rowsFor(client, check15, "gl_document_add"))[0]!;
+    const rvUnsent = await api("POST", `/admin/accounting/checks/${check15}/revise`, {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Lyft",
+      memo: `${PREFIX}lyft fixed`, lines: [{ account_list_id: BANK_FEES, amount_cents: 550 }], reason: "tip included",
+    });
+    const adds15 = await rowsFor(client, check15, "gl_document_add");
+    const superseded = adds15.find((r) => r.id === addUnsent.id);
+    const freshAdd = adds15.find((r) => r.id !== addUnsent.id);
+    assert(rvUnsent.status === 200 && superseded?.status === WRITE.sales.skipped && /superseded by revision 1/.test(superseded?.error ?? "") && !!freshAdd && freshAdd.status === WRITE.sales.dispatchable, "unsent Add → skipped 'superseded', a new Add is queued", JSON.stringify(adds15.map((r) => [r.status, r.error?.slice(0, 40)])));
+    assert(String(freshAdd?.payload?.qbxml ?? "").includes("<Amount>5.50</Amount>") && (await rowsFor(client, check15, "gl_document_mod")).length === 0, "the new Add carries the corrected amount; no Mod row for a document QuickBooks never saw");
+    const rAdd15 = await dispatchAndConfirm(client, freshAdd!.id);
+    assert(rAdd15.status === WRITE.sales.synced, "the superseding Add confirms", rAdd15.status);
+    txnIdsSeen.push(rAdd15.qb_txn_id!);
+
+    // 15f · revise con el ADD EN VUELO → el Mod nace blocked/diferido y sale cuando el Add confirma.
+    const c16 = await api("POST", "/admin/accounting/checks", {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Bolt",
+      memo: `${PREFIX}bolt`, lines: [{ account_list_id: BANK_FEES, amount_cents: 300 }], post: true,
+    });
+    const check16 = c16.json.check.id as string;
+    const add16 = (await rowsFor(client, check16, "gl_document_add"))[0]!;
+    const submitted16 = await dispatchAndConfirm(client, add16.id, { confirm: false });
+    assert(submitted16.status === WRITE.sales.submitted, "fixture: Add in flight (submitted, not confirmed)", submitted16.status);
+    const rvFlight = await api("POST", `/admin/accounting/checks/${check16}/revise`, {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Bolt",
+      memo: `${PREFIX}bolt fixed`, lines: [{ account_list_id: BANK_FEES, amount_cents: 350 }], reason: "amount",
+    });
+    const mod16 = (await rowsFor(client, check16, "gl_document_mod"))[0];
+    assert(rvFlight.status === 200 && !!mod16 && mod16.status !== WRITE.sales.failed, "revise during an in-flight Add → Mod row queued (not failed)", `${rvFlight.status} ${mod16?.status}`);
+    const deferred16 = await dispatchAndConfirm(client, mod16!.id);
+    assert(deferred16.status !== WRITE.sales.synced && deferred16.status !== WRITE.sales.failed && /waiting on the add's qb_txn_id/.test(deferred16.error ?? ""), "dispatching the Mod before the Add confirms DEFERS it", `${deferred16.status} ${deferred16.error}`);
+    const { pollSubmittedRows: poll16 } = await import("../../lib/quickbooks/consolidator/poll-submitted-rows");
+    await poll16([{ ...submitted16, bridge_op_id: submitted16.bridge_op_id! }], stubContainer, logger);
+    const link16 = await docLink(client, "gl_check", check16);
+    assert(!!link16.qb_txn_id, "fixture: the Add confirmed and wrote the TxnID", JSON.stringify(link16));
+    const rm16 = await dispatchAndConfirm(client, mod16!.id);
+    assert(rm16.status === WRITE.sales.synced && rm16.qb_txn_id === link16.qb_txn_id, "after the Add confirms, the deferred Mod dispatches and confirms on that TxnID", `${rm16.status} ${rm16.error ?? ""}`);
+    txnIdsSeen.push(link16.qb_txn_id!);
+
+    // 15g · QB rechaza el Mod (3120) → failed con retry, sin tocar el documento.
+    const revRej = await api("POST", `/admin/accounting/checks/${check16}/revise`, {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Bolt",
+      memo: `${PREFIX}bolt rejected`, lines: [{ account_list_id: BANK_FEES, amount_cents: 360 }], reason: "control: QB rejects",
+    });
+    const modRejRow = (await rowsFor(client, check16, "gl_document_mod")).find((r) => r.status !== WRITE.sales.synced)!;
+    state!.directQueryMode = "reject";
+    const rModRej = await dispatchAndConfirm(client, modRejRow.id);
+    assert(revRej.status === 200 && rModRej.status !== WRITE.sales.synced && /3120|rejected/.test(rModRej.error ?? ""), "control: QuickBooks rejection → row not synced, error names the code", `${rModRej.status} ${rModRej.error?.slice(0, 100)}`);
+    assert((await docLink(client, "gl_check", check16)).qb_txn_id === link16.qb_txn_id, "a rejected Mod leaves the document's QuickBooks link intact");
+
+    // 15h · draft/voided no se revisan.
+    const cDraft = await api("POST", "/admin/accounting/checks", {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Draft",
+      memo: `${PREFIX}draft`, lines: [{ account_list_id: BANK_FEES, amount_cents: 100 }],
+    });
+    const rvDraft = await api("POST", `/admin/accounting/checks/${cDraft.json.check.id}/revise`, {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Draft",
+      memo: `${PREFIX}draft`, lines: [{ account_list_id: BANK_FEES, amount_cents: 100 }], reason: "x",
+    });
+    assert(rvDraft.status === 409 && rvDraft.json.code === "GL_DOCUMENT_NOT_POSTED", "a draft cannot be revised (PATCH is its path) → 409", `${rvDraft.status}`);
+    const rvNoReason = await api("POST", `/admin/accounting/checks/${check16}/revise`, {
+      day: "2026-09-12", bank_account_list_id: CHASE, number: null, payee_type: "other", payee_name: "Bolt",
+      memo: `${PREFIX}bolt`, lines: [{ account_list_id: BANK_FEES, amount_cents: 350 }],
+    });
+    assert(rvNoReason.status === 400, "reason is mandatory → 400", `${rvNoReason.status}`);
+
     // ── 12 · importador ────────────────────────────────────────────────────
     console.log("\n── 12. importer recognises every TxnID this lane wrote (live and voided)");
     const known = await loadPosKnownTxnIds(client as never);
@@ -592,7 +774,7 @@ async function main(): Promise<void> {
     // ── 13 · negativas ─────────────────────────────────────────────────────
     console.log("\n── 13. negatives");
     const stray = await client.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM qb_order_pipeline WHERE step LIKE 'gl_document_%' AND reference_type NOT IN ('gl_check','gl_transfer','gl_journal_entry','bank_deposit')`
+      `SELECT count(*)::text AS n FROM qb_order_pipeline WHERE step LIKE 'gl_document_%' AND reference_type NOT IN ('gl_check','gl_transfer','gl_journal_entry','bank_deposit','gl_sales_tax_payment','gl_sales_tax_adjustment')`
     );
     assert(stray.rows[0]!.n === "0", "no gl_document_* row for any other reference_type");
     const other = await client.query<{ n: string }>(

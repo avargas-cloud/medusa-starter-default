@@ -31,7 +31,13 @@ import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-
 import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
 import { decideAddRetrySafety } from "../pipeline/add-retry-safety";
 import { poolAsKnex } from "../gl-documents/db-adapters";
-import { handleGlDocumentAddConfirmed, handleGlDocumentVoidConfirmed, readDirectQueryStatus } from "../gl-documents/confirm";
+import {
+  handleGlDocumentAddConfirmed,
+  handleGlDocumentModConfirmed,
+  handleGlDocumentVoidConfirmed,
+  readDirectQueryStatus,
+} from "../gl-documents/confirm";
+import { glQbModResponseTag } from "../gl-documents/qbxml-mod-builders";
 import { glQbResponseTag, glQbRetTag, type GlQbTxnType } from "../gl-documents/qbxml-builders";
 import { isGlDocumentKind } from "../gl-documents/types";
 import {
@@ -351,6 +357,54 @@ export async function pollSubmittedRows(
             } catch (handlerErr) {
               logger.warn(
                 `${LOG_PREFIX} ⚠️ ${row.step} ${row.id} confirmed on the pipeline but its write-back failed: ${handlerErr instanceof Error ? handlerErr.message : String(handlerErr)}`
+              );
+            }
+          }
+          continue;
+        }
+
+        // check-revise-20260918: `<Tipo>ModRs` de un cheque corregido en el
+        // lugar. Autocontenido como la rama de arriba: statusCode 0 + `<Tipo>Ret`
+        // → EditSequence nuevo al documento; rechazo (3200 EditSequence viejo,
+        // 3120 no existe…) → failed/retry, nada cambió en QuickBooks.
+        if (row.step === "gl_document_mod") {
+          const modPayload = (row.payload ?? {}) as { qb_txn_type?: GlQbTxnType | null; qb_txn_id?: string | null };
+          const modKind = isGlDocumentKind(row.reference_type) ? row.reference_type : null;
+          const modTxnType = modPayload.qb_txn_type ?? null;
+          if (!modKind || !row.reference_id || !modTxnType) {
+            await failPipelineRow(
+              row.id,
+              `gl_document_mod: cannot confirm without reference_type/reference_id/qb_txn_type (kind=${row.reference_type}, type=${modTxnType})`
+            );
+            continue;
+          }
+          const modRsNode = msgs?.[glQbModResponseTag(modTxnType)] as Record<string, unknown> | undefined;
+          const { statusCode: modStatusCode, statusMessage: modStatusMessage } = readDirectQueryStatus(modRsNode);
+          if (!modRsNode || (modStatusCode !== null && modStatusCode !== "0")) {
+            const message =
+              modStatusCode !== null
+                ? `QuickBooks rejected gl_document_mod (${modStatusCode}): ${modStatusMessage}`
+                : `gl_document_mod completed without a recognizable ${glQbModResponseTag(modTxnType)} response`;
+            classifyQbError({ message, code: modStatusCode });
+            await failOrRetryPipelineRow(row.id, message, row.retry_count ?? 0);
+            logger.warn(`${LOG_PREFIX} ⚠️ gl_document_mod ${row.id}: ${message}`);
+            continue;
+          }
+          const modRet = modRsNode[glQbRetTag(modTxnType)] as { TxnID?: string; EditSequence?: string } | undefined;
+          const modTxnId = modRet?.TxnID ?? modPayload.qb_txn_id ?? row.qb_txn_id ?? null;
+          const wonConfirmMod = await confirmPipelineRow(row.id, modTxnId, null, modRsNode);
+          if (wonConfirmMod) {
+            try {
+              const outcome = await handleGlDocumentModConfirmed(poolAsKnex(pool), modKind, row.reference_id, modRet ?? {});
+              if (outcome.voidQueued) {
+                logger.warn(
+                  `${LOG_PREFIX} ↩️ ${modKind} ${row.reference_id} was voided in the POS while its Mod was in flight — void ${outcome.voidQueued.queued ? `queued (${outcome.voidQueued.pipelineRowId})` : `NOT queued: ${outcome.voidQueued.reason}`}`
+                );
+              }
+              logger.info(`${LOG_PREFIX} ✅ gl_document_mod ${row.id} (${modKind}) confirmed — TxnID=${modTxnId ?? "?"}`);
+            } catch (handlerErr) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ gl_document_mod ${row.id} confirmed on the pipeline but its write-back failed: ${handlerErr instanceof Error ? handlerErr.message : String(handlerErr)}`
               );
             }
           }

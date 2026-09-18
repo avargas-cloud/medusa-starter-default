@@ -22,6 +22,7 @@ import {
   loadLines,
   type BankCheckDto,
   type BankCheckWriteInput,
+  type HeaderRow,
 } from "./bank-check-read";
 import type { PostGlDocumentResult } from "./journal-entry";
 import {
@@ -53,7 +54,7 @@ export {
  * builder puro (que también valida) y deriva `kind`. Devuelve todo lo que el
  * header y las líneas necesitan persistir.
  */
-async function resolve(client: PoolClient, input: BankCheckWriteInput) {
+export async function resolve(client: PoolClient, input: BankCheckWriteInput) {
   const accounts = await loadActiveAccounts(client, [
     input.bank_account_list_id,
     ...input.lines.map((l) => l.account_list_id),
@@ -82,7 +83,7 @@ async function resolve(client: PoolClient, input: BankCheckWriteInput) {
   };
 }
 
-async function writeHeaderAndLines(
+export async function writeHeaderAndLines(
   client: PoolClient,
   id: string,
   input: BankCheckWriteInput,
@@ -168,7 +169,7 @@ export async function createBankCheck(
   return (await getBankCheck(client, id))!;
 }
 
-/** Sólo un `draft` se edita; un `posted` se anula y se crea de nuevo. */
+/** Sólo un `draft` se edita acá; un `posted` se corrige por `reviseBankCheck` (`bank-check-revise.ts`). */
 export async function updateBankCheck(
   client: PoolClient,
   id: string,
@@ -181,6 +182,55 @@ export async function updateBankCheck(
     await writeHeaderAndLines(client, id, input, { insert: false });
   });
   return (await getBankCheck(client, id))!;
+}
+
+/**
+ * Arma el asiento del cheque desde SU estado persistido (header + líneas) y lo
+ * postea en `header.day`. Compartido por el post inicial y por el revise
+ * (`bank-check-revise.ts`), que lo llama tras reescribir header y líneas.
+ */
+export async function postCheckJournal(
+  client: PoolClient,
+  header: HeaderRow,
+  actorId: string
+): Promise<PostGlDocumentResult> {
+  const id = header.id;
+  const lineRows = (await loadLines(client, [id])).get(id) ?? [];
+  // Re-resolve against ACTIVE accounts: a draft may predate an account being retired.
+  const { ledgerLines } = await resolve(client, {
+    ...header,
+    lines: lineRows.map((l) => ({
+      ...l,
+      amount_cents: BigInt(l.amount_cents),
+    })),
+  });
+  const sourceSnapshot = { header, lines: lineRows };
+  const sourceHash = createHash("sha256")
+    .update(JSON.stringify(sourceSnapshot))
+    .digest("hex");
+  const label =
+    header.kind === "card_charge"
+      ? "Card Charge"
+      : header.kind === "check"
+        ? "Check"
+        : "Expense";
+  const result = await postDocumentJournal(client, {
+    source_kind: "bank_check",
+    source_id: id,
+    document_number: header.doc_number,
+    day: header.day,
+    reference: header.number
+      ? `${header.doc_number} #${header.number}`
+      : header.doc_number,
+    description: `${label} ${header.doc_number} — ${header.payee_name}`,
+    lines: ledgerLines,
+    source_snapshot: sourceSnapshot,
+    source_hash: sourceHash,
+    actor_id: actorId,
+  });
+  if (result.status === "skipped")
+    throw new LedgerError("GL_SOURCE_INVALID", { reason: result.reason });
+  return { status: result.status, entry_id: result.entry_id };
 }
 
 /** `postDocumentJournal` + flip a `posted` en UNA transacción; `already_posted` si ya lo estaba. */
@@ -196,41 +246,7 @@ export async function postBankCheck(
       return { status: "already_posted", entry_id: header.entry_id };
     assertStatus(header.status, "draft", id);
 
-    const lineRows = (await loadLines(client, [id])).get(id) ?? [];
-    // Re-resolve against ACTIVE accounts: a draft may predate an account being retired.
-    const { ledgerLines } = await resolve(client, {
-      ...header,
-      lines: lineRows.map((l) => ({
-        ...l,
-        amount_cents: BigInt(l.amount_cents),
-      })),
-    });
-    const sourceSnapshot = { header, lines: lineRows };
-    const sourceHash = createHash("sha256")
-      .update(JSON.stringify(sourceSnapshot))
-      .digest("hex");
-    const label =
-      header.kind === "card_charge"
-        ? "Card Charge"
-        : header.kind === "check"
-          ? "Check"
-          : "Expense";
-    const result = await postDocumentJournal(client, {
-      source_kind: "bank_check",
-      source_id: id,
-      document_number: header.doc_number,
-      day: header.day,
-      reference: header.number
-        ? `${header.doc_number} #${header.number}`
-        : header.doc_number,
-      description: `${label} ${header.doc_number} — ${header.payee_name}`,
-      lines: ledgerLines,
-      source_snapshot: sourceSnapshot,
-      source_hash: sourceHash,
-      actor_id: actorId,
-    });
-    if (result.status === "skipped")
-      throw new LedgerError("GL_SOURCE_INVALID", { reason: result.reason });
+    const result = await postCheckJournal(client, header, actorId);
     await client.query(
       `UPDATE gl_check SET status = 'posted', entry_id = $2, posted_at = now(), updated_at = now() WHERE id = $1`,
       [id, result.entry_id]

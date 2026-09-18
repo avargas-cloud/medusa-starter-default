@@ -72,6 +72,11 @@ export interface BankCheckDto {
   /** adopt-qb-bank-documents-20260915: `'adopted'` = nació en QuickBooks y el POS adoptó su TxnID. */
   qb_source: "adopted" | null;
   evidence_id: string | null;
+  /** check-revise-20260918: veces que el documento posteado se corrigió en el lugar (0 = nunca). */
+  revision: number;
+  revised_at: string | null;
+  revised_by: string | null;
+  revision_reason: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -89,7 +94,8 @@ export type LineRow = Omit<BankCheckLineDto, "amount_cents"> & {
 const HEADER_COLUMNS = `d.id, d.number, d.doc_number, d.kind, d.day::text AS day, d.bank_account_list_id,
   d.bank_account_snapshot, d.payee_type, d.payee_id, d.payee_name, d.memo, d.total_cents::text AS total_cents,
   d.status, d.entry_id, d.posted_at::text AS posted_at, d.voided_at::text AS voided_at, d.void_reason,
-  d.to_be_printed, d.evidence_id, d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at, d.qb_source`;
+  d.to_be_printed, d.evidence_id, d.created_by, d.created_at::text AS created_at, d.updated_at::text AS updated_at, d.qb_txn_id, d.qb_txn_type, d.qb_synced_at::text AS qb_synced_at, d.qb_source,
+  d.revision, d.revised_at::text AS revised_at, d.revised_by, d.revision_reason`;
 
 export async function loadLines(
   client: PoolClient,
