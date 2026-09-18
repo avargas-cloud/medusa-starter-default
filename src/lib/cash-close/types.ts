@@ -56,12 +56,20 @@
  *
  * ── The tie (accountant's ladder) ───────────────────────────────────────────
  *  invoiced
- *   − paid_earlier − paid_store_credit − on_account − credit_memos_today
+ *   − paid_earlier − paid_store_credit − on_account
  *   + invoice_earlier (from cash side) + order_deposit + estimate_deposit
  *   + held_deposit + held_credit + unexplained
  *   − refunds_paid_out
  *  = received − refunds_paid_out  (net cash)
  *  It ties by construction; `verify-cash-close.ts` asserts it to the cent.
+ *  Credit memos are NOT a ladder line: a CM moves no cash (only its refund
+ *  does, and that has its own line) and does not change what was invoiced
+ *  today. They are reported in the sales block as information.
+ *
+ * ── Which days can be closed ────────────────────────────────────────────────
+ *  Only a FINISHED business day: day < today (ET). Asking for today (or the
+ *  future) is a 400 CASH_CLOSE_DAY_NOT_CLOSED — a close of a day still taking
+ *  payments would be superseded within minutes and the number would lie.
  *
  * ── Balanced ────────────────────────────────────────────────────────────────
  *  balanced ⇔ unexplained_cents = 0. Numbering (CC-####) is only granted to a

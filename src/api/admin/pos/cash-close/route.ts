@@ -9,11 +9,12 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
-import { getBusinessDateString } from "../../../../lib/date/et";
 import {
   CashCloseNotBalancedError,
   computeCashClose,
   createCashClose,
+  latestClosableDay,
+  CashCloseDayNotClosedError,
 } from "../../../../lib/cash-close/service";
 import {
   loadExistingClosesForDay,
@@ -53,7 +54,7 @@ export async function GET(
   const day =
     typeof dayParam === "string" && dayParam.length > 0
       ? dayParam
-      : getBusinessDateString();
+      : latestClosableDay();
   if (!DAY_RE.test(day)) {
     res.status(400).json({ error: "CASH_CLOSE_INVALID_DAY", message: `Expected YYYY-MM-DD, received "${day}"` });
     return;
@@ -78,6 +79,14 @@ export async function GET(
     }));
     res.json({ snapshot, existing });
   } catch (err) {
+    if (err instanceof CashCloseDayNotClosedError) {
+      res.status(400).json({
+        error: "CASH_CLOSE_DAY_NOT_CLOSED",
+        message: `Only a finished business day can be closed (latest: ${latestClosableDay()})`,
+        latest_day: latestClosableDay(),
+      });
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[cash-close] GET failed: ${message}`);
     res.status(500).json({ error: "CASH_CLOSE_COMPUTE_FAILED", message });
@@ -110,6 +119,14 @@ export async function POST(
     const record = await createCashClose(knex, { day, actorId: userId });
     res.status(201).json({ record });
   } catch (err) {
+    if (err instanceof CashCloseDayNotClosedError) {
+      res.status(400).json({
+        error: "CASH_CLOSE_DAY_NOT_CLOSED",
+        message: `Only a finished business day can be closed (latest: ${latestClosableDay()})`,
+        latest_day: latestClosableDay(),
+      });
+      return;
+    }
     if (err instanceof CashCloseNotBalancedError) {
       res.status(409).json({
         error: "CASH_CLOSE_NOT_BALANCED",

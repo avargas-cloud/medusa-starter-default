@@ -1,5 +1,12 @@
 import { classifyPayment } from "../../lib/cash-close/classify";
 import {
+  assertValidDay,
+  latestClosableDay,
+  CashCloseDayNotClosedError,
+  CashCloseInvalidDayError,
+} from "../../lib/cash-close/service";
+import { getBusinessDateString } from "../../lib/date/et";
+import {
   buildInvoiceRows,
   buildLadder,
   buildTotals,
@@ -216,5 +223,30 @@ describe("computeSnapshot / ladder", () => {
     // (`invoice_today_cents` is not itself a ladder line).
     const corrupted: CashCloseTotals = { ...totals, unexplained_cents: 5 };
     expect(() => buildLadder(corrupted)).toThrow(CashCloseLadderMismatchError);
+
+    // 09/18/2026 in prod: a $268.02 credit memo completed today and spent as
+    // store credit on an EARLIER invoice. A CM moves no cash and changes
+    // nothing of what was invoiced today, so it must NOT be a ladder line —
+    // when it was, every open of "today" threw and the modal spun forever.
+    const withCreditMemo: CashCloseTotals = {
+      ...totals,
+      credit_memos_today_cents: 26802,
+      credit_memos_count: 1,
+      store_credit_tender_cents: 26802,
+    };
+    expect(() => buildLadder(withCreditMemo)).not.toThrow();
+    expect(buildLadder(withCreditMemo).some((l) => l.key === "credit_memos_today")).toBe(false);
+  });
+});
+
+describe("assertValidDay — only a finished business day can be closed", () => {
+  it("accepts yesterday, rejects today and the future", () => {
+    const yesterday = latestClosableDay();
+    expect(() => assertValidDay(yesterday)).not.toThrow();
+    expect(() => assertValidDay("2020-01-01")).not.toThrow();
+    const today = getBusinessDateString();
+    expect(() => assertValidDay(today)).toThrow(CashCloseDayNotClosedError);
+    expect(() => assertValidDay("2999-12-31")).toThrow(CashCloseDayNotClosedError);
+    expect(() => assertValidDay("not-a-day")).toThrow(CashCloseInvalidDayError);
   });
 });

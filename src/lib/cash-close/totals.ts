@@ -200,13 +200,21 @@ export function buildTotals(
   };
 }
 
+/**
+ * The ladder walks from "invoiced today" to "net cash received". Credit memos
+ * are deliberately NOT a line: a CM never moves cash by itself (the money only
+ * leaves as a refund, which has its own line) and it does not change what was
+ * invoiced today either — 09/18/2026 in prod: a $268.02 CM completed and used
+ * as store credit on an EARLIER invoice broke the tie by exactly that amount
+ * and the backend threw on every open of "today". `credit_memos_today_cents`
+ * stays in the totals for the sales block, as information.
+ */
 export function buildLadder(totals: CashCloseTotals): CashCloseLadderLine[] {
   const lines: CashCloseLadderLine[] = [
     { key: "invoiced", label: "Invoiced", detail: null, cents: totals.invoiced_cents, kind: "start" },
     { key: "paid_earlier", label: "− Paid earlier (AR collected)", detail: null, cents: -totals.paid_earlier_cents, kind: "adjust" },
     { key: "paid_store_credit", label: "− Paid by store credit", detail: null, cents: -totals.paid_store_credit_cents, kind: "adjust" },
     { key: "on_account", label: "− On account", detail: null, cents: -totals.on_account_cents, kind: "adjust" },
-    { key: "credit_memos_today", label: "− Credit memos today", detail: null, cents: -totals.credit_memos_today_cents, kind: "adjust" },
     { key: "invoice_earlier", label: "+ Invoice earlier (cash collected on old invoices)", detail: null, cents: totals.invoice_earlier_cents, kind: "adjust" },
     { key: "order_deposit", label: "+ Order deposits", detail: null, cents: totals.order_deposit_cents, kind: "adjust" },
     { key: "estimate_deposit", label: "+ Estimate deposits", detail: null, cents: totals.estimate_deposit_cents, kind: "adjust" },

@@ -23,7 +23,7 @@ import {
   holdPayment,
 } from "../../lib/cash-close/service";
 import type { Knexish } from "../../lib/cash-close/load-day";
-import { getBusinessDateString } from "../../lib/date/et";
+import { latestClosableDay } from "../../lib/cash-close/service";
 
 let passed = 0;
 let failed = 0;
@@ -93,7 +93,11 @@ async function main(): Promise<void> {
   const pool = new Pool({ connectionString: url });
   const knex = poolAsKnexish(pool);
 
-  const day = getBusinessDateString();
+  // A SYNTHETIC past day: the sandbox is a prod copy, so a real day carries
+  // other unexplained rows (09/17 has a 5¢ Zelle over-payment) and "balanced
+  // after the hold" would never hold. Today is not closable by design (400).
+  const day = "2020-01-02";
+  if (day > latestClosableDay()) throw new Error("synthetic day must be in the past");
   const customerId = `cus_e2ecashclose${Date.now().toString(36)}`;
   const paymentId = `cpay_e2ecashclose${Date.now().toString(36)}`;
   const actorId = "user_e2e_cash_close";
@@ -110,9 +114,9 @@ async function main(): Promise<void> {
     await pool.query(
       `INSERT INTO customer_payment
          (id, customer_id, source, type, amount, currency, method, status, received_at, raw_amount, created_at, updated_at)
-       VALUES ($1, $2, 'pos', 'payment', $3::numeric, 'usd', 'cash', 'available', now(),
+       VALUES ($1, $2, 'pos', 'payment', $3::numeric, 'usd', 'cash', 'available', ($5::date + time '16:00') AT TIME ZONE 'America/New_York',
                jsonb_build_object('value', $4::text, 'precision', 20), now(), now())`,
-      [paymentId, customerId, AMOUNT_CENTS, String(AMOUNT_CENTS)]
+      [paymentId, customerId, AMOUNT_CENTS, String(AMOUNT_CENTS), day]
     );
 
     // ── A. No application at all → the whole amount is unexplained ─────────

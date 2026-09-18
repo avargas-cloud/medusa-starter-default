@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 
 import { computeSnapshot, type CashCloseDayRows } from "./totals";
+import { getBusinessDateString } from "../date/et";
 import {
   loadCreditMemosForDay,
   loadExistingClosesForDay,
@@ -54,9 +55,19 @@ export class CashCloseNotBalancedError extends Error {
   }
 }
 
+export const CashCloseDayNotClosedError = detailError("CASH_CLOSE_DAY_NOT_CLOSED");
+
+/** Latest closable day: yesterday in ET. Today is still taking payments. */
+export function latestClosableDay(now: Date = new Date()): string {
+  return getBusinessDateString(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+}
+
 export function assertValidDay(day: unknown): asserts day is string {
   if (typeof day !== "string" || !DAY_RE.test(day)) {
     throw new CashCloseInvalidDayError(String(day));
+  }
+  if (day > latestClosableDay()) {
+    throw new CashCloseDayNotClosedError(day);
   }
 }
 
