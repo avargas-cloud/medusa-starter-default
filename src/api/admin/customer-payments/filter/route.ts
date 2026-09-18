@@ -19,6 +19,7 @@ type PaymentListDbRow = {
   type: string;
   amount: string | number;
   surcharge_cents: string | number | null;
+  card_brand: string | null;
   currency: string;
   method: string;
   reference: string | null;
@@ -218,6 +219,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           cp.type,
           cp.amount,
           COALESCE(cp.surcharge_cents, 0) AS surcharge_cents,
+          cp.card_brand,
           cp.currency,
           cp.method,
           cp.reference,
