@@ -3,32 +3,33 @@
  * `gl_check` corregido en el lugar (plan check-revise-20260918). PUROS: sin IO.
  *
  * Semántica qbXML de un Mod con líneas: una `ExpenseLineMod` con su `TxnLineID`
- * actualiza esa línea, `TxnLineID = -1` agrega una, y `ClearExpenseLines=true`
- * borra todas las existentes antes de aplicar las `ExpenseLineMod`. El POS no
- * guarda los TxnLineID de las líneas del cheque (ni los de los 683 adoptados),
- * así que el Mod SIEMPRE manda `ClearExpenseLines` + el set completo como
- * líneas nuevas: QuickBooks queda con exactamente lo que el POS tiene.
+ * actualiza esa línea, `TxnLineID = -1` agrega una, y toda línea existente NO
+ * mencionada se BORRA (misma regla que `vendor-credit-mod.ts`). El POS no guarda
+ * los TxnLineID de las líneas del cheque (ni los de los 683 adoptados), así que
+ * el Mod manda el set completo como líneas nuevas: QuickBooks queda con
+ * exactamente lo que el POS tiene. `ClearExpenseLines` NO se manda: parsea (la
+ * sonda con TxnID inexistente lo dejó pasar) pero un CheckMod real lo rechaza
+ * con 3151 "Cannot use the element ClearExpenseLines in this request" — CHK-0999,
+ * el primer revise en producción (09/18/2026).
  *
  * Orden de elementos (load-bearing: 0x80040400 ante un orden equivocado; se
  * sondea contra el company file con un TxnID inexistente + control negativo
  * antes de confiar, como `vendor-credit-mod.ts` el 2026-09-11):
  *
  *   CheckMod:            TxnID → EditSequence → AccountRef → PayeeEntityRef →
- *                        RefNumber → TxnDate → Memo → IsToBePrinted →
- *                        ClearExpenseLines → ExpenseLineMod*
+ *                        RefNumber → TxnDate → Memo → IsToBePrinted → ExpenseLineMod*
  *   CreditCardChargeMod: TxnID → EditSequence → AccountRef → PayeeEntityRef →
- *                        TxnDate → RefNumber → Memo → ClearExpenseLines →
- *                        ExpenseLineMod*
+ *                        TxnDate → RefNumber → Memo → ExpenseLineMod*
  *
  * Los Mod siguen el MISMO orden que sus Add: Check lleva RefNumber ANTES de
  * TxnDate, CreditCardCharge al revés. Sondeado contra el company file el
  * 2026-09-18 (`scripts/debug/probe-check-mod-qbxml.ts`, TxnID inexistente):
  * CheckMod con TxnDate antes de RefNumber → 0x80040400; con RefNumber antes →
- * 3120 "cannot be found" (parseó), y en esa forma `IsToBePrinted`,
- * `ClearExpenseLines` y `ExpenseLineMod` con `TxnLineID -1` también parsean.
+ * 3120 "cannot be found" (parseó), y en esa forma `IsToBePrinted` y
+ * `ExpenseLineMod` con `TxnLineID -1` también parsean.
  *
  * Si algún día se guardan los TxnLineID, `ExpenseLineMod` acepta `txnLineId`
- * por línea y el `ClearExpenseLines` se vuelve opcional — la forma está lista.
+ * por línea — la forma está lista.
  */
 
 import { centsToDollarsString } from "../../ledger/money";
@@ -60,7 +61,7 @@ export interface CheckModInput {
   refNumber?: string | null;
   memo?: string | null;
   isToBePrinted: boolean;
-  /** Set COMPLETO de líneas: las existentes en QB se borran (`ClearExpenseLines`). */
+  /** Set COMPLETO de líneas: las existentes en QB no mencionadas se borran (semántica Mod). */
   lines: ExpenseLineModInput[];
 }
 
@@ -123,7 +124,6 @@ export function buildCheckModQbxml(input: CheckModInput): string {
     tag("TxnDate", input.txnDate) +
     tag("Memo", input.memo) +
     `<IsToBePrinted>${input.isToBePrinted ? "true" : "false"}</IsToBePrinted>` +
-    `<ClearExpenseLines>true</ClearExpenseLines>` +
     input.lines.map(expenseLineModXml).join("");
   return qbxmlEnvelope(`<CheckModRq><CheckMod>${body}</CheckMod></CheckModRq>`);
 }
@@ -140,7 +140,6 @@ export function buildCreditCardChargeModQbxml(input: CreditCardChargeModInput): 
     tag("TxnDate", input.txnDate) +
     tag("RefNumber", input.refNumber) +
     tag("Memo", input.memo) +
-    `<ClearExpenseLines>true</ClearExpenseLines>` +
     input.lines.map(expenseLineModXml).join("");
   return qbxmlEnvelope(
     `<CreditCardChargeModRq><CreditCardChargeMod>${body}</CreditCardChargeMod></CreditCardChargeModRq>`

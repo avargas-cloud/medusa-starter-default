@@ -10,8 +10,9 @@ import {
 /**
  * check-revise-20260918 — CheckMod / CreditCardChargeMod de un cheque corregido
  * en el lugar. El orden de elementos es load-bearing (0x80040400); se afirma
- * byte a byte. Sin TxnLineID guardados el Mod SIEMPRE limpia y re-manda el set
- * completo como líneas nuevas (`TxnLineID -1`).
+ * byte a byte. Sin TxnLineID guardados el Mod re-manda el set completo como líneas
+ * nuevas (`TxnLineID -1`; las no mencionadas se borran). NUNCA `ClearExpenseLines`:
+ * parsea pero QB lo rechaza con 3151 en un CheckMod real (CHK-0999, 09/18/2026).
  */
 const ENVELOPE_OPEN =
   '<?xml version="1.0" encoding="utf-8"?><?qbxml version="10.0"?><QBXML><QBXMLMsgsRq onError="stopOnError">';
@@ -32,7 +33,7 @@ const base = {
 };
 
 describe("CheckMod qbXML", () => {
-  it("emits TxnID → EditSequence → AccountRef → PayeeEntityRef → RefNumber → TxnDate → Memo → IsToBePrinted → ClearExpenseLines → ExpenseLineMod* (probed 2026-09-18)", () => {
+  it("emits TxnID → EditSequence → AccountRef → PayeeEntityRef → RefNumber → TxnDate → Memo → IsToBePrinted → ExpenseLineMod* (probed 2026-09-18)", () => {
     expect(buildCheckModQbxml({ ...base, isToBePrinted: false })).toBe(
       ENVELOPE_OPEN +
         "<CheckModRq><CheckMod>" +
@@ -44,7 +45,6 @@ describe("CheckMod qbXML", () => {
         "<TxnDate>2026-09-01</TxnDate>" +
         "<Memo>Health insurance - Sept</Memo>" +
         "<IsToBePrinted>false</IsToBePrinted>" +
-        "<ClearExpenseLines>true</ClearExpenseLines>" +
         "<ExpenseLineMod><TxnLineID>-1</TxnLineID><AccountRef><ListID>80000090-1</ListID></AccountRef><Amount>60.00</Amount><Memo>MED*UNIVERSITY OF MI</Memo></ExpenseLineMod>" +
         "<ExpenseLineMod><TxnLineID>-1</TxnLineID><AccountRef><ListID>80000091-1</ListID></AccountRef><Amount>12.50</Amount><CustomerRef><ListID>8000AAAA-1</ListID></CustomerRef><BillableStatus>Billable</BillableStatus></ExpenseLineMod>" +
         "</CheckMod></CheckModRq>" +
@@ -101,13 +101,17 @@ describe("CreditCardChargeMod qbXML", () => {
         "<TxnDate>2026-09-01</TxnDate>" +
         "<RefNumber>1042</RefNumber>" +
         "<Memo>Health insurance - Sept</Memo>" +
-        "<ClearExpenseLines>true</ClearExpenseLines>" +
         "<ExpenseLineMod><TxnLineID>-1</TxnLineID><AccountRef><ListID>80000090-1</ListID></AccountRef><Amount>60.00</Amount><Memo>MED*UNIVERSITY OF MI</Memo></ExpenseLineMod>" +
         "<ExpenseLineMod><TxnLineID>-1</TxnLineID><AccountRef><ListID>80000091-1</ListID></AccountRef><Amount>12.50</Amount><CustomerRef><ListID>8000AAAA-1</ListID></CustomerRef><BillableStatus>Billable</BillableStatus></ExpenseLineMod>" +
         "</CreditCardChargeMod></CreditCardChargeModRq>" +
         ENVELOPE_CLOSE
     );
     expect(buildCreditCardChargeModQbxml(base)).not.toContain("IsToBePrinted");
+  });
+
+  it("never emits ClearExpenseLines (QuickBooks 3151 on a real CheckMod / CreditCardChargeMod)", () => {
+    expect(buildCheckModQbxml({ ...base, isToBePrinted: false })).not.toContain("ClearExpenseLines");
+    expect(buildCreditCardChargeModQbxml(base)).not.toContain("ClearExpenseLines");
   });
 });
 

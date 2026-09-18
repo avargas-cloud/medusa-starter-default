@@ -643,7 +643,7 @@ async function main(): Promise<void> {
     const journalAll = require("fs").readFileSync(JOURNAL, "utf8").trim().split("\n").map((l: string) => JSON.parse(l));
     const modEvt = [...journalAll].reverse().find((l: any) => l.event === "document_mod");
     const queryEvt = [...journalAll].reverse().find((l: any) => l.event === "direct_query" && l.isQuery && l.rqName === "Check");
-    assert(!!queryEvt && !!modEvt && modEvt.editSequence !== "stale-1" && modEvt.clear === true && modEvt.lines === 1, "bridge saw CheckQueryRq then CheckModRq with the FRESH EditSequence, ClearExpenseLines + 1 line", JSON.stringify({ q: !!queryEvt, mod: modEvt }));
+    assert(!!queryEvt && !!modEvt && modEvt.editSequence !== "stale-1" && modEvt.clear === false && modEvt.lines === 1, "bridge saw CheckQueryRq then CheckModRq with the FRESH EditSequence, 1 line, NO ClearExpenseLines (QB 3151)", JSON.stringify({ q: !!queryEvt, mod: modEvt }));
     assert(!!jq && jq.qbxml.includes("<CheckModRq>") && jq.qbxml.includes(`<ListID>${OTHER_EXPENSE}</ListID>`) && jq.qbxml.includes("<Amount>7.15</Amount>") && jq.qbxml.includes("<TxnDate>2026-09-11</TxnDate>") && jq.qbxml.includes("<Memo>Payee: Uber Technologies - e2e_gldq_uber - corregido</Memo>"), "CheckMod carries the corrected account, amount, date and payee memo", jq?.qbxml?.slice(0, 300));
     const linkAfter = await client.query<{ qb_edit_sequence: string; qb_synced_at: string | null }>(`SELECT qb_edit_sequence, qb_synced_at::text FROM gl_check WHERE id=$1`, [check15a]);
     assert(linkAfter.rows[0]!.qb_edit_sequence === modEvt?.newEditSequence && !!linkAfter.rows[0]!.qb_synced_at, "confirm wrote the NEW EditSequence back to gl_check", JSON.stringify(linkAfter.rows[0]));

@@ -453,6 +453,8 @@ async function modFactsFailClosed(): Promise<void> {
   const changed = await loadGlDocumentModFacts(stub, "gl_check", "gchk_stub", "7");
   check(!changed.ready && /revise_type_change/.test(changed.reason),
     "facts-mod: QB tiene un Check y el documento ahora es tarjeta → rechazo estructural revise_type_change", JSON.stringify(changed).slice(0, 200));
+  check(!ready.qbxml?.includes("ClearExpenseLines") && ready.ready && (ready.qbxml.match(/<TxnLineID>-1<\/TxnLineID>/g) ?? []).length === 1,
+    "facts-mod: el Mod NO manda ClearExpenseLines (QB 3151 en CHK-0999) y re-lista las líneas con TxnLineID -1");
   const noSeq = await loadGlDocumentModFacts(stub, "gl_check", "gchk_stub", "");
   check(!noSeq.ready && /EditSequence/.test(noSeq.reason), "facts-mod: sin EditSequence no hay Mod");
   const transfer = await loadGlDocumentModFacts(stub, "gl_transfer", "gtr_x", "7");
