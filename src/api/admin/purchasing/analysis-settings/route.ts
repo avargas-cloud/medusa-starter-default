@@ -19,9 +19,14 @@ export interface PurchasingAnalysisSettings {
   inv_days_c: number;
   china_to_usa_days: number;
   china_to_usa_channels_days: number;
-  /** TEMPORARY holiday buffers (agent / factory closed). Display-only like the
-   *  rest of this blob; default 0 = off. The buyer sets them for the holiday
-   *  and clears them after — they are not a permanent part of the lead time. */
+  /** TEMPORARY buffers. Display-only like the rest of this blob; default 0 =
+   *  off. The buyer sets them for the closure and clears them after — they are
+   *  not a permanent part of the lead time.
+   *    holiday_extra_days  → general closure (CNY): Transfer +H AND Factory +H,
+   *                          each ONCE (Factory takes it on the production leg).
+   *    transfer_extra_days → agent / freight only: Transfer lane. Never Factory.
+   *    factory_extra_days  → factory only: production leg. Never Transfer. */
+  holiday_extra_days: number;
   transfer_extra_days: number;
   factory_extra_days: number;
 }
@@ -33,6 +38,7 @@ const DEFAULTS: PurchasingAnalysisSettings = {
   inv_days_c: 15,
   china_to_usa_days: 27,
   china_to_usa_channels_days: 15,
+  holiday_extra_days: 0,
   transfer_extra_days: 0,
   factory_extra_days: 0,
 };
@@ -182,6 +188,10 @@ export async function PUT(
       typeof body.china_to_usa_channels_days === "number"
         ? body.china_to_usa_channels_days
         : current.china_to_usa_channels_days,
+    holiday_extra_days: extraDaysOr(
+      body.holiday_extra_days,
+      current.holiday_extra_days
+    ),
     transfer_extra_days: extraDaysOr(
       body.transfer_extra_days,
       current.transfer_extra_days
