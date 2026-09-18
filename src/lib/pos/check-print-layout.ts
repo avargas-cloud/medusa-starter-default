@@ -83,7 +83,8 @@ export const checkPrintLayoutSchema = z
   })
   .strict();
 
-/** Medido sobre la foto del B7200 de Regions, 09/18/2026 — punto de partida de calibración. */
+/** Preset B7200 (Regions), recalibrado el 09/18/2026 contra un cheque IMPRESO: la primera medición
+ * (foto con perspectiva) quedó 0.1–0.2" alta en la cara y ponía la fecha sobre la etiqueta "Date". */
 export const DEFAULT_CHECK_PRINT_LAYOUT: CheckPrintLayout = Object.freeze({
   version: 1,
   preset: "b7200",
@@ -92,11 +93,11 @@ export const DEFAULT_CHECK_PRINT_LAYOUT: CheckPrintLayout = Object.freeze({
   font_pt: 11,
   stubs: "both",
   fields: Object.freeze({
-    date: { x: 6.6, y: 0.7, w: 1.6 },
-    payee: { x: 1.0, y: 1.22, w: 5.6 },
-    amount: { x: 6.9, y: 1.22, w: 1.4, align: "right" },
-    amount_words: { x: 0.4, y: 1.48, w: 6.8 },
-    memo: { x: 0.85, y: 2.4, w: 3.0 },
+    date: { x: 6.95, y: 0.78, w: 1.1 },
+    payee: { x: 1.05, y: 1.34, w: 5.5 },
+    amount: { x: 6.9, y: 1.34, w: 1.4, align: "right" },
+    amount_words: { x: 0.35, y: 1.59, w: 6.8 },
+    memo: { x: 0.85, y: 2.6, w: 3.0 },
     stub1: { x: 0.5, y: 3.75, w: 7.5 },
     stub2: { x: 0.5, y: 7.25, w: 7.5 },
   }),
