@@ -18,6 +18,7 @@ type PaymentListDbRow = {
   source: string;
   type: string;
   amount: string | number;
+  surcharge_cents: string | number | null;
   currency: string;
   method: string;
   reference: string | null;
@@ -216,6 +217,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           cp.source,
           cp.type,
           cp.amount,
+          COALESCE(cp.surcharge_cents, 0) AS surcharge_cents,
           cp.currency,
           cp.method,
           cp.reference,
@@ -260,6 +262,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const payments = (result.rows ?? []).map((row) => ({
       ...row,
       amount: Number(row.amount),
+      surcharge_cents: Number(row.surcharge_cents ?? 0),
       amount_applied: Number(row.amount_applied),
       available_balance: Number(row.available_balance),
     }));
