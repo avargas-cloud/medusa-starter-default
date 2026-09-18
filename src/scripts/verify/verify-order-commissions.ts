@@ -21,6 +21,7 @@
  *   8. La ruta de settle exige method y compensa el post-commit fallado.
  */
 
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -333,7 +334,7 @@ const funcBody = (src: string, marker: string): string => {
     );
     check(
       "el índice cubre pending/qb_waiting/confirmed y NO failed/reversed (libres para reintento)",
-      upBody.includes("status IN ('pending','qb_waiting','confirmed')") &&
+      upBody.includes("status IN ('pending','qb_waiting','confirmed')") && // entity-status (commission_settlement.status)
         !upBody.includes("'failed'") &&
         !upBody.includes("'reversed'")
     );
@@ -528,7 +529,7 @@ const funcBody = (src: string, marker: string): string => {
   for (const step of ["commission_check", "commission_payment"]) {
     const verdict = evaluateRetryGate({
       step,
-      status: "failed",
+      status: WRITE.sales.failed,
       error:
         "Timed out before submitted state (>20 min) — no response from QB bridge",
       bridgeOpId: "op-verify",
@@ -756,14 +757,14 @@ const funcBody = (src: string, marker: string): string => {
   );
   check(
     "resolveRequestsForAssignment bloquea las pendientes (FOR UPDATE) antes de aprobarlas",
-    /status = 'pending' AND deleted_at IS NULL FOR UPDATE/.test(lib)
+    /status = 'pending' AND deleted_at IS NULL FOR UPDATE/.test(lib) // entity-status (commission_request)
   );
 
   const migration = read("src/migrations/Migration20260917100001-CommissionRequests.ts");
   check(
     "una sola solicitud PENDIENTE por identidad+orden (índices parciales customer y vendor)",
-    /uq_creq_pending_customer[\s\S]{0,200}?WHERE status = 'pending' AND deleted_at IS NULL AND customer_id IS NOT NULL/.test(migration) &&
-      /uq_creq_pending_vendor[\s\S]{0,200}?WHERE status = 'pending' AND deleted_at IS NULL AND qb_vendor_id IS NOT NULL/.test(migration)
+    /uq_creq_pending_customer[\s\S]{0,200}?WHERE status = 'pending' AND deleted_at IS NULL AND customer_id IS NOT NULL/.test(migration) && // entity-status
+      /uq_creq_pending_vendor[\s\S]{0,200}?WHERE status = 'pending' AND deleted_at IS NULL AND qb_vendor_id IS NOT NULL/.test(migration) // entity-status
   );
 
   // Frontend, mitad (a): la puerta del cajero existe y NO es el modal de

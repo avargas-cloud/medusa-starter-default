@@ -92,10 +92,10 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, 10_000));
     const status = await bridge(`/api/sync/status/${queued.operationId}`);
     op = status?.operation;
-    if (op?.status === "completed" || op?.status === "failed") break;
+    if (op?.status === "completed" || op?.status === "failed") break; // bridge-status
     console.log(`     ⏳ poll ${attempt}: ${op?.status ?? "unknown"}`);
   }
-  if (op?.status !== "completed") {
+  if (op?.status !== "completed") { // bridge-status
     console.log(`  ❌ query did not complete: ${op?.status} ${op?.error ?? ""}`);
     process.exit(1);
   }

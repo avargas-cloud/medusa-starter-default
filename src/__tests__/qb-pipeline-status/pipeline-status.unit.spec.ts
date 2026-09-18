@@ -110,6 +110,7 @@ describe("pipeline-status vocabulary", () => {
         expect(has(SALES_SQL.synced, "confirmed")).toBe(false);
         expect(has(SALES_SQL.blocked, "waiting")).toBe(false);
         expect(has(SALES_SQL.dispatchable, "waiting")).toBe(true);
+        expect(has(SALES_SQL.dispatchable, "pending")).toBe(false); // sealed
         expect(WRITE.sales.dispatchable).toBe("waiting");
         expect(has(PURCHASE_SQL.failed, "failed_permanent")).toBe(false);
         expect(has(LOG_SQL.synced, "completed")).toBe(false);

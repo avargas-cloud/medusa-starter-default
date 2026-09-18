@@ -1,3 +1,4 @@
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import {
   ADD_CAPABLE_STEPS,
   PIPELINE_VERDICT_PATTERNS,
@@ -15,7 +16,7 @@ import {
 describe("evaluateRetryGate", () => {
   const base: RetryGateInput = {
     step: "invoice",
-    status: "failed",
+    status: WRITE.sales.failed,
     error: null,
     bridgeOpId: null,
     qbTxnId: null,
@@ -27,7 +28,7 @@ describe("evaluateRetryGate", () => {
     const verdict = evaluateRetryGate({
       ...base,
       step: "vendor_bill_payment_check",
-      status: "failed",
+      status: WRITE.sales.failed,
       bridgeOpId: "op_123",
     });
     expect(verdict.allow).toBe(true);

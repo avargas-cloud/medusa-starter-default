@@ -68,7 +68,7 @@ const ALL_LITERALS = [...CANONICAL, ...LEGACY];
 // one of the row writers (a caller of `writePipelineRow({status: "pending"})`
 // never names the table, and that is exactly where a literal hides).
 const TABLE_RX =
-  /\bqb_(order|purchase_order|item_receipt|vendor_bill|item|vendor|inventory_adjustment)_pipeline\b|\bqb_sync_log\b|pipeline-status["']|\b(writePipelineRow|enqueueSalesMutation|enqueuePurchaseQbOperation|upsertItemPipelineRow|seedPipelineRow|adoptedPipelineRow|deferPipelineRow|failOrRetryPipelineRow|failPipelineRow|confirmPipelineRow|skipPipelineRow)\b/;
+  /\bqb_(order|purchase_order|item_receipt|vendor_bill|item|vendor|inventory_adjustment)_pipeline\b|\bqb_sync_log\b|pipeline-status["']|quickbooks\/(pipeline|consolidator)\/|\b(writePipelineRow|enqueueSalesMutation|enqueuePurchaseQbOperation|upsertItemPipelineRow|seedPipelineRow|adoptedPipelineRow|deferPipelineRow|failOrRetryPipelineRow|failPipelineRow|confirmPipelineRow|skipPipelineRow)\b/;
 
 // A literal counts when it sits next to a status column/field. Both orders:
 //   status = 'x' · status IN ('x', 'y') · status: "x" · status === "x"

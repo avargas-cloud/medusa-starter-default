@@ -1,3 +1,4 @@
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 import {
   describeBlockers,
   findVoidBlockers,
@@ -23,7 +24,7 @@ import {
 const row = (over: Partial<PipelineOperationRow>): PipelineOperationRow => ({
   id: "row-1",
   step: "invoice",
-  status: "submitted",
+  status: WRITE.sales.submitted,
   reference_id: "inv_1",
   medusa_ref_number: "INV-1",
   next_retry_at: null,
@@ -42,7 +43,7 @@ describe("findVoidBlockers", () => {
     // Si esto regresiona, el void queda diferido para siempre sin error: se
     // renueva su propio next_retry_at cada 45 s hasta el tope y recién ahí falla.
     const pool = fakePool([
-      row({ id: VOID_ROW_ID, step: "void_invoice", status: "pending" }),
+      row({ id: VOID_ROW_ID, step: "void_invoice", status: WRITE.sales.dispatchable }),
     ]);
 
     const blockers = await findVoidBlockers(pool as any, {
@@ -58,7 +59,7 @@ describe("findVoidBlockers", () => {
   it("otro void del mismo documento no cuenta como bloqueante", async () => {
     // Dos voids esperándose mutuamente es un deadlock, no una protección.
     const pool = fakePool([
-      row({ id: "otro-void", step: "void_invoice", status: "pending" }),
+      row({ id: "otro-void", step: "void_invoice", status: WRITE.sales.dispatchable }),
     ]);
 
     const blockers = await findVoidBlockers(pool as any, {
@@ -73,7 +74,7 @@ describe("findVoidBlockers", () => {
 
   it("bloquea sobre el ADD en vuelo del mismo documento", async () => {
     const pool = fakePool([
-      row({ id: "add-row", step: "invoice", status: "submitted" }),
+      row({ id: "add-row", step: "invoice", status: WRITE.sales.submitted }),
     ]);
 
     const blockers = await findVoidBlockers(pool as any, {
@@ -92,7 +93,7 @@ describe("findVoidBlockers", () => {
       row({
         id: "mod-row",
         step: "credit_memo_mod",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         medusa_ref_number: "CM-1105",
       }),
     ]);
@@ -115,7 +116,7 @@ describe("findVoidBlockers", () => {
       row({
         id: "muerta",
         step: "invoice",
-        status: "failed",
+        status: WRITE.sales.failed,
         next_retry_at: null,
       }),
     ]);
@@ -135,7 +136,7 @@ describe("findVoidBlockers", () => {
       row({
         id: "reintenta",
         step: "invoice",
-        status: "failed",
+        status: WRITE.sales.error,
         next_retry_at: new Date("2026-07-29T16:00:00Z"),
       }),
     ]);
@@ -154,7 +155,7 @@ describe("findVoidBlockers", () => {
     // Un sales_receipt no puede cambiar una invoice: si lo contara, el void de
     // una invoice quedaría rehén de un documento distinto de la misma orden.
     const pool = fakePool([
-      row({ id: "sr", step: "sales_receipt", status: "submitted" }),
+      row({ id: "sr", step: "sales_receipt", status: WRITE.sales.submitted }),
     ]);
 
     const blockers = await findVoidBlockers(pool as any, {
@@ -169,7 +170,7 @@ describe("findVoidBlockers", () => {
 
   it("un step de void desconocido no bloquea nada (fail-open explícito)", async () => {
     const pool = fakePool([
-      row({ id: "algo", step: "invoice", status: "submitted" }),
+      row({ id: "algo", step: "invoice", status: WRITE.sales.submitted }),
     ]);
 
     const blockers = await findVoidBlockers(pool as any, {

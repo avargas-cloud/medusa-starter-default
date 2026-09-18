@@ -21,7 +21,8 @@
  *      backend booted against THIS database): pipeline-summary buckets are
  *      canonical; Mark fixed / Retry work on converted rows; the POS
  *      qb-pipeline-status route returns the row
- *   §8 CONTRACT migration refuses to run while a legacy row exists, then runs
+ *   §8 CONTRACT migration refuses to run while a legacy row exists, then runs;
+ *      §9 SEAL sweeps `pending` and drops it from the CHECK (throwaway tx)
  *      once the conversion is complete (exercised on a throwaway copy of the
  *      fixtures — the sandbox DB stays in the EXPAND shape)
  *
@@ -59,8 +60,10 @@ import {
 const LEGACY_BLOCKED = VOCAB_PHASE === "expand" ? "waiting" : "blocked";
 const LEGACY_SYNCED = VOCAB_PHASE === "expand" ? "confirmed" : "synced";
 const LEGACY_RETRYING = VOCAB_PHASE === "expand" ? "failed" : "error";
+const LEGACY_DISPATCHABLE = VOCAB_PHASE === "expand" ? "pending" : "waiting";
 import { QbPipelineStatusVocabExpand20260918000001 } from "../../migrations/Migration20260918000001-QbPipelineStatusVocabExpand";
 import { QbPipelineStatusVocabContract20260918000002 } from "../../migrations/Migration20260918000002-QbPipelineStatusVocabContract";
+import { QbPipelineStatusVocabSeal20260918000003 } from "../../migrations/Migration20260918000003-QbPipelineStatusVocabSeal";
 
 const DB = process.env.DATABASE_URL ?? "";
 if (!DB.includes(":5499/")) {
@@ -135,7 +138,7 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     ids.parent = await insertSales(c, { step: "invoice", status: LEGACY_SYNCED, qb_txn_id: "TXN-PARENT" });
     ids.child = await insertSales(c, { step: "invoice_update", status: LEGACY_BLOCKED, depends_on: ids.parent, qb_txn_id: "TXN-PARENT" });
     // created/updated far in the past so the LIMIT 20 claim batch takes ours first.
-    ids.dispatchable = await insertSales(c, { step: "estimate_deactivate", status: "pending", order_id: `${TAG}-od`, qb_txn_id: "TXN-E", created_at: "2000-01-01" });
+    ids.dispatchable = await insertSales(c, { step: "estimate_deactivate", status: LEGACY_DISPATCHABLE, order_id: `${TAG}-od`, qb_txn_id: "TXN-E", created_at: "2000-01-01" });
     ids.retryDue = await insertSales(c, { step: "estimate_deactivate", status: LEGACY_RETRYING, order_id: `${TAG}-or`, next_retry_at: "2020-01-01", qb_txn_id: "TXN-R", created_at: "2000-01-01" });
     ids.terminal = await insertSales(c, { step: "estimate_deactivate", status: "failed", order_id: `${TAG}-ot`, next_retry_at: null, qb_txn_id: "TXN-T" });
     ids.heldSo = await insertSales(c, { step: "sales_order", status: LEGACY_BLOCKED, depends_on: null, created_at: "2001-01-01" });
@@ -198,7 +201,7 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     const r = await status(c, ids.retryDue);
     const t = await status(c, ids.terminal);
     const h = await status(c, ids.heldSo);
-    check("legacy `pending` row was claimed and dispatched", d.status !== "pending", d.status);
+    check(`legacy \`${LEGACY_DISPATCHABLE}\` row was claimed and dispatched`, d.status !== LEGACY_DISPATCHABLE, d.status);
     // The handler either re-submits (bridge dead → transient → error+backoff)
     // or fails it terminally with a reason; a claimed row always has `error`
     // set and NEVER keeps the stale 2020 backoff.
@@ -327,6 +330,23 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     check("CONTRACT runs once rows are canonical", ran);
     check("CONTRACT dropped the 3 legacy partial indexes", ran && oldIdx.rows[0].n === 0, String(oldIdx.rows[0].n));
     check("CONTRACT narrowed the item CHECK (no failed_permanent)", ran && !/failed_permanent/.test(narrowed.rows[0]?.d ?? "x"));
+    // §9 SEAL on top of CONTRACT, same throwaway tx: sweeps `pending` → `waiting`
+    // without moving updated_at and drops `pending` from the sales CHECK.
+    if (ran) {
+      const straggler = await insertSales(c, { step: "invoice", status: "pending", order_id: `${TAG}-seal`, created_at: "2002-01-01" });
+      let sealed = true;
+      try {
+        await new QbPipelineStatusVocabSeal20260918000003().up(shim(c) as never);
+      } catch (e) {
+        sealed = false;
+        console.log("   ", String(e).slice(0, 300));
+      }
+      const sw = await c.query(`SELECT status, updated_at FROM qb_order_pipeline WHERE id = $1`, [straggler]);
+      const chk = await c.query(`SELECT pg_get_constraintdef(oid) d FROM pg_constraint WHERE conname = 'qb_order_pipeline_status_check'`);
+      check("SEAL runs after CONTRACT", sealed);
+      check("SEAL swept the straggler `pending` → `waiting` without moving updated_at", sw.rows[0]?.status === "waiting" && new Date(sw.rows[0].updated_at).getUTCFullYear() === 2002, JSON.stringify(sw.rows[0]));
+      check("SEAL dropped `pending` from the sales CHECK", sealed && !/'pending'/.test(chk.rows[0]?.d ?? "'pending'"));
+    }
     await c.query("ROLLBACK");
   } finally {
     try {

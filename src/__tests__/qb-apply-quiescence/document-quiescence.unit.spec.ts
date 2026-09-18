@@ -1,3 +1,4 @@
+import { WRITE, SALES_SQL, literalsOf } from "../../lib/quickbooks/pipeline-status";
 import {
   CREDIT_MEMO_MUTATION_STEPS,
   INVOICE_MUTATION_STEPS,
@@ -25,7 +26,7 @@ import {
 const row = (over: Partial<PipelineOperationRow>): PipelineOperationRow => ({
   id: "row-1",
   step: "credit_memo_mod",
-  status: "pending",
+  status: WRITE.sales.dispatchable,
   reference_id: "cm-1",
   medusa_ref_number: "CM-1105",
   next_retry_at: null,
@@ -33,7 +34,7 @@ const row = (over: Partial<PipelineOperationRow>): PipelineOperationRow => ({
 });
 
 describe("isLiveOperation", () => {
-  it.each(["waiting", "pending", "processing", "submitted"])(
+  it.each([...literalsOf(SALES_SQL.inFlight)])(
     "treats %s as live (the document may still change)",
     (status) => {
       expect(isLiveOperation(row({ status }))).toBe(true);
@@ -50,7 +51,7 @@ describe("isLiveOperation", () => {
   it("treats a failed row with a scheduled retry as live", () => {
     expect(
       isLiveOperation(
-        row({ status: "failed", next_retry_at: new Date("2030-01-01") })
+        row({ status: WRITE.sales.error, next_retry_at: new Date("2030-01-01") })
       )
     ).toBe(true);
   });
@@ -59,7 +60,7 @@ describe("isLiveOperation", () => {
     // Terminal. It must not block the apply forever — it surfaces in the UI
     // and the digest on its own.
     expect(
-      isLiveOperation(row({ status: "failed", next_retry_at: null }))
+      isLiveOperation(row({ status: WRITE.sales.failed, next_retry_at: null }))
     ).toBe(false);
   });
 });
@@ -124,7 +125,7 @@ describe("findApplyPaymentBlockers", () => {
       row({
         id: "cm-mod-row",
         step: "credit_memo_mod",
-        status: "pending",
+        status: WRITE.sales.dispatchable,
         medusa_ref_number: "CM-1105",
       }),
     ]);
@@ -138,9 +139,9 @@ describe("findApplyPaymentBlockers", () => {
 
   it("returns nothing when every operation on both documents has settled", async () => {
     const pool = fakePool([
-      row({ id: "a", step: "credit_memo", status: "confirmed" }),
-      row({ id: "b", step: "invoice", status: "confirmed" }),
-      row({ id: "c", step: "credit_memo_mod", status: "skipped" }),
+      row({ id: "a", step: "credit_memo", status: WRITE.sales.synced }),
+      row({ id: "b", step: "invoice", status: WRITE.sales.synced }),
+      row({ id: "c", step: "credit_memo_mod", status: WRITE.sales.skipped }),
     ]);
     const blockers = await findApplyPaymentBlockers(pool, {
       invoiceId: "inv-1",
@@ -151,7 +152,7 @@ describe("findApplyPaymentBlockers", () => {
 
   it("never blocks on the apply row being dispatched", async () => {
     const pool = fakePool([
-      row({ id: "self", step: "apply_payment", status: "processing" }),
+      row({ id: "self", step: "apply_payment", status: WRITE.sales.processing }),
     ]);
     const blockers = await findApplyPaymentBlockers(pool, {
       invoiceId: "inv-1",
@@ -217,17 +218,17 @@ describe("describeBlockers", () => {
         {
           id: "x",
           step: "credit_memo_mod",
-          status: "pending",
+          status: WRITE.sales.dispatchable,
           reference: "CM-1105",
         },
       ])
-    ).toBe("credit_memo_mod (CM-1105) [pending]");
+    ).toBe(`credit_memo_mod (CM-1105) [${WRITE.sales.dispatchable}]`);
   });
 
   it("omits the reference when the row has none", () => {
     expect(
       describeBlockers([
-        { id: "x", step: "invoice_update", status: "submitted", reference: null },
+        { id: "x", step: "invoice_update", status: WRITE.sales.submitted, reference: null },
       ])
     ).toBe("invoice_update [submitted]");
   });

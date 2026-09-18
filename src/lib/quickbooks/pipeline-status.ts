@@ -30,9 +30,10 @@
  *                             dispatchable until every legacy row is converted.
  *   convert script            rewrites rows (sales waiting→blocked, …)
  *   VOCAB_PHASE = "contract"  single literals; sales dispatchable = `waiting`.
- *                             `pending` stays readable for the ≤8 min the
- *                             expand build keeps writing it during the deploy;
- *                             the consolidator sweeps it to `waiting`.
+ *                             `pending` stayed readable for the ≤8 min the
+ *                             expand build kept writing it during that deploy;
+ *                             the SEAL migration swept the stragglers and
+ *                             dropped it from the CHECK (3 deploys, 09/17→09/18).
  */
 
 export const PIPELINE_STATUSES = [
@@ -135,7 +136,7 @@ export function literalsOf(list: string): readonly string[] {
 /** Sales (`qb_order_pipeline`). */
 export const SALES_SQL = {
   /** Rows the dispatcher may claim now (also honour `next_retry_at` on them). */
-  dispatchable: EXPAND ? q("pending") : q("waiting", "pending"),
+  dispatchable: EXPAND ? q("pending") : q("waiting"),
   /** Parked behind `depends_on` or a time rule. */
   blocked: EXPAND ? q("blocked", "waiting") : q("blocked"),
   processing: q("processing"),
@@ -148,7 +149,7 @@ export const SALES_SQL = {
   /** Any status that means "this row may still reach QuickBooks". */
   inFlight: EXPAND
     ? q("pending", "processing", "submitted", "waiting", "blocked")
-    : q("waiting", "pending", "processing", "submitted", "blocked"),
+    : q("waiting", "processing", "submitted", "blocked"),
   /** `error` OR legacy `failed`-with-backoff. Pair with `retryDue()`. */
   retryable: EXPAND ? q("error", "failed") : q("error"),
   /** Terminal failure literal (pair with `salesTerminal()` in expand). */
@@ -214,7 +215,7 @@ export const LOG_SQL = {
 export const WRITE = {
   sales: {
     // The expand build wrote the legacy `pending` here; since contract it is
-    // `waiting`. `SALES_SQL.dispatchable` still READS `pending` until SEAL.
+    // `waiting` (SEAL swept the last stragglers and dropped it from the CHECK).
     dispatchable: "waiting" as const,
     blocked: "blocked" as const,
     processing: "processing" as const,
@@ -254,8 +255,7 @@ export const CHECK_LITERALS = {
     log: [...PIPELINE_STATUSES, "completed"],
   },
   contract: {
-    /** `pending` stays until the post-contract sweep; sealed in the next deploy. */
-    sales: [...PIPELINE_STATUSES, "pending", "manual"],
+    sales: [...PIPELINE_STATUSES, "manual"],
     purchaseStatus: [...PIPELINE_STATUSES],
     purchaseMod: [...PIPELINE_STATUSES],
     purchaseVoid: [...PIPELINE_STATUSES],
