@@ -165,6 +165,15 @@ const EXEMPT: Map<string, string> = new Map([
     'src/lib/quickbooks/vendor-credit-add.ts::tag("ListID", line.itemListId)',
     "hijo ya escapado por tag(), que aplica escapeXml al valor",
   ],
+  // 2026-09-18: InventorySiteRef por línea (VC-1002 cayó en "Unspecified Site").
+  [
+    'src/lib/quickbooks/vendor-credit-add.ts::tag("ListID", line.inventorySiteListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-mod.ts::tag("ListID", line.inventorySiteListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
   [
     'src/lib/quickbooks/vendor-credit-add.ts::parts.join("")',
     "hijos ya escapados por tag(), que aplica escapeXml a cada valor",

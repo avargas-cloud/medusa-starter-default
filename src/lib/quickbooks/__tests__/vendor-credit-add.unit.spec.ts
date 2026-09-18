@@ -112,3 +112,35 @@ describe("buildVendorCreditAddQbxml", () => {
     expect(xml).not.toContain("<Memo>");
   });
 });
+
+describe("buildVendorCreditAddQbxml — InventorySiteRef (2026-09-18)", () => {
+  it("emits InventorySiteRef right after ItemRef when the line carries a site (DTD order)", () => {
+    const xml = buildVendorCreditAddQbxml({
+      ...BASE_INPUT,
+      itemLines: [
+        {
+          itemListId: "80000003-ITEM",
+          inventorySiteListId: "80000001-1331053531",
+          quantity: 6,
+          unitCostCents: 8800,
+          amountCents: 52800,
+        },
+      ],
+    });
+    expect(xml).toContain(
+      "<ItemLineAdd><ItemRef><ListID>80000003-ITEM</ListID></ItemRef>" +
+        "<InventorySiteRef><ListID>80000001-1331053531</ListID></InventorySiteRef>" +
+        "<Quantity>6</Quantity>"
+    );
+  });
+
+  it("omits InventorySiteRef when the line has no site (service / non-inventory → QB 3140 otherwise)", () => {
+    const xml = buildVendorCreditAddQbxml({
+      ...BASE_INPUT,
+      itemLines: [
+        { itemListId: "80000003-ITEM", inventorySiteListId: null, quantity: 1, unitCostCents: 100, amountCents: 100 },
+      ],
+    });
+    expect(xml).not.toContain("InventorySiteRef");
+  });
+});

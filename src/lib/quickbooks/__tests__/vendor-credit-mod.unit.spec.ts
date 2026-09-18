@@ -71,3 +71,30 @@ describe("buildVendorCreditModQbxml", () => {
     expect(xml).toContain("<Memo>a &amp; b &lt;c&gt;</Memo>");
   });
 });
+
+describe("buildVendorCreditModQbxml — InventorySiteRef (2026-09-18)", () => {
+  it("emits InventorySiteRef between ItemRef and Quantity on existing and new lines", () => {
+    const xml = buildVendorCreditModQbxml({
+      ...base,
+      itemLines: [
+        {
+          txnLineId: "1D0AFF-1789143761",
+          itemListId: "80000ABC-1",
+          inventorySiteListId: "80000001-1331053531",
+          quantity: 6,
+          unitCostCents: 8800,
+          amountCents: 52800,
+        },
+        { txnLineId: null, itemListId: "80000DEF-1", inventorySiteListId: null, quantity: 1, unitCostCents: 100, amountCents: 100 },
+      ],
+    });
+    expect(xml).toContain(
+      "<ItemLineMod><TxnLineID>1D0AFF-1789143761</TxnLineID><ItemRef><ListID>80000ABC-1</ListID></ItemRef>" +
+        "<InventorySiteRef><ListID>80000001-1331053531</ListID></InventorySiteRef><Quantity>6</Quantity>"
+    );
+    expect(xml).toContain(
+      "<ItemLineMod><TxnLineID>-1</TxnLineID><ItemRef><ListID>80000DEF-1</ListID></ItemRef><Quantity>1</Quantity>"
+    );
+    expect(xml.match(/InventorySiteRef>/g)?.length).toBe(2);
+  });
+});

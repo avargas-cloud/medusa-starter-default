@@ -39,6 +39,7 @@ import {
 import { buildTxnVoidQbxml } from "../quickbooks/txn-void-add";
 import { toQbRefNumber } from "../quickbooks/qb-ref-number";
 import { isQbSyncEnabled } from "../quickbooks/sync-enabled";
+import { loadPoLocationSiteListId, resolveVendorCreditLineSite } from "./vendor-credit-inventory-site";
 
 export type EnqueueKnex = PurchaseDependencyKnex;
 
@@ -58,6 +59,7 @@ interface CreditRow {
   memo: string | null;
   qb_txn_id: string | null;
   qb_edit_sequence: string | null;
+  purchase_order_id: string | null;
 }
 
 /**
@@ -85,6 +87,44 @@ interface CreditLineRow {
   description: string | null;
   qb_txn_line_id: string | null;
   variant_qb_item_list_id: string | null;
+  /** Non-inventory flags — decide whether the line carries an InventorySiteRef. */
+  qb_item_type: string | null;
+  quickbooks_is_service: string | null;
+  quickbooks_no_site: string | null;
+}
+
+const CREDIT_SELECT = `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
+            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence,
+            purchase_order_id
+       FROM vendor_credit
+      WHERE id = ? AND deleted_at IS NULL`;
+
+/**
+ * One SELECT shared by the Add and the Mod: the variant's QB ListID plus the
+ * item-type flags (variant first, product as fallback — same precedence as
+ * `order-flow-core.ts`) that decide whether the line gets a site.
+ */
+const CREDIT_LINES_SELECT = `SELECT vcl.id, vcl.line_type, vcl.variant_id, vcl.qty, vcl.unit_cost_cents,
+            vcl.qb_account_list_id, vcl.amount_cents, vcl.description, vcl.qb_txn_line_id,
+            pv.metadata ->> 'quickbooks_id' AS variant_qb_item_list_id,
+            COALESCE(pv.metadata ->> 'qb_item_type', p.metadata ->> 'qb_item_type') AS qb_item_type,
+            COALESCE(pv.metadata ->> 'quickbooks_is_service', p.metadata ->> 'quickbooks_is_service') AS quickbooks_is_service,
+            COALESCE(pv.metadata ->> 'quickbooks_no_site', p.metadata ->> 'quickbooks_no_site') AS quickbooks_no_site
+       FROM vendor_credit_line vcl
+       LEFT JOIN product_variant pv
+         ON pv.id = vcl.variant_id AND pv.deleted_at IS NULL
+       LEFT JOIN product p
+         ON p.id = pv.product_id AND p.deleted_at IS NULL
+      WHERE vcl.credit_id = ? AND vcl.deleted_at IS NULL
+      ORDER BY vcl.sort ASC, vcl.created_at ASC`;
+
+function lineSite(line: CreditLineRow, locationSiteListId: string | null): string | null {
+  return resolveVendorCreditLineSite({
+    locationSiteListId,
+    qbItemType: line.qb_item_type,
+    quickbooksIsService: line.quickbooks_is_service,
+    quickbooksNoSite: line.quickbooks_no_site,
+  });
 }
 
 async function loadApAccountListId(
@@ -162,13 +202,7 @@ export async function loadVendorCreditAddFacts(
   knex: EnqueueKnex,
   vendorCreditId: string
 ): Promise<VendorCreditAddFacts> {
-  const creditResult = await knex.raw(
-    `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
-            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence
-       FROM vendor_credit
-      WHERE id = ? AND deleted_at IS NULL`,
-    [vendorCreditId]
-  );
+  const creditResult = await knex.raw(CREDIT_SELECT, [vendorCreditId]);
   const credit = (creditResult.rows[0] ?? null) as CreditRow | null;
   if (!credit) return { ready: false, reason: "vendor credit not found" };
   if (credit.status !== "posted") {
@@ -186,17 +220,8 @@ export async function loadVendorCreditAddFacts(
     return { ready: false, reason: "gl_account_map has no 'accounts_payable' entry" };
   }
 
-  const linesResult = await knex.raw(
-    `SELECT vcl.id, vcl.line_type, vcl.variant_id, vcl.qty, vcl.unit_cost_cents,
-            vcl.qb_account_list_id, vcl.amount_cents, vcl.description, vcl.qb_txn_line_id,
-            pv.metadata ->> 'quickbooks_id' AS variant_qb_item_list_id
-       FROM vendor_credit_line vcl
-       LEFT JOIN product_variant pv
-         ON pv.id = vcl.variant_id AND pv.deleted_at IS NULL
-      WHERE vcl.credit_id = ? AND vcl.deleted_at IS NULL
-      ORDER BY vcl.sort ASC, vcl.created_at ASC`,
-    [vendorCreditId]
-  );
+  const linesResult = await knex.raw(CREDIT_LINES_SELECT, [vendorCreditId]);
+  const locationSiteListId = await loadPoLocationSiteListId(knex, credit.purchase_order_id);
   const lines = linesResult.rows as CreditLineRow[];
   if (lines.length === 0) {
     return { ready: false, reason: "vendor credit has no lines" };
@@ -215,6 +240,7 @@ export async function loadVendorCreditAddFacts(
       const qty = Number(line.qty ?? 0);
       itemLines.push({
         itemListId: line.variant_qb_item_list_id,
+        inventorySiteListId: lineSite(line, locationSiteListId),
         quantity: qty,
         unitCostCents: BigInt(Math.round(Number(line.unit_cost_cents ?? 0))),
         amountCents: BigInt(Math.round(Number(line.amount_cents))),
@@ -305,13 +331,7 @@ export async function enqueueVendorCreditVoid(
     return { queued: false, reason: "QB_VENDOR_BILL_MODE is not 'bill' (flag off)" };
   }
 
-  const creditResult = await knex.raw(
-    `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
-            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence
-       FROM vendor_credit
-      WHERE id = ? AND deleted_at IS NULL`,
-    [vendorCreditId]
-  );
+  const creditResult = await knex.raw(CREDIT_SELECT, [vendorCreditId]);
   const credit = (creditResult.rows[0] ?? null) as CreditRow | null;
   if (!credit) return { queued: false, reason: "vendor credit not found" };
   if (!credit.qb_txn_id) {
@@ -373,13 +393,7 @@ export async function loadVendorCreditModFacts(
   vendorCreditId: string,
   editSequence: string | null
 ): Promise<VendorCreditModFacts> {
-  const creditResult = await knex.raw(
-    `SELECT id, number, status, vendor_id, vendor_qb_list_id_snapshot,
-            vendor_name_snapshot, credit_date, reason, memo, qb_txn_id, qb_edit_sequence
-       FROM vendor_credit
-      WHERE id = ? AND deleted_at IS NULL`,
-    [vendorCreditId]
-  );
+  const creditResult = await knex.raw(CREDIT_SELECT, [vendorCreditId]);
   const credit = (creditResult.rows[0] ?? null) as CreditRow | null;
   if (!credit) return { ready: false, reason: "vendor credit not found" };
   if (credit.status !== "posted") {
@@ -398,17 +412,8 @@ export async function loadVendorCreditModFacts(
     return { ready: false, reason: "gl_account_map has no 'accounts_payable' entry" };
   }
 
-  const linesResult = await knex.raw(
-    `SELECT vcl.id, vcl.line_type, vcl.variant_id, vcl.qty, vcl.unit_cost_cents,
-            vcl.qb_account_list_id, vcl.amount_cents, vcl.description, vcl.qb_txn_line_id,
-            pv.metadata ->> 'quickbooks_id' AS variant_qb_item_list_id
-       FROM vendor_credit_line vcl
-       LEFT JOIN product_variant pv
-         ON pv.id = vcl.variant_id AND pv.deleted_at IS NULL
-      WHERE vcl.credit_id = ? AND vcl.deleted_at IS NULL
-      ORDER BY vcl.sort ASC, vcl.created_at ASC`,
-    [vendorCreditId]
-  );
+  const linesResult = await knex.raw(CREDIT_LINES_SELECT, [vendorCreditId]);
+  const locationSiteListId = await loadPoLocationSiteListId(knex, credit.purchase_order_id);
   const lines = linesResult.rows as CreditLineRow[];
   if (lines.length === 0) return { ready: false, reason: "vendor credit has no lines" };
 
@@ -422,6 +427,7 @@ export async function loadVendorCreditModFacts(
       itemLines.push({
         txnLineId: line.qb_txn_line_id,
         itemListId: line.variant_qb_item_list_id,
+        inventorySiteListId: lineSite(line, locationSiteListId),
         quantity: Number(line.qty ?? 0),
         unitCostCents: BigInt(Math.round(Number(line.unit_cost_cents ?? 0))),
         amountCents: BigInt(Math.round(Number(line.amount_cents))),

@@ -37,6 +37,8 @@ export interface VendorCreditModExpenseLine {
 export interface VendorCreditModItemLine {
   txnLineId: string | null;
   itemListId: string;
+  /** See `VendorCreditItemLineInput.inventorySiteListId`. Probed on 2026-09-18 (fake TxnID → 3120). */
+  inventorySiteListId?: string | null;
   quantity: number;
   unitCostCents: bigint | number;
   amountCents: bigint | number;
@@ -85,6 +87,9 @@ export function buildVendorCreditModQbxml(input: VendorCreditModInput): string {
         `<ItemLineMod>` +
         tag("TxnLineID", line.txnLineId ?? "-1") +
         `<ItemRef>${tag("ListID", line.itemListId)}</ItemRef>` +
+        (line.inventorySiteListId
+          ? `<InventorySiteRef>${tag("ListID", line.inventorySiteListId)}</InventorySiteRef>`
+          : "") +
         tag("Quantity", String(line.quantity)) +
         tag("Cost", centsToDollarsString(line.unitCostCents)) +
         tag("Amount", centsToDollarsString(line.amountCents)) +

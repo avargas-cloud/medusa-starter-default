@@ -22,6 +22,9 @@ function fakeKnex(overrides: {
       if (/FROM vendor_credit_line/.test(sql)) {
         return { rows: overrides.lines ?? [] };
       }
+      if (/FROM purchase_order\b/.test(sql)) {
+        return { rows: [{ qb_inventory_site_list_id: null }] };
+      }
       throw new Error(`fakeKnex: unhandled SQL: ${sql}`);
     },
     transaction: async <T,>(fn: (trx: unknown) => Promise<T>) => fn(undefined as never),
@@ -116,5 +119,32 @@ describe("enqueueVendorCreditMod", () => {
     expect(
       await enqueueVendorCreditMod(fakeKnex({ credit: { ...posted, qb_txn_id: null }, lines }) as never, "vcr_1")
     ).toEqual({ queued: false, reason: expect.stringMatching(/no qb_txn_id/) });
+  });
+});
+
+describe("loadVendorCreditModFacts — InventorySiteRef (2026-09-18)", () => {
+  it("re-sends every inventory line WITH its site, so a Mod moves the quantity out of Unspecified Site (VC-1002)", async () => {
+    const facts = await loadVendorCreditModFacts(
+      fakeKnex({
+        credit: { ...posted, purchase_order_id: "po_1" },
+        lines: [{ ...lines[0], qb_item_type: "Inventory" }],
+      }) as never,
+      "vcr_1",
+      "1789999999"
+    );
+    expect(facts.ready).toBe(true);
+    if (!facts.ready) return;
+    expect(facts.qbxml).toContain(
+      "<TxnLineID>1D0AFF-1789143761</TxnLineID><ItemRef><ListID>80000ABC-1</ListID></ItemRef><InventorySiteRef><ListID>80000001-1331053531</ListID></InventorySiteRef><Quantity>4</Quantity>"
+    );
+  });
+
+  it("a service line in a Mod carries no InventorySiteRef", async () => {
+    const facts = await loadVendorCreditModFacts(
+      fakeKnex({ credit: { ...posted, purchase_order_id: "po_1" }, lines: [{ ...lines[0], qb_item_type: "Service" }] }) as never,
+      "vcr_1",
+      "1"
+    );
+    expect(facts.ready && !facts.qbxml.includes("InventorySiteRef")).toBe(true);
   });
 });

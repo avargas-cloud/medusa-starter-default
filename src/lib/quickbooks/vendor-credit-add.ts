@@ -9,7 +9,8 @@
  * `.claude/rules/qb-pipeline.md` 2026-07-28).
  *
  * Order: VendorRef → APAccountRef → TxnDate → RefNumber → Memo →
- * ExpenseLineAdd* → ItemLineAdd*.
+ * ExpenseLineAdd* → ItemLineAdd* (ItemRef → InventorySiteRef → Quantity →
+ * Cost → Amount; probed with a nonexistent vendor on 2026-09-18 → 3120).
  *
  * DISPATCH CHOICE (documented for the R3 executor): the bridge
  * (`quickbooks-bridge`, a separate deploy) has NO typed builder for
@@ -37,6 +38,13 @@ export interface VendorCreditExpenseLineInput {
 
 export interface VendorCreditItemLineInput {
   itemListId: string;
+  /**
+   * QB InventorySite the return hits. `null`/absent = no `<InventorySiteRef>`
+   * (service / non-inventory items — QB error 3140 otherwise). Without it QB
+   * books inventory items against "Unspecified Site" (VC-1002, 2026-09-18).
+   * DTD position: right after ItemRef.
+   */
+  inventorySiteListId?: string | null;
   quantity: number;
   unitCostCents: bigint | number;
   amountCents: bigint | number;
@@ -92,6 +100,9 @@ export function buildVendorCreditAddQbxml(input: VendorCreditAddInput): string {
       }
       const parts = [
         `<ItemRef>${tag("ListID", line.itemListId)}</ItemRef>`,
+        line.inventorySiteListId
+          ? `<InventorySiteRef>${tag("ListID", line.inventorySiteListId)}</InventorySiteRef>`
+          : "",
         tag("Quantity", String(line.quantity)),
         tag("Cost", centsToDollarsString(line.unitCostCents)),
         tag("Amount", centsToDollarsString(line.amountCents)),
