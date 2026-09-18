@@ -29,6 +29,7 @@
  *              void_status voided→synced
  *   log        completed→synced
  *   Rows in `processing` / `submitted` are never touched (a worker owns them).
+ *   `updated_at` is never moved (row triggers bypassed per transaction).
  *
  * Precondition it enforces before writing: turning a sales `failed`+retry row
  * into `error` makes it LIVE for the partial UNIQUE indexes
@@ -40,6 +41,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PoolClient } from "pg";
 import { getDbPool } from "../../api/utils/db-pool";
+import { VOCAB_PHASE } from "../../lib/quickbooks/pipeline-status";
 import {
   assertDryRunEvidence,
   latestFile,
@@ -58,7 +60,11 @@ const log = (line: string): void => process.stdout.write(`${line}\n`);
 type Step = { table: string; col: string; from: string; to: string; extra?: string };
 
 const FORWARD: Step[] = [
-  { table: "qb_order_pipeline", col: "status", from: "waiting", to: "blocked" },
+  // Only while the code is in its EXPAND phase: after CONTRACT the sales
+  // literal `waiting` IS the canonical dispatchable and must not be touched.
+  ...(VOCAB_PHASE === "expand"
+    ? [{ table: "qb_order_pipeline", col: "status", from: "waiting", to: "blocked" }]
+    : []),
   { table: "qb_order_pipeline", col: "status", from: "confirmed", to: "synced" },
   { table: "qb_order_pipeline", col: "status", from: "failed", to: "error", extra: "next_retry_at IS NOT NULL" },
   ...["qb_purchase_order_pipeline", "qb_item_receipt_pipeline", "qb_vendor_bill_pipeline", "qb_item_pipeline", "qb_vendor_pipeline", "qb_inventory_adjustment_pipeline"].flatMap((t) => [
@@ -73,7 +79,9 @@ const FORWARD: Step[] = [
 ];
 
 const REVERSE_STEPS: Step[] = [
-  { table: "qb_order_pipeline", col: "status", from: "blocked", to: "waiting" },
+  ...(VOCAB_PHASE === "expand"
+    ? [{ table: "qb_order_pipeline", col: "status", from: "blocked", to: "waiting" }]
+    : []),
   { table: "qb_order_pipeline", col: "status", from: "synced", to: "confirmed" },
   { table: "qb_order_pipeline", col: "status", from: "error", to: "failed" },
   ...["qb_purchase_order_pipeline", "qb_item_receipt_pipeline", "qb_vendor_bill_pipeline", "qb_item_pipeline", "qb_vendor_pipeline", "qb_inventory_adjustment_pipeline"].flatMap((t) => [
@@ -185,6 +193,14 @@ async function main(): Promise<void> {
       await client.query("BEGIN");
       try {
         await client.query(`SET LOCAL lock_timeout = '10s'`);
+        // `qb_order_pipeline` has a BEFORE UPDATE trigger that stamps
+        // updated_at = NOW() on ANY update. A rename must not move that clock:
+        // `findConfirmedAddTxnId` picks the TxnID by `ORDER BY updated_at DESC`
+        // and 503 (order, step) pairs have more than one synced row — the
+        // first prod run (09/17) stamped 18,350 rows to the same microsecond
+        // and had to be restored from confirmed_at. Bypass row triggers for
+        // this transaction only (superuser; no FK is touched by a status rename).
+        await client.query(`SET LOCAL session_replication_role = replica`);
         for (const s of nonZero.filter((p) => p.table === table)) {
           const r = await client.query(
             `UPDATE "${table}" SET "${s.col}" = '${s.to}' WHERE ${where(s)}`

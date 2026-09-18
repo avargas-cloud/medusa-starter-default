@@ -21,8 +21,8 @@ import { MigrationInterface, QueryRunner } from "typeorm";
  * the nine tables. A failing predeploy leaves the previous build serving —
  * that is the correct outcome if the conversion was skipped.
  *
- * File is committed with the `.pending` suffix during the EXPAND deploy so the
- * predeploy does not pick it up; phase 7 renames it to `.ts`.
+ * Lived in `src/migrations-staged/` during the EXPAND deploy so the predeploy
+ * would not pick it up; phase 7 moved it here.
  */
 export class QbPipelineStatusVocabContract20260918000002 implements MigrationInterface {
   name = "QbPipelineStatusVocabContract20260918000002";
@@ -31,7 +31,11 @@ export class QbPipelineStatusVocabContract20260918000002 implements MigrationInt
     await q.query(`SET LOCAL lock_timeout = '15s'`);
 
     const legacy: Array<[string, string, string]> = [
-      ["qb_order_pipeline", "status", `'waiting','confirmed'`],
+      // Sales `waiting` is NOT listed: since CONTRACT it is the canonical
+      // dispatchable, and the EXPAND build never wrote it (pending/blocked), so
+      // by the time this runs a `waiting` row can only be canonical. The
+      // pre-push dry-run of the conversion script is what proves 0 legacy ones.
+      ["qb_order_pipeline", "status", `'confirmed'`],
       ["qb_order_pipeline", "status", `'failed'`], // only with next_retry_at, checked below
       ["qb_purchase_order_pipeline", "status", `'failed_permanent','cancelled'`],
       ["qb_purchase_order_pipeline", "void_status", `'voided'`],

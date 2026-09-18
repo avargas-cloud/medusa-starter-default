@@ -48,11 +48,19 @@ import {
 import {
   PIPELINE_STATUSES,
   SALES_SQL,
+  VOCAB_PHASE,
   WRITE,
   normalizePipelineStatus,
 } from "../../lib/quickbooks/pipeline-status";
+
+// Legacy sales spelling of a parked row: `waiting` while the code is in its
+// EXPAND phase (dual-read). After CONTRACT that literal means dispatchable and
+// every legacy row was converted, so the fixture is planted canonical.
+const LEGACY_BLOCKED = VOCAB_PHASE === "expand" ? "waiting" : "blocked";
+const LEGACY_SYNCED = VOCAB_PHASE === "expand" ? "confirmed" : "synced";
+const LEGACY_RETRYING = VOCAB_PHASE === "expand" ? "failed" : "error";
 import { QbPipelineStatusVocabExpand20260918000001 } from "../../migrations/Migration20260918000001-QbPipelineStatusVocabExpand";
-import { QbPipelineStatusVocabContract20260918000002 } from "../../migrations-staged/Migration20260918000002-QbPipelineStatusVocabContract";
+import { QbPipelineStatusVocabContract20260918000002 } from "../../migrations/Migration20260918000002-QbPipelineStatusVocabContract";
 
 const DB = process.env.DATABASE_URL ?? "";
 if (!DB.includes(":5499/")) {
@@ -117,24 +125,25 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     const env0 = { ...process.env, ECOPOWERTECH_ENV: "sandbox" };
     const rev = spawnSync("./node_modules/.bin/tsx", ["src/scripts/fix/convert-qb-pipeline-status-vocab.ts", "--reverse"], { env: env0, encoding: "utf8" });
     if (rev.status !== 0) console.log("   reverse:", (rev.stdout + rev.stderr).slice(-300));
+    await new QbPipelineStatusVocabContract20260918000002().down(shim(c) as never);
     await new QbPipelineStatusVocabExpand20260918000001().down(shim(c) as never);
     const pre = await c.query(`SELECT count(*)::int n FROM pg_indexes WHERE indexname LIKE 'idx_qb_pipeline_%_v2'`);
     check("§0 starts from the pre-EXPAND shape (no _v2 indexes)", pre.rows[0].n === 0);
 
     // ── §1 legacy fixtures ─────────────────────────────────────────────────
     console.log("\n§1 legacy fixtures");
-    ids.parent = await insertSales(c, { step: "invoice", status: "confirmed", qb_txn_id: "TXN-PARENT" });
-    ids.child = await insertSales(c, { step: "invoice_update", status: "waiting", depends_on: ids.parent, qb_txn_id: "TXN-PARENT" });
+    ids.parent = await insertSales(c, { step: "invoice", status: LEGACY_SYNCED, qb_txn_id: "TXN-PARENT" });
+    ids.child = await insertSales(c, { step: "invoice_update", status: LEGACY_BLOCKED, depends_on: ids.parent, qb_txn_id: "TXN-PARENT" });
     // created/updated far in the past so the LIMIT 20 claim batch takes ours first.
     ids.dispatchable = await insertSales(c, { step: "estimate_deactivate", status: "pending", order_id: `${TAG}-od`, qb_txn_id: "TXN-E", created_at: "2000-01-01" });
-    ids.retryDue = await insertSales(c, { step: "estimate_deactivate", status: "failed", order_id: `${TAG}-or`, next_retry_at: "2020-01-01", qb_txn_id: "TXN-R", created_at: "2000-01-01" });
+    ids.retryDue = await insertSales(c, { step: "estimate_deactivate", status: LEGACY_RETRYING, order_id: `${TAG}-or`, next_retry_at: "2020-01-01", qb_txn_id: "TXN-R", created_at: "2000-01-01" });
     ids.terminal = await insertSales(c, { step: "estimate_deactivate", status: "failed", order_id: `${TAG}-ot`, next_retry_at: null, qb_txn_id: "TXN-T" });
-    ids.heldSo = await insertSales(c, { step: "sales_order", status: "waiting", depends_on: null });
+    ids.heldSo = await insertSales(c, { step: "sales_order", status: LEGACY_BLOCKED, depends_on: null, created_at: "2001-01-01" });
     ids.submitted = await insertSales(c, { step: "invoice", status: "submitted" });
-    ids.skipped = await insertSales(c, { step: "invoice", status: "skipped" });
-    ids.orphanPay = await insertSales(c, { step: "payment", status: "waiting", reference_id: `${TAG}-cpay`, created_at: "2020-01-01" });
-    ids.parent2 = await insertSales(c, { step: "invoice", status: "confirmed", order_id: `${TAG}-o2`, qb_txn_id: "TXN-P2" });
-    ids.child2 = await insertSales(c, { step: "invoice_update", status: "waiting", order_id: `${TAG}-o2`, depends_on: ids.parent2, qb_txn_id: "TXN-P2" });
+    ids.skipped = await insertSales(c, { step: "invoice", status: "skipped", created_at: "2001-01-01" });
+    ids.orphanPay = await insertSales(c, { step: "payment", status: LEGACY_BLOCKED, reference_id: `${TAG}-cpay`, created_at: "2020-01-01" });
+    ids.parent2 = await insertSales(c, { step: "invoice", status: LEGACY_SYNCED, order_id: `${TAG}-o2`, qb_txn_id: "TXN-P2", created_at: "2001-01-01" });
+    ids.child2 = await insertSales(c, { step: "invoice_update", status: LEGACY_BLOCKED, order_id: `${TAG}-o2`, depends_on: ids.parent2, qb_txn_id: "TXN-P2" });
     await c.query(
       `INSERT INTO qb_item_pipeline (id, variant_id, sku, op_action, status, op_payload, retries, created_at, updated_at)
        VALUES ($1, $2, $3, 'add', 'failed_permanent', '{}'::jsonb, 0, NOW(), NOW())`,
@@ -180,7 +189,7 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     await runWakeDependentsPass(container, quiet);
     const child = await status(c, ids.child);
     const childN = normalizePipelineStatus("sales", child.status, child.next_retry_at);
-    check("legacy `waiting` child behind `confirmed` parent was woken (not left waiting)", child.status !== "waiting", child.status);
+    check(`legacy \`${LEGACY_BLOCKED}\` child behind \`${LEGACY_SYNCED}\` parent was woken`, child.status !== LEGACY_BLOCKED, child.status);
     check("…and landed in a canonical non-terminal-silent state", ["processing", "submitted", "error", "failed", "synced"].includes(String(childN)), String(childN));
     if (childN === "error") check("error carries next_retry_at", !!child.next_retry_at);
 
@@ -193,10 +202,10 @@ export default async function run({ container }: ExecArgs): Promise<void> {
     // The handler either re-submits (bridge dead → transient → error+backoff)
     // or fails it terminally with a reason; a claimed row always has `error`
     // set and NEVER keeps the stale 2020 backoff.
-    check("legacy `failed`+due retry was claimed (handler wrote a reason)", !!r.error, `${r.status} ${r.error}`);
+    check(`legacy \`${LEGACY_RETRYING}\`+due retry was claimed (handler wrote a reason)`, !!r.error, `${r.status} ${r.error}`);
     check("…and did not keep the stale backoff", !r.next_retry_at || r.next_retry_at.getTime() > Date.now() - 60_000, String(r.next_retry_at));
     check("terminal `failed` (no retry) was NOT claimed", t.status === "failed" && t.next_retry_at === null);
-    check("held sales_order (`waiting`, no depends_on) was NOT claimed", h.status === "waiting");
+    check(`held sales_order (\`${LEGACY_BLOCKED}\`, no depends_on) was NOT claimed`, h.status === LEGACY_BLOCKED, h.status);
     for (const [k, v] of Object.entries({ dispatchable: d, retryDue: r })) {
       const n = normalizePipelineStatus("sales", v.status, v.next_retry_at);
       if (n === "error") check(`${k}: error ⇒ next_retry_at set`, !!v.next_retry_at);
@@ -214,8 +223,10 @@ export default async function run({ container }: ExecArgs): Promise<void> {
       `SELECT count(*)::int n FROM qb_order_pipeline WHERE status IN ('waiting','confirmed') OR (status = 'failed' AND next_retry_at IS NOT NULL)`
     );
     check("no legacy sales literal left", legacyLeft.rows[0].n === 0, String(legacyLeft.rows[0].n));
-    check("held sales_order waiting → blocked", (await status(c, ids.heldSo)).status === "blocked");
+    check("held sales_order ends `blocked`", (await status(c, ids.heldSo)).status === "blocked");
     check("confirmed → synced", (await status(c, ids.parent2)).status === "synced");
+    const touched = await c.query(`SELECT count(*)::int n FROM qb_order_pipeline WHERE id = ANY($1::uuid[]) AND updated_at > NOW() - interval '2 minutes'`, [[ids.parent2, ids.heldSo, ids.skipped]]);
+    check("conversion did NOT move updated_at (trigger bypassed) — 09/17 prod stamped 18,350 rows", touched.rows[0].n === 0, `${touched.rows[0].n} touched`);
     check("submitted untouched", (await status(c, ids.submitted)).status === "submitted");
     check("skipped untouched", (await status(c, ids.skipped)).status === "skipped");
     check("terminal failed untouched", (await status(c, ids.terminal)).status === "failed");

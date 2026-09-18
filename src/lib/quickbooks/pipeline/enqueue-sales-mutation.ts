@@ -88,12 +88,8 @@ export interface EnqueueSalesMutationInput {
   medusaRefNumber?: string | null;
   qbRefNumber?: string | null;
   dependsOn?: string | null;
-  /**
-   * 'blocked' parks the row behind depends_on; default dispatchable
-   * (`WRITE.sales.dispatchable`, which is the legacy `pending` while
-   * VOCAB_PHASE is "expand").
-   */
-  status?: PipelineStatus | "pending"; // legacy-literal
+  /** 'blocked' parks the row behind depends_on; default dispatchable (`WRITE.sales.dispatchable`). */
+  status?: PipelineStatus;
 }
 
 export interface EnqueueSalesMutationResult {

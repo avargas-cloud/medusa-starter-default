@@ -52,9 +52,9 @@ export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
 export type PipelineFamily = "sales" | "purchase" | "log";
 
 /** Flip to "contract" in the second deploy, after the conversion script. */
-export const VOCAB_PHASE: "expand" | "contract" = "expand";
+export const VOCAB_PHASE: "expand" | "contract" = "contract";
 
-const EXPAND = VOCAB_PHASE === "expand";
+const EXPAND = (VOCAB_PHASE as string) === "expand";
 
 /**
  * Legacy literal → canonical meaning, per family. Sales `failed` is missing on
@@ -213,7 +213,9 @@ export const LOG_SQL = {
 
 export const WRITE = {
   sales: {
-    dispatchable: (EXPAND ? "pending" : "waiting") as "pending" | "waiting",
+    // The expand build wrote the legacy `pending` here; since contract it is
+    // `waiting`. `SALES_SQL.dispatchable` still READS `pending` until SEAL.
+    dispatchable: "waiting" as const,
     blocked: "blocked" as const,
     processing: "processing" as const,
     submitted: "submitted" as const,

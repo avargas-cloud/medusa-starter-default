@@ -83,15 +83,11 @@ export type PipelineStep =
 
 /**
  * Sales pipeline row status. The canonical nine live in
- * `lib/quickbooks/pipeline-status.ts`; `pending` is the legacy spelling of a
- * dispatchable row that the expand phase still WRITES (see VOCAB_PHASE) and
- * `manual` is a display-only value (qb_skip=true — order intentionally
- * excluded from QB auto-sync) that never reaches the table.
+ * `lib/quickbooks/pipeline-status.ts`; `manual` is a display-only value
+ * (qb_skip=true — order intentionally excluded from QB auto-sync) that never
+ * reaches the table.
  */
-export type PipelineStatus =
-  | CanonicalPipelineStatus
-  | "pending"
-  | "manual";
+export type PipelineStatus = CanonicalPipelineStatus | "manual";
 
 export interface WritePipelineRowInput {
   orderId?: string | null;
