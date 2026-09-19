@@ -182,6 +182,52 @@ const EXEMPT: Map<string, string> = new Map([
     "src/lib/quickbooks/vendor-credit-add.ts::body",
     "composición de hijos ya escapados por tag()",
   ],
+  // 2026-09-19: los 15 rojos que este verificador arrastraba desde el 09/11 (vendor-credit-mod)
+  // y el 09/14 (gl-documents). Cada uno leído: ninguno es un valor crudo.
+  //   · `tag()`/`ref()` aplican escapeXml al valor; `amount()` y centsToDollarsString emiten
+  //     sólo dígitos, "-" y "." (BigInt → string, sin caracteres XML).
+  //   · los `${body}` son concatenaciones de esos tres helpers + literales.
+  //   · los ternarios sobre booleano emiten el literal "true"/"false".
+  [
+    'src/lib/quickbooks/vendor-credit-mod.ts::tag("ListID", input.vendorListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-mod.ts::tag("ListID", input.apAccountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-mod.ts::tag("ListID", line.accountListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    'src/lib/quickbooks/vendor-credit-mod.ts::tag("ListID", line.itemListId)',
+    "hijo ya escapado por tag(), que aplica escapeXml al valor",
+  ],
+  [
+    "src/lib/quickbooks/vendor-credit-mod.ts::body",
+    "composición de hijos ya escapados por tag() (TxnID/EditSequence/refs/líneas)",
+  ],
+  [
+    'src/lib/quickbooks/gl-documents/qbxml-builders.ts::input.isToBePrinted ? "true" : "false"',
+    "ternario sobre booleano, emite el literal true o false",
+  ],
+  [
+    "src/lib/quickbooks/gl-documents/qbxml-builders.ts::body",
+    "composición de tag()/ref()/amount(): escapeXml en valores, centsToDollarsString en montos (CheckAdd, CreditCardChargeAdd, DepositAdd, JournalEntryAdd, SalesTaxPaymentCheckAdd)",
+  ],
+  [
+    'src/lib/quickbooks/gl-documents/qbxml-mod-builders.ts::input.isToBePrinted ? "true" : "false"',
+    "ternario sobre booleano, emite el literal true o false",
+  ],
+  [
+    "src/lib/quickbooks/gl-documents/qbxml-mod-builders.ts::centsToDollarsString(line.amountCents)",
+    "BigInt → string con sólo dígitos, '-' y '.' (ledger/money.ts)",
+  ],
+  [
+    "src/lib/quickbooks/gl-documents/qbxml-mod-builders.ts::body",
+    "composición de tag()/ref() + expenseLineModXml (Amount por centsToDollarsString) (CheckMod, CreditCardChargeMod)",
+  ],
 ]);
 
 let failures = 0;

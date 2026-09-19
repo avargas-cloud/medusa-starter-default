@@ -16,6 +16,7 @@
  *   4. po-returnable?exclude_credit_id → credited 4, returnable 6, unit_cost 1200 (bill), bills ∋ fixture
  *   5. PATCH qty 7 → exceeds_returnable · PATCH lines:[] → no_lines · PATCH bill ajeno → bill_not_on_po
  *   6. post → stock −3 en la location del PO, stock_applied_at, GL AP debitada $36.00
+ *      6k: apply → fila vendor_credit_apply viva → void 409; fila failed por SQL → void 200
  *   7. race gate: draft C (3 u) mutado por SQL a 6 → post → 400 exceeds_returnable
  *   8. DELETE draft C y del otro draft → 200; returnable = 7; DELETE de un posted → 409
  *   9. void → stock restaurado, stock_reversed_at, sin entrada GL activa
@@ -35,6 +36,7 @@ import { Pool, type PoolClient } from "pg";
 
 import { activeDocumentEntry } from "../../lib/ledger";
 import { createDraftVendorCredit } from "../../lib/vendor-credits";
+import { WRITE } from "../../lib/quickbooks/pipeline-status";
 
 import { buildFixture, cleanup, type Fixture } from "./e2e-gl-purchases-fixtures";
 
@@ -239,8 +241,23 @@ async function main(): Promise<void> {
     const rev4 = await http("POST", `/admin/vendor-credits/${creditId}/revise`, { lines: [productLine(fx.polId, 3)] });
     ok("6j. con $48.00 aplicados, revise a 3 u ($36.00) → 409 exceeds_applications", [200, 201].includes(applied.status) && rev4.status === 409 && rev4.json.code === "exceeds_applications", `apply=${applied.status} ` + JSON.stringify(rev4.json));
     const appId = (applied.json.application as { id?: string } | undefined)?.id ?? "";
+    // 6k. Carril `vendor_credit_apply` (vc-apply-qb-20260915): el apply encola una fila que en el
+    //     sandbox (bridge apagado) queda VIVA → void = 409 applying_in_quickbooks (bloquear, nunca
+    //     desparejar). Simulamos el "fail before voiding" que la ruta pide: la fila pasa a failed
+    //     por SQL, y recién ahí el void contesta 200. Hasta el 09/19 este spec voideaba directo y
+    //     arrastraba 6 rojos que no eran regresión.
+    const voidLive = await http("POST", `/admin/vendor-credits/${creditId}/applications/${appId}/void`);
+    ok("6k1. con la fila vendor_credit_apply viva, void → 409 applying_in_quickbooks", voidLive.status === 409 && voidLive.json.code === "applying_in_quickbooks", JSON.stringify(voidLive.json));
+    const { rowCount: failedRows } = await client.query(
+      `UPDATE qb_order_pipeline SET status = $2, next_retry_at = NULL, updated_at = now()
+        WHERE step = 'vendor_credit_apply' AND reference_id = $1`,
+      [appId, WRITE.sales.failed]
+    );
+    ok("6k2. la fila del carril existe y se marcó failed (simula el bridge fallando)", failedRows === 1, `rows=${failedRows}`);
     const unapplied = await http("POST", `/admin/vendor-credits/${creditId}/applications/${appId}/void`);
-    ok("6k. aplicación voideada para poder seguir", unapplied.status === 200, JSON.stringify(unapplied.json));
+    ok("6k3. con la fila failed, void → 200 y applied_cents vuelve a 0", unapplied.status === 200, JSON.stringify(unapplied.json));
+    const { rows: appliedRows } = await client.query<{ applied: string }>(`SELECT applied_cents::text AS applied FROM vendor_credit WHERE id = $1`, [creditId]);
+    ok("6k4. vendor_credit.applied_cents = 0 tras el void", appliedRows[0]?.applied === "0", JSON.stringify(appliedRows[0]));
     const revDraft = await http("POST", `/admin/vendor-credits/${other.id}/revise`, { reason: "x" });
     ok("6l. revise de un DRAFT → 409 invalid_status (los drafts usan PATCH)", revDraft.status === 409 && revDraft.json.code === "invalid_status", JSON.stringify(revDraft.json));
 
