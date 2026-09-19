@@ -31,6 +31,10 @@ export interface RawPaymentApplication {
   order_display_id: number | null;
   amount_applied_cents: number;
   applied_at: string;
+  /** Invoice total/tax (cents) to prorate the tax share of this application;
+   * null when the application points at an order, not an invoice. */
+  invoice_total_cents: number | null;
+  invoice_tax_cents: number | null;
 }
 
 export interface RawPayment {
@@ -69,6 +73,9 @@ export interface RawInvoice {
   invoice_number: string;
   customer_name: string;
   total_cents: number;
+  /** pos_invoice.tax (cents). Sales before tax = total − tax, the figure the
+   * QB Sales report shows; verified 09/18/2026: total = subtotal + tax. */
+  tax_cents: number;
   applications: RawInvoiceApplication[];
 }
 
@@ -140,7 +147,8 @@ export async function loadPaymentsForDay(
               'invoice_id', pa.invoice_id, 'invoice_number', pa.invoice_number,
               'invoice_issued_day', to_char(inv.issued_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD'),
               'order_id', pa.order_id, 'order_display_id', ao.display_id,
-              'amount_applied_cents', pa.amount_applied::float8, 'applied_at', pa.applied_at
+              'amount_applied_cents', pa.amount_applied::float8, 'applied_at', pa.applied_at,
+              'invoice_total_cents', inv.total::float8, 'invoice_tax_cents', inv.tax::float8
             ) ORDER BY pa.applied_at
           ) FILTER (WHERE pa.id IS NOT NULL), '[]'::jsonb
         ) AS applications
@@ -170,6 +178,7 @@ export async function loadInvoicesForDay(
         i.id AS invoice_id, i.invoice_number,
         ${CUSTOMER_NAME_SQL} AS customer_name,
         i.total::float8 AS total_cents,
+        COALESCE(i.tax, 0)::float8 AS tax_cents,
         COALESCE(
           jsonb_agg(
             jsonb_build_object(

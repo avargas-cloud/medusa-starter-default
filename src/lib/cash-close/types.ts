@@ -103,6 +103,10 @@ export interface CashCloseApplicationRef {
   document_id: string;
   /** For order_deposit whose invoice exists now: "invoiced IN-21844 on 09/18". */
   note: string | null;
+  /** Sales-tax share of this application: invoice.tax × applied / invoice.total,
+   * rounded to the cent. 0 for order/estimate deposits — tax is recognized
+   * when the invoice is issued, never on a deposit (same as QB). */
+  tax_cents: number;
 }
 
 export interface CashClosePaymentRow {
@@ -120,6 +124,8 @@ export interface CashClosePaymentRow {
   tender_key: string;
   is_store_credit: boolean; // type = 'credit_memo'
   amount_cents: number;
+  /** Σ applications.tax_cents — the part of `amount_cents` that is sales tax. */
+  tax_cents: number;
   surcharge_cents: number;
   applications: CashCloseApplicationRef[];
   unapplied_cents: number;
@@ -135,6 +141,7 @@ export interface CashCloseTenderGroup {
   is_store_credit: boolean;
   count: number;
   amount_cents: number;
+  tax_cents: number;
   surcharge_cents: number;
   by_bucket: Record<CashCloseBucket, number>;
   unapplied_cents: number;
@@ -146,6 +153,9 @@ export interface CashCloseInvoiceRow {
   invoice_number: string;
   customer_name: string;
   total_cents: number;
+  /** pos_invoice.tax; net_cents = total − tax (sales before tax, as QB reports it). */
+  tax_cents: number;
+  net_cents: number;
   paid_today_cents: number;
   paid_earlier_cents: number;
   paid_store_credit_cents: number;
@@ -175,6 +185,12 @@ export interface CashCloseTotals {
   refunds_count: number;
   invoiced_cents: number;
   invoiced_count: number;
+  /** invoiced = invoiced_net + invoiced_tax. The ladder ties on `invoiced_cents`
+   * (payments carry the tax); `invoiced_net_cents` is the QB Sales-report figure. */
+  invoiced_tax_cents: number;
+  invoiced_net_cents: number;
+  /** Σ tax share of the day's payments (cash side), prorated per application. */
+  received_tax_cents: number;
   credit_memos_today_cents: number;
   credit_memos_count: number;
   estimates_issued_count: number;

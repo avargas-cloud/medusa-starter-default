@@ -101,6 +101,8 @@ export function buildInvoiceRows(
       invoice_number: invoice.invoice_number,
       customer_name: invoice.customer_name,
       total_cents: invoice.total_cents,
+      tax_cents: invoice.tax_cents,
+      net_cents: invoice.total_cents - invoice.tax_cents,
       paid_today_cents: paidToday,
       paid_earlier_cents: paidEarlier,
       paid_store_credit_cents: paidStoreCredit,
@@ -166,6 +168,10 @@ export function buildTotals(
   }
 
   const invoiced_cents = invoiceRows.reduce((s, i) => s + i.total_cents, 0);
+  const invoiced_tax_cents = invoiceRows.reduce((s, i) => s + i.tax_cents, 0);
+  const received_tax_cents = paymentRows
+    .filter((r) => !r.is_store_credit)
+    .reduce((s, r) => s + r.tax_cents, 0);
   const paid_today_cents = invoiceRows.reduce((s, i) => s + i.paid_today_cents, 0);
   const paid_earlier_cents = invoiceRows.reduce((s, i) => s + i.paid_earlier_cents, 0);
   const paid_store_credit_cents = invoiceRows.reduce((s, i) => s + i.paid_store_credit_cents, 0);
@@ -185,6 +191,9 @@ export function buildTotals(
     refunds_count: refunds.length,
     invoiced_cents,
     invoiced_count: invoiceRows.length,
+    invoiced_tax_cents,
+    invoiced_net_cents: invoiced_cents - invoiced_tax_cents,
+    received_tax_cents,
     credit_memos_today_cents,
     credit_memos_count: liveCreditMemos.length,
     estimates_issued_count: orderEstimateAgg.estimates_issued_count,

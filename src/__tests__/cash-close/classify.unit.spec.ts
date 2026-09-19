@@ -39,6 +39,8 @@ describe("classifyPayment", () => {
           order_display_id: 4710,
           amount_applied_cents: 15000,
           applied_at: `${DAY}T16:47:57.000Z`,
+          invoice_total_cents: null,
+          invoice_tax_cents: null,
         },
       ],
     });
@@ -64,6 +66,8 @@ describe("classifyPayment", () => {
           order_display_id: 4719,
           amount_applied_cents: 58195,
           applied_at: `${DAY}T21:39:56.000Z`,
+          invoice_total_cents: null,
+          invoice_tax_cents: null,
         },
       ],
     });
@@ -104,6 +108,8 @@ describe("classifyPayment", () => {
           order_display_id: null,
           amount_applied_cents: 10000,
           applied_at: `${DAY}T10:00:00.000Z`,
+          invoice_total_cents: null,
+          invoice_tax_cents: null,
         },
       ],
     });
@@ -125,6 +131,8 @@ describe("classifyPayment", () => {
           order_display_id: null,
           amount_applied_cents: 5000,
           applied_at: `${DAY}T10:00:00.000Z`,
+          invoice_total_cents: null,
+          invoice_tax_cents: null,
         },
       ],
     });
@@ -144,5 +152,40 @@ describe("classifyPayment", () => {
     expect(result.applications[0]!.bucket).toBe("estimate_deposit");
     expect(result.applications[0]!.document_label).toBe("EST-4715");
     expect(result.unapplied_cents).toBe(0);
+  });
+
+  it("prorates the invoice tax over a PARTIAL payment, to the cent; a deposit carries no tax", () => {
+    // IN-21850 style: total 202.75 = 189.49 + 13.26 tax; the customer pays half.
+    const row = payment({
+      amount_cents: 10138 + 5000,
+      applications: [
+        {
+          invoice_id: "inv_21850",
+          invoice_number: "21850",
+          invoice_issued_day: DAY,
+          order_id: null,
+          order_display_id: null,
+          amount_applied_cents: 10138,
+          applied_at: `${DAY}T10:00:00.000Z`,
+          invoice_total_cents: 20275,
+          invoice_tax_cents: 1326,
+        },
+        {
+          invoice_id: null,
+          invoice_number: null,
+          invoice_issued_day: null,
+          order_id: "order_9",
+          order_display_id: 9,
+          amount_applied_cents: 5000,
+          applied_at: `${DAY}T10:01:00.000Z`,
+          invoice_total_cents: null,
+          invoice_tax_cents: null,
+        },
+      ],
+    });
+    const result = classifyPayment(row, DAY);
+    expect(result.applications[0]!.tax_cents).toBe(663); // round(1326 × 10138 / 20275)
+    expect(result.applications[1]!.tax_cents).toBe(0); // order deposit: tax is recognized on invoicing
+    expect(result.tax_cents).toBe(663);
   });
 });

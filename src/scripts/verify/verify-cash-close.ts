@@ -79,6 +79,9 @@ export default async function run({ container }: ExecArgs): Promise<void> {
   console.log(`  received        ${t.received_cents} (${t.received_count} payments)`);
   console.log(`  surcharge       ${t.surcharge_cents}`);
   console.log(`  invoiced        ${t.invoiced_cents} (${t.invoiced_count})`);
+  console.log(`  invoiced_net    ${t.invoiced_net_cents}  (sales before tax — QB Sales report figure)`);
+  console.log(`  invoiced_tax    ${t.invoiced_tax_cents}`);
+  console.log(`  received_tax    ${t.received_tax_cents}  (tax share of today's payments, prorated)`);
   console.log(`  invoice_today   ${t.invoice_today_cents}`);
   console.log(`  invoice_earlier ${t.invoice_earlier_cents}`);
   console.log(`  order_deposit   ${t.order_deposit_cents}`);
@@ -105,6 +108,18 @@ export default async function run({ container }: ExecArgs): Promise<void> {
   // so a future refactor that swallows that error still gets caught here.
   const endLine = snapshot.ladder[snapshot.ladder.length - 1]!;
   check("ladder ties to end", endLine.cents, t.received_cents - t.refunds_paid_out_cents);
+
+  // Sales before tax: net + tax = invoiced, per invoice and in total; the tax
+  // share of the payments never exceeds the tax of what they were applied to.
+  check("invoiced = net + tax", t.invoiced_net_cents + t.invoiced_tax_cents, t.invoiced_cents);
+  const perInvoiceSplit = snapshot.invoices.every((i) => i.net_cents + i.tax_cents === i.total_cents);
+  check("every invoice: net + tax = total", perInvoiceSplit ? 1 : 0, 1);
+  const tenderTax = snapshot.tenders.filter((g) => !g.is_store_credit).reduce((s, g) => s + g.tax_cents, 0);
+  check("received_tax = Σ tender tax", tenderTax, t.received_tax_cents);
+  const depositTaxFree = snapshot.tenders.every((g) =>
+    g.rows.every((r) => r.applications.every((a) => a.document_kind === "invoice" || a.tax_cents === 0))
+  );
+  check("deposits carry no tax", depositTaxFree ? 1 : 0, 1);
 
   if (day === "2026-09-17") {
     console.log("\nAgainst the 2026-09-17 expected figures:");

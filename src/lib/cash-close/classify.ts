@@ -23,6 +23,15 @@ const EMPTY_BY_BUCKET: Record<CashCloseBucket, number> = {
   estimate_deposit: 0,
 };
 
+/** Tax share of an application to an invoice: tax × applied / total, to the
+ * cent. A partial payment carries a proportional slice of the invoice's tax. */
+function prorateInvoiceTax(app: RawPaymentApplication): number {
+  const total = app.invoice_total_cents ?? 0;
+  const tax = app.invoice_tax_cents ?? 0;
+  if (total <= 0 || tax <= 0) return 0;
+  return Math.round((tax * app.amount_applied_cents) / total);
+}
+
 function classifyApplication(
   app: RawPaymentApplication,
   day: string
@@ -36,6 +45,7 @@ function classifyApplication(
         document_kind: "invoice",
         document_id: app.invoice_id,
         note: null,
+        tax_cents: prorateInvoiceTax(app),
       };
     }
     if (app.invoice_issued_day && app.invoice_issued_day < day) {
@@ -46,6 +56,7 @@ function classifyApplication(
         document_kind: "invoice",
         document_id: app.invoice_id,
         note: null,
+        tax_cents: prorateInvoiceTax(app),
       };
     }
     // issued_at > D (or somehow unresolved): the invoice exists now but
@@ -61,6 +72,7 @@ function classifyApplication(
       note: app.invoice_issued_day
         ? `invoiced IN-${app.invoice_number ?? ""} on ${app.invoice_issued_day}`
         : null,
+      tax_cents: 0,
     };
   }
   if (app.order_id) {
@@ -71,6 +83,7 @@ function classifyApplication(
       document_kind: "order",
       document_id: app.order_id,
       note: null,
+      tax_cents: 0,
     };
   }
   // An active application with neither invoice_id nor order_id has nothing
@@ -83,6 +96,7 @@ function classifyApplication(
     document_kind: "invoice",
     document_id: "",
     note: "unresolved application (no invoice or order)",
+    tax_cents: 0,
   };
 }
 
@@ -128,6 +142,7 @@ export function classifyPayment(
       document_kind: "estimate",
       document_id: row.linked_order_id,
       note: null,
+      tax_cents: 0,
     });
     appliedTotal += row.amount_cents;
   }
@@ -150,6 +165,7 @@ export function classifyPayment(
     tender_key: tenderKey(row.method, row.card_brand),
     is_store_credit: isStoreCredit,
     amount_cents: row.amount_cents,
+    tax_cents: applications.reduce((s, a) => s + a.tax_cents, 0),
     surcharge_cents: row.surcharge_cents,
     applications,
     unapplied_cents: unappliedCents,
@@ -172,6 +188,7 @@ export function buildTenderGroups(
         is_store_credit: row.is_store_credit,
         count: 0,
         amount_cents: 0,
+        tax_cents: 0,
         surcharge_cents: 0,
         by_bucket: { ...EMPTY_BY_BUCKET },
         unapplied_cents: 0,
@@ -181,6 +198,7 @@ export function buildTenderGroups(
     }
     group.count += 1;
     group.amount_cents += row.amount_cents;
+    group.tax_cents += row.tax_cents;
     group.surcharge_cents += row.surcharge_cents;
     group.unapplied_cents += row.unapplied_cents;
     for (const app of row.applications) {

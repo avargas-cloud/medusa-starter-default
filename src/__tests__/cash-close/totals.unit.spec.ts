@@ -47,6 +47,7 @@ function dayRowsFixture(): CashCloseDayRows {
     invoice_number: "21999",
     customer_name: "On Account Co",
     total_cents: 5000,
+    tax_cents: 0,
     applications: [
       {
         payment_id: "cpay_partial",
@@ -71,6 +72,8 @@ function dayRowsFixture(): CashCloseDayRows {
             order_display_id: null,
             amount_applied_cents: 3127,
             applied_at: `${DAY}T09:00:00.000Z`,
+            invoice_total_cents: null,
+            invoice_tax_cents: null,
           },
         ],
       }),
@@ -110,6 +113,7 @@ describe("buildTotals / on_account / refunds", () => {
     );
     expect(totals.on_account_cents).toBe(1873); // 5000 - 3127
     expect(totals.on_account_count).toBe(1);
+    expect(totals.invoiced_net_cents + totals.invoiced_tax_cents).toBe(totals.invoiced_cents);
     expect(totals.refunds_paid_out_cents).toBe(20706);
     expect(totals.refunds_count).toBe(1);
   });
@@ -131,6 +135,8 @@ describe("computeSnapshot / ladder", () => {
               order_display_id: 4710,
               amount_applied_cents: 15000,
               applied_at: `${DAY}T16:47:57.000Z`,
+              invoice_total_cents: null,
+              invoice_tax_cents: null,
             },
           ],
         }),
@@ -147,6 +153,8 @@ describe("computeSnapshot / ladder", () => {
               order_display_id: 4719,
               amount_applied_cents: 58195,
               applied_at: `${DAY}T21:39:56.000Z`,
+              invoice_total_cents: null,
+              invoice_tax_cents: null,
             },
           ],
         }),
@@ -157,6 +165,7 @@ describe("computeSnapshot / ladder", () => {
           invoice_number: "21837",
           customer_name: "Zelle Customer",
           total_cents: 58195,
+          tax_cents: 0,
           applications: [
             {
               payment_id: "cpay_5077",
@@ -248,5 +257,24 @@ describe("assertValidDay — only a finished business day can be closed", () => 
     expect(() => assertValidDay(today)).toThrow(CashCloseDayNotClosedError);
     expect(() => assertValidDay("2999-12-31")).toThrow(CashCloseDayNotClosedError);
     expect(() => assertValidDay("not-a-day")).toThrow(CashCloseInvalidDayError);
+  });
+});
+
+describe("sales before tax (QB Sales report figure)", () => {
+  it("splits invoiced into net + tax and prorates the tax share of the day's payments", () => {
+    const dayRows = dayRowsFixture();
+    const invoice = dayRows.invoices[0]!;
+    invoice.tax_cents = 300; // 5000 total = 4700 net + 300 tax
+    const app = dayRows.payments[0]!.applications[0]!;
+    app.invoice_total_cents = 5000;
+    app.invoice_tax_cents = 300;
+    const paymentRows = dayRows.payments.map((p) => classifyPayment(p, DAY));
+    const invoiceRows = buildInvoiceRows(dayRows.invoices, DAY);
+    expect(invoiceRows[0]!.net_cents).toBe(4700);
+    const totals = buildTotals(paymentRows, invoiceRows, dayRows.creditMemos, dayRows.refunds, dayRows.orderEstimateAgg);
+    expect(totals.invoiced_cents).toBe(5000);
+    expect(totals.invoiced_tax_cents).toBe(300);
+    expect(totals.invoiced_net_cents).toBe(4700);
+    expect(totals.received_tax_cents).toBe(188); // round(300 × 3127 / 5000)
   });
 });
