@@ -4,6 +4,7 @@ import type {
 } from "@medusajs/framework/http";
 import type { PoolClient } from "pg";
 
+import { refreshSuggestionsForDocument } from "../../../../../../lib/banking/suggestion-refresh-document";
 import { voidJournalEntry } from "../../../../../../lib/ledger";
 import {
   REASON_SCHEMA,
@@ -46,6 +47,7 @@ export async function POST(
       parsed.data.reason,
       actorId
     );
+    await refreshSuggestionsForDocument(getDbPool(), req.params.id as string, actorId);
     return res.json({ journal_entry: journalEntry });
   } catch (error) {
     return ledgerFailure(res, error);

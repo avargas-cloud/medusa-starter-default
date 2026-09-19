@@ -121,6 +121,9 @@ export type StatementBookItem = {
   source_hash: string;
   transaction_id: string | null;
   blockers: string[];
+  /** Reversal, or reversed by the statement end: still in the book balance
+   *  (it nets to zero with its pair) but NEVER matchable (09/18/2026). */
+  canceled?: boolean;
 };
 export type StatementMatch = {
   id: string;

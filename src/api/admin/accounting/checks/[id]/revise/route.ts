@@ -3,6 +3,7 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 import type { PoolClient } from "pg";
+import { refreshSuggestionsForDocument } from "../../../../../../lib/banking/suggestion-refresh-document";
 import { z } from "zod";
 
 import { reviseBankCheck } from "../../../../../../lib/ledger";
@@ -69,6 +70,8 @@ export async function POST(
       reason,
       actorId
     );
+    // Committed above: the Bank Feed may be SUGGESTING the reversed line.
+    await refreshSuggestionsForDocument(getDbPool(), req.params.id as string, actorId);
     return res.json(result);
   } catch (error) {
     return ledgerFailure(res, error);

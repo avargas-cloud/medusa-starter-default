@@ -4,6 +4,7 @@ import type {
 } from "@medusajs/framework/http";
 import type { PoolClient } from "pg";
 
+import { refreshSuggestionsForDocument } from "../../../../../../lib/banking/suggestion-refresh-document";
 import { pgLinkDb, unlinkByDocument } from "../../../../../../lib/calendar/occurrence-link";
 import { voidBankCheck } from "../../../../../../lib/ledger";
 import {
@@ -55,6 +56,7 @@ export async function POST(
         },
       }
     );
+    await refreshSuggestionsForDocument(getDbPool(), req.params.id as string, actorId);
     return res.json({ check });
   } catch (error) {
     return ledgerFailure(res, error);

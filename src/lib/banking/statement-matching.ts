@@ -2,12 +2,39 @@ import { appendReviewEvent, runReviewCommand } from "./review-common";
 import { BankingError } from "./security";
 import { statementCapacity, statementEditable } from "./statement-core";
 import { statementContext } from "./statement-read";
-import type { StatementContext } from "./statement-types";
+import type {
+  StatementBookItem,
+  StatementContext,
+  StatementLine,
+} from "./statement-types";
 import {
   statementMatchSchema,
   statementUnmatchSchema,
 } from "./statement-types";
 import { bankId } from "./store";
+
+/**
+ * A match is written only against a LIVE book line: same hash the screen saw,
+ * no blockers on either side, and not canceled. The canceled check is what a
+ * stale suggestion needs — after a check revise (09/18/2026, CHK-0999) the
+ * cached suggestion still named the REVERSED line, whose hash had not moved.
+ */
+export function assertMatchable(
+  line: StatementLine | undefined,
+  book: StatementBookItem | undefined,
+  expectedBookHash: string
+): void {
+  if (
+    !line ||
+    !book ||
+    line.blockers.length ||
+    book.blockers.length ||
+    book.source_hash !== expectedBookHash
+  )
+    throw new BankingError("BANKING_STATEMENT_MATCH_SOURCE_DRIFT", 409);
+  if (book.canceled)
+    throw new BankingError("BANKING_STATEMENT_MATCH_CANCELED_ENTRY", 409);
+}
 
 export async function matchStatement(
   id: string,
@@ -34,13 +61,9 @@ export async function matchStatement(
           (row) =>
             row.kind === allocation.book_kind && row.id === allocation.book_id
         );
-        if (
-          !line ||
-          !book ||
-          line.blockers.length ||
-          book.blockers.length ||
-          book.source_hash !== allocation.expected_book_hash
-        )
+        assertMatchable(line, book, allocation.expected_book_hash);
+        // narrowed by assertMatchable
+        if (!line || !book)
           throw new BankingError("BANKING_STATEMENT_MATCH_SOURCE_DRIFT", 409);
         await client.query(
           `INSERT INTO bank_statement_match(id,statement_id,statement_line_id,book_kind,book_id,

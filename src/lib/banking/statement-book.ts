@@ -147,6 +147,7 @@ export async function statementBook(
       }),
       transaction_id: line.transaction_id,
       blockers,
+      canceled: line.canceled_by_end,
     });
   }
   const bookBalance = lines.reduce((sum, line) => sum + line.amount_cents, 0);

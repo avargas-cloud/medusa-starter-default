@@ -3,8 +3,9 @@ import type { PoolClient } from "pg";
 import { LedgerError } from "../types";
 
 /**
- * Listado paginado por keyset `(day, id)` ASC para las tres tablas de
- * documentos manuales. Filtros comunes: `from,to` (día), `status`,
+ * Listado paginado por keyset `(day, id)` DESC —más nuevos arriba— para las
+ * tres tablas de documentos manuales. (09/18/2026: ASC con página de 50
+ * escondía los cheques del 16 en adelante detrás de un "load more".) Filtros comunes: `from,to` (día), `status`,
  * `account_list_id` (cláusula propia por documento), `q` (ILIKE sobre las
  * columnas de texto del documento), `limit` (1..200, default 50) y `cursor`
  * = `"<day>,<id>"` de la última fila de la página anterior.
@@ -69,7 +70,7 @@ export async function listDocuments<T extends { day: string; id: string }>(
   }
   if (filters.cursor) {
     const cursor = parseCursor(filters.cursor);
-    where.push(`(d.day, d.id) > (${p(cursor.day)}::date, ${p(cursor.id)})`);
+    where.push(`(d.day, d.id) < (${p(cursor.day)}::date, ${p(cursor.id)})`);
   }
 
   const rawLimit = filters.limit ?? 50;
@@ -81,7 +82,7 @@ export async function listDocuments<T extends { day: string; id: string }>(
   const { rows } = await client.query<T>(
     `SELECT ${spec.columns} FROM ${spec.table} d
      WHERE ${where.join(" AND ")}
-     ORDER BY d.day ASC, d.id ASC
+     ORDER BY d.day DESC, d.id DESC
      LIMIT ${p(limit + 1)}`,
     params
   );
